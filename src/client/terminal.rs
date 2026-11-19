@@ -67,6 +67,26 @@ impl Session {
         title: Option<&str>,
         endpoint: Option<&str>,
     ) -> io::Result<Option<Self>> {
+        Self::start_with_account(ui, cwd, title, endpoint, true)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn start_local(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+    ) -> io::Result<Option<Self>> {
+        Self::start_with_account(ui, cwd, title, endpoint, false)
+    }
+
+    fn start_with_account(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+        account: bool,
+    ) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -85,10 +105,11 @@ impl Session {
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
         state.server_origin = endpoint.and_then(footer::Origin::parse);
-        let guide = endpoint.and_then(guide::Guide::from_endpoint);
+        let account_endpoint = endpoint.filter(|_| account);
+        let guide = account_endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
-        let account_server = endpoint
+        let account_server = account_endpoint
             .and_then(account_status::server_from_endpoint)
             .filter(|_| tokio::runtime::Handle::try_current().is_ok());
         if account_server.is_some() {

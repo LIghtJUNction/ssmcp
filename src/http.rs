@@ -47,6 +47,40 @@ pub fn router(broker: Arc<Broker>) -> Router {
         .layer(middleware::from_fn(crate::observability::http))
 }
 
+/// The local host exposes only OAuth and authenticated MCP. No account, device
+/// enrollment, commerce or portal routes are installed on this listener.
+pub(crate) fn local_router(broker: Arc<Broker>) -> Router {
+    let origin = broker.public_url.clone();
+    Router::new()
+        .merge(crate::oauth::routes())
+        .route("/healthz", get(|| async { "ok\n" }))
+        .route("/{user}", any(endpoint))
+        .with_state(broker)
+        .layer(middleware::from_fn_with_state(origin, local_authority))
+        .layer(middleware::map_response(no_store))
+        .layer(middleware::from_fn(crate::observability::http))
+}
+
+async fn local_authority(
+    State(origin): State<String>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let expected = origin.split_once("://").map(|(_, authority)| authority);
+    let host = single_header(request.headers(), "host");
+    if expected.is_none()
+        || !matches!(host, Ok(Some(value)) if Some(value) == expected)
+        || request
+            .uri()
+            .authority()
+            .is_some_and(|authority| Some(authority.as_str()) != expected)
+        || !valid_origin(request.headers(), &origin)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
+
 async fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()

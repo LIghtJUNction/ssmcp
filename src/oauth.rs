@@ -1,4 +1,4 @@
-//! OAuth authorization-code server for SSH login codes and provider identities.
+//! OAuth authorization-code server for connection login codes and provider identities.
 //!
 //! MCP 2026-07-28 authorization, RFC 7636, 8414, 8707, 9207, 9728 and 9700.
 //! No external metadata fetching: DCR is the advertised registration mechanism.
@@ -46,6 +46,7 @@ const MAX_ACCESS: usize = 8192;
 const MAX_REFRESH: usize = 65536;
 const MAX_BODY: usize = 32 * 1024;
 const COOKIE: &str = "__Host-ssmcp-oauth";
+const LOCAL_COOKIE: &str = "ssmcp-local-oauth";
 type Key = [u8; 32];
 type OResult<T> = Result<T, OAuthError>;
 
@@ -96,6 +97,7 @@ impl OAuthConfig {
 
 pub struct OAuth {
     issuer: String,
+    insecure_loopback: bool,
     config: OAuthConfig,
     state: Arc<Mutex<Store>>,
     registry: Option<registry::Registry>,
@@ -441,6 +443,7 @@ impl OAuth {
         config.validate()?;
         Ok(Self {
             issuer: public_url.trim_end_matches('/').to_owned(),
+            insecure_loopback: false,
             config,
             registry: None,
             state: Arc::new(Mutex::new(Store {
@@ -455,6 +458,39 @@ impl OAuth {
                 next_sweep: Instant::now(),
             })),
         })
+    }
+
+    /// Only the explicit local gateway may use a non-Secure cookie, and only
+    /// for an HTTP literal loopback origin. Remote constructors remain Secure.
+    pub(crate) fn for_local_origin(public_url: String) -> crate::Result<Self> {
+        let origin = local_origin(&public_url)?;
+        let mut oauth = Self::with_config(
+            origin.origin().ascii_serialization(),
+            OAuthConfig::default(),
+        )?;
+        oauth.insecure_loopback = origin.scheme() == "http";
+        Ok(oauth)
+    }
+
+    fn cookie_name(&self) -> &'static str {
+        if self.insecure_loopback {
+            LOCAL_COOKIE
+        } else {
+            COOKIE
+        }
+    }
+
+    fn consent_cookie(&self, csrf: &str) -> String {
+        let secure = if self.insecure_loopback {
+            ""
+        } else {
+            " Secure;"
+        };
+        format!(
+            "{}={csrf}; Path=/;{secure} HttpOnly; SameSite=Lax; Max-Age={}",
+            self.cookie_name(),
+            TRANSACTION_TTL.as_secs()
+        )
     }
 
     /// Enable durable registrations before accepting requests. Invalid files,
@@ -860,7 +896,7 @@ impl OAuth {
             return Err(OAuthError::capacity());
         }
         let transaction_id = random("tx_")?;
-        let csrf = cookie(headers)
+        let csrf = cookie(headers, self.cookie_name())
             .filter(|value| opaque(value, "csrf_"))
             .map(str::to_owned)
             .map_or_else(|| random("csrf_"), Ok)?;
@@ -1621,14 +1657,53 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>,
     value.to_str().map(Some).map_err(|_| ())
 }
 
-fn cookie(headers: &HeaderMap) -> Option<&str> {
+/// Origins admitted by the explicit local mode, never by remote login setup.
+pub(crate) fn local_origin(value: &str) -> crate::Result<Url> {
+    if value.len() > 2048
+        || value
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return Err("local public URL must be a bounded origin without whitespace".into());
+    }
+    let url = Url::parse(value)?;
+    let host = url.host_str().ok_or("local public URL requires a host")?;
+    let loopback = host
+        .trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    let mdns = host.ends_with(".local")
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port_or_known_default() == Some(0)
+        || !((url.scheme() == "http" && loopback) || (url.scheme() == "https" && mdns))
+    {
+        return Err("local public URL must be HTTP on a literal loopback address or HTTPS on NAME.local, with no credentials, path, query or fragment".into());
+    }
+    Ok(url)
+}
+
+fn cookie<'a>(headers: &'a HeaderMap, expected_name: &str) -> Option<&'a str> {
     let mut found = None;
     for value in headers.get_all(header::COOKIE) {
         for part in value.to_str().ok()?.split(';') {
             let Some((name, value)) = part.trim().split_once('=') else {
                 continue;
             };
-            if name == COOKIE {
+            if name == expected_name {
                 if found.is_some() {
                     return None;
                 }
@@ -1815,7 +1890,7 @@ fn consent_page(
         choices.push_str(&format!("<form method=post action=/oauth/authorize>{hidden}<button type=submit name=provider value=\"{}\">使用 {} 登录</button></form>", escape(provider), escape(label)));
     }
     if transaction.user != "mcp" {
-        choices.push_str(&format!("<p>也可粘贴本机 ssmcp 显示的一次性登录码，控制同一 SSH 账号下未设置 --allow 的会话。</p><form method=post action=/oauth/authorize>{hidden}<label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false><button type=submit>使用登录码授权</button></form><p class=muted>登录码只使用一次。提供该登录码的 SSH 连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。</p>"));
+        choices.push_str(&format!("<p>也可粘贴本机 ssmcp 显示的一次性登录码，控制同一本地系统用户下未设置 --allow 的会话。</p><form method=post action=/oauth/authorize>{hidden}<label for=login_code>一次性登录码</label><input id=login_code name=login_code type=password autocomplete=one-time-code minlength=64 maxlength=64 required spellcheck=false><button type=submit>使用登录码授权</button></form><p class=muted>登录码只使用一次。提供该登录码的连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。</p>"));
     } else if providers.is_empty() {
         choices.push_str("<p class=error>此服务器尚未配置身份提供方，请联系服务器管理员。</p>");
     }
@@ -1962,12 +2037,7 @@ async fn authorize(
             );
             response.headers_mut().insert(
                 header::SET_COOKIE,
-                HeaderValue::from_str(&format!(
-                    "{COOKIE}={}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={}",
-                    consent.csrf,
-                    TRANSACTION_TTL.as_secs()
-                ))
-                .unwrap(),
+                HeaderValue::from_str(&broker.oauth.consent_cookie(&consent.csrf)).unwrap(),
             );
             response
         }
@@ -1983,7 +2053,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
         }
         .page(&broker.oauth.issuer);
     }
-    let csrf = cookie(request.headers()).map(str::to_owned);
+    let csrf = cookie(request.headers(), broker.oauth.cookie_name()).map(str::to_owned);
     let outcome = async {
         let bytes = body(request, "application/x-www-form-urlencoded").await?;
         let parameters = Parameters::parse(
@@ -2090,7 +2160,7 @@ async fn provider_callback(
             return Err(OAuthError::invalid("This identity provider is not configured"));
         }
         let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
-        let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
+        let csrf = cookie(&headers, broker.oauth.cookie_name()).ok_or_else(|| OAuthError::invalid(
             "Authorization cookie is missing; restart the connection in the same browser"))?;
         let state = parameters.required("state")?;
         let attempt = match broker.oauth.take_provider_login(state, csrf, &provider) {
@@ -2245,6 +2315,53 @@ impl OAuth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_http_cookies_are_scoped_and_remote_cookies_remain_secure() {
+        let local = OAuth::for_local_origin("http://127.0.0.1:43123".into()).unwrap();
+        let header = local.consent_cookie("csrf_fixture");
+        assert!(header.starts_with("ssmcp-local-oauth="));
+        assert!(header.contains("; HttpOnly; SameSite=Lax;"));
+        assert!(!header.contains("Secure"));
+        let secure = OAuth::for_local_origin("https://workstation.local".into()).unwrap();
+        assert!(
+            secure
+                .consent_cookie("csrf_fixture")
+                .starts_with("__Host-ssmcp-oauth=")
+        );
+        assert!(secure.consent_cookie("csrf_fixture").contains("; Secure;"));
+        let remote = OAuth::new("https://remote.example".into());
+        assert!(remote.consent_cookie("csrf_fixture").contains("; Secure;"));
+        // Merely passing HTTP to the existing constructor cannot opt into the
+        // browser-cookie exception. The explicit local constructor is required.
+        assert!(
+            OAuth::new("http://127.0.0.1:43123".into())
+                .consent_cookie("csrf_fixture")
+                .contains("; Secure;")
+        );
+        for invalid in [
+            "http://localhost:43123",
+            "http://192.0.2.1:80",
+            "https://remote.example",
+            "https://workstation.local/path",
+            "https://user@workstation.local",
+            "https://workstation.local?x=1",
+            "https://workstation.local#fragment",
+            "http://127.0.0.1:0",
+        ] {
+            assert!(
+                OAuth::for_local_origin(invalid.into()).is_err(),
+                "{invalid}"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("__Host-ssmcp-oauth=remote; ssmcp-local-oauth=local"),
+        );
+        assert_eq!(cookie(&headers, local.cookie_name()), Some("local"));
+        assert_eq!(cookie(&headers, remote.cookie_name()), Some("remote"));
+    }
 
     fn github_identity(subject: &str, login: &str) -> Identity {
         Identity {
