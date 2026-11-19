@@ -308,8 +308,25 @@ mod tests {
             ticket.wait().await.unwrap().status,
             super::super::Status::Accepted
         );
+        let mut stopping = UnixStream::connect(&path).await.unwrap();
+        stopping.write_u32(bytes.len() as u32).await.unwrap();
+        stopping.write_all(&bytes).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while hub.snapshot()["listener"]["reading"] != true {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), stopping.read_u32())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(hub.snapshot()["listener"]["reading"], false);
         assert!(!path.exists());
         drop(directory);
         assert!(!path.parent().unwrap().exists());

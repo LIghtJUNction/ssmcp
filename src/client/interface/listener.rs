@@ -419,7 +419,17 @@ impl Hub {
     }
 
     fn snapshot(&self) -> Value {
+        self.snapshot_for(None)
+            .expect("local status has no remote scope to validate")
+    }
+
+    fn snapshot_for(&self, caller: Option<&Caller>) -> Result<Value, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(caller) = caller {
+            // Validation and serialization must use this same guard: a reconnect
+            // between separate locks must not expose a new connection's status.
+            caller.validate(state.connection.as_ref())?;
+        }
         let now = Instant::now();
         let expired = state.expire(now);
         let value = json!({"schema_version":1,"connected":state.connection.is_some(),
@@ -439,7 +449,7 @@ impl Hub {
         if expired {
             self.changed();
         }
-        value
+        Ok(value)
     }
 
     fn target_for(&self, selected_thread: Option<&str>) -> Result<Target, String> {
@@ -827,16 +837,7 @@ impl Hub {
                 &caller,
             ),
             Request::Close { listener_id, token } => self.close_for(&listener_id, &token, &caller),
-            Request::Status {} => {
-                caller.validate(
-                    self.state
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .connection
-                        .as_ref(),
-                )?;
-                Ok(self.snapshot())
-            }
+            Request::Status {} => self.snapshot_for(Some(&caller)),
         }
     }
 }

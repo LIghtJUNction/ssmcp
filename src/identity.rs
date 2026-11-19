@@ -124,8 +124,17 @@ impl IdentityProviders {
         {
             return Err("mock identity endpoint must be an HTTP loopback origin".into());
         }
-        let mut providers = Self::new(public_url, Some(github))?;
+        // The opt-in fixture may bind an actual HTTP loopback origin so that its
+        // ACL namespace, OAuth issuer and provider callback remain identical.
+        // This adapter is cfg(test); Self::new still enforces HTTPS in production.
+        let public = Url::parse(&crate::server_endpoint::normalize_server(public_url)?)?;
+        let mut secure = public.clone();
+        secure
+            .set_scheme("https")
+            .map_err(|_| "invalid mock identity callback scheme")?;
+        let mut providers = Self::new(secure.as_str(), Some(github))?;
         let github = providers.github.as_mut().unwrap();
+        github.callback = public.join("oauth/callback/github")?;
         github.client = http_client(false)?;
         github.endpoints = GitHubEndpoints {
             authorize: base.join("login/oauth/authorize")?,

@@ -9,6 +9,7 @@ import hashlib
 import http.client
 import json
 import os
+import signal
 from pathlib import Path
 import select
 import socket
@@ -74,10 +75,18 @@ def worker(mode):
                 try:
                     connection.request("POST", "/mcp", json.dumps(payload).encode(), headers)
                     response = connection.getresponse()
-                    body = json.loads(response.read())
-                    if response.status != 200 or "error" in body:
+                    raw = response.read(256 * 1024 + 1)
+                    if len(raw) > 256 * 1024:
+                        raise RuntimeError("unexpected oversized owned HTTP response")
+                    # Authentication rejection may deliberately have no JSON body.
+                    # Assert the real HTTP status before decoding a success envelope.
+                    if response.status != 200:
                         result = {"ok": False, "http_status": response.status}
                     else:
+                        body = json.loads(raw)
+                        if "error" in body:
+                            print(json.dumps({"ok": False, "http_status": response.status}), flush=True)
+                            continue
                         envelope = body["result"]
                         native = envelope if envelope.get("isError") else envelope["structuredContent"]["result"]
                         if native.get("isError"):
@@ -267,7 +276,7 @@ class Transports(ForceSend):
         network.close()
         local.close()
         self.draft(front, "")
-        final, restored = front.disconnect()
+        final, restored = self.disconnect_front(front)
         self.check(not final["alternate_screen"] and restored == front.original_termios,
                    "the listener fixture restores its owned PTY exactly")
         deadline = time.monotonic() + 3
@@ -280,6 +289,10 @@ class Transports(ForceSend):
 
 
 def main():
+    def interrupted(_signal, _frame):
+        raise TimeoutError("listener E2E interrupted; cleaning up owned processes")
+
+    signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", choices=("http", "unix"))
     parser.add_argument("--bin-dir", type=Path)
@@ -311,6 +324,14 @@ def main():
         finally:
             harness.close_frontends()
             harness.cleanup()
+            owned = list(dict.fromkeys([*harness.processes, harness.account_gateway.process]))
+            report["cleanup"] = {
+                "owned_processes": [{"pid": item.pid, "exit_code": item.poll()} for item in owned],
+                "all_exited": all(item.poll() is not None for item in owned),
+            }
+            if not report["cleanup"]["all_exited"]:
+                report["status"] = "failed"
+                report["error"] = "an owned process remained after cleanup"
             report.update(checks=harness.checks, seconds=round(time.monotonic() - started, 3))
             (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(json.dumps({"status": report["status"], "checks": len(report["checks"]), "error": report.get("error")}))

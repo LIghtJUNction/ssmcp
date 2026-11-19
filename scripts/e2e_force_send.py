@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -66,6 +67,25 @@ class ForceSend(InputHistory):
         self.check(state["draft"]["cursor"] == len(value.encode()),
                    "bracketed input preserves the exact UTF-8 body and cursor")
         return state
+
+    def disconnect_front(self, front):
+        """Follow the current clear/remind/exit contract on this owned PTY."""
+        self.focus_input(front)
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120], "the exit confirmation viewport")
+        queued = self.queue()["queue"]
+        if self.ui("/display/conversation")["draft"]["text"]:
+            front.send(b"\x03")
+            self.wait_state(front, lambda state: not state["draft"]["text"],
+                            "Ctrl-C clears only the owned draft before exit")
+            self.check(front.process.poll() is None and self.queue()["queue"] == queued,
+                       "clearing the draft keeps the client open and preserves its ordinary queue")
+        front.send(b"\x03")
+        front.until(lambda shot: "Press Ctrl+C again to exit" in text(shot),
+                    "the explicit exit confirmation")
+        self.check(front.process.poll() is None,
+                   "the empty-input Ctrl-C warns without closing this owned client")
+        return front.disconnect()
 
     def force(self, front, value):
         self.draft(front, value)
@@ -275,12 +295,16 @@ class ForceSend(InputHistory):
         for secret in self.sensitive:
             self.check(secret.encode() not in front.transcript,
                        "automatic terminal output does not expose an owned credential")
-        final, restored = front.disconnect()
+        final, restored = self.disconnect_front(front)
         self.check(not final["alternate_screen"] and restored == front.original_termios,
                    "the force-send fixture restores its own terminal exactly")
 
 
 def main():
+    def interrupted(_signal, _frame):
+        raise TimeoutError("listener E2E interrupted; cleaning up owned processes")
+
+    signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--decoder", type=Path, required=True)
@@ -312,6 +336,14 @@ def main():
         finally:
             harness.close_frontends()
             harness.cleanup()
+            owned = list(dict.fromkeys([*harness.processes, harness.account_gateway.process]))
+            report["cleanup"] = {
+                "owned_processes": [{"pid": item.pid, "exit_code": item.poll()} for item in owned],
+                "all_exited": all(item.poll() is not None for item in owned),
+            }
+            if not report["cleanup"]["all_exited"]:
+                report["status"] = "failed"
+                report["error"] = "an owned process remained after cleanup"
             report.update(checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             (args.out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
