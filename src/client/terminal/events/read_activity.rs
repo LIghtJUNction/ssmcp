@@ -1,5 +1,6 @@
 //! A display projection over retained reads, never a replacement event stream.
 use super::{Event, correlation::Kind};
+use crate::client::language::{Language, localized};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
@@ -173,8 +174,14 @@ impl Group {
         self.members.contains(&index)
     }
 
-    pub(super) fn title(&self) -> String {
-        format!("Read {} items · {}", self.members.len(), self.source)
+    pub(super) fn title_in(&self, language: Language) -> String {
+        localized!(
+            language,
+            "Read {} items · {}",
+            "读取 {} 项 · {}",
+            self.members.len(),
+            self.source
+        )
     }
 }
 

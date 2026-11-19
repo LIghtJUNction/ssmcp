@@ -6,24 +6,51 @@ impl State {
     pub(super) fn chat_login(&mut self, arguments: &str) -> Result<(), String> {
         let mode = Mode::parse(arguments)?;
         if self.preview {
-            return Err("Preview does not start GitHub login or use desktop helpers".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Preview does not start GitHub login or use desktop helpers",
+                    "预览模式不启动 GitHub 登录，也不调用桌面工具",
+                )
+                .into());
         }
         if self.account == crate::client::account::status::Status::Local {
             return Err(
-                "本地会话无需 GitHub 登录。使用 /logs 中的 MCP 地址和一次性登录码授权控制端。"
+                self.ui.language.text("Local sessions do not need GitHub login. Use the MCP address and one-time login code in /logs to authorize the controller.", "本地会话无需 GitHub 登录。使用 /logs 中的 MCP 地址和一次性登录码授权控制端。")
                     .into(),
             );
         }
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
-            return Err("This session is signing out or closing".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "This session is signing out or closing",
+                    "此会话正在退出登录或关闭",
+                )
+                .into());
         }
         self.chat_poll_login();
         if let Some(task) = &self.conversation.login_task {
             task.request(mode)?;
-            self.notice = Some("Using the pending GitHub login…".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Using the pending GitHub login…",
+                        "正在使用待处理的 GitHub 登录…",
+                    )
+                    .into(),
+            );
         } else {
             self.conversation.login_task = Some(Task::start(mode)?);
-            self.notice = Some("Preparing GitHub login…".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text("Preparing GitHub login…", "正在准备 GitHub 登录…")
+                    .into(),
+            );
         }
         self.dirty = true;
         Ok(())
@@ -36,25 +63,41 @@ impl State {
             };
             match event {
                 Event::Link(link) => {
-                    let mut text = format!("Sign in with GitHub:\n{}", link.url);
+                    let mut text = localized!(
+                        self.ui.language,
+                        "Sign in with GitHub:\n{}",
+                        "使用 GitHub 登录：\n{}",
+                        link.url
+                    );
                     if let Some(code) = link.confirmation {
-                        text.push_str("\nConfirmation code: ");
+                        text.push_str(self.ui.language.text("\nConfirmation code: ", "\n确认码："));
                         text.push_str(&code);
                     }
-                    text.push_str("\n/login copy copies this link; /login link shows it again.");
+                    text.push_str(self.ui.language.text(
+                        "\n/login copy copies this link; /login link shows it again.",
+                        "\n/login copy 复制此链接；/login link 再次显示。",
+                    ));
                     self.chat_login_message(&text);
                 }
                 Event::Notice(message) => {
-                    self.notice = Some(message);
+                    self.notice = Some(self.ui.language.local_message(&message));
                 }
                 Event::Finished(result) => {
                     self.conversation.login_task = None;
                     let message = match result {
-                        Ok(principal) => format!("Signed in with GitHub as {principal}"),
-                        Err(error) => format!("GitHub login: {error}"),
+                        Ok(principal) => localized!(
+                            self.ui.language,
+                            "Signed in with GitHub as {principal}",
+                            "已使用 GitHub 登录为 {principal}"
+                        ),
+                        Err(error) => localized!(
+                            self.ui.language,
+                            "GitHub login: {error}",
+                            "GitHub 登录：{error}"
+                        ),
                     };
                     self.chat_login_message(&message);
-                    self.notice = Some(message);
+                    self.notice = Some(self.ui.language.local_message(&message));
                     self.dirty = true;
                     return;
                 }

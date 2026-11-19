@@ -1,6 +1,11 @@
 //! A shared cache of native command jobs with independent, lightweight view positions.
 use crate::{
-    client::{interface::harness, terminal, ui::Ui},
+    client::{
+        interface::harness,
+        language::{Language, localized},
+        terminal,
+        ui::Ui,
+    },
     runtime::Runtime,
     wire::Operation,
 };
@@ -84,11 +89,11 @@ impl Job {
         format!("{}.{:03}s", millis / 1000, millis % 1000)
     }
 
-    fn exit(&self) -> String {
+    fn exit(&self, language: Language) -> String {
         if let Some(code) = self.data["exit_code"].as_i64() {
             code.to_string()
         } else if let Some(signal) = self.data["exit_signal"].as_i64() {
-            format!("signal {signal}")
+            localized!(language, "signal {signal}", "信号 {signal}")
         } else {
             "—".into()
         }
@@ -437,13 +442,20 @@ impl TaskPanel {
         }
         let mut rows: Vec<(String, &str, Option<String>)> = Vec::new();
         let title = if self.preview {
-            " Tasks · Preview · fictional task data".into()
+            ui.language
+                .text(
+                    " Tasks · Preview · fictional task data",
+                    " 任务 · 预览 · 示例任务数据",
+                )
+                .into()
         } else {
-            format!(
+            localized!(
+                ui.language,
                 " Tasks · {} jobs{}",
+                " 任务 · {} 个作业{}",
                 self.jobs.len(),
                 if self.loading && !self.loaded && self.error.is_none() {
-                    " · loading…"
+                    ui.language.text(" · loading…", " · 加载中…")
                 } else {
                     ""
                 }
@@ -452,20 +464,34 @@ impl TaskPanel {
         rows.push((title, "heading", None));
         rows.push((
             if self.position.detail {
-                " Esc list · ↑/↓ scroll · /tasks cancel JOB_ID"
+                ui.language.text(
+                    " Esc list · ↑/↓ scroll · /tasks cancel JOB_ID",
+                    " Esc 列表 · ↑/↓ 滚动 · /tasks cancel JOB_ID",
+                )
             } else {
-                " ↑/↓ select · Enter details · PgUp/PgDn scroll"
+                ui.language.text(
+                    " ↑/↓ select · Enter details · PgUp/PgDn scroll",
+                    " ↑/↓ 选择 · Enter 详情 · PgUp/PgDn 滚动",
+                )
             }
             .into(),
             "muted",
             None,
         ));
         if let Some(error) = &self.error {
-            rows.push((format!(" Refresh failed: {error}"), "error", None));
+            rows.push((
+                localized!(
+                    ui.language,
+                    " Refresh failed: {error}",
+                    " 刷新失败：{error}"
+                ),
+                "error",
+                None,
+            ));
         }
         if self.position.detail {
             let indent = if width > 1 { " " } else { "" };
-            let detail = self.detail_lines(width.saturating_sub(indent.len()).max(1));
+            let detail = self.detail_lines(width.saturating_sub(indent.len()).max(1), ui.language);
             let capacity = height.saturating_sub(rows.len());
             self.position.detail_scroll = self
                 .position
@@ -483,7 +509,11 @@ impl TaskPanel {
                 && self.selected_index().is_none()
             {
                 rows.push((
-                    format!(" Selected job {id} is no longer retained"),
+                    localized!(
+                        ui.language,
+                        " Selected job {id} is no longer retained",
+                        " 所选作业 {id} 已不在保留记录中"
+                    ),
                     "warning",
                     None,
                 ));
@@ -491,11 +521,14 @@ impl TaskPanel {
             if self.jobs.is_empty() {
                 rows.push((
                     if self.loaded {
-                        " No local command jobs."
+                        ui.language
+                            .text(" No local command jobs.", " 暂无本机命令作业。")
                     } else if self.loading && self.error.is_none() {
-                        " Loading local command jobs…"
+                        ui.language
+                            .text(" Loading local command jobs…", " 正在加载本机命令作业…")
                     } else {
-                        " No task snapshot is available."
+                        ui.language
+                            .text(" No task snapshot is available.", " 暂无可用的任务快照。")
                     }
                     .into(),
                     "muted",
@@ -518,12 +551,14 @@ impl TaskPanel {
                     let selected = self.position.selected_id.as_deref() == Some(job.id.as_str());
                     let tone = if selected { "accent" } else { "foreground" };
                     rows.push((
-                        format!(
+                        localized!(
+                            ui.language,
                             "{} {} · {} · exit {} · {}",
+                            "{} {} · {} · 退出 {} · {}",
                             if selected { "›" } else { " " },
                             job.id,
-                            job.state(),
-                            job.exit(),
+                            ui.language.state_label(job.state()),
+                            job.exit(ui.language),
                             job.duration()
                         ),
                         tone,
@@ -532,7 +567,7 @@ impl TaskPanel {
                     if per_job == 3 {
                         rows.push((format!("  {}", job.command()), tone, Some(job.id.clone())));
                         rows.push((
-                            format!("  cwd: {}", job.cwd()),
+                            localized!(ui.language, "  cwd: {}", "  目录：{}", job.cwd()),
                             "muted",
                             Some(job.id.clone()),
                         ));
@@ -550,11 +585,13 @@ impl TaskPanel {
         rendered
     }
 
-    fn detail_lines(&self, width: usize) -> Vec<String> {
+    fn detail_lines(&self, width: usize, language: Language) -> Vec<String> {
         let Some(index) = self.selected_index() else {
             return wrap(
-                &format!(
+                &localized!(
+                    language,
                     "Job {} is no longer retained. Press Esc to return to the task list.",
+                    "作业 {} 已不在保留记录中。按 Esc 返回任务列表。",
                     self.position.selected_id.as_deref().unwrap_or("—")
                 ),
                 width,
@@ -562,20 +599,29 @@ impl TaskPanel {
         };
         let job = &self.jobs[index];
         let mut lines = vec![
-            format!("Job: {}", job.id),
-            format!("State: {}", job.state()),
-            format!("Exit: {}", job.exit()),
-            format!("Duration: {}", job.duration()),
-            format!("Command: {}", job.command()),
-            format!("cwd: {}", job.cwd()),
+            localized!(language, "Job: {}", "作业：{}", job.id),
+            localized!(
+                language,
+                "State: {}",
+                "状态：{}",
+                language.state_label(job.state())
+            ),
+            localized!(language, "Exit: {}", "退出：{}", job.exit(language)),
+            localized!(language, "Duration: {}", "时长：{}", job.duration()),
+            localized!(language, "Command: {}", "命令：{}", job.command()),
+            localized!(language, "cwd: {}", "目录：{}", job.cwd()),
         ];
         if let Some((id, error)) = &self.detail_error
             && id == &job.id
         {
-            lines.push(format!("Status refresh failed: {error}"));
+            lines.push(localized!(
+                language,
+                "Status refresh failed: {error}",
+                "状态刷新失败：{error}"
+            ));
         }
         if let Some(error) = job.data["error"].as_str() {
-            lines.push(format!("Error: {error}"));
+            lines.push(localized!(language, "Error: {error}", "错误：{error}"));
         }
         for (key, label) in [
             ("stdin", "Stdin"),
@@ -583,10 +629,19 @@ impl TaskPanel {
             ("stderr", "Stderr"),
         ] {
             if let Some(metadata) = job.data.get(key) {
-                lines.push(format!("{label} metadata: {metadata}"));
+                lines.push(localized!(
+                    language,
+                    "{label} metadata: {metadata}",
+                    "{label} 元数据：{metadata}"
+                ));
             }
         }
-        lines.push(format!("Explicit cancellation: /tasks cancel {}", job.id));
+        lines.push(localized!(
+            language,
+            "Explicit cancellation: /tasks cancel {}",
+            "明确取消：/tasks cancel {}",
+            job.id
+        ));
         lines
             .into_iter()
             .flat_map(|line| wrap(&line, width))
@@ -1090,8 +1145,10 @@ mod tests {
             .await
             .expect("native metadata refresh timed out")
             .expect("native metadata worker failed");
-            assert!(panel.poll());
-            assert!(!panel.loading);
+            // A completed refresh can carry the same snapshot (including the
+            // millisecond duration). poll() reports repaint need, not receipt.
+            panel.poll();
+            assert!(!panel.loading, "the real reply was consumed");
             assert!(panel.snapshot()["error"].is_null());
             assert!(panel.snapshot()["detail_error"].is_null());
         }

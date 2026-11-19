@@ -1,5 +1,5 @@
 //! Connection identity and hints share the existing, single bottom row.
-use super::super::account;
+use super::super::{account, language::Language};
 use reqwest::Url;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
@@ -70,30 +70,32 @@ impl Connection {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self, language: Language) -> &'static str {
         match self {
-            Self::Preview => "preview · sample data",
-            Self::Disconnected => "disconnected",
-            Self::QueueUpdate => "server update required for queue",
-            Self::Connected => "connected",
+            Self::Preview => language.text("preview · sample data", "预览 · 示例数据"),
+            Self::Disconnected => language.text("disconnected", "已断开"),
+            Self::QueueUpdate => {
+                language.text("server update required for queue", "队列需要更新服务端")
+            }
+            Self::Connected => language.text("connected", "已连接"),
         }
     }
 
-    fn compact(self) -> &'static str {
+    fn compact(self, language: Language) -> &'static str {
         match self {
-            Self::Preview => "preview",
-            Self::Disconnected => "offline",
-            Self::QueueUpdate => "queue update",
-            Self::Connected => "connected",
+            Self::Preview => language.text("preview", "预览"),
+            Self::Disconnected => language.text("offline", "离线"),
+            Self::QueueUpdate => language.text("queue update", "队列待更新"),
+            Self::Connected => language.text("connected", "已连接"),
         }
     }
 
-    fn short(self) -> &'static str {
+    fn short(self, language: Language) -> &'static str {
         match self {
-            Self::Disconnected => "off",
-            Self::Connected => "on",
-            Self::QueueUpdate => "update",
-            Self::Preview => "preview",
+            Self::Disconnected => language.text("off", "断开"),
+            Self::Connected => language.text("on", "在线"),
+            Self::QueueUpdate => language.text("update", "更新"),
+            Self::Preview => language.text("preview", "预览"),
         }
     }
 }
@@ -136,22 +138,27 @@ fn compact_origin(text: &str, width: usize) -> String {
     format!("{}…{}", &text[..head], &text[text.len() - tail..])
 }
 
-fn connection_text(origin: Option<&Origin>, state: Connection, width: usize) -> String {
+fn connection_text(
+    origin: Option<&Origin>,
+    state: Connection,
+    width: usize,
+    language: Language,
+) -> String {
     let Some(origin) = origin else {
-        return clip(state.label(), width);
+        return clip(state.label(language), width);
     };
-    let full = format!("{} · {}", state.label(), origin.full);
+    let full = format!("{} · {}", state.label(language), origin.full);
     if full.width() <= width {
         return full;
     }
-    let compact = format!("{} · {}", state.compact(), origin.authority);
+    let compact = format!("{} · {}", state.compact(language), origin.authority);
     if compact.width() <= width {
         return compact;
     }
     let status = if width < 20 {
-        state.short()
+        state.short(language)
     } else {
-        state.compact()
+        state.compact(language)
     };
     let prefix = format!("{status} · ");
     if prefix.width() < width {
@@ -188,7 +195,8 @@ fn hint_text(hint: &str, width: usize) -> String {
 }
 
 /// Notices receive space before optional shortcuts; neither side can add a row.
-pub(super) fn render(
+pub(super) fn render_in(
+    language: Language,
     hint: &str,
     origin: Option<&Origin>,
     state: Connection,
@@ -208,14 +216,14 @@ pub(super) fn render(
         // window must not shorten it just because connection details now fit.
         let left = clip(hint, available);
         let remaining = available.saturating_sub(left.width() + 2);
-        let right = if remaining >= state.short().width() {
-            connection_text(origin, state, remaining)
+        let right = if remaining >= state.short(language).width() {
+            connection_text(origin, state, remaining, language)
         } else {
             String::new()
         };
         (left, right)
     } else {
-        let right = connection_text(origin, state, available);
+        let right = connection_text(origin, state, available, language);
         let left = hint_text(hint, available.saturating_sub(right.width() + 2));
         (left, right)
     };
@@ -226,6 +234,17 @@ pub(super) fn render(
         " ".repeat(gap),
         " ".repeat(margin)
     )
+}
+
+#[cfg(test)]
+fn render(
+    hint: &str,
+    origin: Option<&Origin>,
+    state: Connection,
+    columns: u16,
+    priority: bool,
+) -> String {
+    render_in(Language::English, hint, origin, state, columns, priority)
 }
 
 #[cfg(test)]

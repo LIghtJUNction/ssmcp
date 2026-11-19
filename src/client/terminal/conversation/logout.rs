@@ -76,17 +76,57 @@ impl Drop for Task {
     }
 }
 
+fn logout_message(outcome: &account::LogoutOutcome, language: Language) -> String {
+    if language == Language::English {
+        return outcome.message();
+    }
+    let server = &outcome.server;
+    match outcome.status {
+        account::LogoutStatus::NotSignedIn => format!("尚未登录 {server}。"),
+        account::LogoutStatus::Revoked => {
+            format!("已退出 {server} 的登录。此登录及之前派生的凭据均已撤销。")
+        }
+        account::LogoutStatus::AlreadyInvalid => {
+            format!("已退出 {server} 的登录。保存的登录此前已过期或撤销。")
+        }
+        account::LogoutStatus::LocalOnly => format!(
+            "已在本机退出 {server} 的登录。远程撤销尚未确认；此登录及派生设备的凭据可能在到期前仍有效。"
+        ),
+    }
+}
+
 impl State {
     pub(super) fn chat_logout(&mut self, arguments: &str) -> Result<(), String> {
         if !arguments.is_empty() {
-            return Err("Use /logout without arguments to sign out of this connection".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Use /logout without arguments to sign out of this connection",
+                    "请使用 /logout，不加参数，以退出此连接的登录",
+                )
+                .into());
         }
         if self.preview {
-            return Err("Preview cannot sign out or revoke a saved login".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Preview cannot sign out or revoke a saved login",
+                    "预览模式无法退出或撤销已保存的登录",
+                )
+                .into());
         }
         self.chat_poll_logout();
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
-            return Err("This session is already signing out or closing".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "This session is already signing out or closing",
+                    "此会话正在退出登录或关闭",
+                )
+                .into());
         }
         if self.logout_target.is_none() && self.conversation.login_task.is_none() {
             self.chat_finish_logout(Ok(None));
@@ -99,11 +139,19 @@ impl State {
                     .ok()
                     .map(|(_, handle)| handle)
             })
-            .ok_or("Logout requires an active client runtime")?;
+            .ok_or(self.ui.language.text(
+                "Logout requires an active client runtime",
+                "退出登录需要正在运行的客户端",
+            ))?;
         let login = self.conversation.login_task.take();
         self.conversation.logout_task =
             Some(Task::start(runtime, self.logout_target.clone(), login));
-        self.notice = Some("Signing out of this connection…".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text("Signing out of this connection…", "正在退出此连接的登录…")
+                .into(),
+        );
         self.dirty = true;
         Ok(())
     }
@@ -119,8 +167,8 @@ impl State {
     pub(in crate::client::terminal) fn chat_finish_logout(&mut self, result: Completion) {
         match result {
             Ok(outcome) => {
-                let message = outcome.map(|outcome| outcome.message()).unwrap_or_else(|| {
-                    "Disconnected this temporary session. No saved account login was revoked."
+                let message = outcome.map(|outcome| logout_message(&outcome, self.ui.language)).unwrap_or_else(|| {
+                    self.ui.language.text("Disconnected this temporary session. No saved account login was revoked.", "已断开此临时会话，没有撤销任何已保存的账号登录。")
                         .into()
                 });
                 self.conversation.exit_message = Some(message.clone());
@@ -128,7 +176,12 @@ impl State {
                 self.notice = Some(message);
             }
             Err(error) => {
-                self.notice = Some(format!("Logout failed: {}", panel::safe_text(&error)));
+                self.notice = Some(localized!(
+                    self.ui.language,
+                    "Logout failed: {}",
+                    "退出登录失败：{}",
+                    panel::safe_text(&error)
+                ));
             }
         }
         self.dirty = true;

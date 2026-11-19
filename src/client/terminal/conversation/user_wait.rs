@@ -24,36 +24,50 @@ fn groups(snapshot: &Snapshot) -> BTreeMap<&str, Vec<&Entry>> {
     episodes
 }
 
-fn intent_text(intent: Intent) -> &'static str {
+fn intent_text(intent: Intent, language: Language) -> &'static str {
     match intent {
-        Intent::NeedUser => "等待你的输入",
-        Intent::Finish => "等待你确认是否结束",
+        Intent::NeedUser => language.text("Waiting for your input", "等待你的输入"),
+        Intent::Finish => language.text("Confirm whether to finish", "等待你确认是否结束"),
     }
 }
 
-fn outcome_text(outcome: Outcome) -> &'static str {
+fn outcome_text(outcome: Outcome, language: Language) -> &'static str {
     match outcome {
-        Outcome::Ready => "消息已就绪，等待提交",
-        Outcome::TimedOut => "本轮等待超时",
-        Outcome::Cancelled => "等待已取消，会话继续",
-        Outcome::Disconnected => "连接已断开",
-        Outcome::AuthorizationRevoked => "权限已撤销",
-        Outcome::BindingInvalid => "会话绑定已失效",
-        Outcome::Superseded => "等待已被替代",
+        Outcome::Ready => language.text("Message ready; awaiting commit", "消息已就绪，等待提交"),
+        Outcome::TimedOut => language.text("This wait timed out", "本轮等待超时"),
+        Outcome::Cancelled => {
+            language.text("Wait cancelled; session continues", "等待已取消，会话继续")
+        }
+        Outcome::Disconnected => language.text("Disconnected", "连接已断开"),
+        Outcome::AuthorizationRevoked => language.text("Authorization revoked", "权限已撤销"),
+        Outcome::BindingInvalid => language.text("Session binding invalid", "会话绑定已失效"),
+        Outcome::Superseded => language.text("Wait superseded", "等待已被替代"),
     }
 }
 
-fn detail(snapshot: &Snapshot) -> String {
+fn detail(snapshot: &Snapshot, language: Language) -> String {
     let episodes = groups(snapshot);
     let mut lines = Vec::new();
     if episodes.is_empty() {
         lines.push(if snapshot.connected {
-            "当前没有程序在等待你的输入".to_owned()
+            language
+                .text(
+                    "No program is waiting for your input",
+                    "当前没有程序在等待你的输入",
+                )
+                .to_owned()
         } else {
-            "当前连接未就绪，没有活动等待".to_owned()
+            language
+                .text(
+                    "Connection not ready; no active waits",
+                    "当前连接未就绪，没有活动等待",
+                )
+                .to_owned()
         });
     } else {
-        lines.push(format!(
+        lines.push(localized!(
+            language,
+            "{} wait episodes · {} independent requests",
             "{} 项等待 · {} 个独立请求",
             episodes.len(),
             snapshot.active.len()
@@ -66,67 +80,104 @@ fn detail(snapshot: &Snapshot) -> String {
                 .unwrap_or(entries[0]);
             let mixed = entries.iter().any(|entry| entry.intent != first.intent);
             let recipient = if first.recipient == "next" {
-                "Next caller"
+                language.text("Next caller", "下一个调用方")
             } else {
                 &first.recipient
             };
             lines.push(String::new());
-            lines.push(format!("{} · 目标 {recipient}", intent_text(first.intent)));
+            lines.push(localized!(
+                language,
+                "{} · recipient {recipient}",
+                "{} · 目标 {recipient}",
+                intent_text(first.intent, language)
+            ));
             if let Some(reason) = &first.reason {
                 lines.push(reason.clone());
             }
             for entry in entries {
                 let remaining = entry.remaining_ms.div_ceil(1000);
                 lines.push(if mixed {
-                    format!(
+                    localized!(
+                        language,
+                        "#{} · {} · {remaining}s left in this wait",
                         "#{} · {} · 本轮剩余 {remaining}s",
                         entry.wait_id,
-                        intent_text(entry.intent)
+                        intent_text(entry.intent, language)
                     )
                 } else {
-                    format!("#{} · 本轮剩余 {remaining}s", entry.wait_id)
+                    localized!(
+                        language,
+                        "#{} · {remaining}s left in this wait",
+                        "#{} · 本轮剩余 {remaining}s",
+                        entry.wait_id
+                    )
                 });
                 let notification = match entry.notification {
                     Some(report) => {
                         let status = match report.status {
-                            Status::Sent => "系统通知已提交，未确认已读",
-                            Status::Unavailable => "系统通知不可用",
-                            Status::Failed => "系统通知未完成",
+                            Status::Sent => language.text(
+                                "Notification submitted; read unconfirmed",
+                                "系统通知已提交，未确认已读",
+                            ),
+                            Status::Unavailable => {
+                                language.text("System notification unavailable", "系统通知不可用")
+                            }
+                            Status::Failed => {
+                                language.text("System notification failed", "系统通知未完成")
+                            }
                         };
                         format!(
                             "{status}{}",
                             if report.deduplicated {
-                                "（已去重）"
+                                language.text(" (deduplicated)", "（已去重）")
                             } else {
                                 ""
                             }
                         )
                     }
-                    None if entry.notification_requested => "系统通知处理中，未确认已读".into(),
-                    None => "未请求系统通知".into(),
+                    None if entry.notification_requested => language
+                        .text(
+                            "Notification pending; read unconfirmed",
+                            "系统通知处理中，未确认已读",
+                        )
+                        .into(),
+                    None => language
+                        .text("No system notification requested", "未请求系统通知")
+                        .into(),
                 };
                 lines.push(notification);
             }
         }
         lines.push(String::new());
-        lines.push("/wait cancel <完整编号或唯一前缀> 只取消对应等待，会话继续".into());
+        lines.push(language.text("/wait cancel <full ID or unique prefix> cancels only that wait; the session continues", "/wait cancel <完整编号或唯一前缀> 只取消对应等待，会话继续").into());
     }
     if !snapshot.recent.is_empty() {
         lines.push(String::new());
-        lines.push("最近的本机等待结果：".into());
+        lines.push(
+            language
+                .text("Recent local wait results:", "最近的本机等待结果：")
+                .into(),
+        );
         for completed in snapshot.recent.iter().rev().take(4) {
             lines.push(format!(
                 "#{} · {}",
                 completed.wait_id,
-                outcome_text(completed.status)
+                outcome_text(completed.status, language)
             ));
         }
     }
-    lines.push("取消只结束等待；你的消息仍按队列状态处理".into());
+    lines.push(
+        language
+            .text(
+                "Cancelling ends only the wait; your messages keep their queue state",
+                "取消只结束等待；你的消息仍按队列状态处理",
+            )
+            .into(),
+    );
     lines.join("\n")
 }
 
-fn hint(snapshot: &Snapshot) -> Option<String> {
+fn hint(snapshot: &Snapshot, language: Language) -> Option<String> {
     let episodes = groups(snapshot);
     let finish = snapshot
         .active
@@ -134,32 +185,63 @@ fn hint(snapshot: &Snapshot) -> Option<String> {
         .any(|entry| entry.intent == Intent::Finish);
     if episodes.len() > 1 {
         Some(if finish {
-            format!("{} 项等待 · 含结束确认 · /wait", episodes.len())
+            localized!(
+                language,
+                "{} waits · includes finish confirmation · /wait",
+                "{} 项等待 · 含结束确认 · /wait",
+                episodes.len()
+            )
         } else {
-            format!("{} 项等待你的回应 · /wait", episodes.len())
+            localized!(
+                language,
+                "{} waits for your response · /wait",
+                "{} 项等待你的回应 · /wait",
+                episodes.len()
+            )
         })
     } else if finish {
-        Some(format!("{} · /wait", intent_text(Intent::Finish)))
+        Some(format!("{} · /wait", intent_text(Intent::Finish, language)))
     } else {
         snapshot
             .active
             .first()
-            .map(|entry| format!("{} · /wait", intent_text(entry.intent)))
+            .map(|entry| format!("{} · /wait", intent_text(entry.intent, language)))
     }
 }
 
 impl State {
     pub(super) fn chat_user_wait(&mut self, arguments: &str) -> Result<(), String> {
         if self.preview {
-            return Err("预览不连接真实的用户等待".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Preview does not connect to real user waits",
+                    "预览不连接真实的用户等待",
+                )
+                .into());
         }
         let text = match arguments.split_whitespace().collect::<Vec<_>>().as_slice() {
-            [] => detail(&waiting::snapshot()),
+            [] => detail(&waiting::snapshot(), self.ui.language),
             ["cancel", prefix] => {
-                let id = waiting::cancel(prefix)?;
-                format!("已取消等待 #{id}；会话继续，消息队列和草稿保持原样")
+                let id = waiting::cancel(prefix)
+                    .map_err(|error| self.ui.language.local_message(&error))?;
+                localized!(
+                    self.ui.language,
+                    "Cancelled wait #{id}; session continues, queue and draft unchanged",
+                    "已取消等待 #{id}；会话继续，消息队列和草稿保持原样"
+                )
             }
-            _ => return Err("用法：/wait 或 /wait cancel <等待编号或唯一前缀>".into()),
+            _ => {
+                return Err(self
+                    .ui
+                    .language
+                    .text(
+                        "Use /wait or /wait cancel <wait ID or unique prefix>",
+                        "用法：/wait 或 /wait cancel <等待编号或唯一前缀>",
+                    )
+                    .into());
+            }
         };
         self.chat_show_user_wait(&text, arguments.is_empty());
         Ok(())
@@ -177,7 +259,13 @@ impl State {
             format!("\n[USER WAIT] {text}\n").as_bytes(),
         );
         self.notice = Some(if inspecting {
-            "等待状态已显示 · /wait cancel <唯一编号> 可取消等待".into()
+            self.ui
+                .language
+                .text(
+                    "Wait status shown · /wait cancel <unique ID> cancels a wait",
+                    "等待状态已显示 · /wait cancel <唯一编号> 可取消等待",
+                )
+                .into()
         } else {
             text
         });
@@ -200,12 +288,12 @@ impl State {
         // connection state that parallel tests could change.
         #[cfg(test)]
         if let Some(snapshot) = &self.conversation.wait_fixture {
-            return hint(snapshot);
+            return hint(snapshot, self.ui.language);
         }
         if self.preview {
             return None;
         }
-        hint(&waiting::snapshot())
+        hint(&waiting::snapshot(), self.ui.language)
     }
 }
 
@@ -247,7 +335,14 @@ mod tests {
         assert_eq!(arguments("/waiting for text"), None);
         assert_eq!(arguments("/waiter"), None);
         for draft in ["/wait", "  /wait cancel exact-id"] {
-            let mut state = super::super::super::preview_state(24, 48, &Ui::default());
+            let mut state = super::super::super::preview_state(
+                24,
+                48,
+                &Ui {
+                    language: Language::Chinese,
+                    ..Ui::default()
+                },
+            );
             state.conversation.composer.set_text(draft);
             state.conversation.editing = Some("untouched-queue-id".into());
             state.conversation.target = Some("untouched-agent".into());
@@ -279,10 +374,10 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(
-            hint(&snapshot).as_deref(),
+            hint(&snapshot, Language::Chinese).as_deref(),
             Some("2 项等待 · 含结束确认 · /wait")
         );
-        let text = detail(&snapshot);
+        let text = detail(&snapshot, Language::Chinese);
         assert_eq!(text.matches("Synthetic wait reason").count(), 2);
         for id in ["#wait-alpha", "#wait-alpine", "#wait-beta"] {
             assert!(text.contains(id));
@@ -296,8 +391,11 @@ mod tests {
             ],
             ..Snapshot::default()
         };
-        assert_eq!(hint(&mixed).as_deref(), Some("等待你确认是否结束 · /wait"));
-        let text = detail(&mixed);
+        assert_eq!(
+            hint(&mixed, Language::Chinese).as_deref(),
+            Some("等待你确认是否结束 · /wait")
+        );
+        let text = detail(&mixed, Language::Chinese);
         assert!(text.contains("#first-input · 等待你的输入"));
         assert!(text.contains("#second-finish · 等待你确认是否结束"));
         assert!(!text.contains("user_wait.received"));
@@ -323,17 +421,28 @@ mod tests {
             }],
             ..Snapshot::default()
         };
-        let text = detail(&snapshot);
+        let text = detail(&snapshot, Language::Chinese);
         assert!(text.contains("未确认已读"));
         assert!(text.contains("消息已就绪，等待提交"));
         assert!(!text.contains("已收到") && !text.contains("用户已读"));
-        assert!(unicode_width::UnicodeWidthStr::width(hint(&snapshot).unwrap().as_str()) <= 48);
+        assert!(
+            unicode_width::UnicodeWidthStr::width(
+                hint(&snapshot, Language::Chinese).unwrap().as_str()
+            ) <= 48
+        );
     }
 
     #[test]
     fn user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls() {
         for width in [120, 48] {
-            let mut state = super::super::super::preview_state(28, width, &Ui::default());
+            let mut state = super::super::super::preview_state(
+                28,
+                width,
+                &Ui {
+                    language: Language::Chinese,
+                    ..Ui::default()
+                },
+            );
             state.events.clear();
             state.notice = None;
             state
@@ -371,18 +480,13 @@ mod tests {
                 rendered.contains("› /wait") && rendered.contains("查看用户等待"),
                 "{rendered}"
             );
-            assert!(
-                state
-                    .chat_contextual_hint("")
-                    .unwrap()
-                    .contains("Tab insert")
-            );
+            assert!(state.chat_contextual_hint("").unwrap().contains("Tab 插入"));
             assert!(state.chat_user_wait_hint().is_none());
             // A narrow footer may retain only the existing connection label;
             // the selected command remains visible above it.
             if width == 120 {
                 assert!(
-                    rendered.lines().last().unwrap().contains("Tab insert"),
+                    rendered.lines().last().unwrap().contains("Tab 插入"),
                     "{rendered}"
                 );
             }
@@ -400,12 +504,12 @@ mod tests {
                 state
                     .chat_contextual_hint("")
                     .unwrap()
-                    .contains("Enter expand")
+                    .contains("Enter 展开")
             );
             assert!(state.chat_user_wait_hint().is_none());
             if width == 120 {
                 assert!(
-                    rendered.lines().last().unwrap().contains("Enter expand"),
+                    rendered.lines().last().unwrap().contains("Enter 展开"),
                     "{rendered}"
                 );
             }
@@ -424,10 +528,17 @@ mod tests {
             ..Snapshot::default()
         };
         for width in [120, 48] {
-            let mut state = super::super::super::preview_state(28, width, &Ui::default());
+            let mut state = super::super::super::preview_state(
+                28,
+                width,
+                &Ui {
+                    language: Language::Chinese,
+                    ..Ui::default()
+                },
+            );
             state.events.clear();
             state.conversation.composer.set_text("/wait");
-            state.chat_show_user_wait(&detail(&snapshot), true);
+            state.chat_show_user_wait(&detail(&snapshot, Language::Chinese), true);
             let rendered = screen(&mut state);
             assert!(!rendered.contains("\\n"), "{rendered}");
             assert!(

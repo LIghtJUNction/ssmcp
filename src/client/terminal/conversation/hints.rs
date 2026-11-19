@@ -51,57 +51,127 @@ impl State {
                 _ => return None,
             }
         };
-        Some(shortcuts(hint, self.geometry.cols, status))
+        Some(shortcuts_in(
+            hint,
+            self.geometry.cols,
+            status,
+            self.ui.language,
+        ))
     }
 }
 
+#[cfg(test)]
 fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
+    shortcuts_in(hint, width, status, Language::English)
+}
+
+fn shortcuts_in(hint: Hint, width: u16, status: &str, language: Language) -> String {
     let alternatives = match hint {
         Hint::Completion => [
-            "↑↓ choose · Tab insert · Esc close · /help",
-            "↑↓ choose · Tab insert · Esc close",
-            "Tab insert · Esc close",
+            language.text(
+                "↑↓ choose · Tab insert · Esc close · /help",
+                "↑↓ 选择 · Tab 插入 · Esc 关闭 · /help",
+            ),
+            language.text(
+                "↑↓ choose · Tab insert · Esc close",
+                "↑↓ 选择 · Tab 插入 · Esc 关闭",
+            ),
+            language.text("Tab insert · Esc close", "Tab 插入 · Esc 关闭"),
         ],
         Hint::Loading => [
-            "Loading references · keep typing · Esc close",
-            "Loading references · Esc close",
-            "Loading… · Esc close",
+            language.text(
+                "Loading references · keep typing · Esc close",
+                "加载引用中 · 可继续输入 · Esc 关闭",
+            ),
+            language.text("Loading references · Esc close", "加载引用中 · Esc 关闭"),
+            language.text("Loading… · Esc close", "加载中… · Esc 关闭"),
         ],
         Hint::EmptyInput => [
-            "F7 copy · ↑ edit queued · Alt+↑/↓ input height · @ files · $ skills · / commands",
-            "F7 copy · ↑ edit queued · @ files · / commands",
-            "F7 copy · ↑ edit queued · F1 help",
+            language.text(
+                "F7 copy · ↑ edit queued · Alt+↑/↓ input height · @ files · $ skills · / commands",
+                "F7 复制 · ↑ 编辑待发项 · Alt+↑/↓ 输入框高度 · @ 文件 · $ 技能 · / 命令",
+            ),
+            language.text(
+                "F7 copy · ↑ edit queued · @ files · / commands",
+                "F7 复制 · ↑ 编辑待发项 · @ 文件 · / 命令",
+            ),
+            language.text(
+                "F7 copy · ↑ edit queued · F1 help",
+                "F7 复制 · ↑ 编辑待发项 · F1 帮助",
+            ),
         ],
         Hint::Draft => [
-            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy · Alt+↑/↓ input height",
-            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy",
-            "Enter send · F7 copy · F1 help",
+            language.text(
+                "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy · Alt+↑/↓ input height",
+                "Enter 发送 · Ctrl+J 换行 · Ctrl+C 清空 · F7 复制 · Alt+↑/↓ 高度",
+            ),
+            language.text(
+                "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy",
+                "Enter 发送 · Ctrl+J 换行 · Ctrl+C 清空 · F7 复制",
+            ),
+            language.text(
+                "Enter send · F7 copy · F1 help",
+                "Enter 发送 · F7 复制 · F1 帮助",
+            ),
         ],
         Hint::Conversation => [
-            "F7 copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "F7 copy · ↑↓ select · Enter expand · Tab input",
-            "F7 copy · Enter expand · Tab input",
+            language.text(
+                "F7 copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
+                "F7 复制 · ↑↓ 选择 · Enter 展开 · PgUp/PgDn 滚动 · ←/→ 面板 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · ↑↓ select · Enter expand · Tab input",
+                "F7 复制 · ↑↓ 选择 · Enter 展开 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter expand · Tab input",
+                "F7 复制 · Enter 展开 · Tab 输入",
+            ),
         ],
         Hint::Audit => [
-            "F7 copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "F7 copy · Enter details · PgUp/PgDn scroll · Tab input",
-            "F7 copy · Enter details · Tab input",
+            language.text(
+                "F7 copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
+                "F7 复制 · ↑↓ 浏览 · Enter 详情 · PgUp/PgDn 滚动 · ←/→ 面板 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter details · PgUp/PgDn scroll · Tab input",
+                "F7 复制 · Enter 详情 · PgUp/PgDn 滚动 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter details · Tab input",
+                "F7 复制 · Enter 详情 · Tab 输入",
+            ),
         ],
         Hint::Queue => [
-            "F7 copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
-            "F7 copy · Enter edit · i inspect · Tab input",
-            "F7 copy · Enter edit · Tab input",
+            language.text(
+                "F7 copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
+                "F7 复制 · ↑↓ 选择 · Enter 编辑 · i 查看 · Delete 取消 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter edit · i inspect · Tab input",
+                "F7 复制 · Enter 编辑 · i 查看 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter edit · Tab input",
+                "F7 复制 · Enter 编辑 · Tab 输入",
+            ),
         ],
         Hint::QueueInspect => [
-            "F7 copy · ↑↓ select · Enter inspect · i inspect · Tab input",
-            "F7 copy · Enter inspect · Tab input",
-            "Enter inspect · Tab input",
+            language.text(
+                "F7 copy · ↑↓ select · Enter inspect · i inspect · Tab input",
+                "F7 复制 · ↑↓ 选择 · Enter 查看 · i 查看 · Tab 输入",
+            ),
+            language.text(
+                "F7 copy · Enter inspect · Tab input",
+                "F7 复制 · Enter 查看 · Tab 输入",
+            ),
+            language.text("Enter inspect · Tab input", "Enter 查看 · Tab 输入"),
         ],
     };
     let available = usize::from(width.saturating_sub(1));
     let hint = alternatives
         .into_iter()
-        .chain(["F1 help", "F1", "?"])
+        .chain([language.text("F1 help", "F1 帮助"), "F1", "?"])
         .find(|text| text.width() <= available)
         .unwrap_or("");
     let with_status = format!("{hint} · {status}");

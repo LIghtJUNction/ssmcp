@@ -107,8 +107,8 @@ impl Canvas {
                 .all(|(index, column)| column.id == index as u64 + 1)
     }
 
-    pub(super) fn label(&self, _width: u16) -> String {
-        let current = self.columns[self.active].view.name();
+    pub(super) fn label(&self, _width: u16, language: Language) -> String {
+        let current = self.columns[self.active].view.label(language);
         format!("{current}  {}/{}", self.active + 1, self.columns.len())
     }
 }
@@ -229,7 +229,13 @@ impl State {
         if view == View::History && !self.preview {
             match crate::client::interface::history::sessions() {
                 Ok(sessions) => self.conversation.sessions = sessions,
-                Err(error) => self.notice = Some(format!("Could not read history: {error}")),
+                Err(error) => {
+                    self.notice = Some(localized!(
+                        self.ui.language,
+                        "Could not read history: {error}",
+                        "无法读取历史：{error}"
+                    ))
+                }
             }
         }
         self.dirty = true;
@@ -334,7 +340,15 @@ impl State {
 
     pub(super) fn canvas_close(&mut self) {
         if self.conversation.canvas.columns.len() == 1 {
-            self.notice = Some("Keep one panel open · /new opens another".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Keep one panel open · /new opens another",
+                        "请保留至少一个面板 · /new 可打开新面板",
+                    )
+                    .into(),
+            );
             return;
         }
         let index = self.conversation.canvas.active;

@@ -165,7 +165,11 @@ fn action_inner(action: &str) -> Result<Option<(u16, u16)>, String> {
         }
         "save" => {
             save(&ui)?;
-            terminal::notice("Appearance saved · F5 Reload");
+            terminal::notice(
+                render::current_ui()
+                    .language
+                    .text("Appearance saved · F5 Reload", "外观已保存 · F5 重载"),
+            );
             return Ok(None);
         }
         "logs.clear" => {
@@ -206,7 +210,7 @@ pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
                 }
             }
             Err(error) => {
-                terminal::notice(&error);
+                terminal::notice(&render::current_ui().language.local_message(&error));
             }
         }
     }
@@ -216,7 +220,7 @@ pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
         match apply(ui, false) {
             Ok(Some(size)) => geometry = Some(size),
             Ok(None) => {}
-            Err(error) => terminal::notice(&error),
+            Err(error) => terminal::notice(&render::current_ui().language.local_message(&error)),
         }
     }
     if let Some(language) = language {

@@ -1,5 +1,6 @@
 //! Local presentation and cancellation for authenticated server-owned waits.
 //! This module never reads, reserves, or delivers the ordinary user queue.
+use crate::client::language::localized;
 use crate::client::notification::{Notifier, Report};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -381,20 +382,29 @@ impl Hub {
                 return Ok(json!({"wait_id":spec.wait_id,"status":"disconnected"}));
             }
         };
+        let language = crate::client::render::current_ui().language;
         let title = match spec.intent {
-            Intent::NeedUser => "ssmcp 正在等待你回复",
-            Intent::Finish => "ssmcp 正在等待你确认是否结束",
+            Intent::NeedUser => {
+                language.text("ssmcp is waiting for your reply", "ssmcp 正在等待你回复")
+            }
+            Intent::Finish => language.text(
+                "ssmcp is waiting for your finish confirmation",
+                "ssmcp 正在等待你确认是否结束",
+            ),
         };
         let recipient = if spec.recipient == "next" {
-            "Next caller"
+            language.text("Next caller", "下一个调用方")
         } else {
             &spec.recipient
         };
-        let body = format!(
+        let body = localized!(
+            language,
+            "Recipient: {recipient}\n{}",
             "接收目标：{recipient}\n{}",
-            spec.reason
-                .as_deref()
-                .unwrap_or("请返回当前 ssmcp 会话输入你的下一条消息。")
+            spec.reason.as_deref().unwrap_or(language.text(
+                "Return to this ssmcp session to enter your next message.",
+                "请返回当前 ssmcp 会话输入你的下一条消息。"
+            ))
         );
         let notify = self.notifier.notify_wait(&spec.episode_id, title, &body);
         tokio::pin!(notify);

@@ -5,8 +5,11 @@ use serde_json::{Value, json};
 use steering::receipt::Receipt;
 mod access;
 mod canvas;
+mod help;
 mod hints;
 mod history;
+#[cfg(test)]
+mod language_tests;
 mod listener;
 mod login;
 pub(super) mod logout;
@@ -46,6 +49,19 @@ impl View {
             Self::Tasks => "Tasks",
         }
     }
+    fn label(self, language: Language) -> &'static str {
+        match self {
+            Self::Activity => language.text("conversation", "会话"),
+            Self::Audit => language.text("code audit", "代码审计"),
+            Self::Agents => language.text("agents", "智能体"),
+            Self::Queue => language.text("queue", "队列"),
+            Self::Questions => language.text("questions", "问题"),
+            Self::History => language.text("history", "历史"),
+            Self::Logs => language.text("Logs", "日志"),
+            Self::Tasks => language.text("Tasks", "任务"),
+        }
+    }
+
     fn next(self) -> Self {
         match self {
             Self::Activity => Self::Audit,
@@ -199,6 +215,20 @@ fn agent_key(value: &Value) -> String {
 }
 
 impl State {
+    fn exit_confirmation(&self) -> &'static str {
+        self.ui
+            .language
+            .text(EXIT_CONFIRMATION, "再按 Ctrl+C 退出 · 按其他键继续当前会话")
+    }
+
+    fn chat_recipient_name<'a>(&self, entry: &'a Value) -> &'a str {
+        if field(entry, "agent_id") == "next" {
+            self.ui.language.text("Next caller", "下一个调用方")
+        } else {
+            field(entry, "name")
+        }
+    }
+
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
         recipients(data, &self.caller_tracker.groups(&observed, data))
@@ -235,13 +265,25 @@ impl State {
     fn chat_block_replacement(&mut self) {
         self.notice = Some(
             (if self.conversation.recalling.is_some() {
-                "Waiting for take-back confirmation · your current draft is preserved"
+                self.ui.language.text(
+                    "Waiting for take-back confirmation · your current draft is preserved",
+                    "等待取回确认 · 保留当前草稿",
+                )
             } else if self.conversation.submitting.is_some() {
-                "Waiting for queue confirmation · your current draft is preserved"
+                self.ui.language.text(
+                    "Waiting for queue confirmation · your current draft is preserved",
+                    "等待队列确认 · 保留当前草稿",
+                )
             } else if self.conversation.editing.is_some() {
-                "Finish the current edit before opening another request"
+                self.ui.language.text(
+                    "Finish the current edit before opening another request",
+                    "请先完成当前编辑，再打开另一条请求",
+                )
             } else {
-                "Previous draft is parked · finish this draft or press Esc to restore it"
+                self.ui.language.text(
+                    "Previous draft is parked · finish this draft or press Esc to restore it",
+                    "上一份草稿已暂存 · 完成当前草稿或按 Esc 恢复",
+                )
             })
             .into(),
         );
@@ -260,7 +302,15 @@ impl State {
         }
         self.chat_follow_latest();
         self.conversation.content_focus = false;
-        self.notice = Some("Sending to queue… · the next draft stays editable".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Sending to queue… · the next draft stays editable",
+                    "正在加入队列… · 可继续编辑下一份草稿",
+                )
+                .into(),
+        );
         self.dirty = true;
     }
 
@@ -274,7 +324,10 @@ impl State {
         for line in markdown::rows(&text, self.geometry.left, &self.ui) {
             let _ = writeln!(record, "{line}");
         }
-        record.push_str("  queued · waiting for the next eligible tool response\n\n");
+        record.push_str(self.ui.language.text(
+            "  queued · waiting for the next eligible tool response\n\n",
+            "  已排队 · 等待下一个符合条件的工具响应\n\n",
+        ));
         self.log_message("user", &text, record.as_bytes());
         if self
             .conversation
@@ -285,7 +338,15 @@ impl State {
             self.conversation.submitting = None;
         }
         // Even identical text may be a deliberately typed next request.
-        self.notice = Some("Queued · delivered with the next eligible tool response".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Queued · delivered with the next eligible tool response",
+                    "已排队 · 将随下一个符合条件的工具响应送达",
+                )
+                .into(),
+        );
         self.dirty = true;
     }
 
@@ -311,7 +372,15 @@ impl State {
         self.conversation.target = target;
         self.conversation.editing = Some(id);
         self.conversation.content_focus = false;
-        self.notice = Some("Editing · this request is held until you press Enter".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Editing · this request is held until you press Enter",
+                    "编辑中 · 按 Enter 前不会发送此请求",
+                )
+                .into(),
+        );
         self.dirty = true;
     }
 
@@ -359,7 +428,7 @@ impl State {
                     if self.conversation.recalling.as_ref() == Some(&id) {
                         self.conversation.recalling = None;
                     }
-                    failed_notice = Some(message.clone());
+                    failed_notice = Some(self.ui.language.local_message(&message));
                     if self
                         .conversation
                         .submitting
@@ -385,13 +454,21 @@ impl State {
                     if let Some(parked) = self.conversation.parked.take() {
                         self.chat_restore_draft(parked);
                     }
-                    self.notice = Some("Request cancelled · previous draft restored".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text(
+                                "Request cancelled · previous draft restored",
+                                "请求已取消 · 已恢复上一份草稿",
+                            )
+                            .into(),
+                    );
                 } else if field(record, "status") == "delivered"
                     && self.conversation.submitting.is_none()
                 {
                     self.conversation.editing = None;
                     self.notice = Some(
-                        "This request was already delivered · current text is kept as a new draft"
+                        self.ui.language.text("This request was already delivered · current text is kept as a new draft", "此请求已送达 · 当前文本保留为新草稿")
                             .into(),
                     );
                 }
@@ -464,10 +541,25 @@ impl State {
         }
         if let Some(command) = text.strip_prefix('!') {
             if self.preview {
-                return Err("Preview does not execute shell commands".into());
+                return Err(self
+                    .ui
+                    .language
+                    .text(
+                        "Preview does not execute shell commands",
+                        "预览模式不执行 shell 命令",
+                    )
+                    .into());
             }
             crate::client::interface::harness::submit_shell(command)?;
-            self.notice = Some("Shell command started · results appear here".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Shell command started · results appear here",
+                        "Shell 命令已启动 · 结果将在此显示",
+                    )
+                    .into(),
+            );
             return Ok(true);
         }
         if !text.starts_with('/') {
@@ -478,10 +570,25 @@ impl State {
         match command {
             "/exit" | "/quit" => {
                 if !rest.is_empty() {
-                    return Err("Use /exit or /quit without arguments".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /exit or /quit without arguments",
+                            "请使用 /exit 或 /quit，不加参数",
+                        )
+                        .into());
                 }
                 self.conversation.exit_requested = true;
-                self.notice = Some("Closing this client · restoring the terminal".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Closing this client · restoring the terminal",
+                            "正在关闭客户端 · 恢复终端",
+                        )
+                        .into(),
+                );
             }
             "/help" => {
                 self.conversation.help_scroll = 0;
@@ -490,7 +597,14 @@ impl State {
             }
             "/paste" => {
                 if !rest.is_empty() {
-                    return Err("Use /paste without arguments to read your local clipboard".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /paste without arguments to read your local clipboard",
+                            "请使用 /paste，不加参数，以读取本机剪贴板",
+                        )
+                        .into());
                 }
                 self.chat_start_input(attachments::Source::Clipboard, true)?;
             }
@@ -499,20 +613,34 @@ impl State {
             }
             "/select" => {
                 if !rest.is_empty() {
-                    return Err(
-                        "Use /select without arguments; F7 or Esc returns to the interface".into(),
-                    );
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /select without arguments; F7 or Esc returns to the interface",
+                            "请使用 /select，不加参数；F7 或 Esc 返回界面",
+                        )
+                        .into());
                 }
                 self.set_selection_mode(true);
             }
             "/copy" => {
                 if !rest.is_empty() {
-                    return Err(
-                        "Use /copy without arguments to copy the latest agent message".into(),
-                    );
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /copy without arguments to copy the latest agent message",
+                            "请使用 /copy，不加参数，以复制智能体最近的回复",
+                        )
+                        .into());
                 }
-                let text = crate::client::interface::messages::last_text()
-                    .ok_or("No agent message is available to copy")?;
+                let text = crate::client::interface::messages::last_text().ok_or(
+                    self.ui.language.text(
+                        "No agent message is available to copy",
+                        "暂无可复制的智能体回复",
+                    ),
+                )?;
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
             "/login" => self.chat_login(rest)?,
@@ -520,7 +648,14 @@ impl State {
             "/logout" => self.chat_logout(rest)?,
             "/handoff" => {
                 if self.preview {
-                    return Err("Preview cannot export a live conversation".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Preview cannot export a live conversation",
+                            "预览模式无法导出真实会话",
+                        )
+                        .into());
                 }
                 self.chat_start_input(
                     crate::client::attachments::Source::Handoff(rest.into()),
@@ -538,42 +673,91 @@ impl State {
             }
             "/resume" => {
                 if !rest.is_empty() {
-                    return Err("Use /resume to choose a saved conversation".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /resume to choose a saved conversation",
+                            "请使用 /resume 选择已保存的会话",
+                        )
+                        .into());
                 }
                 self.chat_resume();
             }
             "/pi" | "/cc" | "/codex" => {
                 if self.preview {
-                    return Err("Preview does not invoke installed harnesses".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Preview does not invoke installed harnesses",
+                            "预览模式不调用已安装的工具后端",
+                        )
+                        .into());
                 }
                 crate::client::interface::harness::submit(&command[1..], rest)?;
-                self.notice = Some("Harness request queued · results appear here".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Harness request queued · results appear here",
+                            "后端请求已排队 · 结果将在此显示",
+                        )
+                        .into(),
+                );
             }
             "/computer" => {
                 if self.preview {
-                    return Err(
-                        "Preview cannot grant host input; use the connected local terminal".into(),
-                    );
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Preview cannot grant host input; use the connected local terminal",
+                            "预览模式无法授予主机输入权限；请在已连接的本机终端操作",
+                        )
+                        .into());
                 }
-                self.notice = Some(crate::client::interface::computer::local_command(rest)?);
+                self.notice = Some(crate::client::interface::computer::local_command(
+                    rest,
+                    self.ui.language,
+                )?);
             }
             "/tasks" => {
                 if rest.is_empty() {
                     self.chat_change_view(View::Tasks);
                     self.conversation.content_focus = true;
                     if let Err(error) = self.conversation.tasks.refresh(self.preview) {
-                        self.notice = Some(error);
+                        self.notice = Some(self.ui.language.local_message(&error));
                     }
                 } else {
                     let arguments: Vec<_> = rest.split_whitespace().collect();
                     if !matches!(arguments.as_slice(), ["cancel", id] if !id.is_empty()) {
-                        return Err("Use /tasks to browse jobs, or /tasks cancel ID".into());
+                        return Err(self
+                            .ui
+                            .language
+                            .text(
+                                "Use /tasks to browse jobs, or /tasks cancel ID",
+                                "使用 /tasks 查看作业，或 /tasks cancel ID 取消作业",
+                            )
+                            .into());
                     }
                     if self.preview {
-                        return Err("Preview cannot cancel live tasks".into());
+                        return Err(self
+                            .ui
+                            .language
+                            .text(
+                                "Preview cannot cancel live tasks",
+                                "预览模式无法取消真实任务",
+                            )
+                            .into());
                     }
                     crate::client::interface::harness::submit_tasks(rest)?;
-                    self.notice = Some("Task cancellation requested".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text("Task cancellation requested", "已请求取消任务")
+                            .into(),
+                    );
                 }
             }
             "/queue" => self.chat_change_view(View::Queue),
@@ -583,11 +767,15 @@ impl State {
                     self.events.set_diff_mode(events::DiffMode::parse(rest)?);
                     self.dirty = true;
                 }
-                self.notice = Some(format!(
+                self.notice = Some(localized!(
+                    self.ui.language,
                     "Diff layout · {}{}",
+                    "差异布局 · {}{}",
                     self.events.diff_mode().name(),
                     if self.events.diff_mode() == events::DiffMode::Split {
-                        " · narrow screens use single"
+                        self.ui
+                            .language
+                            .text(" · narrow screens use single", " · 窄屏使用单列")
                     } else {
                         ""
                     }
@@ -599,9 +787,14 @@ impl State {
             }
             "/raw" => {
                 if !rest.is_empty() {
-                    return Err(
-                        "Use /raw without arguments to toggle the original transcript".into(),
-                    );
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /raw without arguments to toggle the original transcript",
+                            "请使用 /raw，不加参数，以切换原始日志",
+                        )
+                        .into());
                 }
                 self.logs_toggle();
             }
@@ -613,13 +806,29 @@ impl State {
                     "queue" => View::Queue,
                     "questions" => View::Questions,
                     "history" => View::History,
-                    _ => return Err("Use /new [chat|agents|audit|queue|questions|history]".into()),
+                    _ => {
+                        return Err(self
+                            .ui
+                            .language
+                            .text(
+                                "Use /new [chat|agents|audit|queue|questions|history]",
+                                "请使用 /new [chat|agents|audit|queue|questions|history]",
+                            )
+                            .into());
+                    }
                 };
                 self.canvas_new(view);
             }
             "/close" => {
                 if !rest.is_empty() {
-                    return Err("Use /close without arguments to close this view".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Use /close without arguments to close this view",
+                            "请使用 /close，不加参数，以关闭当前视图",
+                        )
+                        .into());
                 }
                 self.canvas_close();
             }
@@ -663,14 +872,28 @@ impl State {
                         "commands" => 1,
                         "errors" => 2,
                         _ => {
-                            return Err("Use /filter text, or --all / --commands / --errors".into());
+                            return Err(self
+                                .ui
+                                .language
+                                .text(
+                                    "Use /filter text, or --all / --commands / --errors",
+                                    "请使用 /filter 文本，或 --all / --commands / --errors",
+                                )
+                                .into());
                         }
                     };
                     self.logs_open();
                     self.log_level = level;
                 } else {
                     if rest.len() > 256 || rest.chars().any(char::is_control) {
-                        return Err("A log filter accepts up to 256 bytes of plain text".into());
+                        return Err(self
+                            .ui
+                            .language
+                            .text(
+                                "A log filter accepts up to 256 bytes of plain text",
+                                "日志筛选最多接受 256 字节纯文本",
+                            )
+                            .into());
                     }
                     self.logs_open();
                     self.log_query = rest.into();
@@ -693,12 +916,21 @@ impl State {
             }
             "/reload" | "/restart" => {
                 if !rest.is_empty() {
-                    return Err(format!(
-                        "Use {command} without arguments to restart this session"
+                    return Err(localized!(
+                        self.ui.language,
+                        "Use {command} without arguments to restart this session",
+                        "请使用 {command}，不加参数，以重启当前会话"
                     ));
                 }
                 if self.preview {
-                    return Err("Preview has no connected session to restart".into());
+                    return Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Preview has no connected session to restart",
+                            "预览模式没有可重启的已连接会话",
+                        )
+                        .into());
                 }
                 // Preserve the parked request before the restart worker can run.
                 // The command itself should never reappear as a user requirement.
@@ -715,10 +947,26 @@ impl State {
                     self.chat_persist_draft();
                     return Err(error);
                 }
-                self.notice =
-                    Some("Preparing restart · preserving confirmed pending requests".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Preparing restart · preserving confirmed pending requests",
+                            "正在准备重启 · 保留已确认的待发送请求",
+                        )
+                        .into(),
+                );
             }
-            _ => return Err("Unknown command · /help lists local commands".into()),
+            _ => {
+                return Err(self
+                    .ui
+                    .language
+                    .text(
+                        "Unknown command · /help lists local commands",
+                        "未知命令 · 使用 /help 查看本机命令",
+                    )
+                    .into());
+            }
         }
         Ok(true)
     }
@@ -778,7 +1026,15 @@ impl State {
         if self.conversation.input_task.is_none() {
             return false;
         }
-        self.notice = Some("Preparing local input… · wait for it to finish before sending".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Preparing local input… · wait for it to finish before sending",
+                    "正在准备本机输入… · 完成后再发送",
+                )
+                .into(),
+        );
         self.dirty = true;
         true
     }
@@ -791,7 +1047,7 @@ impl State {
             Some("/exit" | "/quit" | "/logout")
         ) {
             if let Err(error) = self.chat_command(text.trim()) {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
             }
             self.dirty = true;
             return;
@@ -802,21 +1058,29 @@ impl State {
                     self.conversation.composer.take_text();
                 }
                 Ok(_) => {}
-                Err(error) => self.notice = Some(error),
+                Err(error) => self.notice = Some(self.ui.language.local_message(&error)),
             }
             self.dirty = true;
             return;
         }
         if user_wait::arguments(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
             }
             // Wait controls stay local even while editing or preparing input.
             self.dirty = true;
             return;
         }
         if self.conversation.logout_task.is_some() {
-            self.notice = Some("Signing out · your draft is preserved".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Signing out · your draft is preserved",
+                        "正在退出登录 · 保留草稿",
+                    )
+                    .into(),
+            );
             return;
         }
         if self.chat_wait_for_input() {
@@ -824,7 +1088,15 @@ impl State {
         }
         self.chat_refresh_completions();
         if self.conversation.composer.completion_loading() {
-            self.notice = Some("Loading reference suggestions · your draft is preserved".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Loading reference suggestions · your draft is preserved",
+                        "正在加载引用候选 · 保留草稿",
+                    )
+                    .into(),
+            );
             return;
         }
         if self.chat_menu_visible()
@@ -835,14 +1107,22 @@ impl State {
                 .is_some_and(|item| item.reference)
         {
             if let Err(error) = self.conversation.composer.accept_suggestion() {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
             } else {
                 self.notice = None;
             }
             return;
         }
         if self.conversation.submitting.is_some() {
-            self.notice = Some("Waiting for queue confirmation · your draft is preserved".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Waiting for queue confirmation · your draft is preserved",
+                        "等待队列确认 · 保留草稿",
+                    )
+                    .into(),
+            );
             return;
         }
         if self.conversation.recalling.is_some() {
@@ -864,7 +1144,7 @@ impl State {
         }
         if listener::body(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
             }
             // Force-send retains the exact draft until an accepted receipt.
             return;
@@ -878,14 +1158,22 @@ impl State {
                     return;
                 }
                 Err(error) => {
-                    self.notice = Some(error);
+                    self.notice = Some(self.ui.language.local_message(&error));
                     return;
                 }
                 Ok(false) => {}
             }
         }
         if self.preview {
-            self.notice = Some("Preview only · connect a session to queue a requirement".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Preview only · connect a session to queue a requirement",
+                        "当前为预览 · 连接会话后即可提交需求",
+                    )
+                    .into(),
+            );
             return;
         }
         // The native edit API treats omitted target as "keep the previous one".
@@ -898,7 +1186,7 @@ impl State {
         };
         match result {
             Ok(id) => self.chat_enqueued(id, text),
-            Err(error) => self.notice = Some(error),
+            Err(error) => self.notice = Some(self.ui.language.local_message(&error)),
         }
     }
 
@@ -940,19 +1228,35 @@ impl State {
                         if self.audit.open_run(field(&agent, "run_id")) {
                             self.conversation.detail = true;
                             self.conversation.content_focus = true;
-                            self.notice =
-                                Some("Observed call · Esc / left click returns to agents".into());
+                            self.notice = Some(
+                                self.ui
+                                    .language
+                                    .text(
+                                        "Observed call · Esc / left click returns to agents",
+                                        "已观测的调用 · Esc / 单击左键返回智能体",
+                                    )
+                                    .into(),
+                            );
                         } else {
-                            self.notice =
-                                Some("This call is no longer in the retained audit history".into());
+                            self.notice = Some(
+                                self.ui
+                                    .language
+                                    .text(
+                                        "This call is no longer in the retained audit history",
+                                        "此调用已不在保留的审计历史中",
+                                    )
+                                    .into(),
+                            );
                         }
                         return;
                     }
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
                     self.chat_change_view(View::Activity);
-                    self.notice = Some(format!(
+                    self.notice = Some(localized!(
+                        self.ui.language,
                         "To {} · Enter sends · ← at draft start switches agent",
+                        "发送给 {} · Enter 发送 · 草稿开头按 ← 切换智能体",
                         panel::safe_text(field(&agent, "name"))
                     ));
                 }
@@ -962,7 +1266,9 @@ impl State {
                     if edit && Receipt::from_entry(&message).editable() && !self.preview {
                         match steering::take_back(message_id(&message)) {
                             Ok(()) => self.chat_recall_started(message_id(&message).into()),
-                            Err(error) => self.notice = Some(error),
+                            Err(error) => {
+                                self.notice = Some(self.ui.language.local_message(&error))
+                            }
                         }
                     } else {
                         self.conversation.detail = true;
@@ -977,7 +1283,15 @@ impl State {
             View::Logs => {}
             View::Activity => {
                 if self.raw_logs {
-                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text(
+                                "Raw transcript · /logs returns to tool details",
+                                "原始日志 · /logs 返回工具详情",
+                            )
+                            .into(),
+                    );
                     return;
                 }
                 if edit {
@@ -1052,7 +1366,7 @@ impl State {
 
     fn chat_disarm_exit(&mut self) {
         self.conversation.exit_armed = false;
-        if self.notice.as_deref() == Some(EXIT_CONFIRMATION) {
+        if self.notice.as_deref() == Some(self.exit_confirmation()) {
             self.notice = None;
             self.dirty = true;
         }
@@ -1085,17 +1399,32 @@ impl State {
         });
         if cleared {
             self.conversation.exit_armed = false;
-            self.notice = Some(format!(
+            self.notice = Some(localized!(
+                self.ui.language,
                 "{} cleared · queued requests kept · Ctrl+C for exit reminder",
-                if answering { "Answer" } else { "Input" }
+                "已清空{} · 保留队列中的请求 · Ctrl+C 显示退出提醒",
+                if answering {
+                    self.ui.language.text("Answer", "回答")
+                } else {
+                    self.ui.language.text("Input", "输入")
+                }
             ));
-        } else if self.conversation.exit_armed && self.notice.as_deref() == Some(EXIT_CONFIRMATION)
+        } else if self.conversation.exit_armed
+            && self.notice.as_deref() == Some(self.exit_confirmation())
         {
             self.conversation.exit_requested = true;
-            self.notice = Some("Closing this client · restoring the terminal".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Closing this client · restoring the terminal",
+                        "正在关闭客户端 · 恢复终端",
+                    )
+                    .into(),
+            );
         } else {
             self.conversation.exit_armed = true;
-            self.notice = Some(EXIT_CONFIRMATION.into());
+            self.notice = Some(self.exit_confirmation().into());
         }
         self.dirty = true;
     }
@@ -1110,7 +1439,15 @@ impl State {
             self.conversation.submitting = None;
         }
         self.conversation.recalling = Some(id);
-        self.notice = Some("Taking back the queued request · waiting for confirmation".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Taking back the queued request · waiting for confirmation",
+                    "正在取回待发送请求 · 等待确认",
+                )
+                .into(),
+        );
         self.dirty = true;
     }
 
@@ -1136,7 +1473,7 @@ impl State {
                 true
             }
             Err(error) => {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
                 self.dirty = true;
                 true
             }
@@ -1370,8 +1707,15 @@ impl State {
                         return;
                     }
                     if self.conversation.submitting.is_some() {
-                        self.notice =
-                            Some("Waiting for queue confirmation · your draft is preserved".into());
+                        self.notice = Some(
+                            self.ui
+                                .language
+                                .text(
+                                    "Waiting for queue confirmation · your draft is preserved",
+                                    "等待队列确认 · 保留草稿",
+                                )
+                                .into(),
+                        );
                         return;
                     }
                     self.conversation.composer.history_previous();
@@ -1396,7 +1740,15 @@ impl State {
             Key::Back if self.conversation.view == View::Agents && content => self.canvas_move(-1),
             Key::Back if self.conversation.view == View::Activity && content => {
                 if self.raw_logs {
-                    self.notice = Some("Raw transcript · /logs returns to tool details".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text(
+                                "Raw transcript · /logs returns to tool details",
+                                "原始日志 · /logs 返回工具详情",
+                            )
+                            .into(),
+                    );
                 } else if !self.events.back() {
                     self.canvas_move(-1);
                 }
@@ -1436,11 +1788,19 @@ impl State {
                 if let Some(message) = self.chat_selected()
                     && let Err(error) = steering::cancel(message_id(&message))
                 {
-                    self.notice = Some(error);
+                    self.notice = Some(self.ui.language.local_message(&error));
                 }
             }
             Key::Delete if content && self.conversation.view == View::Tasks => {
-                self.notice = Some("Cancel a task explicitly with /tasks cancel ID".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Cancel a task explicitly with /tasks cancel ID",
+                            "使用 /tasks cancel ID 明确取消任务",
+                        )
+                        .into(),
+                );
             }
             Key::Delete => {
                 if self.conversation.view == View::Logs {
@@ -1602,7 +1962,15 @@ impl State {
             && let Some(parked) = self.conversation.parked.take()
         {
             self.chat_restore_draft(parked);
-            self.notice = Some("Previous draft restored · recipient and cursor preserved".into());
+            self.notice = Some(
+                self.ui
+                    .language
+                    .text(
+                        "Previous draft restored · recipient and cursor preserved",
+                        "已恢复上一份草稿 · 保留接收方与光标位置",
+                    )
+                    .into(),
+            );
             return;
         }
         self.help = false;
@@ -1635,7 +2003,12 @@ impl State {
                 self.conversation.content_focus = false;
                 self.notice = None;
                 if !self.conversation.composer.insert(&character.to_string()) {
-                    self.notice = Some("Draft limit reached · 16 KiB".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text("Draft limit reached · 16 KiB", "已达到草稿上限 · 16 KiB")
+                            .into(),
+                    );
                 }
                 self.dirty = true;
             }
@@ -1643,7 +2016,7 @@ impl State {
         }
         if character == '\u{16}' {
             if let Err(error) = self.chat_start_input(attachments::Source::Clipboard, false) {
-                self.notice = Some(error);
+                self.notice = Some(self.ui.language.local_message(&error));
             }
             self.dirty = true;
             return;
@@ -1699,7 +2072,7 @@ impl State {
                     }
                     if recoverable && !self.preview {
                         if let Err(error) = steering::retarget(message_id(&message), None) {
-                            self.notice = Some(error);
+                            self.notice = Some(self.ui.language.local_message(&error));
                         }
                     } else {
                         if !self.conversation.composer.is_empty() {
@@ -1713,9 +2086,9 @@ impl State {
                         self.conversation.content_focus = false;
                         self.notice = Some(
                             (if self.conversation.parked.is_some() {
-                                "Copied to a new draft · Enter sends · Esc restores previous draft"
+                                self.ui.language.text("Copied to a new draft · Enter sends · Esc restores previous draft", "已复制为新草稿 · Enter 发送 · Esc 恢复上一份草稿")
                             } else {
-                                "Copied to a new draft · Enter sends a new request"
+                                self.ui.language.text("Copied to a new draft · Enter sends a new request", "已复制为新草稿 · Enter 发送新请求")
                             })
                             .into(),
                         );
@@ -1726,11 +2099,18 @@ impl State {
             '\t' => {
                 if self.chat_menu_visible() {
                     if let Err(error) = self.conversation.composer.accept_suggestion() {
-                        self.notice = Some(error);
+                        self.notice = Some(self.ui.language.local_message(&error));
                     }
                 } else if self.conversation.composer.completion_loading() {
-                    self.notice =
-                        Some("Loading reference suggestions · your draft is preserved".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text(
+                                "Loading reference suggestions · your draft is preserved",
+                                "正在加载引用候选 · 保留草稿",
+                            )
+                            .into(),
+                    );
                 } else {
                     self.conversation.content_focus = !self.conversation.content_focus;
                 }
@@ -1783,7 +2163,12 @@ impl State {
                 }
                 self.conversation.content_focus = false;
                 if !self.conversation.composer.insert(&ch.to_string()) {
-                    self.notice = Some("Draft limit reached · 16 KiB".into());
+                    self.notice = Some(
+                        self.ui
+                            .language
+                            .text("Draft limit reached · 16 KiB", "已达到草稿上限 · 16 KiB")
+                            .into(),
+                    );
                 }
             }
             _ => {}
@@ -1819,15 +2204,34 @@ impl State {
         command: bool,
     ) -> Result<(), String> {
         if self.preview {
-            return Err(
-                "Preview cannot read or write the system clipboard or import local files".into(),
-            );
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Preview cannot read or write the system clipboard or import local files",
+                    "预览模式不能读写系统剪贴板或导入本机文件",
+                )
+                .into());
         }
         if self.selection {
-            return Err("Leave copy mode before importing input".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Leave copy mode before importing input",
+                    "请退出选择模式后再导入输入",
+                )
+                .into());
         }
         if self.conversation.input_task.is_some() {
-            return Err("A local input job is still running; your draft is preserved".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "A local input job is still running; your draft is preserved",
+                    "本机输入任务仍在运行；已保留草稿",
+                )
+                .into());
         }
         let copying = matches!(&source, attachments::Source::Copy(_));
         let context = matches!(&source, attachments::Source::Context { .. });
@@ -1835,17 +2239,23 @@ impl State {
         if self.conversation.view == View::Questions && inserts {
             self.question_paste_len()?;
         }
-        let mut stamp = self
-            .chat_input_stamp()
-            .ok_or("No answer editor is open; press Esc to return to your draft")?;
+        let mut stamp = self.chat_input_stamp().ok_or(self.ui.language.text(
+            "No answer editor is open; press Esc to return to your draft",
+            "尚未打开回答编辑器；按 Esc 返回草稿",
+        ))?;
         let used = if command { 0 } else { stamp.text.len() };
         if inserts
             && attachments::REFERENCE_RESERVE
                 > crate::client::composer::MAX_DRAFT_BYTES.saturating_sub(used)
         {
-            return Err(
-                "Not enough draft space for an input reference; your draft was preserved".into(),
-            );
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Not enough draft space for an input reference; your draft was preserved",
+                    "草稿剩余空间不足以插入引用；已保留草稿",
+                )
+                .into());
         }
         let original = command.then(|| stamp.text.clone());
         if command {
@@ -1859,11 +2269,19 @@ impl State {
         self.conversation.input_command = original;
         self.notice = Some(
             if copying {
-                "Copying the latest agent message…"
+                self.ui.language.text(
+                    "Copying the latest agent message…",
+                    "正在复制智能体最近的回复…",
+                )
             } else if context {
-                "Reading local context…"
+                self.ui
+                    .language
+                    .text("Reading local context…", "正在读取本机上下文…")
             } else {
-                "Preparing local input… · keep this draft unchanged to insert the result"
+                self.ui.language.text(
+                    "Preparing local input… · keep this draft unchanged to insert the result",
+                    "正在准备本机输入… · 保持当前草稿不变以插入结果",
+                )
             }
             .into(),
         );
@@ -1895,7 +2313,15 @@ impl State {
         let unchanged = expected.is_some() && self.chat_input_stamp().as_ref() == expected;
         match result {
             Ok(attachments::Loaded::Copied) => {
-                self.notice = Some("Latest agent message copied to the system clipboard".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Latest agent message copied to the system clipboard",
+                            "已将智能体最近的回复复制到系统剪贴板",
+                        )
+                        .into(),
+                );
             }
             Ok(attachments::Loaded::Context(text)) => {
                 let mut record = String::from("\n[CONTEXT]\n");
@@ -1909,7 +2335,13 @@ impl State {
                     record.as_bytes(),
                 );
                 self.notice = Some(
-                    "Local context updated · source history and queue were not replayed".into(),
+                    self.ui
+                        .language
+                        .text(
+                            "Local context updated · source history and queue were not replayed",
+                            "本机上下文已更新 · 没有重放历史或队列",
+                        )
+                        .into(),
                 );
             }
             Ok(attachments::Loaded::Files {
@@ -1920,22 +2352,38 @@ impl State {
                 self.notice = match self.chat_paste_text(&text) {
                     Ok(()) => {
                         files.keep();
-                        Some(format!("{description} · Enter sends when ready"))
+                        Some(localized!(
+                            self.ui.language,
+                            "{description} · Enter sends when ready",
+                            "{description} · 准备好后按 Enter 发送"
+                        ))
                     }
                     Err(error) => {
                         if let Some(command) = original_command {
                             self.conversation.composer.set_text(command);
                         }
-                        Some(format!("{error} · imported copies were rolled back"))
+                        Some(localized!(
+                            self.ui.language,
+                            "{error} · imported copies were rolled back",
+                            "{error} · 已撤销导入的副本"
+                        ))
                     }
                 };
             }
             Ok(attachments::Loaded::Files { .. }) => {
-                self.notice = Some("Draft or recipient changed · imported copies were rolled back; source files are unchanged".into());
+                self.notice = Some(self.ui.language.text("Draft or recipient changed · imported copies were rolled back; source files are unchanged", "草稿或接收方已更改 · 已撤销导入副本；源文件保持不变").into());
             }
             Ok(attachments::Loaded::Text(text)) if unchanged => {
                 self.notice = match self.chat_paste_text(&text) {
-                    Ok(()) => Some("Clipboard text inserted · Enter sends when ready".into()),
+                    Ok(()) => Some(
+                        self.ui
+                            .language
+                            .text(
+                                "Clipboard text inserted · Enter sends when ready",
+                                "已插入剪贴板文本 · 准备好后按 Enter 发送",
+                            )
+                            .into(),
+                    ),
                     Err(error) => Some(error),
                 };
             }
@@ -1944,23 +2392,37 @@ impl State {
                 description,
             }) if unchanged => {
                 self.notice = match self.chat_paste_text(&format!("\n{reference}\n")) {
-                    Ok(()) => Some(format!("{description} · Enter sends when ready")),
-                    Err(error) => Some(format!("{error} · recover with {reference}")),
+                    Ok(()) => Some(localized!(
+                        self.ui.language,
+                        "{description} · Enter sends when ready",
+                        "{description} · 准备好后按 Enter 发送"
+                    )),
+                    Err(error) => Some(localized!(
+                        self.ui.language,
+                        "{error} · recover with {reference}",
+                        "{error} · 可用 {reference} 恢复"
+                    )),
                 };
             }
             Ok(attachments::Loaded::Text(_)) => {
-                self.notice = Some("Draft or recipient changed · clipboard text was not inserted; paste again when ready".into());
+                self.notice = Some(self.ui.language.text("Draft or recipient changed · clipboard text was not inserted; paste again when ready", "草稿或接收方已更改 · 未插入剪贴板文本；准备好后重新粘贴").into());
             }
             Ok(attachments::Loaded::Reference { reference, .. }) => {
-                self.notice = Some(format!(
-                    "Draft or recipient changed · input retained at {reference}; insert it when ready"
+                self.notice = Some(localized!(
+                    self.ui.language,
+                    "Draft or recipient changed · input retained at {reference}; insert it when ready",
+                    "草稿或接收方已更改 · 输入保留于 {reference}；准备好后再插入"
                 ));
             }
             Err(error) => {
                 if unchanged && let Some(command) = original_command {
                     self.conversation.composer.set_text(command);
                 }
-                self.notice = Some(format!("Local input failed: {error}"));
+                self.notice = Some(localized!(
+                    self.ui.language,
+                    "Local input failed: {error}",
+                    "本机输入失败：{error}"
+                ));
             }
         }
         self.dirty = true;
@@ -1980,11 +2442,25 @@ impl State {
             text.len()
         };
         if required > crate::client::composer::MAX_DRAFT_BYTES.saturating_sub(used) {
-            return Err("Not enough draft space for this paste; your draft was preserved".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Not enough draft space for this paste; your draft was preserved",
+                    "草稿剩余空间不足以容纳粘贴内容；已保留草稿",
+                )
+                .into());
         }
         if large {
             if text.len() > references::paste::MAX_PASTE_BYTES {
-                return Err("Paste exceeds 4 MiB; save it as a file and use @path".into());
+                return Err(self
+                    .ui
+                    .language
+                    .text(
+                        "Paste exceeds 4 MiB; save it as a file and use @path",
+                        "粘贴内容超过 4 MiB；请保存为文件并使用 @path 引用",
+                    )
+                    .into());
             }
             // File creation/fsync happens on the shared async input job. The
             // completion stamp protects edits, answers and recipient changes.
@@ -1996,7 +2472,14 @@ impl State {
             self.conversation.composer.paste(text)
         };
         if !accepted {
-            return Err("Paste could not be inserted; your draft was preserved".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Paste could not be inserted; your draft was preserved",
+                    "无法插入粘贴内容；已保留草稿",
+                )
+                .into());
         }
         Ok(())
     }
@@ -2006,9 +2489,9 @@ impl State {
             return;
         }
         self.notice = Some(if self.conversation.paste_overflow {
-            "Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH."
+            self.ui.language.text("Image paste exceeds 16 MiB; draft preserved. Use a smaller image or /attach PATH.", "粘贴图片超过 16 MiB；已保留草稿。请使用更小的图片或 /attach PATH。")
         } else {
-            "Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH."
+            self.ui.language.text("Incomplete image paste discarded; draft preserved. Copy the original image and use Ctrl+V or /paste, or /attach PATH.", "已丢弃不完整的图片粘贴；已保留草稿。请复制原图后使用 Ctrl+V、/paste 或 /attach PATH。")
         }.into());
         self.conversation.paste_overflow = false;
     }
@@ -2034,12 +2517,20 @@ impl State {
                     }
                 }
                 let result = if self.selection {
-                    Err("Leave copy mode before pasting".into())
+                    Err(self
+                        .ui
+                        .language
+                        .text("Leave copy mode before pasting", "请退出选择模式后再粘贴")
+                        .into())
                 } else if self.conversation.paste_overflow {
-                    Err(
-                        "Paste exceeds its limit (4 MiB text / 16 MiB image); use /attach PATH"
-                            .into(),
-                    )
+                    Err(self
+                        .ui
+                        .language
+                        .text(
+                            "Paste exceeds its limit (4 MiB text / 16 MiB image); use /attach PATH",
+                            "粘贴内容超过上限（文本 4 MiB / 图片 16 MiB）；请使用 /attach PATH",
+                        )
+                        .into())
                 } else {
                     match attachments::paste_source(paste) {
                         Ok(attachments::Source::Text(text)) => self.chat_paste_text(&text),
@@ -2048,7 +2539,7 @@ impl State {
                     }
                 };
                 if let Err(error) = result {
-                    self.notice = Some(error);
+                    self.notice = Some(self.ui.language.local_message(&error));
                 }
             }
             self.dirty = true;
@@ -2195,11 +2686,35 @@ impl State {
     ) -> Vec<(String, PanelTone)> {
         let Some(selected) = selected else {
             return vec![
-                ("Selection unavailable".into(), PanelTone::Heading),
+                (
+                    self.ui
+                        .language
+                        .text("Selection unavailable", "所选项不可用")
+                        .into(),
+                    PanelTone::Heading,
+                ),
                 ("".into(), PanelTone::Normal),
-                ("The selected entry left".into(), PanelTone::Normal),
-                ("Your recipient has not changed".into(), PanelTone::Muted),
-                ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
+                (
+                    self.ui
+                        .language
+                        .text("The selected entry left", "所选项已离开")
+                        .into(),
+                    PanelTone::Normal,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text("Your recipient has not changed", "接收方保持不变")
+                        .into(),
+                    PanelTone::Muted,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text("↑ / ↓ choose another entry", "↑ / ↓ 选择其他条目")
+                        .into(),
+                    PanelTone::Muted,
+                ),
             ];
         };
         let observed = field(selected, "kind") == "observed";
@@ -2207,17 +2722,17 @@ impl State {
         let mut details = vec![
             (
                 (if observed {
-                    "Observed caller"
+                    self.ui.language.text("Observed caller", "已观测的调用方")
                 } else if next {
-                    "Message delivery"
+                    self.ui.language.text("Message delivery", "消息投递")
                 } else {
-                    "Agent"
+                    self.ui.language.text("Agent", "智能体")
                 })
                 .into(),
                 PanelTone::Heading,
             ),
             ("".into(), PanelTone::Normal),
-            (field(selected, "name").into(), PanelTone::Accent),
+            (self.chat_recipient_name(selected).into(), PanelTone::Accent),
         ];
         if observed {
             let running = selected["running"].as_u64().unwrap_or(0);
@@ -2232,24 +2747,75 @@ impl State {
             details.extend([
                 (field(selected, "model").into(), PanelTone::Normal),
                 (
-                    format!("{calls} calls in retained history"),
+                    localized!(
+                        self.ui.language,
+                        "{calls} calls in retained history",
+                        "保留历史中有 {calls} 次调用"
+                    ),
                     PanelTone::Muted,
                 ),
                 (
-                    format!("{running} running · {}", field(selected, "status")),
+                    localized!(
+                        self.ui.language,
+                        "{running} running · {}",
+                        "{running} 项运行中 · {}",
+                        field(selected, "status")
+                    ),
                     tone,
                 ),
                 ("".into(), PanelTone::Normal),
-                ("Latest tool".into(), PanelTone::Heading),
+                (
+                    self.ui.language.text("Latest tool", "最近的工具").into(),
+                    PanelTone::Heading,
+                ),
                 (field(selected, "tool").into(), PanelTone::Normal),
-                ("Enter / → inspect latest call".into(), PanelTone::Muted),
+                (
+                    self.ui
+                        .language
+                        .text("Enter / → inspect latest call", "Enter / → 查看最近的调用")
+                        .into(),
+                    PanelTone::Muted,
+                ),
                 ("".into(), PanelTone::Normal),
-                ("Messages".into(), PanelTone::Heading),
-                ("No direct message address".into(), PanelTone::Normal),
-                ("Choose Next caller to queue".into(), PanelTone::Muted),
-                ("for the next eligible response".into(), PanelTone::Muted),
+                (
+                    self.ui.language.text("Messages", "消息").into(),
+                    PanelTone::Heading,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text("No direct message address", "没有直接消息地址")
+                        .into(),
+                    PanelTone::Normal,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text("Choose Next caller to queue", "选择“下一个调用方”加入队列")
+                        .into(),
+                    PanelTone::Muted,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text(
+                            "for the next eligible response",
+                            "随下一个符合条件的响应送达",
+                        )
+                        .into(),
+                    PanelTone::Muted,
+                ),
                 ("".into(), PanelTone::Normal),
-                ("Name and model are display labels".into(), PanelTone::Muted),
+                (
+                    self.ui
+                        .language
+                        .text(
+                            "Name and model are display labels",
+                            "名称和模型仅为展示标签",
+                        )
+                        .into(),
+                    PanelTone::Muted,
+                ),
             ]);
         } else {
             let target = self.conversation.target.as_deref().unwrap_or("next");
@@ -2264,7 +2830,7 @@ impl State {
             details.extend([
                 (
                     (if next {
-                        "Automatic delivery"
+                        self.ui.language.text("Automatic delivery", "自动投递")
                     } else {
                         field(selected, "role")
                     })
@@ -2273,7 +2839,9 @@ impl State {
                 ),
                 (
                     (if next {
-                        "Next eligible response"
+                        self.ui
+                            .language
+                            .text("Next eligible response", "下一个符合条件的响应")
                     } else {
                         field(selected, "status")
                     })
@@ -2281,24 +2849,54 @@ impl State {
                     PanelTone::Normal,
                 ),
                 ("".into(), PanelTone::Normal),
-                ("Messages".into(), PanelTone::Heading),
                 (
-                    format!("{pending} pending for this recipient"),
+                    self.ui.language.text("Messages", "消息").into(),
+                    PanelTone::Heading,
+                ),
+                (
+                    localized!(
+                        self.ui.language,
+                        "{pending} pending for this recipient",
+                        "此接收方有 {pending} 条待发送消息"
+                    ),
                     PanelTone::Normal,
                 ),
             ]);
             if id == target {
-                details.push(("● Current recipient".into(), PanelTone::Accent));
+                details.push((
+                    self.ui
+                        .language
+                        .text("● Current recipient", "● 当前接收方")
+                        .into(),
+                    PanelTone::Accent,
+                ));
             }
             details.extend([
-                ("Enter / → choose and return".into(), PanelTone::Normal),
-                ("Your draft stays in place".into(), PanelTone::Muted),
+                (
+                    self.ui
+                        .language
+                        .text("Enter / → choose and return", "Enter / → 选择并返回")
+                        .into(),
+                    PanelTone::Normal,
+                ),
+                (
+                    self.ui
+                        .language
+                        .text("Your draft stays in place", "草稿保持不变")
+                        .into(),
+                    PanelTone::Muted,
+                ),
                 ("".into(), PanelTone::Normal),
                 (
                     (if next {
-                        "Any eligible caller may receive it"
+                        self.ui.language.text(
+                            "Any eligible caller may receive it",
+                            "任何符合条件的调用方均可接收",
+                        )
                     } else {
-                        "Only this member receives it"
+                        self.ui
+                            .language
+                            .text("Only this member receives it", "只有该成员可以接收")
                     })
                     .into(),
                     PanelTone::Muted,
@@ -2309,12 +2907,30 @@ impl State {
             } else if items(data, "agents").is_empty() {
                 details.extend([
                     ("".into(), PanelTone::Normal),
-                    ("No registered agents yet".into(), PanelTone::Normal),
                     (
-                        "Observed callers can still receive".into(),
+                        self.ui
+                            .language
+                            .text("No registered agents yet", "暂无已注册的智能体")
+                            .into(),
+                        PanelTone::Normal,
+                    ),
+                    (
+                        self.ui
+                            .language
+                            .text(
+                                "Observed callers can still receive",
+                                "已观测的调用方仍可通过",
+                            )
+                            .into(),
                         PanelTone::Muted,
                     ),
-                    ("requests through Next caller".into(), PanelTone::Muted),
+                    (
+                        self.ui
+                            .language
+                            .text("requests through Next caller", "“下一个调用方”接收请求")
+                            .into(),
+                        PanelTone::Muted,
+                    ),
                 ]);
             }
         }
@@ -2331,7 +2947,15 @@ impl State {
                 self.conversation.selected = index;
             } else {
                 self.conversation.selected = 0;
-                self.notice = Some("Selected member or caller left · choose a recipient".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "Selected member or caller left · choose a recipient",
+                            "所选成员或调用方已离开 · 请选择接收方",
+                        )
+                        .into(),
+                );
             }
         }
         let missing = self
@@ -2353,8 +2977,10 @@ impl State {
             .filter(|entry| field(entry, "kind") == "observed")
             .count();
         let mut rows = vec![self.chat_line(
-            &format!(
+            &localized!(
+                self.ui.language,
                 "  Agents · {} members · {callers} callers",
+                "  智能体 · {} 名成员 · {callers} 个调用方",
                 items(data, "agents").len()
             ),
             PanelTone::Heading,
@@ -2379,16 +3005,25 @@ impl State {
             let title = if observed && !field(entry, "model").is_empty() {
                 format!(
                     " {marker} {symbol}{} · {}",
-                    field(entry, "name"),
+                    self.chat_recipient_name(entry),
                     field(entry, "model")
                 )
             } else {
-                format!(" {marker} {symbol}{}", field(entry, "name"))
+                format!(" {marker} {symbol}{}", self.chat_recipient_name(entry))
             };
             let subtitle = if observed {
-                format!("     {} calls · {}", entry["calls"], field(entry, "status"))
+                localized!(
+                    self.ui.language,
+                    "     {} calls · {}",
+                    "     {} 次调用 · {}",
+                    entry["calls"],
+                    field(entry, "status")
+                )
             } else if field(entry, "agent_id") == "next" {
-                "     Next eligible response".into()
+                self.ui
+                    .language
+                    .text("     Next eligible response", "     下一个符合条件的响应")
+                    .into()
             } else {
                 let duplicate = entries
                     .iter()
@@ -2410,7 +3045,11 @@ impl State {
                 let status = field(entry, "status");
                 format!(
                     "     {}{}",
-                    if status.is_empty() { "Member" } else { status },
+                    if status.is_empty() {
+                        self.ui.language.text("Member", "成员")
+                    } else {
+                        status
+                    },
                     if duplicate {
                         format!(" · …{suffix}")
                     } else {
@@ -2478,16 +3117,31 @@ impl State {
             } else {
                 self.filter_offset
             };
-            return (below > 0)
-                .then(|| format!("↓ {below} rows below · Ctrl+End to return to latest"));
+            return (below > 0).then(|| {
+                localized!(
+                    self.ui.language,
+                    "↓ {below} rows below · Ctrl+End to return to latest",
+                    "↓ 下方还有 {below} 行 · Ctrl+End 回到最新内容"
+                )
+            });
         }
         let below = self.events.rows_below();
         if below > 0 {
-            Some(format!(
-                "↓ {below} rows below · Ctrl+End to return to latest"
+            Some(localized!(
+                self.ui.language,
+                "↓ {below} rows below · Ctrl+End to return to latest",
+                "↓ 下方还有 {below} 行 · Ctrl+End 回到最新内容"
             ))
         } else if !self.events.is_following() {
-            Some("Paused · Ctrl+End to follow new activity".into())
+            Some(
+                self.ui
+                    .language
+                    .text(
+                        "Paused · Ctrl+End to follow new activity",
+                        "已暂停跟随 · Ctrl+End 跟随新活动",
+                    )
+                    .into(),
+            )
         } else {
             None
         }
@@ -2497,22 +3151,51 @@ impl State {
     /// It is not a separate mode that can drift away from the active editor.
     fn chat_mode_label(&self, width: u16) -> &'static str {
         let (full, compact) = if self.selection {
-            ("Select · F7/Esc back", "Select")
+            (
+                self.ui
+                    .language
+                    .text("Select · F7/Esc back", "选择 · F7/Esc 返回"),
+                self.ui.language.text("Select", "选择"),
+            )
         } else if self.help
             || self.conversation.content_focus
             || (self.conversation.view == View::Questions && !self.conversation.detail)
         {
-            ("Browse", "Browse")
+            (
+                self.ui.language.text("Browse", "浏览"),
+                self.ui.language.text("Browse", "浏览"),
+            )
         } else if self.conversation.view == View::Questions {
-            ("Edit answer", "Answer")
+            (
+                self.ui.language.text("Edit answer", "编辑回答"),
+                self.ui.language.text("Answer", "回答"),
+            )
         } else if self.conversation.recalling.is_some() {
-            ("Edit · recall pending", "Edit · recall")
+            (
+                self.ui
+                    .language
+                    .text("Edit · recall pending", "输入 · 等待取回"),
+                self.ui.language.text("Edit · recall", "输入 · 取回中"),
+            )
         } else if self.conversation.editing.is_some() {
-            ("Edit queue · Enter sends", "Edit queue")
+            (
+                self.ui
+                    .language
+                    .text("Edit queue · Enter sends", "编辑队列 · Enter 发送"),
+                self.ui.language.text("Edit queue", "编辑队列"),
+            )
         } else if self.conversation.submitting.is_some() {
-            ("Edit next · queue pending", "Edit · pending")
+            (
+                self.ui
+                    .language
+                    .text("Edit next · queue pending", "编辑下一条 · 等待队列确认"),
+                self.ui.language.text("Edit · pending", "输入 · 待确认"),
+            )
         } else {
-            ("Edit", "Edit")
+            (
+                self.ui.language.text("Edit", "输入"),
+                self.ui.language.text("Edit", "输入"),
+            )
         };
         if full.width() <= usize::from(width) {
             full
@@ -2528,7 +3211,7 @@ impl State {
         if self.conversation.view == View::Tasks
             && let Err(error) = self.conversation.tasks.refresh(self.preview)
         {
-            self.notice = Some(error);
+            self.notice = Some(self.ui.language.local_message(&error));
         }
         self.chat_refresh_completions();
         let g = self.geometry;
@@ -2597,8 +3280,13 @@ impl State {
         );
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
-            prompt.lines[0] =
-                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
+            prompt.lines[0] = self.chat_input_line(
+                self.ui.language.text(
+                    "❯ Type an answer · number selects an option",
+                    "❯ 输入回答 · 输入数字选择选项",
+                ),
+                g.left,
+            );
         }
         self.conversation.reference_stamp = Some(reference_stamp);
         self.conversation.reference_rows = std::mem::take(&mut prompt.references)
@@ -2618,9 +3306,14 @@ impl State {
                     .iter()
                     .find(|agent| field(agent, "agent_id") == target)
                     .map(|agent| field(agent, "name").to_owned())
-                    .unwrap_or_else(|| "offline recipient".into())
+                    .unwrap_or_else(|| {
+                        self.ui
+                            .language
+                            .text("offline recipient", "离线接收方")
+                            .into()
+                    })
             })
-            .unwrap_or_else(|| "next caller".into());
+            .unwrap_or_else(|| self.ui.language.text("next caller", "下一个调用方").into());
         if self.conversation.view == View::Questions {
             label = self
                 .conversation
@@ -2628,7 +3321,12 @@ impl State {
                 .as_ref()
                 .and_then(|id| crate::client::interface::questions::get(id))
                 .and_then(|q| q.title)
-                .unwrap_or_else(|| "pending question".into());
+                .unwrap_or_else(|| {
+                    self.ui
+                        .language
+                        .text("pending question", "待回答问题")
+                        .into()
+                });
         }
         let mut rows = Vec::new();
         for index in 0..g.rows {
@@ -2646,47 +3344,47 @@ impl State {
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = wait_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
-                    if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
-                    if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.logs_open { return self.ui.language.text("Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back", "日志 · ←/→ 面板 · ↑↓ / PgUp/PgDn 滚动 · F9 筛选 · 右键 / Esc 返回").into(); }
+                    if self.help { return self.ui.language.text("Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back", "帮助 · ↑↓ / PgUp/PgDn 滚动 · Home/End · Esc 返回").into(); }
                     if self.conversation.view == View::Tasks {
                         return if self.conversation.content_focus {
-                            "Tasks · ↑↓ select · Enter details · PgUp/PgDn scroll · Esc back · ←/→ panels".into()
+                            self.ui.language.text("Tasks · ↑↓ select · Enter details · PgUp/PgDn scroll · Esc back · ←/→ panels", "任务 · ↑↓ 选择 · Enter 详情 · PgUp/PgDn 滚动 · Esc 返回 · ←/→ 面板").into()
                         } else {
-                            "Tasks · Tab browse · Enter sends draft · /tasks cancel ID".into()
+                            self.ui.language.text("Tasks · Tab browse · Enter sends draft · /tasks cancel ID", "任务 · Tab 浏览 · Enter 发送草稿 · /tasks cancel ID").into()
                         };
                     }
                     if self.conversation.view == View::History {
-                        return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
-                            else { "↑↓ select · Enter resume · Esc back".into() };
+                        return if self.conversation.detail { self.ui.language.text("Saved conversation · PgUp/PgDn · type to continue · Esc list", "已保存的会话 · PgUp/PgDn · 输入以继续 · Esc 列表").into() }
+                            else { self.ui.language.text("↑↓ select · Enter resume · Esc back", "↑↓ 选择 · Enter 恢复 · Esc 返回").into() };
                     }
                     if self.conversation.view == View::Questions {
                         return if self.conversation.detail {
-                            "Enter answer · Shift+↑ next · Esc list · Tab browse".into()
+                            self.ui.language.text("Enter answer · Shift+↑ next · Esc list · Tab browse", "Enter 回答 · Shift+↑ 下一个 · Esc 列表 · Tab 浏览").into()
                         } else {
-                            "↑↓ select · Enter answer · Delete skip · Esc back".into()
+                            self.ui.language.text("↑↓ select · Enter answer · Delete skip · Esc back", "↑↓ 选择 · Enter 回答 · Delete 跳过 · Esc 返回").into()
                         };
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
-                            "← / Esc  back to agents".into()
+                            self.ui.language.text("← / Esc  back to agents", "← / Esc  返回智能体").into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
+                                self.ui.language.text("Esc back · ↑↓ select · Enter latest call · ←/→ panels", "Esc 返回 · ↑↓ 选择 · Enter 最近调用 · ←/→ 面板").into()
                             } else {
-                                "Esc back · ↑↓ select · Enter message · ←/→ panels".into()
+                                self.ui.language.text("Esc back · ↑↓ select · Enter message · ←/→ panels", "Esc 返回 · ↑↓ 选择 · Enter 消息 · ←/→ 面板").into()
                             }
                         };
                     }
-                    format!(
-                        "{} · Alt+←/→ panels · right-click logs · /help",
+                    localized!(self.ui.language, "{} · Alt+←/→ panels · right-click logs · /help", "{} · Alt+←/→ 面板 · 右键日志 · /help",
                         if self.conversation.content_focus {
-                            "browse"
+                            self.ui.language.text("browse", "浏览")
                         } else {
-                            "input"
+                            self.ui.language.text("input", "输入")
                         }
                     )
                 });
-                let text = super::footer::render(
+                let text = super::footer::render_in(
+                    self.ui.language,
                     &hint,
                     self.server_origin.as_ref(),
                     connection,
@@ -2701,7 +3399,11 @@ impl State {
                 {
                     format!(
                         " · {} /{}",
-                        ["all", "commands", "errors"][usize::from(self.log_level)],
+                        [
+                            self.ui.language.text("all", "全部"),
+                            self.ui.language.text("commands", "命令"),
+                            self.ui.language.text("errors", "错误")
+                        ][usize::from(self.log_level)],
                         self.log_query
                     )
                 } else {
@@ -2711,9 +3413,12 @@ impl State {
                     && !self.help
                     && self.conversation.canvas.is_default_conversation()
                 {
-                    format!("conversation{suffix}")
+                    localized!(self.ui.language, "conversation{suffix}", "会话{suffix}")
                 } else {
-                    format!("{}{suffix}", self.conversation.canvas.label(g.left))
+                    format!(
+                        "{}{suffix}",
+                        self.conversation.canvas.label(g.left, self.ui.language)
+                    )
                 };
                 if g.left < 32 {
                     self.chat_line(&format!("ssmcp · {label}"), PanelTone::Muted, g.left)
@@ -2740,7 +3445,7 @@ impl State {
                 {
                     label.clone()
                 } else if self.conversation.target.is_some() {
-                    format!("To {label}")
+                    localized!(self.ui.language, "To {label}", "发送给 {label}")
                 } else {
                     self.chat_receipt_context(&queue).unwrap_or_default()
                 };
@@ -2752,7 +3457,7 @@ impl State {
                 let title = fit(&title, width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if g.left == g.cols {
-                    let [account, quota] = self.account.compact_rows();
+                    let [account, quota] = self.account.compact_rows(self.ui.language);
                     let full = format!("{} · {}", account.trim(), quota.trim());
                     if full.width() <= available {
                         full
@@ -2801,19 +3506,45 @@ impl State {
             for kind in self.ui.panels.iter().filter(|_| !agent_view) {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
-                        let mut section =
-                            vec![(format!(" Members · {}", agents.len()), PanelTone::Heading)];
-                        section.push((" ← choose agent".into(), PanelTone::Muted));
+                        let mut section = vec![(
+                            localized!(
+                                self.ui.language,
+                                " Members · {}",
+                                " 成员 · {}",
+                                agents.len()
+                            ),
+                            PanelTone::Heading,
+                        )];
+                        section.push((
+                            self.ui
+                                .language
+                                .text(" ← choose agent", " ← 选择智能体")
+                                .into(),
+                            PanelTone::Muted,
+                        ));
                         for agent in agents.iter().take(4) {
-                            section.push((format!(" {}", field(agent, "name")), PanelTone::Accent));
                             section.push((
-                                format!("   reported {}", field(agent, "status")),
+                                format!(" {}", self.chat_recipient_name(agent)),
+                                PanelTone::Accent,
+                            ));
+                            section.push((
+                                localized!(
+                                    self.ui.language,
+                                    "   reported {}",
+                                    "   报告状态：{}",
+                                    field(agent, "status")
+                                ),
                                 PanelTone::Muted,
                             ));
                         }
                         if !grouped_callers.is_empty() {
                             section.push((
-                                format!(" Observed callers · {}", grouped_callers.len()),
+                                localized!(
+                                    self.ui.language,
+                                    " Observed callers · {}",
+                                    " 已观测的调用方 · {}",
+                                    grouped_callers.len()
+                                ),
                                 PanelTone::Heading,
                             ));
                             for controller in grouped_callers.iter().take(3) {
@@ -2826,22 +3557,45 @@ impl State {
                                 };
                                 section.push((format!(" ↳ {}", controller.name), tone));
                                 section.push((
-                                    format!(
+                                    localized!(
+                                        self.ui.language,
                                         "   {} · {} calls · {}",
-                                        controller.model, controller.calls, controller.status
+                                        "   {} · {} 次调用 · {}",
+                                        controller.model,
+                                        controller.calls,
+                                        controller.status
                                     ),
                                     tone,
                                 ));
                             }
                         }
                         if agents.is_empty() && observed.is_empty() {
-                            section.push((" Waiting for agent activity".into(), PanelTone::Muted));
+                            section.push((
+                                self.ui
+                                    .language
+                                    .text(" Waiting for agent activity", " 等待智能体活动")
+                                    .into(),
+                                PanelTone::Muted,
+                            ));
                         }
                         section
                     }
                     crate::client::ui::Panel::Queue => vec![
-                        (format!(" Queue · {pending} pending"), PanelTone::Heading),
-                        (" /queue to review and edit".into(), PanelTone::Muted),
+                        (
+                            localized!(
+                                self.ui.language,
+                                " Queue · {pending} pending",
+                                " 队列 · {pending} 条待发送"
+                            ),
+                            PanelTone::Heading,
+                        ),
+                        (
+                            self.ui
+                                .language
+                                .text(" /queue to review and edit", " /queue 查看和编辑")
+                                .into(),
+                            PanelTone::Muted,
+                        ),
                     ],
                     _ => {
                         let mut ui = self.ui.clone();
@@ -2853,7 +3607,10 @@ impl State {
                             now,
                             &ui,
                         );
-                        if section.first().is_some_and(|row| row.text == "Ready") {
+                        if section
+                            .first()
+                            .is_some_and(|row| row.text == self.ui.language.text("Ready", "就绪"))
+                        {
                             section.clear();
                         }
                         while section.last().is_some_and(|row| row.text.trim().is_empty()) {

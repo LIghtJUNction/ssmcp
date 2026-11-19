@@ -1,5 +1,5 @@
 //! Local draft editing and rendering; submission and queue ownership live outside this module.
-use super::{completion, ui::Ui};
+use super::{completion, language::Language, ui::Ui};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -18,164 +18,210 @@ pub(super) struct Suggestion<'a> {
 pub(super) struct SlashCommand {
     pub name: &'static str,
     pub description: &'static str,
+    description_zh: &'static str,
+}
+
+impl SlashCommand {
+    pub(super) fn description(self, language: Language) -> &'static str {
+        language.text(self.description, self.description_zh)
+    }
 }
 
 pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/help",
         description: "Show keyboard shortcuts and commands",
+        description_zh: "查看快捷键和命令",
     },
     SlashCommand {
         name: "/exit",
         description: "Close this frontend and restore the terminal",
+        description_zh: "关闭此界面并恢复终端",
     },
     SlashCommand {
         name: "/quit",
         description: "Close this frontend (alias of /exit)",
+        description_zh: "关闭此界面（/exit 的别名）",
     },
     SlashCommand {
         name: "/reload",
         description: "Restart this client session; preserve pending requests",
+        description_zh: "重启当前客户端会话并保留待发送请求",
     },
     SlashCommand {
         name: "/restart",
         description: "Restart this client session (alias of /reload)",
+        description_zh: "重启当前客户端会话（/reload 的别名）",
     },
     SlashCommand {
         name: "/computer",
         description: "Local host-input handoff: status, host [1..60 seconds], stop",
+        description_zh: "本机输入授权：status、host [1..60 秒]、stop",
     },
     SlashCommand {
         name: "/tasks",
         description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
+        description_zh: "在日志旁打开任务；查看作业或按准确 ID 取消",
     },
     SlashCommand {
         name: "/queue",
         description: "Show queued requests",
+        description_zh: "查看待发送请求",
     },
     SlashCommand {
         name: "/send",
-        description: "强制发送给当前监听程序：/send <正文>；无监听者时保留草稿",
+        description: "Send to the active listener: /send <text>; keep the draft if no listener is waiting",
+        description_zh: "发送给当前监听程序：/send <正文>；无监听者时保留草稿",
     },
     SlashCommand {
         name: "/wait",
-        description: "查看用户等待；/wait cancel <唯一编号> 取消对应等待，会话继续",
+        description: "Inspect user waits; /wait cancel <unique ID> cancels one wait and keeps the session open",
+        description_zh: "查看用户等待；/wait cancel <唯一编号> 取消对应等待，会话继续",
     },
     SlashCommand {
         name: "/audit",
         description: "Open code audit",
+        description_zh: "打开代码审计",
     },
     SlashCommand {
         name: "/diff",
         description: "Choose diff layout: single or split; narrow screens use single",
+        description_zh: "选择差异布局：single 或 split；窄屏使用单列",
     },
     SlashCommand {
         name: "/allow",
         description: "List session access; /allow USER grants, /allow remove USER revokes",
+        description_zh: "查看会话访问权；/allow USER 授权，/allow remove USER 撤销",
     },
     SlashCommand {
         name: "/logout",
         description: "Sign out of this connection\'s saved account and close this session",
+        description_zh: "退出此连接保存的账号并关闭当前会话",
     },
     SlashCommand {
         name: "/login",
         description: "Sign in with GitHub; open a browser, copy the link or show the link",
+        description_zh: "使用 GitHub 登录；打开浏览器、复制或显示登录链接",
     },
     SlashCommand {
         name: "/logs",
         description: "Open the Logs canvas panel; Esc returns to the previous panel",
+        description_zh: "打开日志面板；Esc 返回前一面板",
     },
     SlashCommand {
         name: "/raw",
         description: "Toggle the diagnostic log panel",
+        description_zh: "切换诊断日志面板",
     },
     SlashCommand {
         name: "/new",
         description: "Add a canvas panel: chat, agents, audit, queue, questions or history",
+        description_zh: "新增面板：chat、agents、audit、queue、questions 或 history",
     },
     SlashCommand {
         name: "/close",
         description: "Close this canvas panel; keep the session and running work",
+        description_zh: "关闭当前面板；保留会话和运行中的工作",
     },
     SlashCommand {
         name: "/questions",
         description: "Review pending questions",
+        description_zh: "查看待回答的问题",
     },
     SlashCommand {
         name: "/filter",
         description: "Filter logs by text",
+        description_zh: "按文本筛选日志",
     },
     SlashCommand {
         name: "/theme",
         description: "Choose a display theme",
+        description_zh: "选择界面主题",
     },
     SlashCommand {
         name: "/language",
         description: "Switch and save the interface language: en or zh",
+        description_zh: "切换并保存界面语言：en 或 zh",
     },
     SlashCommand {
         name: "/sidebar",
         description: "Toggle sidebar",
+        description_zh: "切换侧栏",
     },
     SlashCommand {
         name: "/clear",
         description: "Clear visible logs",
+        description_zh: "清空可见日志",
     },
     SlashCommand {
         name: "/paste",
         description: "Import clipboard text, image or desktop file selection",
+        description_zh: "导入剪贴板文本、图片或桌面选中的文件",
     },
     SlashCommand {
         name: "/attach",
         description: "Reference a workspace file or import selected local files",
+        description_zh: "引用工作区文件或导入选中的本机文件",
     },
     SlashCommand {
         name: "/select",
         description: "Freeze display for terminal mouse selection; F7/Esc returns",
+        description_zh: "暂停重绘以使用终端原生拖选；F7/Esc 返回",
     },
     SlashCommand {
         name: "/copy",
         description: "Copy the latest agent reply",
+        description_zh: "复制智能体最近的回复",
     },
     SlashCommand {
         name: "/handoff",
         description: "Prepare a context file and editable handoff draft",
+        description_zh: "准备上下文文件和可编辑的交接草稿",
     },
     SlashCommand {
         name: "/context",
         description: "List local memory branches",
+        description_zh: "查看本机记忆分支",
     },
     SlashCommand {
         name: "/memory",
         description: "Read the active local memory branch",
+        description_zh: "读取当前本机记忆分支",
     },
     SlashCommand {
         name: "/compact",
         description: "Create a local checkpoint; optional explicit summary",
+        description_zh: "创建本机检查点；可提供明确摘要",
     },
     SlashCommand {
         name: "/fork",
         description: "Fork local memory; optional branch name",
+        description_zh: "创建记忆分支；可指定名称",
     },
     SlashCommand {
         name: "/switch",
         description: "Switch memory branch by exact ID; never replay work",
+        description_zh: "按准确 ID 切换记忆分支；不重放工作",
     },
     SlashCommand {
         name: "/resume",
         description: "Resume saved local conversation history",
+        description_zh: "恢复已保存的本机会话历史",
     },
     SlashCommand {
         name: "/pi",
         description: "Inspect or call the installed Pi harness",
+        description_zh: "查看或调用已安装的 Pi 能力",
     },
     SlashCommand {
         name: "/cc",
         description: "Inspect or call native Claude Code tools",
+        description_zh: "查看或调用原生 Claude Code 工具",
     },
     SlashCommand {
         name: "/codex",
         description: "Inspect or call native Codex tools",
+        description_zh: "查看或调用原生 Codex 工具",
     },
 ];
 
@@ -703,7 +749,18 @@ impl Composer {
                     (if index == selected { "› " } else { "  " }, "accent"),
                     (command.name, "accent"),
                     ("  ", "muted"),
-                    (command.description, "muted"),
+                    (
+                        if command.reference {
+                            command.description
+                        } else {
+                            SLASH_COMMANDS
+                                .iter()
+                                .find(|item| item.name == command.name)
+                                .map(|item| item.description(ui.language))
+                                .unwrap_or(command.description)
+                        },
+                        "muted",
+                    ),
                 ],
                 width,
                 ui,

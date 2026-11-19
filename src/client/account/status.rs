@@ -1,5 +1,6 @@
 //! Read-only account and monthly traffic status for the connected server.
 use super::{Api, Credential, Method, StatusCode, Url, Value, public_identity};
+use crate::client::language::{Language, localized};
 
 mod traffic;
 pub(in crate::client) use traffic::Traffic;
@@ -99,12 +100,12 @@ impl Status {
         }
     }
 
-    fn account_label(&self) -> String {
+    fn account_label(&self, language: Language) -> String {
         match self {
-            Self::Local => "当前系统用户".into(),
-            Self::Loading => "loading…".into(),
-            Self::SignedOut => "signed out".into(),
-            Self::Unavailable => "unavailable".into(),
+            Self::Local => language.text("current OS user", "当前系统用户").into(),
+            Self::Loading => language.text("loading…", "加载中…").into(),
+            Self::SignedOut => language.text("signed out", "未登录").into(),
+            Self::Unavailable => language.text("unavailable", "不可用").into(),
             Self::Ready {
                 login, username, ..
             } => username
@@ -123,34 +124,63 @@ impl Status {
     }
 
     /// This quota belongs to the saved login for the live origin, not its remote caller.
+    #[cfg(test)]
     pub(in crate::client) fn rows(&self, width: u16) -> [String; 3] {
+        self.rows_in(width, Language::English)
+    }
+
+    pub(in crate::client) fn rows_in(&self, width: u16, language: Language) -> [String; 3] {
         if *self == Self::Local {
             return [
-                " 本地会话  当前系统用户".into(),
-                " 授权  /logs 查看 MCP 地址和一次性登录码".into(),
+                language
+                    .text(" Local session  current OS user", " 本地会话  当前系统用户")
+                    .into(),
+                language
+                    .text(
+                        " Access  /logs for MCP address and one-time login code",
+                        " 授权  /logs 查看 MCP 地址和一次性登录码",
+                    )
+                    .into(),
                 String::new(),
             ];
         }
         let width = width.saturating_sub(1);
         let progress = if *self == Self::Loading {
-            "Quota loading…".into()
+            language.text("Quota loading…", "额度加载中…").into()
         } else {
-            self.traffic().progress(width)
+            self.traffic().progress_in(width, language)
         };
         [
-            format!(" Local {}", self.account_label()),
+            localized!(
+                language,
+                " Local {}",
+                " 本机账号 {}",
+                self.account_label(language)
+            ),
             format!(" {progress}"),
-            format!(" {}", self.traffic().reset_label(width)),
+            format!(" {}", self.traffic().reset_label_in(width, language)),
         ]
     }
 
-    pub(in crate::client) fn compact_rows(&self) -> [String; 2] {
+    pub(in crate::client) fn compact_rows(&self, language: Language) -> [String; 2] {
         if *self == Self::Local {
-            return ["本地会话 当前系统用户".into(), "/logs 查看 MCP 授权".into()];
+            return [
+                language
+                    .text("Local session  current OS user", "本地会话 当前系统用户")
+                    .into(),
+                language
+                    .text("/logs for MCP access", "/logs 查看 MCP 授权")
+                    .into(),
+            ];
         }
         [
-            format!("Local {}", self.account_label()),
-            self.traffic().compact(),
+            localized!(
+                language,
+                "Local {}",
+                "本机账号 {}",
+                self.account_label(language)
+            ),
+            self.traffic().compact(language),
         ]
     }
 }

@@ -1,0 +1,261 @@
+{
+  "scope": "Native client display language, English default and persistent en/zh selection",
+  "base_commit": "a3e4b679528e9e35ae9940ac4c296f5205e7cd0b",
+  "original_base": "b43cf1f38bff28b04947fc82178bd7c26cbeb627",
+  "full_gate_source_sha256": "cf87404b7ff5b1063642a2168f6578abc77a3245188d4737978fb82d5e46ef8e",
+  "final_build_source_sha256": "93d335366c5407266cca2c7f5a58c38acf4bd99a9423ef048335908e7e8075d2",
+  "source_unchanged_during_gates": true,
+  "binary": {
+    "sha256": "81f9ce37b125cd63be7d57724912c50e1342527a8e3f11710fc3608532567a4a",
+    "bytes": 104640512
+  },
+  "rust_unique_passed": 352,
+  "unique_by_round": {
+    "5": 331,
+    "6": 19,
+    "7": 13
+  },
+  "checks": [
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::terminal"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::composer"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::ui"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::panel"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::audit_view"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::account::status"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::link_metrics"
+      ],
+      "exit_code": 101
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::link_metrics",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::interface::user_wait"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::interface::tests::language_"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::language"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 6,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "ssmcp"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 7,
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 7,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::interface::questions"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 7,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "client::terminal::conversation::language_tests"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 7,
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--lib",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "round": 7,
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "ssmcp"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "pty": {
+    "sha256": "81f9ce37b125cd63be7d57724912c50e1342527a8e3f11710fc3608532567a4a",
+    "scope": "owned PTYs with isolated preview config; no backend or real account",
+    "checks": [
+      "default_english_real_pty",
+      "immediate_chinese_private_atomic_save_preserves_other_sections",
+      "invalid_language_keeps_active_and_saved_language",
+      "chinese_survives_process_restart",
+      "switch_back_to_english_real_pty",
+      "english_survives_process_restart",
+      "failed_save_keeps_english_and_malformed_document",
+      "en_static_narrow_unicode_frames",
+      "zh_static_narrow_unicode_frames",
+      "machine_readable_show_stays_clean_toml"
+    ],
+    "exit_code": 0
+  },
+  "pty_script_sha256": "a935eba85ac92e51e45e2e8a598e0cec20bff2a167072404905b55b16a492859",
+  "baseline_test_adjustment_commit": "6e74d811da72a0d4db88dc64efeab9f0a746160c",
+  "notes": [
+    "The full terminal group ran without skips.",
+    "Two existing Unix datagram close assertions failed in the parallel link_metrics group, then passed unchanged when that group ran with --test-threads=1. No transport lifecycle code was changed in this language stage.",
+    "Strict all-targets Clippy passed before a narrow canonical skipped-history correction. Questions and localized frame tests plus strict library Clippy and the final binary build passed after that correction.",
+    "The final PTY script adds owned-child SIGTERM cleanup after the compiler gate; it was executed against the frozen final binary.",
+    "The qrcodegen unused dependency manifest warning predates this change; Rust -D warnings checks passed.",
+    "No installation, live account authorization, client reload, release publication, or CI run was used.",
+    "Container labels and the newer sleep overlay are a separate integration follow-up."
+  ]
+}

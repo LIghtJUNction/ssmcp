@@ -1,5 +1,6 @@
 //! Application-payload telemetry for this relay connection only.
 //! Samples travel over a private local datagram socket, never the public wire.
+use super::language::{Language, localized};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -61,13 +62,18 @@ impl View {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn rows(&self) -> [String; 3] {
+        self.rows_in(Language::English)
+    }
+
+    pub(super) fn rows_in(&self, language: Language) -> [String; 3] {
         let id = if self.client_id.is_empty() {
             "—"
         } else {
             &self.client_id
         };
-        let heading = format!("App data #{id}");
+        let heading = localized!(language, "App data #{id}", "应用数据 #{id}");
         match self.status {
             Status::Ready {
                 uploaded,
@@ -80,9 +86,9 @@ impl View {
             status => [
                 heading,
                 match status {
-                    Status::Sampling => "Sampling…",
-                    Status::Unavailable => "Speed unavailable",
-                    Status::Disconnected => "Disconnected",
+                    Status::Sampling => language.text("Sampling…", "采样中…"),
+                    Status::Unavailable => language.text("Speed unavailable", "速率不可用"),
+                    Status::Disconnected => language.text("Disconnected", "已断开"),
                     Status::Ready { .. } => unreachable!(),
                 }
                 .into(),

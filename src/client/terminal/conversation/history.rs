@@ -8,7 +8,13 @@ impl State {
                 self.conversation.sessions = sessions;
                 self.chat_change_view(View::History);
             }
-            Err(error) => self.notice = Some(format!("Could not read history: {error}")),
+            Err(error) => {
+                self.notice = Some(localized!(
+                    self.ui.language,
+                    "Could not read history: {error}",
+                    "无法读取历史：{error}"
+                ))
+            }
         }
         self.dirty = true;
     }
@@ -20,7 +26,13 @@ impl State {
                 .any(|item| field(item, "status") == "sending");
         if sending {
             self.notice = Some(
-                "Wait for the current submission to be confirmed before switching history".into(),
+                self.ui
+                    .language
+                    .text(
+                        "Wait for the current submission to be confirmed before switching history",
+                        "请等待当前提交得到确认后，再切换历史会话",
+                    )
+                    .into(),
             );
             return;
         }
@@ -65,10 +77,23 @@ impl State {
                 self.conversation.detail = true;
                 self.conversation.content_focus = false;
                 self.conversation.detail_scroll = usize::MAX;
-                self.notice =
-                    Some("History restored · type to continue · no old request was resent".into());
+                self.notice = Some(
+                    self.ui
+                        .language
+                        .text(
+                            "History restored · type to continue · no old request was resent",
+                            "历史已恢复 · 输入即可继续 · 没有重发旧请求",
+                        )
+                        .into(),
+                );
             }
-            Err(error) => self.notice = Some(format!("Could not resume: {error}")),
+            Err(error) => {
+                self.notice = Some(localized!(
+                    self.ui.language,
+                    "Could not resume: {error}",
+                    "无法恢复：{error}"
+                ))
+            }
         }
         self.dirty = true;
     }
@@ -82,10 +107,10 @@ impl State {
                 let mut rows = Vec::new();
                 for message in &history.messages {
                     let label = match message.role.as_str() {
-                        "assistant" => "Agent",
-                        "user" => "You",
-                        "tool" => "Tool",
-                        _ => "Session",
+                        "assistant" => self.ui.language.text("Agent", "智能体"),
+                        "user" => self.ui.language.text("You", "你"),
+                        "tool" => self.ui.language.text("Tool", "工具"),
+                        _ => self.ui.language.text("Session", "会话"),
                     };
                     rows.extend(markdown::rows(&format!("## {label}"), width, &self.ui));
                     rows.extend(markdown::rows(&message.content, width, &self.ui));
@@ -113,13 +138,19 @@ impl State {
                 .collect();
         }
         let mut rows = vec![self.chat_line(
-            "  Conversation history · ↑↓ select · Enter resume · Esc back",
+            self.ui.language.text(
+                "  Conversation history · ↑↓ select · Enter resume · Esc back",
+                "  会话历史 · ↑↓ 选择 · Enter 恢复 · Esc 返回",
+            ),
             PanelTone::Heading,
             width,
         )];
         if self.conversation.sessions.is_empty() {
             rows.push(self.chat_line(
-                "  No saved conversations in this workspace yet.",
+                self.ui.language.text(
+                    "  No saved conversations in this workspace yet.",
+                    "  当前工作区暂无已保存的会话。",
+                ),
                 PanelTone::Muted,
                 width,
             ));
@@ -145,11 +176,17 @@ impl State {
                 width,
             ));
             rows.push(self.chat_line(
-                &format!(
+                &localized!(
+                    self.ui.language,
                     "  {} messages · {}{}",
+                    "  {} 条消息 · {}{}",
                     session.message_count,
                     session.id,
-                    if session.current { " · current" } else { "" }
+                    if session.current {
+                        self.ui.language.text(" · current", " · 当前")
+                    } else {
+                        ""
+                    }
                 ),
                 PanelTone::Muted,
                 width,
@@ -159,19 +196,26 @@ impl State {
     }
 
     pub(super) fn chat_help_rows(&mut self, height: u16) -> Vec<String> {
-        let mut text = String::from("# ssmcp help\n\n");
+        let mut text = String::from(
+            self.ui
+                .language
+                .text("# ssmcp help\n\n", "# ssmcp 帮助\n\n"),
+        );
         if let Some(guide) = &self.guide {
-            text.push_str("Online guide: ");
+            text.push_str(self.ui.language.text("Online guide: ", "在线指南："));
             text.push_str(guide.url());
             text.push_str("\n\n");
         }
-        text.push_str(
-            "## Write and send\nEnter: queue a requirement; continue writing the next draft.\nCtrl+J / Shift+Enter: newline. Tab / Shift+Tab: switch focus.\nAlt+Up/Down: increase/decrease visible input rows; keeps your draft and cursor.\nUp/Down: move over wrapped input lines; then history.\nEmpty input + Up: take back the latest queued request before input history. Wait for confirmation; delivered requests cannot be taken back.\nCtrl+C: clear the current input; on empty input, show an exit reminder, then press again to exit. Any other input cancels the exit reminder. Other queued requests stay unchanged.\nLeft/Right: move cursor; at a draft boundary, move to the adjacent panel. Home/End: line start/end.\nCtrl+A/E: line start/end. Ctrl+U/K: delete before/after cursor.\nCtrl+W: delete word. Backspace/Delete: edit text.\n\n## Agents and questions\nLeft at draft start: move to Agents; Up/Down select; Enter chooses. Alt+Left/Right always moves between panels.\nEsc: return without changing recipient or draft.\nShift+Up or /questions: answer pending questions; repeat for next question.\nEnter a choice number or a free answer; Enter saves it.\nEsc: question list; Delete in list skips; Esc again returns.\nQuestions never pause the agent's other work.\n\n## Shell commands\n!command: execute with your local shell in the workspace.\nUses the ASCII ! prefix; runs asynchronously with output and exit status here.\n\n## Tasks\n/tasks: open Tasks immediately to the right of Logs; refreshes while visible.\nUp/Down select a job; Enter opens details; Esc returns to the list or input.\nPgUp/PgDn and the mouse wheel scroll.\n/tasks cancel ID: explicitly cancel that local job.\n\n## Files, skills and paste\n@path or @\"path with spaces\": reference a workspace file/image.\n$skill-name: reference an effective project/global skill.\nPaste over 8 KiB: saved as @file; add your request after it.\nText paste limit: 4 MiB; image paste limit: 16 MiB. Input/expanded requirement limit: 16 KiB.\nCtrl+V or /paste: import clipboard text or image.\n/attach PATH: import an image as a private file reference.\n/copy: copy the latest agent reply to the clipboard.\n\n## GitHub account\n/login: prepare GitHub sign-in and open the browser.\n/login copy: copy the pending login link; /login link: display it here.\nRepeat these commands to use the same pending authorization.\nFinish GitHub sign-in and confirm the device; the current session stays connected.\n\n## Review and copy\nTab: browse content. Enter: open or toggle the selected record.\nLeft/Right: move between canvas panels; Esc: back. Wheel/PgUp/PgDn: scroll content.\nCtrl+Home: oldest retained output. Ctrl+End: return to the latest and follow new activity.\nThe footer shows how much output is below your position.\nRight-click or /logs: move to Logs; Esc/right-click returns to the previous panel.\nLogs and Tasks are adjacent canvas panels; Left/Right moves between them.\n/raw also toggles Logs. Full output stays available there.\n/diff single|split: stack changes or show old/new lines side by side.\nSplit uses a single column on narrow terminals.\n/new [chat|agents|audit|queue|questions|history]: add a panel to the right.\n/close: close this panel; the session, drafts and running tasks are kept.\nCanvas navigation does not wrap; each panel remembers its selection and scroll position.\nF7 or /select: freeze display and use your terminal's native mouse selection.\nCopy using your terminal's Copy shortcut or menu (often Ctrl+Shift+C).\nF7/Esc resumes updates and restores interface scrolling and clicks.\nOn terminals supporting it, Shift+drag selects directly without entering copy mode.\n/copy still copies only the latest agent reply.\n\n## Queued requests\n/queue: Up/Down select; Enter take back; i/I inspect without editing.\nDelete cancels a revocable request. R copies delivered text.\nFor uncertain/offline items, R opens explicit review before resending.\nTaking back waits for server acknowledgement; delivery may win.\n\n## Computer input\n/computer status: inspect the local host-input handoff.\n/computer host [seconds]: hand over host input locally; default 15s, maximum 60s.\n/computer stop: return control immediately. Any input in this terminal also stops it.\nOther applications are not monitored for input; use isolated desktop/background browser while you work.\n\n## Appearance and history\nF1: help. F2: next view. F3: sidebar. F4: theme.\nF5 reloads appearance. F8 saves appearance. F9 changes log category.\n/reload restarts the client; /resume reopens saved local conversation.\nConversation history never automatically replays tools or requests.\n/handoff [note]: export current context and prepare an @file draft.\nChoose the recipient, review the draft, then Enter to send.\n\n## Local commands\n",
-        );
+        text.push_str(super::help::body(self.ui.language));
         for command in crate::client::composer::SLASH_COMMANDS {
-            let _ = writeln!(text, "{} — {}", command.name, command.description);
+            let _ = writeln!(
+                text,
+                "{} — {}",
+                command.name,
+                command.description(self.ui.language)
+            );
         }
-        text.push_str("\n## Native harnesses\n/pi, /cc, /codex: inspect installed capabilities.\nUse /cc TOOL {JSON} or /codex TOOL {JSON} with the discovered schema.\nUse /pi rpc {\"type\":\"get_commands\",\"args\":{}} to inspect installed commands.\nBackend capabilities and approvals stay with the installed harness.\n\nHelp: Up/Down, PgUp/PgDn, Home/End scroll; Esc returns.\n");
+        text.push_str(self.ui.language.text("\n## Native harnesses\n/pi, /cc, /codex: inspect installed capabilities.\nUse /cc TOOL {JSON} or /codex TOOL {JSON} with the discovered schema.\nUse /pi rpc {\"type\":\"get_commands\",\"args\":{}} to inspect installed commands.\nBackend capabilities and approvals stay with the installed harness.\n\nHelp: Up/Down, PgUp/PgDn, Home/End scroll; Esc returns.\n", "\n## 原生工具后端\n/pi、/cc、/codex：查看已安装的能力。\n按发现的参数定义使用 /cc TOOL {JSON} 或 /codex TOOL {JSON}。\n使用 /pi rpc {\"type\":\"get_commands\",\"args\":{}} 查看已安装的命令。\n后端能力与审批仍由已安装的后端管理。\n\n帮助：↑/↓、PgUp/PgDn、Home/End 滚动；Esc 返回。\n"));
         let lines = markdown::rows(&text, self.geometry.left, &self.ui);
         self.conversation.help_scroll = self
             .conversation

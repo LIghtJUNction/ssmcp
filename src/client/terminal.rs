@@ -3,6 +3,7 @@
 use super::{
     account::status::{self as account_status, Status as AccountStatus},
     audit_view::AuditView,
+    language::{Language, localized},
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
     ui::{Layout, Ui},
@@ -1605,7 +1606,10 @@ impl State {
             result.push(self.tone(
                 PanelTone::Muted,
                 &panel::fit(
-                    "No matching log entries · / Edit filter · Esc Clear",
+                    self.ui.language.text(
+                        "No matching log entries · / Edit filter · Esc Clear",
+                        "没有匹配的日志 · / 编辑筛选 · Esc 清除",
+                    ),
                     usize::from(g.left),
                 ),
             ));
@@ -1869,14 +1873,21 @@ impl State {
         Vec::new()
     }
 
+    fn copy_hint(&self) -> &'static str {
+        self.ui.language.text(
+            COPY_HINT,
+            "选择模式 · 拖动选择 · 使用终端复制 · F7/Esc 返回",
+        )
+    }
+
     fn set_selection_mode(&mut self, enabled: bool) {
         if self.selection == enabled {
             return;
         }
         self.selection = enabled;
         if enabled {
-            self.notice = Some(COPY_HINT.into());
-        } else if self.notice.as_deref() == Some(COPY_HINT) {
+            self.notice = Some(self.copy_hint().into());
+        } else if self.notice.as_deref() == Some(self.copy_hint()) {
             self.notice = None;
         }
         self.dirty = true;
@@ -1946,25 +1957,47 @@ impl State {
         let mut rows = Vec::with_capacity(usize::from(g.rows));
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
-                let level = ["all", "commands", "errors"][usize::from(self.log_level)];
+                let level = [
+                    self.ui.language.text("all", "全部"),
+                    self.ui.language.text("commands", "命令"),
+                    self.ui.language.text("errors", "错误"),
+                ][usize::from(self.log_level)];
                 let hint = if self.selection {
-                    COPY_HINT.into()
+                    self.copy_hint().into()
                 } else if self.filter_editing {
-                    format!(" / {}_   Enter Apply · Esc Cancel ", self.filter_draft)
+                    localized!(
+                        self.ui.language,
+                        " / {}_   Enter Apply · Esc Cancel ",
+                        " / {}_   Enter 应用 · Esc 取消 ",
+                        self.filter_draft
+                    )
                 } else if let Some(notice) = &self.notice {
-                    format!(" {notice} · F1 Help ")
+                    localized!(
+                        self.ui.language,
+                        " {notice} · F1 Help ",
+                        " {notice} · F1 帮助 "
+                    )
                 } else if !self.log_query.is_empty() || self.log_level != 0 {
-                    format!(
+                    localized!(
+                        self.ui.language,
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
+                        " 日志：{level} /{} · / 编辑 · Esc 清除 · 滚轮滚动 · ↑↓ 审计 · Enter 打开 ",
                         self.log_query
                     )
                 } else if g.cols < 100 {
-                    " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
+                    self.ui
+                        .language
+                        .text(
+                            " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ",
+                            " F7 复制 · 滚轮日志 · ↑↓ 审计 · Enter/→ 打开 · / 筛选 · F1 帮助 ",
+                        )
+                        .into()
                 } else {
-                    " F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ".into()
+                    self.ui.language.text(" F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ", " F7 复制 · 滚轮 / PgUp 日志 · ↑↓ 审计 · Enter/→ 打开 · ← 返回 · / 筛选 · F9 分类 · F1 帮助 ").into()
                 };
                 let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
-                let text = footer::render(
+                let text = footer::render_in(
+                    self.ui.language,
                     &hint,
                     self.server_origin.as_ref(),
                     connection,
@@ -1988,7 +2021,10 @@ impl State {
                     .cloned()
                     .unwrap_or_else(|| screen_row(self.logs.screen(), row, g.left, &self.ui))
             } else if row == g.log_rows && g.log_rows > 0 {
-                let title = " CODE_MODE  ·  ↑↓ Browse  ·  Enter/→ Details  ·  ← Back ";
+                let title = self.ui.language.text(
+                    " CODE_MODE  ·  ↑↓ Browse  ·  Enter/→ Details  ·  ← Back ",
+                    " CODE_MODE  ·  ↑↓ 浏览  ·  Enter/→ 详情  ·  ← 返回 ",
+                );
                 let text = fit(title, g.left);
                 let padding = usize::from(g.left).saturating_sub(text.width());
                 self.tone(PanelTone::Muted, &format!("{text}{}", "─".repeat(padding)))
@@ -2009,42 +2045,138 @@ impl State {
         if self.help {
             self.media.clear();
             let mut lines = vec![
-                "SSMCP  /  Help & appearance".to_string(),
+                self.ui
+                    .language
+                    .text("SSMCP  /  Help & appearance", "SSMCP  /  帮助与外观")
+                    .to_string(),
                 String::new(),
-                format!(
+                localized!(
+                    self.ui.language,
                     "Theme  {}     View  {}",
+                    "主题  {}     视图  {}",
                     self.ui.theme.name(),
-                    self.ui.layout.name()
+                    self.ui.layout.label(self.ui.language)
                 ),
-                format!(
+                localized!(
+                    self.ui.language,
                     "Logs  {}%     Sidebar  {} · {} columns",
+                    "日志  {}%     侧栏  {} · {} 列",
                     self.ui.log_height_percent,
-                    if self.ui.sidebar { "shown" } else { "hidden" },
+                    if self.ui.sidebar {
+                        self.ui.language.text("shown", "显示")
+                    } else {
+                        self.ui.language.text("hidden", "隐藏")
+                    },
                     self.ui.sidebar_width
                 ),
                 String::new(),
-                "F1 / Esc   Close this view".into(),
-                "F2         Switch split / audit / logs".into(),
-                "F3         Show or hide the sidebar".into(),
-                "F4         Cycle color themes".into(),
-                "F5         Reload your configuration".into(),
-                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
-                "Copy       Use your terminal copy shortcut after selecting text".into(),
-                "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
-                "Up / Down  Select a code_mode call; Enter / Right opens".into(),
-                "Left       Return to the audit list".into(),
-                "/          Filter logs by text; F9 cycles all / commands / errors".into(),
-                "F8         Save the current appearance".into(),
+                self.ui
+                    .language
+                    .text("F1 / Esc   Close this view", "F1 / Esc   关闭当前视图")
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "F2         Switch split / audit / logs",
+                        "F2         切换拆分 / 审计 / 日志",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "F3         Show or hide the sidebar",
+                        "F3         显示或隐藏侧栏",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text("F4         Cycle color themes", "F4         切换颜色主题")
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "F5         Reload your configuration",
+                        "F5         重新加载配置",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "F7         Freeze display for terminal mouse selection; F7/Esc returns",
+                        "F7         暂停重绘，使用终端原生拖选；F7/Esc 返回",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "Copy       Use your terminal copy shortcut after selecting text",
+                        "复制       选中文本后使用终端的复制快捷键",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "Wheel      Scroll logs directly; PgUp / PgDn also work",
+                        "滚轮       直接滚动日志，也可使用 PgUp / PgDn",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "Up / Down  Select a code_mode call; Enter / Right opens",
+                        "↑ / ↓      选择 code_mode 调用；Enter / → 打开",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "Left       Return to the audit list",
+                        "←          返回审计列表",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "/          Filter logs by text; F9 cycles all / commands / errors",
+                        "/          按文本筛选日志；F9 切换全部 / 命令 / 错误",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "F8         Save the current appearance",
+                        "F8         保存当前外观",
+                    )
+                    .into(),
+                self.ui
+                    .language
+                    .text(
+                        "Language   [ui] language = \"en\" or \"zh\"; F5 reloads",
+                        "语言       [ui] language = \"en\" 或 \"zh\"；F5 重载",
+                    )
+                    .into(),
                 String::new(),
-                "Edit colors, panel order and sizes in your TOML file.".into(),
+                self.ui
+                    .language
+                    .text(
+                        "Edit colors, panel order and sizes in your TOML file.",
+                        "在 TOML 配置中调整颜色、面板顺序和尺寸。",
+                    )
+                    .into(),
                 "ssmcp ui show     ssmcp ui check     ssmcp ui preview".into(),
                 String::new(),
                 self.notice.clone().unwrap_or_else(|| {
-                    "Appearance changes keep running tasks and audit history.".into()
+                    self.ui
+                        .language
+                        .text(
+                            "Appearance changes keep running tasks and audit history.",
+                            "更改外观会保留运行中的任务和审计历史。",
+                        )
+                        .into()
                 }),
             ];
             if let Some(guide) = &self.guide {
-                let mut links = vec!["Online guide".to_owned()];
+                let mut links = vec![self.ui.language.text("Online guide", "在线指南").to_owned()];
                 links.extend(
                     guide
                         .url_lines(g.cols.saturating_sub(4))
@@ -2056,7 +2188,7 @@ impl State {
             }
             for (row, line) in rows.iter_mut().enumerate() {
                 let content = if self.selection && g.rows >= 3 && row + 1 == usize::from(g.rows) {
-                    COPY_HINT
+                    self.copy_hint()
                 } else {
                     lines
                         .get(row.saturating_sub(1))
@@ -2096,7 +2228,7 @@ impl State {
         let mut rows = Vec::new();
         // The account, quota and reset share the existing guide footer space.
         if height >= 10 && width >= 20 {
-            for text in self.account.rows(width) {
+            for text in self.account.rows_in(width, self.ui.language) {
                 let text = fit(&text, width);
                 let padded = format!(
                     "{text}{}",
@@ -2107,7 +2239,7 @@ impl State {
         }
         for text in self
             .link_metrics
-            .rows()
+            .rows_in(self.ui.language)
             .into_iter()
             .take(usize::from(height).saturating_sub(rows.len()))
         {
@@ -2936,25 +3068,37 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn local_frame_shows_connection_authorization_without_cloud_account_quota() {
-        let ui = Ui {
-            layout: Layout::Chat,
-            sidebar: false,
-            ..Ui::default()
-        };
-        let mut state = preview_state(30, 120, &ui);
-        state.preview = false;
-        state.guide = None;
-        state.account = AccountStatus::Local;
-        state.server_origin = footer::Origin::parse_local("http://127.0.0.1:43123/alice");
-        let frame = physical(&state.frame(Instant::now()));
-        let text = frame.screen().contents();
-        assert!(text.contains("本地会话"), "{text}");
-        assert!(text.contains("一次性登录码"), "{text}");
-        assert!(text.contains("http://127.0.0.1:43123"), "{text}");
-        assert!(
-            !text.contains("本月剩余") && !text.contains("未登录"),
-            "{text}"
-        );
+        for language in [Language::English, Language::Chinese] {
+            let ui = Ui {
+                language,
+                layout: Layout::Chat,
+                sidebar: false,
+                ..Ui::default()
+            };
+            let mut state = preview_state(30, 120, &ui);
+            state.preview = false;
+            state.guide = None;
+            state.account = AccountStatus::Local;
+            state.server_origin = footer::Origin::parse_local("http://127.0.0.1:43123/alice");
+            let frame = physical(&state.frame(Instant::now()));
+            let text = frame.screen().contents();
+            assert!(
+                text.contains(language.text("Local session", "本地会话")),
+                "{text}"
+            );
+            assert!(
+                text.contains(language.text("/logs for MCP access", "/logs 查看 MCP 授权")),
+                "{text}"
+            );
+            assert!(text.contains("http://127.0.0.1:43123"), "{text}");
+            assert!(
+                !text.contains("remaining")
+                    && !text.contains("本月剩余")
+                    && !text.contains("未登录")
+                    && !text.contains("Signed out"),
+                "{text}"
+            );
+        }
     }
 
     fn physical(frame: &Frame) -> vt100::Parser {
@@ -3001,12 +3145,36 @@ mod tests {
         state.image(rejected, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -3043,7 +3211,19 @@ mod tests {
         state.image(next, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -3185,7 +3365,19 @@ mod tests {
         state.image(image, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert_eq!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["expanded"],
+            false,
+            "decoded images initially use thumbnails"
+        );
+        assert!(
+            state.events.open(),
+            "explicitly open before checking placement lifecycle"
+        );
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
