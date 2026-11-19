@@ -47,7 +47,9 @@
   },
   "artifacts": {
     "raw_report_sha256": "a8da22669aec463fd3edfb2cbefe733268ebd93a6ff7d617cb95469dbe62764b",
-    "published_report_sha256": "cc18c8a6ed4e124c8594473c66fad1d1ebb8fbb9d6fe5afa9605474b2e46f829"
+    "published_report_sha256": "cc18c8a6ed4e124c8594473c66fad1d1ebb8fbb9d6fe5afa9605474b2e46f829",
+    "passed_checks_file": "passed-checks.txt",
+    "published_log_sha256": "bf4a9b648fb6e2f48aab83121e480307987806d11b3f17e4326561fdf1031679"
   },
   "redactions": [
     "ephemeral loopback ports",

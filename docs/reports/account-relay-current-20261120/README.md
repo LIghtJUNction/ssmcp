@@ -59,4 +59,4 @@ python3 scripts/e2e_account_relay.py --binary "$FROZEN_CLI" --report account-rel
 
 为排查后续是否还有独立问题，曾在私有诊断副本中仅跳过已知失败区段，运行其余 46 项检查；该结果明确标记为 `diagnostic_only_early_revocation_excluded`，没有作为完整发布验收。最终记录只采用保留全部场景的仓库脚本。
 
-完整检查名称、冻结哈希和运行结果见本目录 `validation.json` 与 `account-relay.json`。公开证据不包含真实凭据；临时 loopback 端口和测试目录作统一替换，原始私有日志保留在开发机验收目录。
+完整检查名称、冻结哈希和运行结果见 [validation.json](validation.json)、[account-relay.json](account-relay.json) 与 [passed-checks.txt](passed-checks.txt)。公开证据不包含真实凭据；临时 loopback 端口和测试目录作统一替换，原始私有日志保留在开发机验收目录。
