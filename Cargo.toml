@@ -59,6 +59,7 @@ include = [
     "/tests/**",
     "/scripts/release.py",
     "/scripts/test_release.py",
+    "/scripts/test_server_runtime.py",
     "/docs/commands.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",

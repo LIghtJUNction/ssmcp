@@ -313,25 +313,21 @@ class Unified(SessionFeatures):
     def catalog(self):
         for modern in (False, True):
             status, result, _ = self.rpc("tools/list", modern=modern)
-            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode"],
-                       f"public MCP exposes exactly list/code_mode (modern={modern})")
+            self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                       f"public MCP exposes exactly list/code_mode/collab/invite (modern={modern})")
         harness_names = {"codex", "claude", "pi", "opencode"}
         provider_names = harness_names | {"playwright"}
-        def settled():
-            result = self.call("ssmcp.harnesses.list")
-            rows = result["harnesses"]
-            return result if (len(rows) == len(provider_names)
-                              and {row["provider"] for row in rows} == provider_names
-                              and all(row["status"] != "discovering" for row in rows)) else None
-        discovery = wait_for(settled, timeout=10,
-                             description="four independent absent-Harness probes and the optional Playwright provider")
-        providers = {row["provider"]: row for row in discovery["harnesses"]}
-        self.check(all(providers[name]["status"] == "unavailable" and providers[name]["tools"] == 0
-                       for name in harness_names),
-                   "all four absent Harnesses are diagnosed without preventing Shell access")
-        playwright = providers["playwright"]
-        self.check(playwright["status"] == "unavailable" and playwright["tools"] == 0,
-                   "the absent optional Playwright MCP provider is diagnosed independently of the four Harnesses")
+        discovery = self.call("ssmcp.harnesses.list")
+        rows = discovery["harnesses"]
+        providers = {row["provider"]: row for row in rows}
+        self.check(len(rows) == len(provider_names) and set(providers) == provider_names,
+                   "all optional providers have independent lazy state records")
+        self.check(all(row["status"] == "not_loaded" and row["tools"] == 0
+                       and "executable" in row and row["executable"] is None
+                       and "version" in row and row["version"] is None for row in rows),
+                   "native startup lists optional providers without probing executables or versions")
+        self.check(self.external_invocations("unified-primary") == [],
+                   "native startup and observation execute no external fixture programs")
         inventory = self.public_call("list")
         selected = next(client for client in inventory["clients"] if client["id"] == self.client_id)
         self.check(selected["title"] == TITLE and selected["cwd"] == str(self.workspace.resolve()),
@@ -344,7 +340,7 @@ class Unified(SessionFeatures):
                    and len(index(invoked)) == len(invoked),
                    "list and code_mode tools return one identical collision-free full-schema catalog")
         self.check(not any(t["name"].startswith(("codex.", "claude.", "pi.", "opencode.", "playwright.")) for t in listed),
-                   "unavailable Harnesses and the optional Playwright provider contribute no invented native tools")
+                   "unloaded Harnesses and the optional Playwright provider contribute no invented native tools")
         self.initial_catalog = index(listed)
         self.save("catalog.json", {"client": selected, "tools": listed, "discovery": discovery})
 
