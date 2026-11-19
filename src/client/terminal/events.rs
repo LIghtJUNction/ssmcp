@@ -2269,6 +2269,10 @@ mod tests {
             }
             assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
             view.open();
+            let head = view.render(100, 12, &plain_ui(), true).join("\n");
+            assert!(head.contains("Command") && head.contains("warming up"), "{head}");
+            assert_eq!(view.events[0].panel.offset(), 0);
+            assert!(view.scroll_selected_panel(isize::MAX));
             let expanded = view.render(100, 12, &plain_ui(), true).join("\n");
             assert!(
                 expanded.contains("warning: cache unavailable")
