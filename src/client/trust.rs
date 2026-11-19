@@ -266,13 +266,6 @@ fn write_at(path: &Path, store: &Store) -> Result<()> {
 }
 
 /// Return canonical SPKI fingerprints for invitation transfer.
-pub(super) fn pins(server: &str) -> Result<Vec<String>> {
-    Ok(load_at(&path()?)?
-        .pins(server)?
-        .iter()
-        .map(encode_pin)
-        .collect())
-}
 
 #[derive(Debug)]
 struct PinnedVerifier {

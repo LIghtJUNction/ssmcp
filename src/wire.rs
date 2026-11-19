@@ -4,6 +4,9 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
+mod attribution;
+pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
+
 /// The sole supported wire protocol, including controller, source audit and steering.
 pub const VERSION: u32 = 7;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -15,6 +18,8 @@ pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 /// Opted into through the authenticated WebSocket HTTP handshake, never display metadata.
 pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
+/// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
+pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
 pub const CAPABILITIES_HEADER: &str = "ssmcp-capabilities";
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
@@ -106,11 +111,30 @@ pub struct CodeContext {
     pub run_id: String,
     pub code: String,
     pub timestamp_ms: u64,
+    /// Authenticated logical scope, emitted only after thread_scope:1 capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 impl CodeContext {
     pub fn validate(&self) -> Result<(), String> {
         validate_run_id(&self.run_id)?;
+        if self.session_id.is_some() != self.thread_id.is_some()
+            || [&self.session_id, &self.thread_id]
+                .iter()
+                .filter_map(|value| value.as_ref())
+                .any(|value| {
+                    value.is_empty()
+                        || value.len() > 128
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                })
+        {
+            return Err("invalid authenticated session/thread scope".into());
+        }
         if self.code.trim().is_empty() || self.code.len() > MAX_CODE_BYTES {
             return Err("code audit source must contain 1..=65536 UTF-8 bytes".into());
         }
@@ -163,7 +187,7 @@ pub struct ClientMetadata {
     /// Absolute working directory at client startup; agent sessions may use other directories.
     pub cwd: String,
     pub hostname: String,
-    /// Canonical GitHub principals allowed to access this connection.
+    /// Canonical server usernames or GitHub principals allowed to access this connection.
     /// Empty retains connection-bound login-code authorization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
@@ -189,12 +213,15 @@ impl ClientMetadata {
         }
         if self.allow.len() > MAX_ALLOWED_PRINCIPALS {
             return Err(format!(
-                "client allow list must contain at most {MAX_ALLOWED_PRINCIPALS} GitHub principals"
+                "client allow list must contain at most {MAX_ALLOWED_PRINCIPALS} principals"
             ));
         }
         for (index, principal) in self.allow.iter().enumerate() {
-            if canonical_github_principal(principal)? != *principal {
-                return Err("client allow entries must use lowercase username@github".into());
+            if canonical_allow_principal(principal)? != *principal {
+                return Err(
+                    "client allow entries must use lowercase server usernames or username@github"
+                        .into(),
+                );
             }
             if self.allow[..index].contains(principal) {
                 return Err("client allow list must not contain duplicate principals".into());
@@ -243,6 +270,13 @@ pub fn validate_title(title: Option<&str>) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Access targets are registered accounts on one explicit relay origin.
+pub fn canonical_allow_principal(principal: &str) -> Result<String, String> {
+    let (handle, server) =
+        crate::server_endpoint::allow_target(principal).map_err(|error| error.to_string())?;
+    crate::server_endpoint::allow_principal(&handle, &server).map_err(|error| error.to_string())
 }
 
 /// Validate a GitHub principal and return its case-insensitive canonical form.
@@ -389,6 +423,18 @@ fn default_max_bytes() -> usize {
 }
 
 impl Operation {
+    /// The actual operation, independent of caller-supplied display descriptions.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::CallTool { name, .. } => name,
+            Self::ListTools { .. } => "tools/list",
+            Self::Read { .. } => "terminal.read",
+            Self::Write { .. } => "terminal.write",
+            Self::Resize { .. } => "terminal.resize",
+            Self::Status {} => "terminal.status",
+        }
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         match self {
             Self::Read {
@@ -452,7 +498,7 @@ impl AccessSnapshot {
     pub fn validate(&self) -> Result<(), String> {
         if self.entries.is_empty()
             || self.entries.len() > MAX_ALLOWED_PRINCIPALS
-            || self.entries.iter().filter(|entry| entry.owner).count() != 1
+            || self.entries.iter().filter(|entry| entry.owner).count() > 1
             || self
                 .message
                 .as_ref()
@@ -463,8 +509,11 @@ impl AccessSnapshot {
         let mut subjects = std::collections::HashSet::new();
         let mut principals = std::collections::HashSet::new();
         for entry in &self.entries {
-            if canonical_github_principal(&entry.principal)? != entry.principal
-                || format!("{}@github", entry.login.to_ascii_lowercase()) != entry.principal
+            if canonical_allow_principal(&entry.principal)? != entry.principal
+                || entry
+                    .principal
+                    .split_once('@')
+                    .is_none_or(|(handle, _)| handle != entry.login)
                 || entry.subject.is_empty()
                 || entry.subject.len() > 20
                 || !entry.subject.bytes().all(|byte| byte.is_ascii_digit())
@@ -520,6 +569,10 @@ pub enum Frame {
         /// overwriting one another's displayed identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controller: Option<Controller>,
+        /// Derived by the authenticated relay; caller metadata cannot supply this.
+        /// Omitted unless the client negotiated control_attribution_v1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attribution: Option<Box<ControlAttribution>>,
         /// Present only when this call belongs to an audited code-mode run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code_context: Option<CodeContext>,
@@ -624,6 +677,7 @@ mod tests {
             id: 7,
             operation: Operation::Status {},
             controller: None,
+            attribution: None,
             code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
@@ -643,6 +697,7 @@ mod tests {
                 model: Some("model-a".into()),
                 source: ControllerSource::CallerReported,
             }),
+            attribution: None,
             code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
@@ -716,6 +771,8 @@ mod tests {
     fn code_source_metadata_is_bounded_exact_and_separate_from_tool_arguments() {
         let code = format!("//{}\n", "x".repeat(MAX_CODE_BYTES - 3));
         let context = CodeContext {
+            session_id: None,
+            thread_id: None,
             run_id: "a".repeat(32),
             code: code.clone(),
             timestamp_ms: 42,
@@ -728,6 +785,7 @@ mod tests {
                 arguments: serde_json::json!({"value":3}),
             },
             controller: None,
+            attribution: None,
             code_context: Some(context.clone()),
         };
         let value = serde_json::to_value(frame).unwrap();
@@ -746,6 +804,8 @@ mod tests {
         assert_eq!(decoded, context);
         assert!(
             CodeContext {
+                session_id: None,
+                thread_id: None,
                 code: "x".repeat(MAX_CODE_BYTES + 1),
                 ..context.clone()
             }
@@ -754,6 +814,8 @@ mod tests {
         );
         assert!(
             CodeContext {
+                session_id: None,
+                thread_id: None,
                 run_id: "bad".into(),
                 ..context
             }
@@ -914,34 +976,59 @@ mod tests {
     }
 
     #[test]
+    fn allow_principals_require_an_explicit_relay_namespace() {
+        for (input, expected) in [
+            ("Alice@SSMCP.Test:443", "alice@ssmcp.test"),
+            (
+                "Alice_2-home@https://ssmcp.test/",
+                "alice_2-home@ssmcp.test",
+            ),
+        ] {
+            assert_eq!(canonical_allow_principal(input).unwrap(), expected);
+        }
+        for input in [
+            "",
+            "alice",
+            "alice@github",
+            "@ssmcp.test",
+            "alice@@ssmcp.test",
+            "root@ssmcp.test",
+        ] {
+            assert!(canonical_allow_principal(input).is_err(), "{input}");
+        }
+        assert_ne!(
+            canonical_allow_principal("alice@first.test").unwrap(),
+            canonical_allow_principal("alice@second.test").unwrap()
+        );
+    }
+
+    #[test]
     fn client_metadata_keeps_legacy_shape_and_validates_allow_policy() {
-        let legacy = serde_json::json!({
-            "name":"dev", "cwd":"/project", "hostname":"workstation"
-        });
+        let legacy = serde_json::json!({"name":"dev","cwd":"/project","hostname":"workstation"});
         let mut metadata: ClientMetadata = serde_json::from_value(legacy.clone()).unwrap();
         assert!(metadata.allow.is_empty());
-        assert!(metadata.title.is_none());
         assert!(metadata.validate().is_ok());
         assert_eq!(serde_json::to_value(&metadata).unwrap(), legacy);
-        metadata.allow = vec!["alice@github".into(), "bob@github".into()];
+        metadata.allow = vec!["alice@ssmcp.test".into(), "bob_dev@ssmcp.test".into()];
         assert!(metadata.validate().is_ok());
         assert_eq!(
             serde_json::to_value(&metadata).unwrap()["allow"],
-            serde_json::json!(["alice@github", "bob@github"])
+            serde_json::json!(["alice@ssmcp.test", "bob_dev@ssmcp.test"])
         );
         for allow in [
-            vec!["Alice@github".into()],
-            vec!["alice@example.com".into()],
-            vec!["alice@github".into(), "alice@github".into()],
+            vec!["Alice@ssmcp.test".into()],
+            vec!["alice".into()],
+            vec!["alice@github".into()],
+            vec!["alice@ssmcp.test".into(), "alice@ssmcp.test".into()],
             (0..=MAX_ALLOWED_PRINCIPALS)
-                .map(|i| format!("user-{i}@github"))
+                .map(|i| format!("user-{i}@ssmcp.test"))
                 .collect(),
         ] {
             metadata.allow = allow;
             assert!(metadata.validate().is_err());
         }
         metadata.allow = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@github"))
+            .map(|i| format!("user-{i}@ssmcp.test"))
             .collect();
         assert!(metadata.validate().is_ok());
     }

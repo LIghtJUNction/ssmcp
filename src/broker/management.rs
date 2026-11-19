@@ -326,7 +326,7 @@ impl Broker {
             .await
             .map_err(policy_error)?;
         if account.banned {
-            self.oauth.revoke_subject(subject);
+            let oauth_revocation = self.oauth.revoke_subject(subject);
             self.portal
                 .revoke_browser_sessions(subject)
                 .map_err(policy_error)?;
@@ -341,7 +341,9 @@ impl Broker {
                 .await
                 .values()
                 .flat_map(|clients| clients.values())
-                .filter(|session| session.owner_subject.as_deref() == Some(subject))
+                .filter(|session| {
+                    !session.locally_owned_peer && session.owner_subject.as_deref() == Some(subject)
+                })
                 .cloned()
                 .collect();
             for session in &active {
@@ -363,6 +365,7 @@ impl Broker {
             })
             .await
             .map_err(|_| ManagementError::Unavailable)?;
+            oauth_revocation.map_err(|_| ManagementError::Unavailable)?;
         }
         event.outcome = AuditOutcome::Success;
         let audit = state.audit.clone();
@@ -472,6 +475,8 @@ impl Session {
         &self,
         tool_name: Option<&str>,
         actor_subject: Option<&str>,
+        attribution: Option<&crate::wire::ControlAttribution>,
+        run_id: Option<&str>,
         outcome: AuditOutcome,
     ) -> Result<(), String> {
         if self.audit.is_none() {
@@ -479,6 +484,8 @@ impl Session {
         }
         let mut event = self.audit_event(AuditAction::ToolCall, outcome);
         event.actor_subject = actor_subject.map(str::to_owned);
+        event.attribution = attribution.cloned();
+        event.run_id = run_id.map(str::to_owned);
         event.tool_name = tool_name
             .filter(|name| {
                 !name.is_empty()

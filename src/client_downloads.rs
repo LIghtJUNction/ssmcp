@@ -47,7 +47,7 @@ struct Downloads {
     publisher: Option<Publisher>,
 }
 
-/// A single anchored publication shared by the HTTP routes and MCP invite.
+/// A single anchored publication shared by the HTTP download routes.
 #[derive(Clone)]
 pub struct Publisher {
     directory: Arc<File>,
@@ -158,7 +158,7 @@ impl Publisher {
 }
 
 fn publication_error() -> &'static str {
-    "This gateway has no complete compatible client release. Publish release.json and its matching executables in server.client_download_dir; an already installed compatible client can still join."
+    "This gateway has no complete compatible client release. Publish release.json and its matching executables in server.client_download_dir; an already installed compatible client can still connect with --allow username@server."
 }
 
 fn valid_version(value: &str) -> bool {

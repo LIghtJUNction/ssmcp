@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "source": {
+    "parent_commit": "e7c5e23343936628e34cc5a4447771c097082bd9",
+    "sha256": "9dde2fe1184626bf4edc2b42e6e1b1ae4a9fba501f5651a35380681ccf07c133",
+    "unchanged_during_gate": true,
+    "fingerprint": "Sort unique git ls-files --cached --others --exclude-standard src Cargo.toml Cargo.lock crates/ztui paths; SHA-256 of UTF-8 path, NUL, file bytes, NUL for each regular file."
+  },
+  "platform": "Linux x86_64",
+  "test_count": 24,
+  "tests_passed": [
+    "portal::assets::tests::asset_routes_reject_unknown_names_and_mismatched_fingerprints",
+    "portal::assets::tests::fingerprinted_and_legacy_assets_return_the_same_bundled_bytes",
+    "portal::frontend::tests::guide_proxy_never_forwards_authorization_cookies_or_untrusted_host",
+    "portal::frontend::tests::new_worker_asset_hashes_work_while_old_core_urls_keep_exact_bytes",
+    "portal::frontend::tests::private_renderer_round_trip_and_owned_task_shutdown",
+    "portal::frontend::tests::replacing_real_worker_preserves_core_oauth_and_same_device_websocket",
+    "portal::frontend::tests::schema_accepts_only_public_rendering_and_known_assets",
+    "portal::frontend::tests::socket_rejects_unsafe_parent_symlink_and_second_writer",
+    "portal::frontend::tests::timeout_oversized_and_mismatched_worker_responses_fall_back",
+    "portal::guide::tests::guide_routes_are_public_without_displacing_the_guide_account_endpoint",
+    "portal::guide::tests::localized_pages_keep_examples_and_exclude_credentials",
+    "tests::authorization_config_cannot_be_group_or_world_writable_without_provider_secrets",
+    "tests::command_line_overrides_environment_without_parsing_shadowed_values",
+    "tests::commerce_defaults_keep_sales_closed_at_the_requested_rmb_price",
+    "tests::commerce_rejects_a_second_portal_only_billing_writer",
+    "tests::lifetime_options_require_bounded_positive_seconds",
+    "tests::management_configuration_fails_closed_and_has_bounded_defaults",
+    "tests::monthly_tier_configuration_is_optional_explicit_and_requires_accounts",
+    "tests::portal_only_flag_does_not_consume_an_option_value",
+    "tests::portal_only_requires_account_storage_and_never_needs_its_own_audit_store",
+    "tests::public_frontend_is_optional_and_does_not_open_a_second_account_store",
+    "tests::public_url_is_an_https_origin",
+    "tests::toml_schema_rejects_typos_and_redacts_secret_source_in_errors",
+    "tests::toml_secrets_need_private_permissions_and_environment_overrides_file_values"
+  ],
+  "steps": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.312
+    },
+    {
+      "name": "worker-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcp-frontend"
+      ],
+      "exit_code": 0,
+      "seconds": 167.913
+    },
+    {
+      "name": "frontend",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "portal::frontend::",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 69.057
+    },
+    {
+      "name": "assets",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "portal::assets::",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 0.163
+    },
+    {
+      "name": "guide",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "portal::guide::",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 0.119
+    },
+    {
+      "name": "server-options",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcpd",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 14.503
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 43.013
+    },
+    {
+      "name": "core-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcpd"
+      ],
+      "exit_code": 0,
+      "seconds": 3.182
+    },
+    {
+      "name": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.048
+    }
+  ],
+  "binaries": {
+    "ssmcp-frontend": {
+      "sha256": "42535ea33be85f9cd714b5e30dffa61d20ce4247a1559e17c80fa1b14f51453b",
+      "bytes": 80794936
+    },
+    "ssmcpd": {
+      "sha256": "b6c3f05fd9c09240324b97ea08b52795d65598f1942a4c89229b0b0846ae5e0e",
+      "bytes": 132819544
+    }
+  },
+  "versions": {
+    "ssmcp-frontend": "ssmcp-frontend 0.10.11",
+    "ssmcpd": "ssmcpd 0.10.11"
+  },
+  "replacement": {
+    "core": "Production HTTP router in one retained test process",
+    "workers": "Two successive real ssmcp-frontend ELF processes, selected explicitly by SSMCP_FRONTEND_TEST_BINARY",
+    "same_device_websocket": true,
+    "same_session_object": true,
+    "original_oauth_token_accepted": true,
+    "oauth_grant_snapshot_unchanged": true,
+    "owned_fixture_worker_processes_remaining": 0
+  },
+  "boundaries": {
+    "deployed": false,
+    "installed": false,
+    "ci_triggered": false,
+    "core_restarts_keep_existing_websockets": false,
+    "dynamic_account_pages_remain_in_core": true
+  },
+  "earlier_attempts": [
+    {
+      "status": "scheduling_interruption",
+      "stage": "worker-build",
+      "tests_run": false
+    },
+    {
+      "status": "compile_error_fixed",
+      "error": "Portal::open missed frontend: None",
+      "tests_run": false
+    }
+  ]
+}

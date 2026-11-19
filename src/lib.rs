@@ -18,6 +18,8 @@ pub mod http;
 #[cfg(target_os = "linux")]
 pub mod identity;
 #[cfg(target_os = "linux")]
+pub(crate) mod local_socket;
+#[cfg(target_os = "linux")]
 pub mod management;
 pub(crate) mod memory;
 #[cfg(target_os = "linux")]
@@ -34,6 +36,7 @@ pub mod pty;
 pub mod registry;
 #[cfg(target_os = "linux")]
 pub mod resources;
+pub(crate) mod server_endpoint;
 pub mod session;
 #[cfg(target_os = "linux")]
 mod steering;
