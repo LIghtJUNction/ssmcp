@@ -1010,7 +1010,7 @@ impl State {
         if self.conversation.content_focus
             && self.conversation.view == View::Activity
             && !self.raw_logs
-            && self.events.scroll_selected_panel(delta)
+            && self.events.scroll_selected_layer(delta)
         {
             return;
         }
@@ -1441,7 +1441,7 @@ impl State {
                             && !self.raw_logs
                             && self
                                 .events
-                                .scroll_panel_at(y - body_top(self.geometry.rows), delta);
+                                .scroll_layer_at(y - body_top(self.geometry.rows), delta);
                         if !inside_panel {
                             self.chat_move(delta);
                         }
