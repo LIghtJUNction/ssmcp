@@ -97,33 +97,9 @@ impl Canvas {
         })
     }
 
-    pub(super) fn label(&self, width: u16) -> String {
+    pub(super) fn label(&self, _width: u16) -> String {
         let current = self.columns[self.active].view.name();
-        let count = self.columns.len();
-        let position = self.active + 1;
-        let previous = self
-            .active
-            .checked_sub(1)
-            .map(|index| self.columns[index].view.name());
-        let next = self
-            .columns
-            .get(self.active + 1)
-            .map(|column| column.view.name());
-        if width >= 86 {
-            format!(
-                "{}  {current}  {position}/{count}  {}",
-                previous
-                    .map(|name| format!("‹ {name}   "))
-                    .unwrap_or_default(),
-                next.map(|name| format!("   {name} ›")).unwrap_or_default()
-            )
-        } else {
-            format!(
-                "{} {current}  {position}/{count} {}",
-                if previous.is_some() { "‹" } else { "" },
-                if next.is_some() { "›" } else { "" }
-            )
-        }
+        format!("{current}  {}/{}", self.active + 1, self.columns.len())
     }
 }
 
