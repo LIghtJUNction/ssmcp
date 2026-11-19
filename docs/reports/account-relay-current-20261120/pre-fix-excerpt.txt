@@ -1,0 +1,11 @@
+Observed on the old b49da12 CLI, before product fix e7f5711.
+[PROG] https Connecting to <loopback-origin> with an explicit account allow list
+[PROG] shell Starting native tools; optional harnesses stay unloaded
+sh-5.3$ [ERR ] ssmcp SSH exited before local backend readiness (exit status: 0)
+[PROG] watchdog Disconnected; retrying in 1s (attempt 2). Stop with Ctrl-C or ssmcp sessions stop N…
+[PROG] https Connecting to <loopback-origin> with an explicit account allow list
+[PROG] shell Starting native tools; optional harnesses stay unloaded
+[OK  ] shell CONNECTED client=B early revocation mode=shell cwd=<fixture-root>/B…
+[RES ] shell Sign in with an allowed GitHub account. Ctrl-C disconnects this client.
+sh-5.3$ 
+TimeoutExpired: Command '['<checkout-path>', '--server', '<loopback-origin>', '--allow', 'fixture@<loopback-origin>', '--name', 'B early revocation', '--no-setup', '--shell', '/bin/sh', '--reconnect-delay', '1']' timed out after 8 seconds
