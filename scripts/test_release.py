@@ -426,13 +426,14 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ztui-core"):
             release.validate_package("v0.5.0", self.root)
 
-    def test_workspace_bump_updates_core_manifest_dependency_and_lock_together(self):
+    def test_workspace_bump_preserves_independent_core_version_and_source(self):
         member = self.add_workspace_package()
+        core_before = member.read_bytes()
         result = release.bump("minor", self.root)
         self.assertEqual(result["version"], "0.6.0")
-        self.assertEqual(result["ztui_core_version"], "0.1.1")
-        self.assertIn('version = "0.1.1"', member.read_text())
-        self.assertIn('version = "=0.1.1"', (self.root / "Cargo.toml").read_text())
+        self.assertEqual(result["ztui_core_version"], "0.1.0")
+        self.assertEqual(member.read_bytes(), core_before)
+        self.assertIn('version = "=0.1.0"', (self.root / "Cargo.toml").read_text())
         self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
 
     def test_bad_workspace_lock_prevents_every_bump_write(self):
@@ -548,6 +549,204 @@ class ReleaseTests(unittest.TestCase):
                  self.assertRaisesRegex(ValueError, message):
                 release.publish(self.root)
             publish.assert_not_called()
+
+
+
+    def add_registry_dependencies(self):
+        with (self.root / "Cargo.toml").open("a") as stream:
+            stream.write('\n[dependencies]\n'
+                         'zharness = { path = "crates/zharness", version = "=0.5.0" }\n'
+                         'zplugin = { path = "crates/zplugin", version = "=0.3.0" }\n'
+                         '\n[patch.crates-io]\nzplugin = { path = "crates/zplugin" }\n')
+        for name, version in (("zharness", "0.5.0"), ("zplugin", "0.3.0")):
+            path = self.root / "crates" / name / "Cargo.toml"
+            path.parent.mkdir(parents=True)
+            path.write_text(f'[package]\nname = "{name}"\nversion = "{version}"\n'
+                            + ('\n[dependencies]\nzplugin = { version = "=0.3.0" }\n'
+                               if name == "zharness" else ""))
+            with (self.root / "Cargo.lock").open("a") as stream:
+                stream.write(f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n')
+
+    def test_registry_dependency_uses_its_own_inherited_workspace_version(self):
+        self.add_registry_dependencies()
+        path = self.root / "crates/zplugin/Cargo.toml"
+        manifest = path.read_text().replace('version = "0.3.0"', 'version.workspace = true')
+        path.write_text(manifest + '\n[workspace.package]\nversion = "0.3.0"\n')
+        self.assertEqual(release.registry_dependencies(self.root),
+                         [("zplugin", "0.3.0"), ("zharness", "0.5.0")])
+        for workspace in ('\n[workspace.package]\nversion = "0.3.1"\n', ''):
+            with self.subTest(workspace=workspace):
+                path.write_text(manifest + workspace)
+                with self.assertRaisesRegex(ValueError, "source and exact dependency version differ"):
+                    release.registry_dependencies(self.root)
+
+    def submodule_fixture(self, nested=False):
+        temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")
+        self.addCleanup(temporary.cleanup)
+        source = Path(temporary.name) / "source"
+        source.mkdir()
+
+        def git(folder, *args):
+            return subprocess.check_output(["git", *args], cwd=folder, env=self.git_env,
+                                           text=True, stderr=subprocess.PIPE).strip()
+
+        def initialize(folder):
+            git(folder, "init", "--quiet", "--template=", "-b", "main")
+            git(folder, "config", "user.name", "Release submodule test")
+            git(folder, "config", "user.email", "release-module@example.invalid")
+            git(folder, "config", "commit.gpgSign", "false")
+            git(folder, "config", "core.hooksPath", os.devnull)
+            (folder / "value.txt").write_text("first\n")
+            git(folder, "add", "value.txt")
+            git(folder, "commit", "--quiet", "-m", "first fixture version")
+            (folder / "value.txt").write_text("second\n")
+            git(folder, "commit", "--quiet", "-am", "second fixture version")
+
+        initialize(source)
+        if nested:
+            child = Path(temporary.name) / "child"
+            child.mkdir()
+            initialize(child)
+            git(source, "-c", "protocol.file.allow=always", "submodule", "add",
+                "--quiet", str(child), "nested")
+            git(source, "commit", "--quiet", "-am", "pin nested fixture")
+        self.git("-c", "protocol.file.allow=always", "submodule", "add",
+                 "--quiet", str(source), "modules/fixture")
+        self.git("commit", "--quiet", "-am", "pin fixture")
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("tag", "-d", "v0.5.0")
+        self.git("tag", "v0.5.0")
+        return self.root / "modules/fixture", git
+
+    def test_custom_version_and_dry_run_do_not_change_any_file(self):
+        member = self.add_workspace_package()
+        paths = [self.root / "Cargo.toml", self.root / "Cargo.lock", member]
+        before = [path.read_bytes() for path in paths]
+        for level, custom, expected in (("minor", None, "0.6.0"),
+                                        ("custom", "0.10.0-rc.1", "0.10.0-rc.1")):
+            with self.subTest(level=level):
+                result = release.bump(level, self.root, custom_version=custom, dry_run=True)
+                self.assertEqual(result["version"], expected)
+                self.assertEqual(result["dry_run"], "true")
+                self.assertEqual(before, [path.read_bytes() for path in paths])
+        release.bump("custom", self.root, custom_version="0.10.0-rc.1")
+        self.assertEqual(release.validate_package("v0.10.0-rc.1", self.root), "0.10.0-rc.1")
+        self.assertEqual(member.read_bytes(), before[2])
+
+    def test_invalid_custom_versions_fail_before_writing(self):
+        paths = [self.root / "Cargo.toml", self.root / "Cargo.lock"]
+        before = [path.read_bytes() for path in paths]
+        for custom in (None, "", "v0.6.0", "0.6.00", "0.6.0-01", "0.5.0",
+                       "0.5.0-rc.1", "0.4.9", "0.6.0\nmalicious"):
+            with self.subTest(custom=custom), self.assertRaises(ValueError):
+                release.bump("custom", self.root, custom_version=custom)
+            self.assertEqual(before, [path.read_bytes() for path in paths])
+        with self.assertRaisesRegex(ValueError, "only valid"):
+            release.bump("patch", self.root, custom_version="0.6.0")
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+        self.assertEqual(release.bumped_version("0.6.0-rc.9", "custom", "0.6.0-rc.10"), "0.6.0-rc.10")
+        self.assertEqual(release.bumped_version("0.6.0-rc.10", "custom", "0.6.0"), "0.6.0")
+
+    def test_missing_ztui_checkout_does_not_disappear_from_publication(self):
+        member = self.add_workspace_package()
+        member.unlink()
+        with self.assertRaisesRegex(ValueError, "submodules"):
+            release.publication_packages(self.root)
+
+    def test_independent_dependencies_preserve_exact_versions_and_patch_on_bump(self):
+        self.add_registry_dependencies()
+        manifest = (self.root / "Cargo.toml").read_text()
+        source = [(self.root / "crates" / name / "Cargo.toml").read_bytes()
+                  for name in ("zharness", "zplugin")]
+        self.assertEqual(release.registry_dependencies(self.root),
+                         [("zplugin", "0.3.0"), ("zharness", "0.5.0")])
+        release.bump("minor", self.root)
+        updated = (self.root / "Cargo.toml").read_text()
+        self.assertEqual(updated.split("[dependencies]", 1)[1], manifest.split("[dependencies]", 1)[1])
+        self.assertEqual(source, [(self.root / "crates" / name / "Cargo.toml").read_bytes()
+                                  for name in ("zharness", "zplugin")])
+        self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
+
+    def test_wrong_independent_version_or_patch_is_rejected_before_bump(self):
+        self.add_registry_dependencies()
+        manifest = self.root / "Cargo.toml"
+        original = manifest.read_text()
+        mutations = (original.replace('version = "=0.3.0"', 'version = "0.3.0"'),
+                     original.replace('[patch.crates-io]\nzplugin = { path = "crates/zplugin" }',
+                                      '[patch.crates-io]\nzplugin = { path = "other/zplugin" }'),
+                     original.replace('version = "=0.5.0"', 'version = "=0.5.1"'))
+        for text in mutations:
+            with self.subTest(manifest=text):
+                manifest.write_text(text)
+                before = [manifest.read_bytes(), (self.root / "Cargo.lock").read_bytes()]
+                with self.assertRaises(ValueError):
+                    release.bump("patch", self.root)
+                self.assertEqual(before, [manifest.read_bytes(), (self.root / "Cargo.lock").read_bytes()])
+        manifest.write_text(original)
+        lock = self.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "0.3.0"', 'version = "0.2.9"'))
+        with self.assertRaisesRegex(ValueError, "zplugin"):
+            release.validate_package("v0.5.0", self.root)
+
+    def test_unpublished_independent_dependency_stops_before_upload(self):
+        self.add_registry_dependencies()
+        with mock.patch.object(release, "registry_checksum", return_value=None) as registry, \
+             mock.patch.object(release.subprocess, "run") as upload, \
+             self.assertRaisesRegex(ValueError, "independent repository"):
+            release.publish(self.root)
+        registry.assert_called_once_with("0.3.0", "zplugin")
+        upload.assert_not_called()
+
+    def test_published_independent_dependencies_are_not_republished(self):
+        self.add_registry_dependencies()
+        output = self.root / "target/package"
+        output.mkdir(parents=True)
+        archive = output / "ssmcp-0.5.0.crate"
+        archive.write_bytes(b"verified application fixture")
+        checksum = release.digest(archive)
+        with mock.patch.object(release, "registry_checksum", side_effect=["plugin-digest", "harness-digest", checksum]) as registry, \
+             mock.patch.object(release.subprocess, "run") as upload:
+            release.publish(self.root)
+        self.assertEqual(registry.call_args_list,
+                         [mock.call("0.3.0", "zplugin"), mock.call("0.5.0", "zharness"), mock.call("0.5.0", "ssmcp")])
+        upload.assert_not_called()
+
+    def test_pinned_submodules_and_nested_source_are_recorded(self):
+        checkout, git = self.submodule_fixture(nested=True)
+        modules = release.source_submodules(self.root)
+        self.assertEqual([row["path"] for row in modules], ["modules/fixture", "modules/fixture/nested"])
+        for row, folder in zip(modules, (checkout, checkout / "nested")):
+            self.assertEqual(row["commit"], git(folder, "rev-parse", "HEAD"))
+            self.assertEqual(row["tree"], git(folder, "rev-parse", "HEAD^{tree}"))
+        self.fixtures()
+        release.checksums(self.root)
+        manifest = json.loads((self.root / "dist/release-manifest.json").read_text())
+        self.assertEqual(manifest["submodules"], modules)
+
+    def test_uninitialized_submodule_blocks_valid_tag_preflight(self):
+        self.submodule_fixture()
+        self.git("submodule", "deinit", "--force", "--", "modules/fixture")
+        with self.assertRaisesRegex(ValueError, "not initialized"):
+            release.validate_tag("v0.5.0", self.root)
+        with self.assertRaisesRegex(ValueError, "not initialized"):
+            release.validate_tag(None, self.root, build_only=True)
+
+    def test_submodule_checkout_must_match_committed_gitlink(self):
+        checkout, git = self.submodule_fixture()
+        git(checkout, "checkout", "--quiet", "HEAD^")
+        with self.assertRaisesRegex(ValueError, "pinned gitlink"):
+            release.source_submodules(self.root)
+
+    def test_submodule_tracked_and_untracked_source_cannot_be_packaged(self):
+        checkout, git = self.submodule_fixture()
+        (checkout / "value.txt").write_text("changed after validation\n")
+        with self.assertRaisesRegex(ValueError, "uncommitted source"):
+            release.source_submodules(self.root)
+        git(checkout, "checkout", "--", "value.txt")
+        (checkout / "unexpected.txt").write_text("not part of the pinned source\n")
+        with self.assertRaisesRegex(ValueError, "uncommitted source"):
+            release.source_submodules(self.root)
 
 
 class GithubReleaseTests(unittest.TestCase):

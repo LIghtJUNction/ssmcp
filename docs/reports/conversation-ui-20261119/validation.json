@@ -1,0 +1,93 @@
+{
+  "revision": "40fe644e224903c0f343f188c634d9e73bffe5ab",
+  "production_code_verified_revision": "ae4795ea1e5574cfbcdb43b27eb8779b37aa9077",
+  "date": "2026-11-19",
+  "timezone": "Asia/Taipei",
+  "ui_preview_checks": 56,
+  "canvas_preview_checks": 67,
+  "release_python_tests": 70,
+  "ztty_python_tests": 8,
+  "setup_python_tests": 10,
+  "local_unit_tests": {
+    "passed": 1261,
+    "ignored": 12,
+    "filtered_out": 5,
+    "filter_reason": "AF_UNIX listener creation is denied by this environment"
+  },
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--bin",
+      "ssmcp",
+      "--bin",
+      "ssmcpd",
+      "--example",
+      "vt_snapshot"
+    ],
+    "exit_code": 0,
+    "seconds": 68.8
+  },
+  "clippy": {
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "seconds": 108.41
+  },
+  "binaries": {
+    "ssmcp": "2109c7a82083cf0ab2728a80dfee3e821d3e323a0d9aff91442cd3ea084adf72",
+    "ssmcpd": "a989a9fbce00a661cdd2f2e2d3723c955180d327e5e78628dcfe2348fdd2cb5e"
+  },
+  "ssmcp_developer_connection": "UNAUTHORIZED; reauthentication required",
+  "developer_installation": "pending_connection",
+  "local_live_suites": {
+    "ssh_composer": "blocked at Unix socket bind before UI acceptance",
+    "agent_panel": "blocked at Unix socket bind before UI acceptance",
+    "account_relay_composer": "12 authentication checks passed; code execution blocked by NETLINK_ROUTE EPERM"
+  },
+  "github_workflow_run": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44470943053",
+  "github_ci_status": "success",
+  "github_linux_unit_tests": {
+    "passed": 1266,
+    "failed": 0,
+    "ignored": 12,
+    "filtered_out": 0
+  },
+  "github_native_lifecycle": {
+    "linux": "passed",
+    "macos": "passed",
+    "windows": "passed"
+  },
+  "merge_commit": "c1f64b99414670255c3f117b89749a02b4e12ffe",
+  "pull_requests": [
+    {
+      "number": 34,
+      "merged": true,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/34"
+    },
+    {
+      "number": 39,
+      "merged": true,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/39"
+    },
+    {
+      "number": 40,
+      "merged": true,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/40"
+    },
+    {
+      "number": 50,
+      "merged": true,
+      "url": "https://github.com/LIghtJUNction/ssmcp/pull/50"
+    }
+  ]
+}

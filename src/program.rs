@@ -303,13 +303,27 @@ fn native_binary(bytes: &[u8]) -> bool {
 }
 
 /// The isolated executor requires a real Node runtime with compatible flags.
-pub fn node() -> Result<PathBuf, String> {
-    let path = executable("node")?;
+fn node_entry(override_path: Option<&OsStr>) -> Result<PathBuf, String> {
+    let path = if let Some(value) = override_path {
+        let path = PathBuf::from(value);
+        if !path.is_absolute() || !path.is_file() {
+            return Err(
+                "SSMCP_NODE must name an existing absolute native Node.js executable".into(),
+            );
+        }
+        path.canonicalize()
+            .map_err(|error| format!("SSMCP_NODE: {error}"))?
+    } else {
+        executable("node")?
+    };
     if !native_binary(&prefix(&path)?) {
-        return Err(
-            "Node entry is not a native executable; refusing to pass --jitless to a shim".into(),
-        );
+        return Err("Node entry is not a native executable; check SSMCP_NODE or PATH".into());
     }
+    Ok(path)
+}
+
+pub fn node() -> Result<PathBuf, String> {
+    let path = node_entry(std::env::var_os("SSMCP_NODE").as_deref())?;
     #[cfg(target_os = "linux")]
     {
         validated_node(path, &NODE_VALIDATION, probe_node)
@@ -393,8 +407,7 @@ pub fn configure(command: &mut tokio::process::Command) {
         .env("PI_OFFLINE", "1")
         .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
         .env("OPENCODE_DISABLE_MODELS_FETCH", "1");
-    if let Ok(node) = executable("node")
-        && prefix(&node).is_ok_and(|bytes| native_binary(&bytes))
+    if let Ok(node) = node_entry(std::env::var_os("SSMCP_NODE").as_deref())
         && let Some(directory) = node.parent()
     {
         let mut paths = vec![directory.to_path_buf()];
@@ -410,6 +423,35 @@ pub fn configure(command: &mut tokio::process::Command) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_node_override_is_native_and_never_falls_back_to_path() {
+        let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            node_entry(Some(executable.as_os_str())).unwrap(),
+            executable
+        );
+        let root = directory();
+        let script = root.join("node");
+        std::fs::write(&script, b"#!/bin/sh\nexit 0\n").unwrap();
+        assert!(
+            node_entry(Some(script.as_os_str()))
+                .unwrap_err()
+                .contains("native")
+        );
+        assert!(
+            node_entry(Some(root.join("missing").as_os_str()))
+                .unwrap_err()
+                .contains("SSMCP_NODE")
+        );
+        assert!(
+            node_entry(Some(OsStr::new("node")))
+                .unwrap_err()
+                .contains("absolute")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use std::os::unix::fs::{PermissionsExt, symlink};
     fn directory() -> PathBuf {
         let root = std::env::temp_dir().join(format!(

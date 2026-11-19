@@ -455,10 +455,10 @@ impl Portal {
             return Ok(None);
         };
         let ttl = persisted.renew(key, crate::management::now())?;
-        if let Some(ttl) = ttl {
-            if let Some(session) = browser.sessions.get_mut(&key) {
-                session.expires = Instant::now() + Duration::from_secs(ttl);
-            }
+        if let Some(ttl) = ttl
+            && let Some(session) = browser.sessions.get_mut(&key)
+        {
+            session.expires = Instant::now() + Duration::from_secs(ttl);
         }
         Ok(ttl)
     }

@@ -635,7 +635,7 @@ impl Composer {
                 _ => "",
             };
             let (body, tone) = if self.text.is_empty() {
-                ("Message the agent · @file · $skill · / commands", "muted")
+                ("Message the agent", "muted")
             } else {
                 (body.as_str(), "foreground")
             };
@@ -777,7 +777,7 @@ fn paint_row(parts: &[(&str, &str)], width: usize, ui: &Ui) -> String {
     if ui.color {
         result.push_str(&format!(
             "\x1b[{};{}m",
-            ui.background(),
+            ui.input_background(),
             ui.color("foreground")
         ));
     }

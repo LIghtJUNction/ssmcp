@@ -1,0 +1,88 @@
+{
+  "status": "validated_r14_checkpoint_and_public_guide; later_requests_pending",
+  "items": {
+    "r14-gates.json": {
+      "source": "out/iteration-20261118/final-integration-r14/result.json",
+      "sha256": "5a99af19602d423c211148663a8dc496f8063371072a8d17fd41d4f55ad2fbda",
+      "bytes": 3753,
+      "transformation": "Added parsed aggregate counts and checkpoint scope; original source file hash retained separately.",
+      "original_sha256": "7a6279aa6ea997131d50e53f25de7bc2b991bb20d7bfb202d3c591ffcfd597e4"
+    },
+    "r7-client-ui.json": {
+      "source": "out/iteration-20261118/pty/final-r7/client-ui/ui-smoke.json",
+      "sha256": "d5da532af57ff864869e4cf7cc25b4c1417a27071abcc4fdab62444547c41ebf",
+      "bytes": 2773
+    },
+    "r7-native-images.json": {
+      "source": "out/iteration-20261118/pty/final-r7/native-images/report.json",
+      "sha256": "83f07fda2b748a522bccdd21f496ef607bb7a7ed8cabf6464d6532c3aa772c71",
+      "bytes": 3760
+    },
+    "r7-guide.json": {
+      "source": "out/iteration-20261118/pty/final-r7/guide/report.json",
+      "sha256": "c977ca2ca62368b88dd6acb94305dfd44fdb7b44a990e835619645024b4f9009",
+      "bytes": 3012
+    },
+    "ancestry-reconciliation.json": {
+      "source": "out/iteration-20261118/ancestry-reconciliation.json",
+      "sha256": "3995be79a2258867aa6ce36475843765de0e310a40f53490f815a1044f497960",
+      "bytes": 620
+    },
+    "images/qr-120x30.png": {
+      "source": "out/iteration-20261118/pty/final-r7/guide/sidebar-120x30.png",
+      "sha256": "81461e79f5b95d293baa8ae7f977ead17329532742dc311ee418ea4cd24913c4",
+      "bytes": 101417
+    },
+    "images/qr-60x16.png": {
+      "source": "out/iteration-20261118/pty/final-r7/guide/sidebar-60x16.png",
+      "sha256": "b8f33f459939a4971965d375927f73bbc36879247dcbb253ba9b90cc2b1b16f8",
+      "bytes": 56854
+    },
+    "images/native-image.png": {
+      "source": "out/iteration-20261118/pty/final-r7/native-images/native-image.png",
+      "sha256": "620adaaa5b5f2c1b6235c70f565c692d2543d6b3dfdb2fac984b86dcbbab6935",
+      "bytes": 32679
+    },
+    "images/native-image-resized.png": {
+      "source": "out/iteration-20261118/pty/final-r7/native-images/resized-image.png",
+      "sha256": "0c542a6a599a9091da527f13f7a4a52bed5037dea2366cc46ef37a4ee3415d73",
+      "bytes": 29169
+    },
+    "images/guide-english-desktop.png": {
+      "source": "out/iteration-20261118/guide-production-deployment/viewport-review/english-desktop.png",
+      "sha256": "b497da09a55e42ecf21a2ddb24eee86e55410f2dc29e9303e92773ab8805dbf0",
+      "bytes": 104126
+    },
+    "images/guide-chinese-mobile.png": {
+      "source": "out/iteration-20261118/guide-production-deployment/viewport-review/chinese-mobile.png",
+      "sha256": "d33d306f3ec0d8baa87f297fd879a73e5ba0d891ed56bc1b6ed7fdcac96cfd5f",
+      "bytes": 81833
+    },
+    "ztui-performance.json": {
+      "source": "out/iteration-20261118/ztui-performance-repeat-r13/report.json",
+      "sha256": "dfeee2b1ac2a0f022f0200bff711f057ec54fb771a984f0c1b8bf71cf738d82b",
+      "bytes": 11470,
+      "transformation": "Kept timing runs and source hashes; omitted machine-local absolute provenance paths."
+    },
+    "guide-deployment.json": {
+      "sha256": "03b76a6374f3ba84459ddf8243cd0461d61f805a1eeb1e4cd775be9a219e4a7e",
+      "bytes": 1760,
+      "transformation": "Kept public deployment facts/hashes; omitted machine-local service identifiers."
+    },
+    "guide-public-validation.json": {
+      "source": "out/iteration-20261118/guide-production-deployment/public-validation.json",
+      "sha256": "b73c2a0f9baf1da513799a8a99e5608723915dbaa99594b29130280c9d4004cb",
+      "bytes": 8949
+    },
+    "guide-before-css-fix.json": {
+      "source": "out/iteration-20261118/guide-production-deployment/public-validation-before-css-fix.json",
+      "sha256": "e573dc030cac831882f3875e072f235c484e4dcc9522df01a698f29be31a4be4",
+      "bytes": 7447
+    },
+    "guide-viewport-manifest.json": {
+      "source": "out/iteration-20261118/guide-production-deployment/viewport-review/manifest.json",
+      "sha256": "d762f0fc94d8434eec8d5a6d247e8b3f63dc2c282bd2f87440814a5f93f62e2a",
+      "bytes": 5004
+    }
+  }
+}
