@@ -68,7 +68,7 @@ await reload(clientId) acknowledges a client restart from the updated installed 
 
 ### outputs
 
-Long command output spills to private files under /tmp/ssmcp on the client. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.
+Long command output spills to private files under `/tmp/ssmcp-<uid>` on Unix clients. outputs.read(clientId,{id,offset,max_bytes}), outputs.stat(clientId,{id}), outputs.cleanup(clientId) inspect artifacts by returned ID. Metadata includes SHA-256, bytes, lines, completeness and expiry; automatic retention is 24 hours.
 
 ### output
 

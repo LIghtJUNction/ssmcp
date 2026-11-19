@@ -12,7 +12,7 @@ ssmcp --server https://relay.example --allow alice@relay.example --name device-b
 
 ## 授权名单
 
-`--allow USER@SERVER` 支持重复或逗号分隔，最多 32 个不同账号。服务器必须与本次连接的 origin 一致；用户名按门户规则转成小写，再解析到不可转让的稳定账号 ID。显式名单不会自动附加本机登录账号。裸用户名、`@github`、未知或被封禁账号、其他服务器的目标均被拒绝。[解析与注册](../src/server_endpoint.rs) · [服务端 ACL](../src/broker/allow.rs)
+`--allow USER@SERVER` 支持重复或逗号分隔，最多 32 个不同账号。服务器必须与本次连接的 origin 一致；用户名使用门户登记的小写形式，再解析到不可转让的稳定账号 ID。显式名单不会自动附加本机登录账号。裸用户名、`@github`、未知或被封禁账号、其他服务器的目标均被拒绝。[解析与注册](../src/server_endpoint.rs) · [服务端 ACL](../src/broker/allow.rs)
 
 ~~~sh
 ssmcp --server https://relay.example \
@@ -85,10 +85,10 @@ F5 或 `ssmcp.ui.action` 的 `reload` 只重载本地显示配置；输入框中
 用户要求队列与本地成员目标需要协议 v7，源码审计需要 v6 或更新版本。队列中的已交付表示附加到符合目标的 `code_mode` 响应，不表示模型已经阅读或执行。受控重启通过私有、单次读取的交接文件保留草稿与队列；交付不确定或接收目标已变化的记录需要用户复核，不会自动重发。[队列状态与恢复](client-ui.md#输入要求与队列)
 
 ```sh
-ssmcp --ssh --title "检查构建与测试" --allow octocat@github my-ssmcp
-ssmcp --ssh --theme nord --timestamps --allow octocat@github my-ssmcp
-ssmcp --ssh --log-format jsonl --allow octocat@github my-ssmcp
-NO_COLOR=1 ssmcp --ssh --allow octocat@github my-ssmcp
+ssmcp --server https://ssmcp.lmm.best --title "检查构建与测试" --allow alice@ssmcp.lmm.best
+ssmcp --server https://ssmcp.lmm.best --theme nord --timestamps --allow alice@ssmcp.lmm.best
+ssmcp --server https://ssmcp.lmm.best --log-format jsonl --allow alice@ssmcp.lmm.best
+NO_COLOR=1 ssmcp --server https://ssmcp.lmm.best --allow alice@ssmcp.lmm.best
 ```
 
 更新已安装的程序后，可以从 `code_mode` 调用 `await reload(clientId)`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和 `--allow`。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
@@ -103,9 +103,9 @@ GitHub 授权在仍有效、且新连接允许同一身份时继续可用。登�
 `--title` 为这一条连接附加任务说明，`--name` 用于辨认机器或工作区；两者都不代替唯一客户端 ID。标题支持中文和空格，最多 512 个 UTF-8 字节。升级时保留原有 `--allow` 与 SSH 选项即可，无须为了增加标题重新登记同一把 SSH 公钥；首次使用标题前应确认服务端支持该元数据字段。[参数实现](../src/client.rs) · [会话说明](session-control.md)
 
 ```sh
-ssmcp --ssh --name dev --title "修复构建并准备发布" --allow octocat@github my-ssmcp
+ssmcp --server https://ssmcp.lmm.best --name dev --title "修复构建并准备发布" --allow alice@ssmcp.lmm.best
 ```
 
 重载只会重新启动原入口，不会下载更新或选择另一安装目录。Windows 手动按版本目录安装时，切换版本需停止旧进程并从新目录启动；使用安装器更新同一入口后，才可按上述重载流程接管。
 
-长输出超过 32 KiB 或 500 行时会按来源转储，调用方获得转储 ID、客户端路径、SHA-256、字节数和行数，再用 `outputs.read` 分块读取。Unix 的默认目录是 `/tmp/ssmcp/<uid>`，Windows 默认是 `%LOCALAPPDATA%\ssmcp\output`，无该变量时使用用户临时目录下的 `ssmcp/output`；该路径属于目标客户端；文件仍按连接归属校验，其他客户端不能读取。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，运行期间每 60 秒清理一次。活动文件被跳过；达到单文件上限或发生写入错误时，应检查 `complete` 与 `error`，不能假定已保存完整输出。[输出实现](../src/output.rs) · [读取与清理](session-control.md#按需读取正文)
+长输出超过 32 KiB 或 500 行时会按来源转储，调用方获得转储 ID、客户端路径、SHA-256、字节数和行数，再用 `outputs.read` 分块读取。Unix 的默认目录是 `/tmp/ssmcp-<uid>`，其中 `<uid>` 来自当前进程的有效系统用户 ID；目录权限为 0700，输出文件为 0600。每个用户直接拥有自己的目录，不依赖另一个用户创建的共享父目录。Windows 默认是 `%LOCALAPPDATA%\ssmcp\output`，无该变量时使用用户临时目录下的 `ssmcp/output`；该路径属于目标客户端；文件仍按连接归属校验，其他客户端不能读取。默认保留 24 小时，已结束文件总量上限 512 MiB，单文件上限 256 MiB，运行期间每 60 秒清理一次。活动文件被跳过；达到单文件上限或发生写入错误时，应检查 `complete` 与 `error`，不能假定已保存完整输出。[输出实现](../src/output.rs) · [读取与清理](session-control.md#按需读取正文)

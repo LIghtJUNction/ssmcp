@@ -125,7 +125,9 @@ ssmcp sessions status workstation --json
 
 ## 长输出自动转储
 
-长输出护卫在输出超过 **32 KiB** 或 **500 行** 时，将输出保存到客户端的私有输出目录，返回元数据供 agent 按需读取。Unix 使用 `/tmp/ssmcp/<uid>/output-<id>.log`，`<uid>` 是运行客户端的本机用户 ID；Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`，并限制目录访问权限。路径属于该客户端机器，不属于 MCP 服务器或调用方沙箱；以返回的 artifact 元数据为准。
+长输出护卫在输出超过 **32 KiB** 或 **500 行** 时，将输出保存到客户端的私有输出目录，返回元数据供 agent 按需读取。Unix 使用 `/tmp/ssmcp-<uid>/output-<id>.log`，`<uid>` 是运行客户端的本机用户 ID；Windows 默认使用 `%LOCALAPPDATA%\ssmcp\output`，未设置 LOCALAPPDATA 时使用用户临时目录下的 `ssmcp/output`，并限制目录访问权限。路径属于该客户端机器，不属于 MCP 服务器或调用方沙箱；以返回的 artifact 元数据为准。
+
+升级不会修改或删除旧的 `/tmp/ssmcp/<uid>` 目录。已确认的热重载可凭原有的私有、一次性凭据继续读取旧位置的输出；新连接使用新的用户私有目录。账户、会话账本以及显式配置的持久存储路径不受此临时目录变更影响。
 
 流式捕获会保留触发阈值之前的前缀，并继续追加后续字节。短输出保持原来的内联形式；长输出返回文件 ID、路径、SHA-256、字节数、行数、完成状态和过期时间，避免把全部日志塞进一次工具返回。[输出存储实现](../src/output.rs)
 
