@@ -463,3 +463,33 @@ async fn tool_containers_real_key_parser_routes_wheel_and_pages_without_touching
         }
     }
 }
+
+#[tokio::test]
+async fn tool_containers_language_switch_rebuilds_colorless_rows() {
+    use crate::client::language::Language;
+    let fixture = Fixture::new().await;
+    let scope = fixture.scope(1, "123", 'a', None);
+    let mut v = view(&scope, 3);
+    v.selected = Some(v.events[0].id);
+    v.open();
+    let mut config = ui();
+    for width in [1, 2, 3, 9, 31, 68, 100] {
+        for language in [Language::English, Language::Chinese, Language::English] {
+            config.language = language;
+            let rows = v.render(width, 20, &config, true);
+            assert!(rows.iter().all(|row| !row.contains('\x1b')));
+            assert!(rows.iter().all(
+                |row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= usize::from(width)
+            ));
+            let cache = v.events[0].cache.as_ref().unwrap();
+            assert!(cache.1.contains(language.code()));
+            if width >= 31 {
+                let body = cache.2.join("\n");
+                assert!(body.starts_with(language.text("Command", "命令")), "{body}");
+                let frame = rows.join("\n");
+                assert!(frame.contains(language.text("Tools", "工具")), "{frame}");
+                assert!(frame.contains(language.text(" rows", " 行")), "{frame}");
+            }
+        }
+    }
+}
