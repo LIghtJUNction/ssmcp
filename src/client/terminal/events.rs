@@ -837,6 +837,7 @@ impl EventView {
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
             event.meta.kind = Kind::Tool;
+            event.chat_expanded = true;
             if self.follow && event.matches(&self.query, self.level, self.scope) {
                 self.selected = Some(event.id);
                 self.new_image.get_or_insert(event.id);
@@ -2684,7 +2685,10 @@ mod tests {
         view.attach_image(image_preview(2, 2, false));
         assert!(!view.is_empty());
         assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
-        assert!(view.open());
+        assert!(
+            !view.open(),
+            "decoded images start expanded in Conversation"
+        );
         assert!(
             !view
                 .render(80, 12, &plain_ui(), true)
@@ -2786,6 +2790,48 @@ mod tests {
             native,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn decoded_conversation_image_starts_visible_and_respects_manual_folding() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.render(80, 18, &plain_ui(), true);
+        assert!(view.image_placements(0).is_empty());
+        view.attach_image(image_preview(32, 32, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        view.render(80, 18, &ui, true);
+        let initial = view.image_placements(0);
+        assert_eq!(initial.len(), 1, "a decoded image is visible without Enter");
+        let mut renderer = images::Renderer::default();
+        let (_, output) = renderer.update(initial, (17, 0), false);
+        assert!(output.contains("a=t") && output.contains("a=p"));
+
+        assert!(view.toggle());
+        view.render(80, 18, &ui, true);
+        assert!(
+            view.image_placements(0).is_empty(),
+            "manual folding hides native pixels"
+        );
+        renderer.update(view.image_placements(0), (17, 0), false);
+
+        assert!(view.toggle());
+        view.render(80, 18, &ui, true);
+        assert_eq!(
+            view.image_placements(0).len(),
+            1,
+            "reopening uses the retained image"
+        );
+        let (_, output) = renderer.update(view.image_placements(0), (17, 0), false);
+        assert!(output.contains("a=p"));
     }
 
     #[test]
