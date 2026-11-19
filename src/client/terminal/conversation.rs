@@ -2437,7 +2437,10 @@ impl State {
                 } else {
                     String::new()
                 };
-                let label = if self.conversation.view == View::Activity && !self.help {
+                let label = if self.conversation.view == View::Activity
+                    && !self.help
+                    && self.conversation.canvas.is_default_conversation()
+                {
                     format!("conversation{suffix}")
                 } else {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
