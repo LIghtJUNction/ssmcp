@@ -27,8 +27,8 @@ class AtCompletion(InputHistory):
                  "vanishes.txt": "REMOVE_AFTER_SELECTION\n",
                  "mouse-alpha.txt": "MOUSE_ALPHA\n",
                  "mouse-beta.txt": "MOUSE_BETA\n",
-                 "鼠标 甲 中文说明文档 带空格和很长的文件名 界.txt": "NARROW_ALPHA\n",
-                 "鼠标 乙 中文说明文档 带空格和很长的文件名 界.txt": "NARROW_BETA\n"}
+                 "鼠标 01 中文说明文档 带空格和很长的文件名 界.txt": "NARROW_ALPHA\n",
+                 "鼠标 02 中文说明文档 带空格和很长的文件名 界.txt": "NARROW_BETA\n"}
         for name, content in files.items():
             path = self.workspace / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,10 +88,10 @@ class AtCompletion(InputHistory):
         self.check(recovered["status"] == "queued", "retry preserves the held request identity")
         self.delivered_references(front, member, recovered, source)
 
-        long_path = "鼠标 乙 中文说明文档 带空格和很长的文件名 界.txt"
+        long_path = "鼠标 02 中文说明文档 带空格和很长的文件名 界.txt"
         for typed, visible_prefix, path, source, narrow in [
             ("@mouse-", "@mouse-beta.txt  ", "mouse-beta.txt", "@mouse-beta.txt ", False),
-            ('@"鼠标 ', "@鼠标 乙 ", long_path, '@"' + long_path + '" ', True),
+            ('@"鼠标 ', "@鼠标 02 ", long_path, '@"' + long_path + '" ', True),
         ]:
             front.send(typed)
             visible = lambda shot: any(row.lstrip().startswith(visible_prefix) for row in shot["rows"])
