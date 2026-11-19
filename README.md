@@ -137,6 +137,18 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
 
+### 定时更新 Git 上游
+
+连接存续期间，ssmcp 默认每 300 秒检查当前分支的远端上游并更新对应的远端跟踪引用；JSONL、无终端和后台连接同样运行。可设为 60–86400 秒，或用 `0` 关闭，修改对新连接生效。
+
+```sh
+ssmcp config get git-fetch-interval
+ssmcp config set git-fetch-interval 300
+ssmcp config set git-fetch-interval 0
+```
+
+首次检查、共享调度、超时与更新范围见[定时 Git fetch 配置](docs/configuration.md#background-git-fetch)。
+
 ### 先预览，再调整
 
 ```sh

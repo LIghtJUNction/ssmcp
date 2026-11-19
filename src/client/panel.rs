@@ -1,6 +1,6 @@
 //! Pure sidebar layout. The compositor alone owns terminal escape sequences.
 use super::{
-    git_status::{GitSnapshot, GitState},
+    git_status::{FetchState, GitSnapshot, GitState},
     ui::{Panel, Ui},
 };
 use std::{
@@ -542,6 +542,38 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
                 PanelTone::Muted,
             ));
         }
+        let remote = git.fetch.remote.as_deref().unwrap_or("upstream");
+        let (fetch, tone) = match git.fetch.state {
+            FetchState::Disabled => ("Fetch off".into(), PanelTone::Muted),
+            FetchState::Waiting => (
+                format!(
+                    "Fetch every {}",
+                    elapsed(Duration::from_secs(git.fetch.interval_seconds))
+                ),
+                PanelTone::Muted,
+            ),
+            FetchState::Running => (format!("Fetching {remote}"), PanelTone::Accent),
+            FetchState::Fresh => {
+                let age = git
+                    .fetch
+                    .last_success_at
+                    .map(|at| format!(" · {} ago", elapsed(now.saturating_duration_since(at))))
+                    .unwrap_or_default();
+                (format!("Fetched {remote}{age}"), PanelTone::Muted)
+            }
+            FetchState::Failed => ("Fetch failed · retry scheduled".into(), PanelTone::Warning),
+            FetchState::NoUpstream => ("Fetch needs an upstream".into(), PanelTone::Muted),
+        };
+        if git.fetch.state != FetchState::Disabled {
+            lines[0] = line(
+                format!("Git · {fetch}"),
+                if tone == PanelTone::Warning {
+                    tone
+                } else {
+                    PanelTone::Heading
+                },
+            );
+        }
         for change in &git.changed_files {
             if lines.len() >= budget {
                 break;
@@ -1042,7 +1074,9 @@ mod tests {
     #[test]
     fn git_history_follows_activity_and_adapts_to_available_rows() {
         let now = Instant::now();
-        let git = git_with_history(now);
+        let mut git = git_with_history(now);
+        git.fetch.state = FetchState::Waiting;
+        git.fetch.interval_seconds = 300;
         let snapshot = PanelSnapshot {
             tasks: vec![
                 TaskView {
@@ -1063,7 +1097,10 @@ mod tests {
         };
         let full = render(&snapshot, 28, 57, now);
         assert_eq!(full.len(), 57);
-        let git_row = full.iter().position(|row| row.text == "Git").unwrap();
+        let git_row = full
+            .iter()
+            .position(|row| row.text.starts_with("Git · Fetch"))
+            .unwrap();
         assert_eq!(
             git_row, 10,
             "Git follows the controller block and two task rows without bottom anchoring"

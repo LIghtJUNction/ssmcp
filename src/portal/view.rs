@@ -91,7 +91,7 @@ pub(super) fn traffic_panel(traffic: &TrafficQuota) -> String {
     let period = format!("{}（{timezone} 自然月）", escape(&traffic.period));
     let Some(limit_bytes) = traffic.limit_bytes else {
         return format!(
-            r#"<dl class="account-facts" aria-label="账户流量"><div><dt>流量额度</dt><dd>无限</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div></dl>
+            r#"<dl class="account-facts" aria-label="账户流量"><div><dt>流量额度</dt><dd aria-label="无限">∞</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div></dl>
 <details class="traffic-details"><summary>流量统计说明</summary><p class="dashboard-note">管理员账户，无总流量上限。<br>{period}。<br>上下行合计，包含应用协议封装；重试会重新计入。</p></details>"#,
             traffic.used_bytes,
         );
@@ -343,6 +343,7 @@ mod tests {
         assert!(html.contains(r#"title="250000000 字节">250 MB</dd>"#));
         assert!(html.contains(r#"title="1000000000 字节">1 GB</dd>"#));
         assert!(html.contains("每月免费"));
+        assert!(!html.contains('∞'));
         assert!(html.contains("2026-11（UTC+08:00 自然月）"));
         assert!(html.contains("月底到期，不滚存"));
         assert!(html.contains("上下行合计，包含应用协议封装；重试会重新计入"));
@@ -392,7 +393,7 @@ mod tests {
         traffic.limit_bytes = None;
         traffic.remaining_bytes = None;
         let html = logged_in_home(&traffic);
-        assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"<dt>流量额度</dt><dd aria-label="无限">∞</dd>"#));
         assert!(html.contains(r#"href="/account/admin#registered-users""#));
         assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
         assert!(!html.contains("每月免费"));
