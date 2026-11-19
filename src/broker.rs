@@ -64,7 +64,7 @@ impl Authorization {
         }
     }
 
-    fn permits(&self, session: &Session) -> bool {
+    pub(crate) fn permits(&self, session: &Session) -> bool {
         match self {
             Self::Legacy { .. } => session.allowed().is_empty(),
             Self::Identity(identity) => session.allowed().iter().any(|allowed| {
@@ -438,6 +438,12 @@ impl Broker {
     }
 
     pub async fn authenticate(&self, user: &str, access_token: &str) -> Option<Authorization> {
+        self.authenticate_now(user, access_token)
+    }
+
+    /// Synchronous decision point for responses that must not await between
+    /// checking current OAuth/account state and committing a queue revision.
+    pub(crate) fn authenticate_now(&self, user: &str, access_token: &str) -> Option<Authorization> {
         if !valid_username(user) {
             return None;
         }
@@ -576,6 +582,17 @@ impl Broker {
         session
     }
 
+    #[cfg(test)]
+    pub(crate) async fn test_register_identity(
+        &self,
+        user: &str,
+        identity: Identity,
+    ) -> Arc<Session> {
+        let session = self.test_register(user, &"a".repeat(64)).await;
+        session.allowed().push(identity);
+        session
+    }
+
     /// Enumerate only sessions allowed by this identity and resource scope.
     pub async fn clients(
         &self,
@@ -644,6 +661,7 @@ impl Broker {
         for session in &active {
             session.alive.store(false, Ordering::Release);
             session.collaboration.close();
+            session.steering.close();
             session.disconnect.notify_one();
         }
         // Drain normal wire cleanup and its bounded audit writes before the
@@ -1101,6 +1119,7 @@ impl Broker {
         drop(writer);
         session.alive.store(false, Ordering::Release);
         session.collaboration.close();
+        session.steering.close();
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
             if clients
