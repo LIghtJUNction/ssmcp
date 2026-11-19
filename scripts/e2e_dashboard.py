@@ -665,11 +665,15 @@ def main():
         parser.error(f"missing {decoder}; build the existing vt_snapshot example first")
     started = time.monotonic()
     report = {"status": "failed", "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned physical PTY + independent vt100 decoder",
+        "transport": "production Broker/router fixture + account HTTP/WS + owned physical PTY + independent vt100 decoder",
+        "oauth": "real discovery/DCR/PKCE/consent with a synthetic upstream GitHub provider",
+        "tls_verified": False, "real_github_account": False, "models_started": False,
         "scope": "real dashboard behavior; no installed coding harness or model is invoked",
         "binaries": {name: sha256(path) for name, path in (
             ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"), ("vt_snapshot", decoder))},
-        "sources": {str(path.name): sha256(path) for path in (Path(__file__), Path(__file__).with_name("e2e.py"))}}
+        "sources": {str(path.name): sha256(path) for path in (
+            Path(__file__), Path(__file__).with_name("e2e.py"),
+            Path(__file__).with_name("e2e_account_gateway.py"))}}
     with tempfile.TemporaryDirectory(prefix="ssmcp-dashboard-e2e-") as directory:
         harness = Dashboard(Path(directory), args.bin_dir, decoder)
         try:

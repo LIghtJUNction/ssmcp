@@ -13,7 +13,6 @@ import base64
 import concurrent.futures
 import http.client
 import hashlib
-from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -203,6 +202,8 @@ class Harness:
                 process.stdout.close()
         for _, log in self.logs:
             log.close()
+        if self.account_gateway.prepared and self.account_gateway.exit_code != 0:
+            raise AssertionError("the owned account-router fixture did not terminate successfully")
 
     def diagnostics(self):
         for path, log in self.logs:
@@ -278,8 +279,8 @@ class Harness:
         return result["structuredContent"]
 
     def workspace_roundtrip(self, directory, *, client_id=None, label="workspace"):
-        """Exercise universal file helpers across actual SSH in a temporary launch root."""
-        payload = bytes(range(256)) * 17 + b"\x00ssmcp SSH roundtrip\xff"
+        """Exercise universal file helpers over the account relay in a temporary root."""
+        payload = bytes(range(256)) * 17 + b"\x00ssmcp account roundtrip\xff"
         relative = "workspace-check/nested/binary.dat"
         code = """
             const id = %s;
@@ -297,14 +298,14 @@ class Harness:
         result = self.public_call("code_mode", {"code": code})["result"]
         self.check(result["root"]["root"] == str(directory.resolve())
                    and result["root"]["kind"] == "directory",
-                   f"{label}: fs.stat identifies the SSH client's exact shared root")
+                   f"{label}: fs.stat identifies the account client's exact shared root")
         self.check(base64.b64decode(result["read"]["data_base64"], validate=True) == payload
                    and result["read"]["eof"] and result["stat"]["kind"] == "file"
                    and result["stat"]["size"] == len(payload)
                    and (directory / relative).read_bytes() == payload,
-                   f"{label}: fs.mkdir/write/read/stat preserve binary bytes through real SSH")
+                   f"{label}: fs.mkdir/write/read/stat preserve binary bytes through the account relay")
 
-        skill = "---\nname: ssh-skill\ndescription: Inspect files through SSH.\n---\nSKILL_BODY_ONLY_ON_READ\n"
+        skill = "---\nname: account-skill\ndescription: Inspect files through the account relay.\n---\nSKILL_BODY_ONLY_ON_READ\n"
         text = "\ufeff原生文件🙂\r\nbefore\r\n"
         code = r"""
             const id = %s;
@@ -324,13 +325,13 @@ class Harness:
                 });
             } catch (_) { stale = true; }
             const current = await fs.readText(id, {path:"workspace-check/text.txt"});
-            await fs.writeText(id, {path:"skills/ssh-skill/SKILL.md",text:%s,create_parents:true});
+            await fs.writeText(id, {path:"skills/account-skill/SKILL.md",text:%s,create_parents:true});
             await fs.writeText(id, {path:"workspace-check/AGENTS.md",text:"Parent rule.\n"});
             await fs.writeText(id, {path:"workspace-check/nested/agents.md",text:"Nested rule.\n"});
             const roots = await context.roots(id);
             const index = await skills.list(id, {root:"workspace"});
             const view = await skills.view(id, {root:"workspace"});
-            const full = await skills.read(id, {path:"skills/ssh-skill/SKILL.md"});
+            const full = await skills.read(id, {path:"skills/account-skill/SKILL.md"});
             const rules = await agents.resolve(id, {path:"workspace-check/nested/new.rs"});
             const instruction = await agents.read(id, {path:"workspace-check/AGENTS.md"});
             const skillResource = await resources.read("ssmcp://clients/"+id+"/skills?root=workspace");
@@ -349,14 +350,14 @@ class Harness:
                    and result["current"]["text"] == text.replace("before", "after")
                    and (directory / "workspace-check/text.txt").read_bytes()
                        == text.replace("before", "after").encode(),
-                   f"{label}: native text edit enforces SHA-256 preconditions through SSH")
+                   f"{label}: native text edit enforces SHA-256 preconditions through the account relay")
         self.check(result["roots"]["roots"][0]["id"] == "workspace"
                    and result["roots"]["roots"][0]["path"] == str(directory.resolve()),
-                   f"{label}: context roots identify the actual SSH client directory")
+                   f"{label}: context roots identify the actual account client directory")
         summaries = result["index"]["skills"]
-        self.check(len(summaries) == 1 and summaries[0]["name"] == "ssh-skill"
+        self.check(len(summaries) == 1 and summaries[0]["name"] == "account-skill"
                    and "SKILL_BODY_ONLY_ON_READ" not in json.dumps(result["index"])
-                   and "Inspect files through SSH." in result["view"]["markdown"],
+                   and "Inspect files through the account relay." in result["view"]["markdown"],
                    f"{label}: skill discovery generates summaries without loading body text into the view")
         self.check(result["full"]["content"] == skill
                    and result["full"]["root"]["id"] == "workspace",
@@ -409,13 +410,13 @@ class Harness:
                        "uri": resource_file["readUri"], "mimeType": "text/markdown",
                        "text": native_file["content"],
                    }] for value, resource_file, native_file in zip(readback, resource_files, native_files)),
-                   f"{label}: every instruction readUri returns the exact original text through SSH")
+                   f"{label}: every instruction readUri returns the exact original text through the account relay")
         undecorated = []
         for resource_file in resource_files:
             native_copy = dict(resource_file)
             del native_copy["readUri"]
             undecorated.append(native_copy)
-        self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
+        self.check(result["skillResource"]["skills"][0]["name"] == "account-skill"
                    and undecorated == native_files,
                    f"{label}: dynamic resources preserve all native fields beside their verified readUri")
 
@@ -874,7 +875,10 @@ def main():
         report = {
             "status": "passed", "checks": harness.checks,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "transport": "real OpenSSH public-key + HTTP + Linux PTY",
+            "transport": "production Broker/router fixture + loopback account HTTP/WS + owned local PTY",
+            "oauth": "real discovery/DCR/PKCE/consent with a synthetic upstream GitHub provider",
+            "tls_verified": False, "real_github_account": False, "models_started": False,
+            "fixture_exit_code": harness.fixture_exit_code,
         }
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

@@ -34,8 +34,9 @@ def direct_loopback(environment):
 
 
 def private_json(path, value):
-    with path.open("x", encoding="utf-8") as stream:
-        os.chmod(path, 0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False)
         stream.write("\n")
 
@@ -90,6 +91,11 @@ class AccountGateway:
         environment = direct_loopback({key: value for key, value in os.environ.items()
                                        if not key.startswith("SSMCP_")})
         environment["SSMCP_RELAY_COMPOSER_FIXTURE"] = str(self.directory)
+        lifetime = getattr(h, "fixture_timeout_seconds", None)
+        if lifetime is not None:
+            if type(lifetime) is not int or not 30 <= lifetime <= 1800:
+                raise ValueError("fixture_timeout_seconds must be an integer in 30..=1800")
+            environment["SSMCP_RELAY_COMPOSER_FIXTURE_TIMEOUT_SECS"] = str(lifetime)
         self.process = h.spawn("account-router", [
             str(binary), "--exact", FIXTURE_TEST, "--ignored", "--nocapture",
         ], env=environment)
@@ -288,6 +294,47 @@ class AccountGateway:
         h.check(h.rpc("ping", modern=True, secret=h.account_token)[0] == 401,
                 "the account relay credential cannot authenticate as an MCP access token")
         return h.oauth_grant
+
+    def disconnect_client(self, client_id, timeout=5):
+        """Request one owned WSS close; the acknowledgment is not reconnection proof."""
+        if (not isinstance(client_id, str) or len(client_id) != 64
+                or any(character not in "0123456789abcdef" for character in client_id)):
+            raise ValueError("disconnect_client requires an exact 64-character hexadecimal client ID")
+        if not isinstance(timeout, (int, float)) or not 0 < timeout <= 60:
+            raise ValueError("disconnect timeout must be greater than zero and at most 60 seconds")
+        if not self.prepared or self.process.poll() is not None:
+            raise RuntimeError("the owned account fixture is not running")
+        request = self.directory / "disconnect.json"
+        acknowledgment = self.directory / "disconnect-ack.json"
+        lock = self.directory / "disconnect-inflight"
+        try:
+            descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as error:
+            raise RuntimeError("another owned disconnect request is still awaiting acknowledgment") from error
+        os.close(descriptor)
+        nonce = os.urandom(16).hex()
+        temporary = self.directory / f"disconnect-{nonce}.tmp"
+        try:
+            if request.exists():
+                raise RuntimeError("an earlier owned disconnect request has not been consumed")
+            acknowledgment.unlink(missing_ok=True)
+            private_json(temporary, {"schema_version": 1, "nonce": nonce, "client_id": client_id})
+            os.replace(temporary, request)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if self.process.poll() is not None:
+                    raise AssertionError("the account fixture exited before acknowledging the disconnect request")
+                if acknowledgment.is_file():
+                    result = json.loads(acknowledgment.read_text())
+                    if (result.get("schema_version") != 1 or result.get("nonce") != nonce
+                            or result.get("client_id") != client_id or result.get("accepted") is not True):
+                        raise AssertionError("the account fixture rejected or mismatched the exact disconnect request")
+                    return result
+                time.sleep(0.02)
+            raise TimeoutError("owned disconnect acknowledgment was not confirmed; inspect the client before retrying")
+        finally:
+            temporary.unlink(missing_ok=True)
+            lock.unlink(missing_ok=True)
 
     def stop(self):
         if self.process is None:
