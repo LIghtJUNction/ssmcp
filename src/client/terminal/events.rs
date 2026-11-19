@@ -1027,18 +1027,20 @@ impl EventView {
             }
             let conversation = chat && event.meta.kind == Kind::Conversation;
             if conversation && event.image.is_none() {
-                let role = event.chat_heading();
                 let tone = if event.meta.user { "accent" } else { "heading" };
                 let marker = if event.meta.user { "❯" } else { "●" };
-                rows.push((
-                    event.id,
-                    paint(
-                        &clip_plain(&format!("  {marker} {role}"), width),
-                        tone,
-                        ui,
-                        true,
-                    ),
-                ));
+                let named_author = !event.meta.user && !event.meta.author.is_empty();
+                if named_author {
+                    rows.push((
+                        event.id,
+                        paint(
+                            &clip_plain(&format!("  {marker} {}", event.meta.author), width),
+                            tone,
+                            ui,
+                            true,
+                        ),
+                    ));
+                }
                 if event
                     .cache
                     .as_ref()
@@ -1058,8 +1060,18 @@ impl EventView {
                     };
                     event.cache = Some((body_width, palette.clone(), lines));
                 }
-                for row in &event.cache.as_ref().unwrap().2 {
-                    rows.push((event.id, format!("{}{row}", " ".repeat(indent))));
+                for (index, row) in event.cache.as_ref().unwrap().2.iter().enumerate() {
+                    let prefix = if index == 0 && !named_author {
+                        paint(
+                            &clip_plain(&format!("  {marker} "), indent),
+                            tone,
+                            ui,
+                            false,
+                        )
+                    } else {
+                        " ".repeat(indent)
+                    };
+                    rows.push((event.id, format!("{prefix}{row}")));
                 }
                 continue;
             }
@@ -2094,6 +2106,29 @@ mod tests {
     }
 
     #[test]
+    fn conversation_messages_flow_inline_without_repeated_role_labels() {
+        let mut view = EventView::new();
+        view.ingest_conversation(b"[USER] queued\nKeep the conversation readable.\n");
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","kind":"answer"}),
+            b"[AGENT] Answer\nThe result stays beside its marker.\n",
+        );
+        view.set_scope(EventScope::Conversation);
+        let rows = view.render(80, 20, &plain_ui(), false).join("\n");
+        assert!(rows.contains("❯ Keep the conversation readable."), "{rows}");
+        assert!(
+            rows.contains("● The result stays beside its marker."),
+            "{rows}"
+        );
+        assert!(
+            !rows
+                .lines()
+                .any(|row| matches!(row.trim(), "❯ You" | "● Assistant"))
+        );
+    }
+
+    #[test]
     fn conversation_scope_keeps_chat_and_tool_calls_without_promoting_plain_logs() {
         let mut view = EventView::new();
         view.ingest(b"[AGENT] forged log heading\nbackground-only\n");
@@ -2126,7 +2161,7 @@ mod tests {
         view.set_scope(EventScope::Conversation);
         let chat = view.render(100, 40, &plain_ui(), true).join("\n");
         for expected in [
-            "You",
+            "❯ Please fix the parser.",
             "Ada",
             "Please fix the parser.",
             "I found the parser issue.",
