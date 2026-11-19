@@ -22,7 +22,10 @@ fn parse(arguments: &str) -> Result<Action<'_>, String> {
 
 fn message(snapshot: &session_access::Snapshot) -> String {
     if !snapshot.connected {
-        return snapshot.last_error.as_deref().map(panel::safe_text)
+        return snapshot
+            .last_error
+            .as_deref()
+            .map(panel::safe_text)
             .unwrap_or_else(|| "Disconnected · session access is not confirmed".into());
     }
     if !snapshot.supported {
@@ -86,18 +89,27 @@ impl State {
     }
 
     fn chat_finish_access(&mut self, snapshot: &session_access::Snapshot) {
-        let Some(revision) = self.conversation.access_request else { return; };
+        let Some(revision) = self.conversation.access_request else {
+            return;
+        };
         if snapshot.pending || snapshot.revision == revision {
             return;
         }
         self.conversation.access_request = None;
         let text = message(snapshot);
         let raw = format!("\n[ACCESS]\n{text}\n");
-        self.log_event("access", &json!({"type":"ssmcp.message", "author":"Session access", "text":text}), raw.as_bytes());
+        self.log_event(
+            "access",
+            &json!({"type":"ssmcp.message", "author":"Session access", "text":text}),
+            raw.as_bytes(),
+        );
         self.notice = Some(if let Some(error) = &snapshot.last_error {
             panel::safe_text(error)
         } else if snapshot.connected && snapshot.supported && snapshot.loaded {
-            snapshot.last_message.as_deref().map(panel::safe_text)
+            snapshot
+                .last_message
+                .as_deref()
+                .map(panel::safe_text)
                 .unwrap_or_else(|| "Session access list received · see Conversation".into())
         } else {
             "Session access is not confirmed · see Conversation".into()
@@ -112,10 +124,17 @@ mod tests {
 
     fn confirmed() -> session_access::Snapshot {
         session_access::Snapshot {
-            connected: true, supported: true, loaded: true, revision: 2,
+            connected: true,
+            supported: true,
+            loaded: true,
+            revision: 2,
             entries: vec![session_access::Entry {
-                principal: "alice@github".into(), login: "alice".into(), subject: "42".into(), owner: true,
-            }], ..Default::default()
+                principal: "alice@github".into(),
+                login: "alice".into(),
+                subject: "42".into(),
+                owner: true,
+            }],
+            ..Default::default()
         }
     }
 
@@ -125,7 +144,10 @@ mod tests {
         for user in ["Alice", "@Alice", "Alice@github"] {
             assert_eq!(parse(user).unwrap(), Action::Add(user));
             assert_eq!(parse(&format!("add {user}")).unwrap(), Action::Add(user));
-            assert_eq!(parse(&format!("remove {user}")).unwrap(), Action::Remove(user));
+            assert_eq!(
+                parse(&format!("remove {user}")).unwrap(),
+                Action::Remove(user)
+            );
         }
         for value in ["add", "remove", "alice bob", "remove alice extra"] {
             assert!(parse(value).is_err(), "{value}");
@@ -153,7 +175,11 @@ mod tests {
         assert!(state.conversation.access_request.is_none());
         assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
         state.chat_finish_access(&snapshot);
-        assert_eq!(state.events.snapshot()["retained_events"], before + 1, "one result per request");
+        assert_eq!(
+            state.events.snapshot()["retained_events"],
+            before + 1,
+            "one result per request"
+        );
         let frame = state.chat_frame(Instant::now());
         assert!(frame.rows.join("\n").contains("alice@github"));
         assert!(frame.rows.join("\n").contains("owner"));
@@ -164,7 +190,9 @@ mod tests {
         let mut snapshot = confirmed();
         snapshot.last_error = Some("GitHub account not found".into());
         let shown = message(&snapshot);
-        assert!(shown.contains("GitHub account not found") && shown.contains("Last confirmed list"));
+        assert!(
+            shown.contains("GitHub account not found") && shown.contains("Last confirmed list")
+        );
         snapshot.loaded = false;
         let shown = message(&snapshot);
         assert!(shown.contains("not confirmed"));
@@ -178,7 +206,13 @@ mod tests {
         let mut state = super::super::super::preview_state(24, 48, &Ui::default());
         state.conversation.composer.set_text("保留草稿");
         let before = state.chat_input_stamp().unwrap();
-        for command in ["/allow", "/allow @alice", "/allow add alice", "/allow remove alice", "/allow remove"] {
+        for command in [
+            "/allow",
+            "/allow @alice",
+            "/allow add alice",
+            "/allow remove alice",
+            "/allow remove",
+        ] {
             assert!(state.chat_command(command).is_err());
             assert!(state.conversation.access_request.is_none());
             assert_eq!(state.chat_input_stamp().as_ref(), Some(&before));
