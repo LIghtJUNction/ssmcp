@@ -15,9 +15,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import signal
 import statistics
 import tempfile
-import time
 
 from e2e_composer import Composer
 from e2e_client_ui import empty_composer_ready
@@ -198,6 +198,10 @@ class ReadGroupMemory(Composer):
 
 
 def main():
+    def interrupted(_signal, _frame):
+        raise TimeoutError("memory probe interrupted; cleaning up owned processes")
+
+    signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--decoder", type=Path, required=True)
@@ -233,8 +237,10 @@ def main():
             raise
         finally:
             try:
-                harness.close_frontends()
-                harness.cleanup()
+                try:
+                    harness.close_frontends()
+                finally:
+                    harness.cleanup()
                 report["cleanup_confirmed"] = all(process.poll() is not None for process in harness.processes)
             finally:
                 args.report.write_text(json.dumps(report, indent=2) + "\n")
