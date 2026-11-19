@@ -1,0 +1,78 @@
+{
+  "schema": "ssmcp.release-e2e-catalog.v1",
+  "product_source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "fixture_source": "4aa018b84973044420547c03c241f237dcdd77e6",
+  "account_router_fixture_source": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "account_router_libtest_sha256": "b5c3a9cb0801ccccfe57c00cba0c2c35d215b836b258966213e8eff19ee31132",
+  "product_hashes_after": {
+    "ssmcp": "c80da3aa112d25d9228dfe7a860ed02ceb3aa04cd545eb904d1ebad448bf85f7",
+    "ssmcpd": "c657bd9216b2ca4e3a89548f5565c44da14a48b14f5b5d6684616e8489f96518",
+    "ssmcp-frontend": "9bc2c9b2b98d9a8f6a997c3aeda11f735a964b141b70870f75825e75e8a63c5b"
+  },
+  "products_match_frozen_manifest": true,
+  "results": [
+    {
+      "name": "base",
+      "checks": 125,
+      "status": "passed",
+      "duration_seconds": 7.572,
+      "original_report_sha256": "70ddb0a54eb1a0d2d9cd8fdcabd9f8e742d891b055f163be3d7bb1f0f4ba3e6c",
+      "public_report_sha256": "70ddb0a54eb1a0d2d9cd8fdcabd9f8e742d891b055f163be3d7bb1f0f4ba3e6c"
+    },
+    {
+      "name": "agents",
+      "checks": 475,
+      "status": "passed",
+      "duration_seconds": 31.134,
+      "original_report_sha256": "ffec4abd98fc776b2094da198a3f8aa53806837e05572834f5766bd83a302237",
+      "public_report_sha256": "ffec4abd98fc776b2094da198a3f8aa53806837e05572834f5766bd83a302237"
+    },
+    {
+      "name": "unified",
+      "checks": 105,
+      "status": "passed",
+      "duration_seconds": 35.212,
+      "original_report_sha256": "8ecc7bde8ab0919c7e1ec67a99b16bf2d77b76afe9d8a0c15e590477cbd11007",
+      "public_report_sha256": "35888e8b07926fdc70b0ca348f671b08036264710c42aa098b238cb8a982971a"
+    },
+    {
+      "name": "daemon",
+      "checks": 182,
+      "status": "passed",
+      "duration_seconds": 64.939,
+      "original_report_sha256": "aab8e38ef920f29e085d52874189b0e24ba7e96da108ca3f430df6233a9755f4",
+      "public_report_sha256": "aab8e38ef920f29e085d52874189b0e24ba7e96da108ca3f430df6233a9755f4"
+    }
+  ],
+  "runner": {
+    "product_source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+    "fixture_source": "4aa018b84973044420547c03c241f237dcdd77e6",
+    "results": [
+      {
+        "stage": "base",
+        "exit_code": 0,
+        "elapsed_seconds": 7.729,
+        "log_sha256": "85633654ecc7e1510d5cb55213a0f76a304de4199876ccd40b493c0e942adeb2"
+      },
+      {
+        "stage": "agents",
+        "exit_code": 0,
+        "elapsed_seconds": 31.329,
+        "log_sha256": "d36ca66a829ea081d8f6bbb02629a8d936f9b229f40183f4346be66b59ef710d"
+      },
+      {
+        "stage": "unified",
+        "exit_code": 0,
+        "elapsed_seconds": 35.334,
+        "log_sha256": "f0de4d064c452a0d0013f48584dc6cd9e5485a3c080dcb5cd42df9e691c30724"
+      },
+      {
+        "stage": "daemon",
+        "exit_code": 0,
+        "elapsed_seconds": 65.2,
+        "log_sha256": "c3315b98848c01c869f89ba689840ee578efaec86a5e74043325ef89d1f5efef"
+      }
+    ]
+  },
+  "scope": "Linux real CLI, authenticated fixture relay and isolated user services; synthetic model-provider fixtures only; no real model calls or existing client restarts"
+}
