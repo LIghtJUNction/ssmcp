@@ -567,6 +567,19 @@ class ReleaseTests(unittest.TestCase):
             with (self.root / "Cargo.lock").open("a") as stream:
                 stream.write(f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n')
 
+    def test_registry_dependency_uses_its_own_inherited_workspace_version(self):
+        self.add_registry_dependencies()
+        path = self.root / "crates/zplugin/Cargo.toml"
+        manifest = path.read_text().replace('version = "0.3.0"', 'version.workspace = true')
+        path.write_text(manifest + '\n[workspace.package]\nversion = "0.3.0"\n')
+        self.assertEqual(release.registry_dependencies(self.root),
+                         [("zplugin", "0.3.0"), ("zharness", "0.5.0")])
+        for workspace in ('\n[workspace.package]\nversion = "0.3.1"\n', ''):
+            with self.subTest(workspace=workspace):
+                path.write_text(manifest + workspace)
+                with self.assertRaisesRegex(ValueError, "source and exact dependency version differ"):
+                    release.registry_dependencies(self.root)
+
     def submodule_fixture(self, nested=False):
         temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")
         self.addCleanup(temporary.cleanup)

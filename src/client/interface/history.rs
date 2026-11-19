@@ -63,6 +63,113 @@ pub(crate) struct SessionSummary {
     pub current: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchFilter {
+    query: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    case_sensitive: bool,
+}
+
+impl SearchFilter {
+    fn validate(&self) -> Result<(), String> {
+        if self.query.trim().is_empty()
+            || self.query.len() > 256
+            || self
+                .query
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+        {
+            return Err("history query must contain 1..=256 UTF-8 bytes of literal text".into());
+        }
+        if let Some(id) = &self.id {
+            session_name(id)?;
+        }
+        if self
+            .role
+            .as_deref()
+            .is_some_and(|role| !matches!(role, "system" | "user" | "assistant" | "tool"))
+        {
+            return Err("history search role must be system, user, assistant or tool".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SearchHit {
+    conversation_id: String,
+    message_id: String,
+    message_index: usize,
+    role: String,
+    kind: String,
+    created_at_ms: u64,
+    content_bytes: usize,
+    source_truncated: bool,
+    snippet: String,
+    snippet_truncated: bool,
+}
+
+struct SearchResult {
+    matches: Vec<SearchHit>,
+    scanned_sessions: usize,
+    scan_truncated: bool,
+}
+
+// Lowercasing can change UTF-8 length (for example İ → i + combining dot).
+// Map the match back to the original character boundary before slicing.
+fn match_index(content: &str, query: &str, case_sensitive: bool) -> Option<usize> {
+    if case_sensitive {
+        return content.find(query);
+    }
+    let folded_offset = content.to_lowercase().find(&query.to_lowercase())?;
+    let mut folded_bytes = 0;
+    for (offset, character) in content.char_indices() {
+        folded_bytes += character.to_lowercase().map(char::len_utf8).sum::<usize>();
+        if folded_offset < folded_bytes {
+            return Some(offset);
+        }
+    }
+    None
+}
+
+fn search_hit(conversation_id: &str, index: usize, message: &Message, at: usize) -> SearchHit {
+    let start = message.content[..at]
+        .char_indices()
+        .rev()
+        .nth(80)
+        .map_or(0, |(offset, _)| offset);
+    let end = message.content[start..]
+        .char_indices()
+        .nth(384)
+        .map_or(message.content.len(), |(offset, _)| start + offset);
+    SearchHit {
+        conversation_id: conversation_id.into(),
+        message_id: message.id.clone(),
+        message_index: index,
+        role: message.role.clone(),
+        kind: message.kind.clone(),
+        created_at_ms: message.created_at_ms,
+        content_bytes: message.content.len(),
+        source_truncated: message.truncated,
+        snippet: format!(
+            "{}{}{}",
+            if start > 0 { "…" } else { "" },
+            &message.content[start..end],
+            if end < message.content.len() {
+                "…"
+            } else {
+                ""
+            }
+        ),
+        snippet_truncated: start > 0 || end < message.content.len(),
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Entry {
@@ -614,6 +721,106 @@ impl History {
         Ok(conversation)
     }
 
+    fn metadata(&self, id: &str) -> Result<Value, String> {
+        let conversation = self.read(id)?;
+        Ok(
+            json!({"schema_version":1,"metadata":conversation.metadata,"summary":self.summary(&conversation)}),
+        )
+    }
+
+    fn search(&self, filter: &SearchFilter) -> Result<SearchResult, String> {
+        filter.validate()?;
+        let _lock = self.directory.lock()?;
+        let mut conversations = Vec::new();
+        let mut scan_truncated = false;
+        if let Some(id) = &filter.id {
+            let conversation = self.load(id)?;
+            if conversation.metadata.workspace != self.workspace {
+                return Err("conversation belongs to a different workspace".into());
+            }
+            conversations.push(conversation);
+        } else {
+            // Inspect file metadata before reading bodies. Manual imports must
+            // not turn a bounded search into an unbounded scan of old files.
+            let mut candidates = Vec::new();
+            for name in self.directory.names()? {
+                let Some(id) = name
+                    .strip_suffix(".jsonl")
+                    .filter(|id| valid_id(id, "conversation"))
+                else {
+                    continue;
+                };
+                let Ok(file) = self.directory.open(&name, false, false, false) else {
+                    continue;
+                };
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                let Ok(bytes) = usize::try_from(metadata.len()) else {
+                    continue;
+                };
+                if bytes > MAX_SESSION_BYTES {
+                    continue;
+                }
+                candidates.push((
+                    id.to_owned(),
+                    bytes,
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                ));
+            }
+            candidates
+                .sort_by(|left, right| right.2.cmp(&left.2).then_with(|| right.0.cmp(&left.0)));
+            let mut scanned_bytes = 0usize;
+            for (scanned_files, (id, bytes, _)) in candidates.into_iter().enumerate() {
+                if scanned_files >= MAX_SESSIONS
+                    || scanned_bytes.saturating_add(bytes) > MAX_TOTAL_BYTES
+                {
+                    scan_truncated = true;
+                    break;
+                }
+                scanned_bytes += bytes;
+                let Ok(conversation) = self.load(&id) else {
+                    continue;
+                };
+                if conversation.metadata.workspace == self.workspace {
+                    conversations.push(conversation);
+                }
+            }
+        }
+        conversations.sort_by(|left, right| {
+            let left = self.summary(left);
+            let right = self.summary(right);
+            right
+                .updated_at_ms
+                .cmp(&left.updated_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let mut result = SearchResult {
+            matches: Vec::new(),
+            scanned_sessions: conversations.len(),
+            scan_truncated,
+        };
+        for conversation in conversations {
+            for (index, message) in conversation.messages.iter().enumerate() {
+                if filter
+                    .role
+                    .as_ref()
+                    .is_some_and(|role| role != &message.role)
+                {
+                    continue;
+                }
+                if let Some(at) =
+                    match_index(&message.content, &filter.query, filter.case_sensitive)
+                {
+                    result
+                        .matches
+                        .push(search_hit(&conversation.metadata.id, index, message, at));
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn resume(&mut self, id: &str) -> Result<Conversation, String> {
         let _lock = self.directory.lock()?;
         let conversation = self.load(id)?;
@@ -719,6 +926,24 @@ pub(crate) struct SafeDirectory {
     directory: File,
     #[cfg(windows)]
     directory: cap_std::fs::Dir,
+}
+
+pub(crate) struct HistoryLock {
+    _file: File,
+}
+
+impl Drop for HistoryLock {
+    fn drop(&mut self) {
+        // flock is owned by the open file description. A concurrent fork can
+        // retain a duplicate until exec, so closing only our fd can leave a
+        // completed transaction locked. Explicitly release our own lock first.
+        #[cfg(unix)]
+        while let Err(error) = self._file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
 }
 
 fn private_tree(path: &Path) -> Result<(), String> {
@@ -878,11 +1103,11 @@ impl SafeDirectory {
         Ok(file)
     }
 
-    pub(crate) fn lock(&self) -> Result<File, String> {
+    pub(crate) fn lock(&self) -> Result<HistoryLock, String> {
         let file = self.open(".history.lock", true, true, false)?;
         crate::platform::lock_file(&file, true)
             .map_err(|_| "conversation storage is busy; retry shortly")?;
-        Ok(file)
+        Ok(HistoryLock { _file: file })
     }
 
     pub(crate) fn names(&self) -> Result<Vec<String>, String> {
@@ -992,6 +1217,59 @@ enum Request {
         #[serde(default)]
         limit: Option<usize>,
     },
+    Metadata {
+        id: String,
+    },
+    Search {
+        query: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        role: Option<String>,
+        #[serde(default)]
+        case_sensitive: bool,
+        #[serde(default)]
+        offset: Option<usize>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+}
+
+fn search_page(
+    history: &History,
+    filter: &SearchFilter,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, String> {
+    if !(1..=64).contains(&limit) {
+        return Err("history page limit must be in 1..=64".into());
+    }
+    let result = history.search(filter)?;
+    let total = result.matches.len();
+    if offset > total {
+        return Err("history search offset exceeds match count".into());
+    }
+    let mut page = Vec::new();
+    // Account for the query, envelope, and JSON escaping, as well as each hit.
+    let mut bytes = 4096;
+    for entry in result.matches.into_iter().skip(offset).take(limit) {
+        let size = serde_json::to_vec(&entry)
+            .map_err(|_| "cannot encode history match")?
+            .len();
+        if bytes + size > MAX_PAGE_BYTES {
+            break;
+        }
+        bytes += size;
+        page.push(entry);
+    }
+    let next = offset + page.len();
+    Ok(
+        json!({"schema_version":1,"schema":SCHEMA,"query":filter.query,
+        "case_sensitive":filter.case_sensitive,"id":filter.id,"role":filter.role,
+        "matches":page,"total":total,"offset":offset,"next_offset":(next < total).then_some(next),
+        "scanned_sessions":result.scanned_sessions,"scan_truncated":result.scan_truncated,
+        "scope":"current_workspace","order":"session_updated_desc_then_message_asc"}),
+    )
 }
 
 pub(super) fn call(arguments: Value) -> Result<Value, String> {
@@ -1001,17 +1279,34 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
     {
         return Err("history expects an object; omit optional fields instead of null".into());
     }
-    let request: Request =
-        serde_json::from_value(arguments).map_err(|_| "expected a history list or read action")?;
+    let request: Request = serde_json::from_value(arguments)
+        .map_err(|_| "expected a history list, metadata, read or search action")?;
     let (offset, limit) = match &request {
-        Request::List { offset, limit } | Request::Read { offset, limit, .. } => {
-            (offset.unwrap_or(0), limit.unwrap_or(16))
-        }
+        Request::List { offset, limit }
+        | Request::Read { offset, limit, .. }
+        | Request::Search { offset, limit, .. } => (offset.unwrap_or(0), limit.unwrap_or(16)),
+        Request::Metadata { .. } => (0, 1),
     };
     if !(1..=64).contains(&limit) {
         return Err("history page limit must be in 1..=64".into());
     }
     match request {
+        Request::Metadata { id } => with(|history| history.metadata(&id)),
+        Request::Search {
+            query,
+            id,
+            role,
+            case_sensitive,
+            ..
+        } => {
+            let filter = SearchFilter {
+                query,
+                id,
+                role,
+                case_sensitive,
+            };
+            with(|history| search_page(history, &filter, offset, limit))
+        }
         Request::List { .. } => {
             let sessions = sessions()?;
             let total = sessions.len();
@@ -1071,7 +1366,7 @@ pub(super) fn tool() -> Value {
     let offset = json!({"type":"integer","minimum":0,"default":0});
     json!({
         "name":"ssmcp.ui.history",
-        "description":"Read this workspace's local, redacted conversation history. list returns recent session summaries; read returns versioned metadata and message pages. Pages are at most 64 KiB: follow next_offset. The open JSONL schema is ssmcp.conversation.v1 with system/user/assistant/tool roles and string content. This does not restore any external harness session, invoke a model, resend old user requirements, or expose saved agent credentials. The user chooses /resume locally to display and continue a past conversation. Only current-workspace histories are readable. At most 64 histories / 16 MiB are retained; each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
+        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries; metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
         "inputSchema":{"type":"object","oneOf":[
             {"type":"object","required":["action"],"additionalProperties":false,"properties":{
                 "action":{"const":"list"},"offset":offset,"limit":page
@@ -1080,6 +1375,15 @@ pub(super) fn tool() -> Value {
                 "action":{"const":"read"},
                 "id":{"type":"string","pattern":"^conversation_[0-9a-f]{32}$"},
                 "offset":offset,"limit":page
+            }},
+            {"type":"object","required":["action","id"],"additionalProperties":false,"properties":{
+                "action":{"const":"metadata"},"id":{"type":"string","pattern":"^conversation_[0-9a-f]{32}$"}
+            }},
+            {"type":"object","required":["action","query"],"additionalProperties":false,"properties":{
+                "action":{"const":"search"},"query":{"type":"string","minLength":1,"maxLength":256,"description":"Literal keyword or phrase; at most 256 UTF-8 bytes, not a regular expression."},
+                "id":{"type":"string","pattern":"^conversation_[0-9a-f]{32}$"},
+                "role":{"type":"string","enum":["system","user","assistant","tool"]},
+                "case_sensitive":{"type":"boolean","default":false},"offset":offset,"limit":page
             }}
         ]},
         "annotations":{"readOnlyHint":true,"destructiveHint":false}
@@ -1109,6 +1413,151 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn query(text: &str) -> SearchFilter {
+        SearchFilter {
+            query: text.into(),
+            id: None,
+            role: None,
+            case_sensitive: false,
+        }
+    }
+
+    #[test]
+    fn metadata_and_search_are_read_only_scoped_and_keep_source_positions() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        history
+            .record("user", "请修复登录，History search uses literal [A.*]")
+            .unwrap();
+        history
+            .record("assistant", "登录已修复，history preserved")
+            .unwrap();
+        history
+            .record("tool", "API_TOKEN=private_fixture_secret")
+            .unwrap();
+        let current = history.current().unwrap().unwrap();
+        let id = current.metadata.id.clone();
+        let path = temp
+            .0
+            .join("conversations")
+            .join(session_name(&id).unwrap());
+        let before = fs::read(&path).unwrap();
+        let metadata = history.metadata(&id).unwrap();
+        assert_eq!(metadata["metadata"]["id"], id);
+        assert_eq!(metadata["summary"]["message_count"], 3);
+        assert_eq!(metadata["summary"]["current"], true);
+        assert!(metadata.get("messages").is_none());
+
+        let result = history.search(&query("HISTORY")).unwrap();
+        assert_eq!(result.matches.len(), 2);
+        assert_eq!(result.matches[1].message_index, 1);
+        assert_eq!(result.matches[1].message_id, current.messages[1].id);
+        assert_eq!(result.matches[0].conversation_id, id);
+        assert_eq!(history.search(&query("[A.*]")).unwrap().matches.len(), 1);
+        assert!(history.search(&query("H.*ry")).unwrap().matches.is_empty());
+        assert_eq!(history.search(&query("登录")).unwrap().matches.len(), 2);
+        assert!(
+            history
+                .search(&query("private_fixture_secret"))
+                .unwrap()
+                .matches
+                .is_empty()
+        );
+
+        let mut filter = query("history");
+        filter.id = Some(id.clone());
+        filter.role = Some("assistant".into());
+        filter.case_sensitive = true;
+        assert_eq!(history.search(&filter).unwrap().matches.len(), 1);
+        filter.role = Some("user".into());
+        assert!(history.search(&filter).unwrap().matches.is_empty());
+
+        let other =
+            History::with_workspace(temp.0.join("conversations"), "/fixture/other".into()).unwrap();
+        assert!(other.search(&query("登录")).unwrap().matches.is_empty());
+        assert!(other.metadata(&id).is_err());
+        assert!(other.search(&filter).is_err());
+        assert_eq!(history.current().unwrap().unwrap(), current);
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn search_snippets_find_late_unicode_matches_and_paginate_within_budget() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        for n in 0..70 {
+            history
+                .record(
+                    "user",
+                    &format!(
+                        "{n} {}İSTANBUL 登录{}",
+                        "前文".repeat(250),
+                        "后文".repeat(250)
+                    ),
+                )
+                .unwrap();
+        }
+        let filter = query("i\u{307}stanbul 登录");
+        let first = search_page(&history, &filter, 0, 64).unwrap();
+        assert_eq!(first["total"], 70);
+        let hits = first["matches"].as_array().unwrap();
+        assert!(!hits.is_empty());
+        assert!(
+            hits.iter()
+                .all(|hit| hit["snippet"].as_str().unwrap().contains("İSTANBUL 登录"))
+        );
+        assert!(hits.iter().all(|hit| hit["snippet_truncated"] == true));
+        assert!(serde_json::to_vec(&first).unwrap().len() <= MAX_PAGE_BYTES);
+        let next = first["next_offset"].as_u64().unwrap() as usize;
+        assert_eq!(next, hits.len());
+        let second = search_page(&history, &filter, next, 64).unwrap();
+        assert_eq!(second["matches"][0]["message_index"], next);
+        assert!(serde_json::to_vec(&second).unwrap().len() <= MAX_PAGE_BYTES);
+        assert!(search_page(&history, &filter, 71, 1).is_err());
+        assert!(search_page(&history, &filter, 0, 0).is_err());
+        assert!(search_page(&history, &filter, 0, 65).is_err());
+    }
+
+    #[test]
+    fn search_bounds_manually_imported_files_and_reports_incomplete_scope() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        history.record("user", "bounded keyword").unwrap();
+        let mut conversation = history.current().unwrap().unwrap();
+        for _ in 0..MAX_SESSIONS {
+            conversation.metadata.id = random_id("conversation").unwrap();
+            history
+                .directory
+                .write_atomic(
+                    &session_name(&conversation.metadata.id).unwrap(),
+                    &History::encode(&conversation).unwrap(),
+                )
+                .unwrap();
+        }
+        let result = history.search(&query("keyword")).unwrap();
+        assert!(result.scan_truncated);
+        assert_eq!(result.scanned_sessions, MAX_SESSIONS);
+        assert_eq!(result.matches.len(), MAX_SESSIONS);
+    }
+
+    #[test]
+    fn search_rejects_bad_queries_paths_roles_and_schema_fields() {
+        for text in ["", "  \n", "bad\u{1b}query", &"x".repeat(257)] {
+            assert!(query(text).validate().is_err());
+        }
+        let mut filter = query("valid");
+        filter.id = Some("../outside".into());
+        assert!(filter.validate().is_err());
+        filter.id = None;
+        filter.role = Some("agent".into());
+        assert!(filter.validate().is_err());
+        assert!(call(json!({"action":"metadata","id":"conversation_00000000000000000000000000000000","limit":1})).is_err());
+        assert!(call(json!({"action":"search","query":"valid","id":null})).is_err());
+        let schema = tool();
+        assert_eq!(schema["annotations"]["readOnlyHint"], true);
+        assert_eq!(schema["inputSchema"]["oneOf"].as_array().unwrap().len(), 4);
     }
 
     #[test]
@@ -1365,6 +1814,23 @@ mod tests {
             .join("conversations")
             .join(session_name(&summary.id).unwrap());
         assert!(fs::metadata(path).unwrap().len() <= MAX_SESSION_BYTES as u64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transaction_lock_releases_while_an_inherited_descriptor_stays_open() {
+        let temp = Temporary::new();
+        let history = temp.history();
+        let lock = history.directory.lock().unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        let busy = Some("conversation storage is busy; retry shortly");
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(lock);
+        let next = history.directory.lock().unwrap();
+        drop(inherited);
+        assert_eq!(history.directory.lock().err().as_deref(), busy);
+        drop(next);
+        assert!(history.directory.lock().is_ok());
     }
 
     #[test]

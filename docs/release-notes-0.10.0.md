@@ -30,11 +30,11 @@ Windows 安装器默认验证或安装 Node.js 与 npm、固定版本的 `playwr
 
 | 库 | 固定版本 | 用途 |
 | --- | --- | --- |
-| [ztui](https://github.com/LIghtJUNction/ztui) | `ztui-core 0.1.0` | 终端布局、文本行与差分帧；Rust 库名仍为 `ztui` |
+| [ztui](https://github.com/LIghtJUNction/ztui) | `ztui-core 0.1.1` | 终端布局、文本行与差分帧；Rust 库名仍为 `ztui` |
 | [zharness](https://github.com/LIghtJUNction/zharness) | `0.5.0` | Extension v1 原生扩展接口 |
 | [zplugin](https://github.com/LIghtJUNction/zplugin) | `0.3.0` | 动态库加载与 ABI 校验 |
 
-三个库通过 Git 子模块固定到具体提交，不随子库分支自动漂移。ztui 保留独立历史、测试和可发布的 crate。应用版本递增不会自动递增这些库。[依赖与源码构建](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/dependencies.md)
+zharness 与 zplugin 通过 Git 子模块固定到具体提交；ztui-core 保留主线的普通源码目录及 0.1.1 版本。当前独立 ztui 仓库仍为 0.1.0，本轮保留已有 crate 版本，待版本对齐后再迁移。所有库的源码都由父仓库固定，不随外部库分支自动漂移，应用版本递增也不会自动递增这些库。[依赖与源码构建](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/dependencies.md)
 
 新增 `ssmcp.plugins.list`、`ssmcp.plugins.load`、`ssmcp.plugins.unload`。只有显式指定可信动态库路径后，才创建工作线程、校验扩展目录并注册 `plugins.<namespace>.<tool>`。工具保留原始输入/输出 schema 和结果字段，继续经过现有 Runtime hook、注册代际校验和输出归档。
 

@@ -2,13 +2,13 @@
 
 ssmcp 把终端绘制、原生扩展接口和动态库加载拆成三个独立 Rust 库。编译器将这些库连进客户端；它们本身不会启动模型、读取其他 Agent 的账号，或扫描机器上安装的 harness。外部 Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 仍遵循[显式加载](optional-harnesses.md)。
 
-| 子模块 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
+| 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|
-| `crates/ztui` | `ztui-core = 0.1.0`，Rust 库名 `ztui` | 现有终端布局、文本行和差分帧 | [ztui](https://github.com/LIghtJUNction/ztui) |
+| `crates/ztui` | `ztui-core = 0.1.1`，Rust 库名 `ztui` | 现有终端布局、文本行和差分帧 | [ztui](https://github.com/LIghtJUNction/ztui) |
 | `crates/zharness` | `zharness = 0.5.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
 | `crates/zplugin` | `zplugin = 0.3.0` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 
-目录中的 Git 提交由父仓库的 gitlink 固定；`.gitmodules` 只记录公开仓库地址。日常构建不会跟随子库的 `main` 自动更新。精确版本同时写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)。
+zharness 和 zplugin 的 Git 提交由父仓库的 gitlink 固定；`.gitmodules` 只记录这两个公开仓库地址。ztui-core 保留父仓库中的普通源码目录及主线已有的 0.1.1 版本；当前独立 ztui 仓库仍为 0.1.0，因此本轮不把它改成会降版的子模块。两份终端运行时源码、测试、示例和基准一致，后续版本对齐后再迁移其源码来源。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
 
 ## 获取与构建
 
@@ -28,7 +28,7 @@ GitHub 自动生成的源码压缩包不展开 Git 子模块。需要从源码�
 
 ## 独立修改与验收
 
-先在相应子库提交并推送修改，再在 ssmcp 更新该 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。
+更新 zharness 或 zplugin 时，先在相应子库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。ztui-core 目前直接修改父仓库内的源码目录，版本继续独立维护。
 
 ztui 保留为 ssmcp workspace 成员。zharness、zplugin 自带独立 workspace，父 workspace 显式排除其目录，并通过路径依赖使用它们。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。
 

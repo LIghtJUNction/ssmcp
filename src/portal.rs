@@ -4,6 +4,7 @@ mod commerce;
 mod dashboard;
 mod dashboard_view;
 mod guide;
+mod sessions;
 mod setup;
 pub(crate) mod store;
 #[cfg(test)]
@@ -40,7 +41,7 @@ use subtle::ConstantTimeEq;
 
 const COOKIE: &str = "__Host-ssmcp-portal";
 const LOGIN_TTL: Duration = Duration::from_secs(600);
-const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
+const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 const MAX_SESSIONS: usize = 4096;
 type DigestKey = [u8; 32];
 
@@ -56,6 +57,7 @@ pub struct Portal {
 
 #[derive(Default)]
 struct BrowserState {
+    persisted: Option<sessions::Sessions>,
     sessions: HashMap<DigestKey, Session>,
     pending: HashMap<DigestKey, Pending>,
     rates: HashMap<String, Rate>,
@@ -78,6 +80,14 @@ struct Rate {
 }
 
 impl BrowserState {
+    fn remove_session(&mut self, key: DigestKey) -> Result<Option<Session>, Problem> {
+        if let Some(persisted) = &mut self.persisted {
+            persisted.remove(key)?;
+        }
+        self.pending.retain(|_, pending| pending.browser != key);
+        Ok(self.sessions.remove(&key))
+    }
+
     fn prune(&mut self) {
         let now = Instant::now();
         self.sessions.retain(|_, s| s.expires > now);
@@ -262,10 +272,17 @@ fn set_cookie(response: &mut Response, value: &str, ttl: u64) {
 impl Portal {
     /// Opt-in durable portal storage. Startup fails if permissions, format or locking are unsafe.
     pub fn open(path: &Path) -> crate::Result<Self> {
+        let store = Store::open(path)?;
+        let persisted = sessions::Sessions::open(path)?;
+        let active = persisted.restore(crate::management::now());
         Ok(Self {
-            browser: Mutex::default(),
+            browser: Mutex::new(BrowserState {
+                sessions: active,
+                persisted: Some(persisted),
+                ..BrowserState::default()
+            }),
             setup: Mutex::default(),
-            store: Some(Arc::new(Mutex::new(Store::open(path)?))),
+            store: Some(Arc::new(Mutex::new(store))),
             credentials: Some(Arc::new(Mutex::new(crate::device::Credentials::open(
                 path,
             )?))),
@@ -298,6 +315,9 @@ impl Portal {
     /// Invalidate browser sessions after a durable ban; account guards also cover races.
     pub(crate) fn revoke_browser_sessions(&self, subject: &str) -> Result<(), Problem> {
         let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        if let Some(persisted) = &mut browser.persisted {
+            persisted.revoke(subject)?;
+        }
         browser
             .sessions
             .retain(|_, session| session.subject.as_deref() != Some(subject));
@@ -403,10 +423,45 @@ impl Portal {
         let raw = browser_cookie(headers).ok_or(Problem::Unauthorized)?;
         let key = digest(raw);
         let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        if let Some(persisted) = &browser.persisted {
+            persisted.healthy()?;
+        }
         browser.prune();
         let session = browser.sessions.get(&key).ok_or(Problem::Unauthorized)?;
         Ok((key, session.csrf.clone(), session.subject.clone()))
     }
+    async fn renew_session(&self, raw: &str) -> Result<Option<u64>, Problem> {
+        let key = digest(raw);
+        let subject = {
+            let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+            browser.prune();
+            browser
+                .sessions
+                .get(&key)
+                .and_then(|session| session.subject.clone())
+        };
+        let Some(subject) = subject else {
+            return Ok(None);
+        };
+        // Every renewal checks the durable account policy, including after restart.
+        self.storage(move |store| store.account(&subject)).await?;
+        let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        browser.prune();
+        if !browser.sessions.contains_key(&key) {
+            return Ok(None);
+        }
+        let Some(persisted) = &mut browser.persisted else {
+            return Ok(None);
+        };
+        let ttl = persisted.renew(key, crate::management::now())?;
+        if let Some(ttl) = ttl {
+            if let Some(session) = browser.sessions.get_mut(&key) {
+                session.expires = Instant::now() + Duration::from_secs(ttl);
+            }
+        }
+        Ok(ttl)
+    }
+
     fn verify(
         &self,
         headers: &HeaderMap,
@@ -436,6 +491,15 @@ impl Portal {
 pub fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .route("/", get(home))
+        .route(
+            "/favicon.svg",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "image/svg+xml")],
+                    include_str!("portal/favicon.svg"),
+                )
+            }),
+        )
         .route(
             "/portal.css",
             get(|| async {
@@ -493,6 +557,31 @@ pub fn routes() -> Router<Arc<Broker>> {
         .layer(middleware::map_response(security_headers))
 }
 
+/// Refresh authenticated browser pages after their handler succeeds. Static
+/// assets, failed requests, login rotation and logout never renew an old cookie.
+pub(crate) async fn renew_browser_session(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let raw = browser_cookie(request.headers()).map(str::to_owned);
+    let mut response = next.run(request).await;
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if html
+        && response.status().is_success()
+        && !response.headers().contains_key(header::SET_COOKIE)
+        && let Some(raw) = raw
+        && let Ok(Some(ttl)) = broker.portal.renew_session(&raw).await
+    {
+        set_cookie(&mut response, &raw, ttl);
+    }
+    response
+}
+
 async fn security_headers(mut response: Response) -> Response {
     let h = response.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -503,7 +592,7 @@ async fn security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -881,7 +970,7 @@ async fn finish_identity(
         let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
         browser.prune();
         // A logout/expired session during the upstream exchange must not recreate a login.
-        if browser.sessions.remove(&previous).is_none() {
+        if browser.remove_session(previous)?.is_none() {
             return Err(Problem::Unauthorized);
         }
         browser.pending.retain(|_, p| p.browser != previous);
@@ -911,6 +1000,22 @@ async fn finish_identity(
             .remove(&digest(&raw));
         return Err(error);
     }
+    {
+        let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
+        let session = browser
+            .sessions
+            .get(&digest(&raw))
+            .ok_or(Problem::Unauthorized)?;
+        let subject = session.subject.clone().ok_or(Problem::Unauthorized)?;
+        let csrf = session.csrf.clone();
+        if let Some(persisted) = &mut browser.persisted
+            && let Err(error) =
+                persisted.issue(digest(&raw), subject, csrf, crate::management::now())
+        {
+            browser.sessions.remove(&digest(&raw));
+            return Err(error);
+        }
+    }
     let mut response = Redirect::to("/#account").into_response();
     set_cookie(&mut response, &raw, SESSION_TTL.as_secs());
     Ok(response)
@@ -932,8 +1037,7 @@ async fn logout_inner(
         .record_audit(Some(&identity), AuditAction::Logout, AuditOutcome::Pending)
         .await?;
     let mut browser = broker.portal.browser.lock().map_err(|_| Problem::Storage)?;
-    browser.sessions.remove(&key);
-    browser.pending.retain(|_, p| p.browser != key);
+    browser.remove_session(key)?;
     let mut response = Redirect::to("/").into_response();
     set_cookie(&mut response, "", 0);
     Ok(response)
