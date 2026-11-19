@@ -87,6 +87,8 @@ pub(super) struct Conversation {
     editing: Option<String>,
     submitting: Option<(String, String)>,
     force_task: Option<listener::Task>,
+    #[cfg(test)]
+    wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     parked: Option<steering::SavedDraft>,
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
@@ -2433,8 +2435,8 @@ impl State {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if let Some(hint) = wait_hint { return hint; }
+                    if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Tasks {
