@@ -1,45 +1,8 @@
 //! Read-only account and monthly traffic status for the connected server.
 use super::{Api, Credential, Method, StatusCode, Url, Value, public_identity};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::client) enum Traffic {
-    Unknown,
-    Unlimited,
-    Remaining(u64),
-}
-
-impl Traffic {
-    fn from_reply(reply: &Value) -> Self {
-        let Some(traffic) = reply.get("traffic").and_then(Value::as_object) else {
-            return Self::Unknown;
-        };
-        match (traffic.get("limit_bytes"), traffic.get("remaining_bytes")) {
-            (Some(Value::Null), Some(Value::Null)) => Self::Unlimited,
-            (Some(limit), Some(remaining)) => match (limit.as_u64(), remaining.as_u64()) {
-                (Some(limit), Some(remaining)) if remaining <= limit => Self::Remaining(remaining),
-                _ => Self::Unknown,
-            },
-            _ => Self::Unknown,
-        }
-    }
-
-    fn label(&self) -> String {
-        match self {
-            Self::Unknown => "未提供".into(),
-            Self::Unlimited => "∞".into(),
-            Self::Remaining(0) => "0 GB".into(),
-            Self::Remaining(bytes) if *bytes < 10_000_000 => "<0.01 GB".into(),
-            Self::Remaining(bytes) => {
-                // Decimal GB, rounded down so the display never overstates available traffic.
-                format!(
-                    "{}.{:02} GB",
-                    bytes / 1_000_000_000,
-                    (bytes % 1_000_000_000) / 10_000_000
-                )
-            }
-        }
-    }
-}
+mod traffic;
+pub(in crate::client) use traffic::Traffic;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::client) enum Status {
@@ -135,29 +98,47 @@ impl Status {
         }
     }
 
-    pub(in crate::client) fn rows(&self) -> [String; 2] {
-        let (account, remaining) = match self {
-            Self::Loading => ("加载中…".into(), "加载中…".into()),
-            Self::SignedOut => ("未登录".into(), "未知".into()),
-            Self::Unavailable => ("暂不可用".into(), "未知".into()),
+    fn account_label(&self) -> String {
+        match self {
+            Self::Loading => "loading…".into(),
+            Self::SignedOut => "signed out".into(),
+            Self::Unavailable => "unavailable".into(),
             Self::Ready {
-                login,
-                username,
-                traffic,
-            } => {
-                let account = match username
-                    .as_deref()
-                    .filter(|username| *username != login.as_str())
-                {
-                    Some(username) => format!("{login} ({username})"),
-                    None => login.clone(),
-                };
-                (account, traffic.label())
-            }
+                login, username, ..
+            } => username
+                .as_deref()
+                .filter(|username| !username.is_empty())
+                .unwrap_or(login)
+                .to_owned(),
+        }
+    }
+
+    fn traffic(&self) -> &Traffic {
+        match self {
+            Self::Ready { traffic, .. } => traffic,
+            _ => &Traffic::Unknown,
+        }
+    }
+
+    /// This quota belongs to the saved login for the live origin, not its remote caller.
+    pub(in crate::client) fn rows(&self, width: u16) -> [String; 3] {
+        let width = width.saturating_sub(1);
+        let progress = if *self == Self::Loading {
+            "Quota loading…".into()
+        } else {
+            self.traffic().progress(width)
         };
         [
-            format!(" 账号  {account}"),
-            format!(" 本月剩余  {remaining}"),
+            format!(" Local {}", self.account_label()),
+            format!(" {progress}"),
+            format!(" {}", self.traffic().reset_label(width)),
+        ]
+    }
+
+    pub(in crate::client) fn compact_rows(&self) -> [String; 2] {
+        [
+            format!("Local {}", self.account_label()),
+            self.traffic().compact(),
         ]
     }
 }

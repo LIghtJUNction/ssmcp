@@ -596,7 +596,10 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     state.account = AccountStatus::Ready {
         login: "example".into(),
         username: None,
-        traffic: account_status::Traffic::Remaining(750_000_000),
+        traffic: account_status::Traffic::from_reply(&serde_json::json!({"traffic":{
+            "used_bytes":250_000_000,"limit_bytes":1_000_000_000,
+            "remaining_bytes":750_000_000,"reset_at":1_796_054_400u64,"utc_offset_minutes":480
+        }})),
     };
     state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
     state.log_message(
@@ -2009,9 +2012,9 @@ impl State {
     }
     fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
         let mut rows = Vec::new();
-        // Keep eight rows for the configured panels before reserving account space.
+        // The account, quota and reset share the existing guide footer space.
         if height >= 10 && width >= 20 {
-            for text in self.account.rows() {
+            for text in self.account.rows(width) {
                 let text = fit(&text, width);
                 let padded = format!(
                     "{text}{}",
@@ -2691,7 +2694,7 @@ mod tests {
     }
 
     #[test]
-    fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+    fn account_quota_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
         for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
             let mut ui = Ui {
                 color: false,
@@ -2702,23 +2705,47 @@ mod tests {
             let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             screen.process(&preview_bytes(&ui, 30, 120));
             let contents = screen.screen().contents();
-            assert!(contents.contains("账号  example"), "{layout:?}: {contents}");
+            assert!(contents.contains("Local example"), "{layout:?}: {contents}");
+            assert!(contents.contains("Max 1 GB"), "{layout:?}: {contents}");
             assert!(
-                contents.contains("本月剩余  0.75 GB"),
+                contents.contains("Reset 2026-12-01"),
                 "{layout:?}: {contents}"
             );
+            assert!(contents.contains('█'), "{layout:?}: {contents}");
             assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
             ui.sidebar = false;
             let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
             hidden.process(&preview_bytes(&ui, 30, 120));
             let contents = hidden.screen().contents();
             if layout == Layout::Chat {
-                assert!(contents.contains("账号  example"), "{contents}");
-                assert!(contents.contains("本月剩余  0.75 GB"), "{contents}");
+                assert!(contents.contains("Local example"), "{contents}");
+                assert!(contents.contains("Max 1 GB"), "{contents}");
+                assert!(contents.contains("Reset 12-01"), "{contents}");
             } else {
-                assert!(!contents.contains("账号"));
+                assert!(!contents.contains("Local example"));
             }
             assert!(!contents.contains("( o.o )"));
+        }
+    }
+
+    #[test]
+    fn account_quota_narrow_sidebar_keeps_capacity_reset_and_local_identity() {
+        for width in [20, 24, 30] {
+            let ui = Ui {
+                color: false,
+                layout: Layout::Chat,
+                sidebar: true,
+                sidebar_width: width,
+                ..Ui::default()
+            };
+            let mut screen = vt100::Parser::new(nonzero(30), nonzero(100), 0);
+            screen.process(&preview_bytes(&ui, 30, 100));
+            let contents = screen.screen().contents();
+            assert!(contents.contains("Local example"), "{width}: {contents}");
+            assert!(contents.contains("Max 1 GB"), "{width}: {contents}");
+            assert!(contents.contains("Reset 2026-12-01"), "{width}: {contents}");
+            assert!(contents.contains('█'), "{width}: {contents}");
+            assert!(!contents.contains("本月剩余") && !contents.contains("无限"));
         }
     }
 

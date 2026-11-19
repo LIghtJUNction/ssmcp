@@ -2683,12 +2683,12 @@ impl State {
                 let title = fit(&title, width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if g.left == g.cols {
-                    let [account, remaining] = self.account.rows();
-                    let full = format!("{} · {}", account.trim(), remaining.trim());
+                    let [account, quota] = self.account.compact_rows();
+                    let full = format!("{} · {}", account.trim(), quota.trim());
                     if full.width() <= available {
                         full
-                    } else if remaining.trim().width() <= available {
-                        remaining.trim().into()
+                    } else if quota.trim().width() <= available {
+                        quota.trim().into()
                     } else {
                         String::new()
                     }
