@@ -56,7 +56,7 @@ impl Runtime {
         if recent_limit > 16 || job_limit > 16 {
             return Err("recovery recent_limit and job_limit must be 0..=16".into());
         }
-        let workspace = self.workspace.root().to_string_lossy().into_owned();
+        let workspace = self.files.workspace_root().to_string_lossy().into_owned();
         let scope = workspace.clone();
         let (history, checkpoint) = tokio::task::spawn_blocking(move || {
             (
