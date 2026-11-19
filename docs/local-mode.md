@@ -6,17 +6,13 @@
 
 ## 运行前提
 
-本地模式同时承担客户端与 MCP 宿主的工作。除了 `ssmcp` 可执行文件，执行 `code_mode` 还需要已安装的原生 Node.js、Bubblewrap 的 `bwrap`、util-linux 的 `prlimit`，以及与当前版本匹配的 `code-mode.js`。这不是只复制一个 Rust 可执行文件就能完成的运行环境。
+本地模式同时承担客户端与 MCP 宿主的工作。除了 `ssmcp` 可执行文件，执行 `code_mode` 还需要已安装的原生 Node.js、Bubblewrap 的 `bwrap` 和 util-linux 的 `prlimit`。这些系统运行依赖不会被打包进客户端。
 
 `node`、`bwrap` 和 `prlimit` 通常从启动进程的 `PATH` 查找；Node 也可用 `SSMCP_NODE` 指向已经安装的原生可执行文件。程序会检查 Node 是否支持隔离运行所需的参数。Bubblewrap 必须能创建本次沙箱使用的用户与其他 Linux namespace；系统策略禁止该操作时，工具编排会报错，不会退回无沙箱执行。
 
-正式构建默认从安装前缀下的 `libexec/ssmcp/code-mode.js` 加载执行脚本；例如程序位于 `/usr/local/bin/ssmcp` 时，对应 `/usr/local/libexec/ssmcp/code-mode.js`。如果只有客户端安装包而缺少该脚本，需先准备同版本脚本，再以绝对路径明确指定：
+本地执行脚本 `code-mode.js` 与 Linux 客户端一起编译。每次启动本地宿主时，程序把这份同版本内容写入本次会话的 `0700` 私有目录，文件权限为 `0600`，再明确交给沙箱使用；退出时只清理自己创建且身份未被替换的文件。无需另外安装该脚本，也不依赖调试构建的源码回退路径。更新客户端后，已有本地会话继续使用各自的脚本，新会话使用新程序内的脚本。
 
-```sh
-SSMCP_CODE_MODE_RUNNER=/absolute/path/to/matching/code-mode.js ssmcp local
-```
-
-脚本路径必须存在。源码的调试构建可以回退到其编译时源码目录中的脚本，正式安装不能依赖该调试行为。单独的文件、命令与已安装工具仍有各自的运行前提；本地模式不会下载模型程序、安装上述依赖或修改系统 namespace 策略。以上查找与沙箱规则对应 [`runner_path` / `sandbox_command`](../src/code_mode.rs) 和 [Node 运行时检查](../src/program.rs)。
+远程 `ssmcpd` 的安装脚本路径与 `SSMCP_CODE_MODE_RUNNER` 配置保持原有语义；它们不会替代 `ssmcp local` 自己持有的脚本。单独的文件、命令与已安装工具仍有各自的运行前提。本地模式不会下载模型程序、安装上述依赖或修改系统 namespace 策略。实现见[本地宿主](../src/client/local.rs)、[沙箱执行器](../src/code_mode.rs)和 [Node 运行时检查](../src/program.rs)。
 
 ## 直接在本机连接
 
@@ -100,6 +96,8 @@ return await ui.wait(clientId, {
 ## 验证这个入口
 
 源码中的 `scripts/e2e_local.py` 使用已编译的真实 `ssmcp`、独立物理 PTY 和 `vt_snapshot` 解码器。它在临时 HOME/状态目录内运行，不读取开发者的账户，不启动模拟 GitHub 提供方，也不启动模型。
+
+夹具会将同一份客户端复制到没有脚本文件的临时安装前缀，并移除客户端环境中的 `SSMCP_CODE_MODE_RUNNER`。在真实阻塞等待期间，它检查存活 Bubblewrap 进程实际绑定的本地脚本路径及内容哈希，因此调试构建的源码回退不能替代此项验证。输入目录中的同版本 `code-mode.js` 只提供期望哈希；也可用 `--runner-sha256` 明确指定该哈希，运行中的客户端不读取这份外部参照文件。
 
 ```sh
 python3 scripts/e2e_local.py \

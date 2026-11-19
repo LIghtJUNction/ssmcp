@@ -161,7 +161,7 @@ class LocalFrontend(Frontend):
 
 
 class Local(Harness):
-    def __init__(self, directory, binary_dir, decoder, browser, browser_preview=None):
+    def __init__(self, directory, binary_dir, decoder, browser, runner_sha256, browser_preview=None):
         super().__init__(directory, binary_dir)
         self.decoder = decoder
         self.browser = browser
@@ -179,9 +179,18 @@ class Local(Harness):
         self.browser_cookie_verified = False
         self.http_timeout = 30
         self.wait_user_verified = False
+        self.expected_runner_sha256 = runner_sha256
+        self.bundled_runner_verified = False
+        self.runner_mount_observed = False
+        self.observed_runner_sha256 = None
+        self.standalone_prefix = directory / "standalone-prefix"
+        standalone_bin = self.standalone_prefix / "bin"
+        standalone_bin.mkdir(mode=0o700, parents=True)
+        self.executable = standalone_bin / "ssmcp"
+        shutil.copy2(binary_dir / "ssmcp", self.executable)
 
     def client_command(self, *, name="local-fixture", shell="/bin/sh", extra_args=()):
-        return [str(self.binary_dir / "ssmcp"), "local", "--name", name,
+        return [str(self.executable), "local", "--name", name,
                 "--shell", shell, "--no-watchdog", "--no-browser", *extra_args]
 
     def client_environment(self, label, **_kwargs):
@@ -196,6 +205,7 @@ class Local(Harness):
             "XDG_STATE_HOME": str(home / "state"), "XDG_CACHE_HOME": str(home / "cache"),
             "XDG_RUNTIME_DIR": str(home / "runtime")})
         for name in ("SSMCP_RELAY_SERVER", "SSMCP_RELAY_TOKEN", "SSMCP_RELAY_CAPABILITIES",
+                     "SSMCP_CODE_MODE_RUNNER",
                      "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP"):
             environment.pop(name, None)
         self.environments[label] = environment
@@ -227,7 +237,12 @@ class Local(Harness):
         config.write_text('[ui]\ndashboard=true\ncolor=false\nsidebar=false\nlayout="chat"\n')
         self.front = LocalFrontend(self, "local-fixture", config, self.decoder, rows=34, cols=120)
         self.client = self.front.process
-        version = subprocess.run([str(self.binary_dir / "ssmcp"), "--version"],
+        self.check(sha256(self.executable) == sha256(self.binary_dir / "ssmcp")
+                   and not (self.standalone_prefix / "libexec").exists()
+                   and not (self.executable.parent / "code-mode.js").exists()
+                   and "SSMCP_CODE_MODE_RUNNER" not in self.environments["local-fixture"],
+                   "the exact candidate runs from an isolated prefix without sidecar or runner override")
+        version = subprocess.run([str(self.executable), "--version"],
                                  env=self.environments["local-fixture"], cwd=self.workspace,
                                  capture_output=True, text=True, timeout=5, check=True).stdout.strip()
         if not re.fullmatch(r"ssmcp [0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.]+)?", version):
@@ -311,6 +326,8 @@ class Local(Harness):
                        "real Chromium accepts the scoped HttpOnly loopback cookie and submits it")
             self.browser_cookie_verified = True
             self.browser_details = reply["browser"]
+            self.check(reply.get("local_view_verified") is True,
+                       "the real local consent page explains this terminal and has no remote-account or portal navigation")
         else:
             path = "/oauth/authorize?" + urlencode(params)
             status, body, headers = self.oauth_request(path)
@@ -318,6 +335,9 @@ class Local(Harness):
             form.feed(body)
             self.check(status == 200 and "transaction_id" in form.fields and "login_code" in form.fields,
                        "local consent requests the connection code without a provider login")
+            self.check("/logs" in body and "连接本地会话" in body
+                       and "--allow" not in body and "href=\"/\"" not in body,
+                       "local consent uses the explicit local view without portal navigation")
             cookie_header = headers["set-cookie"]
             self.check(cookie_header.startswith("ssmcp-local-oauth=") and "; Secure;" not in cookie_header,
                        "HTTP local consent emits its separate cookie name")
@@ -439,6 +459,7 @@ class Local(Harness):
                 self.front.pump(0.05)
             self.check(active is not None and not future.done(),
                        "authenticated local wait blocks and reaches the actual native wait registry")
+            self.verify_bundled_runner()
             message = "SYNTHETIC_LOCAL_USER_WAIT_REPLY"
             self.front.send(b"\x15")
             self.front.send(message + "\r")
@@ -462,6 +483,42 @@ class Local(Harness):
                    "an empty bounded local wait times out and asks the caller to continue waiting")
         self.wait_user_verified = True
 
+    def verify_bundled_runner(self):
+        """Observe the live Bubblewrap bind, not just a file near the CLI.
+
+        Debug builds have a source-tree fallback. The live mount argument plus
+        matching bytes proves this request uses the session-owned bundled copy.
+        No command line or private path is emitted into the report.
+        """
+        commands = []
+        socket_path = None
+        for pid in owned_children(self.client.pid):
+            try:
+                arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            commands.append(arguments)
+            if len(arguments) >= 3 and arguments[1] == b"__local-relay":
+                socket_path = Path(os.fsdecode(arguments[2]))
+        self.check(socket_path is not None, "the active wait belongs to the owned local transport")
+        runner = socket_path.parent / "code-mode.js"
+        metadata = runner.lstat()
+        actual = sha256(runner)
+        self.check(runner.is_file() and not runner.is_symlink()
+                   and metadata.st_uid == os.geteuid() and metadata.st_mode & 0o777 == 0o600
+                   and actual == self.expected_runner_sha256,
+                   "the local host materializes the exact compiled runner in its private directory with mode 0600")
+        mounted = any(
+            Path(os.fsdecode(args[0])).name == "bwrap"
+            and any(args[index:index + 3] == [b"--ro-bind", os.fsencode(runner), b"/runner.js"]
+                    for index in range(len(args) - 2))
+            for args in commands if args and args[0]
+        )
+        self.check(mounted, "the live isolated worker binds the private bundled runner rather than a debug-source fallback")
+        self.bundled_runner_verified = True
+        self.runner_mount_observed = True
+        self.observed_runner_sha256 = actual
+
     def close(self):
         if self.callback is not None:
             self.callback.close()
@@ -478,6 +535,7 @@ def main():
     parser.add_argument("--browser", action="store_true", help="require real installed Chromium/Playwright for OAuth")
     parser.add_argument("--browser-preview", type=Path, help="save the isolated consent form before filling any login code")
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--runner-sha256", help="expected compiled runner hash; defaults to matching code-mode.js in --bin-dir")
     args = parser.parse_args()
     if args.browser_preview and not args.browser:
         parser.error("--browser-preview requires --browser")
@@ -488,6 +546,10 @@ def main():
     decoder = args.decoder or args.bin_dir / "vt_snapshot"
     if not decoder.is_file():
         parser.error("supply the already-built vt_snapshot with --decoder")
+    reference_runner = args.bin_dir / "code-mode.js"
+    runner_sha256 = args.runner_sha256 or (sha256(reference_runner) if reference_runner.is_file() else None)
+    if not runner_sha256 or not re.fullmatch(r"[0-9a-f]{64}", runner_sha256):
+        parser.error("supply --runner-sha256 or the matching code-mode.js reference in --bin-dir")
     started = time.monotonic()
     report = {"schema_version": 1, "status": "failed", "platform": "Linux",
               "transport": "real foreground CLI + private Unix socket + loopback HTTP + OAuth/PKCE + owned PTY",
@@ -499,9 +561,7 @@ def main():
                           "e2e_dashboard.py": sha256(Path(__file__).with_name("e2e_dashboard.py")),
                           "e2e_account_gateway.py": sha256(Path(__file__).with_name("e2e_account_gateway.py")),
                           "local_oauth_browser.mjs": sha256(Path(__file__).parent.parent / "tests/fixtures/local_oauth_browser.mjs")}}
-    runner = Path(os.environ.get("SSMCP_CODE_MODE_RUNNER", args.bin_dir / "code-mode.js"))
-    if runner.is_file():
-        report["binaries"]["code-mode.js"] = sha256(runner)
+    report["expected_compiled_runner_sha256"] = runner_sha256
 
     def interrupted(_signum, _frame):
         raise TimeoutError("local E2E interrupted; cleaning up owned resources")
@@ -510,7 +570,7 @@ def main():
     signal.signal(signal.SIGALRM, interrupted)
     signal.alarm(120)
     with tempfile.TemporaryDirectory(prefix="ssmcp-local-e2e-") as directory:
-        harness = Local(Path(directory), args.bin_dir, decoder, args.browser, args.browser_preview)
+        harness = Local(Path(directory), args.bin_dir, decoder, args.browser, runner_sha256, args.browser_preview)
         try:
             harness.run()
             report["status"] = "passed"
@@ -531,6 +591,9 @@ def main():
                 report.update(checks=harness.checks, browser_cookie_verified=harness.browser_cookie_verified,
                               cli_version=harness.cli_version, browser=harness.browser_details,
                               owned_client_exit_codes=[process.poll() for process in harness.processes],
+                              bundled_runner_verified=harness.bundled_runner_verified,
+                              runner_mount_observed=harness.runner_mount_observed,
+                              observed_runner_sha256=harness.observed_runner_sha256,
                               wait_user_verified=harness.wait_user_verified, cleanup_verified=harness.cleanup_verified,
                               duration_seconds=round(time.monotonic() - started, 3))
                 if args.browser_preview and args.browser_preview.is_file():

@@ -30,6 +30,12 @@ try {
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(authorize.href, { waitUntil: "domcontentloaded" });
+  const visible = await page.locator("body").innerText();
+  if (!visible.includes("连接本地会话") || !visible.includes("/logs")
+      || visible.includes("--allow") || visible.includes("使用会话允许的账号登录")
+      || visible.includes("返回账户门户") || await page.locator('a[href="/"]').count()) {
+    throw new Error("local authorization guidance or navigation");
+  }
   const cookies = await context.cookies(origin.href);
   const cookie = cookies.find((item) => item.name === "ssmcp-local-oauth");
   if (!cookie || cookie.secure || !cookie.httpOnly || cookie.sameSite !== "Lax") {
@@ -46,6 +52,7 @@ try {
   ]);
   process.stdout.write(JSON.stringify({
     callback_url: page.url(),
+    local_view_verified: true,
     cookie: { name: cookie.name, secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite },
     browser: { engine: "chromium", version: browser.version(), headless: true, isolated_context: true, node_version: process.version },
   }) + "\n");
