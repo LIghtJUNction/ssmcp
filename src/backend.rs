@@ -2,7 +2,6 @@
 pub mod cc;
 pub mod codex;
 pub mod events;
-pub(crate) mod lazy;
 pub mod opencode;
 pub mod pi;
 pub mod playwright;
@@ -14,9 +13,12 @@ pub mod shell;
 // the process capability plugin. Runtime dispatch crosses the zplugin ABI.
 pub use crate::runtime::native_plugins::process::Process as Backend;
 use crate::wire::Operation;
-use serde_json::{Value, json};
 #[cfg(test)]
-use crate::{runtime::native_plugins::process::diagnostic_changed, wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE}};
+use crate::{
+    runtime::native_plugins::process::diagnostic_changed,
+    wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE},
+};
+use serde_json::{Value, json};
 
 /// Convert a shell capability into a validated private wire operation.
 pub(crate) fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String> {
@@ -162,4 +164,3 @@ mod tests {
         assert!(page(&tools[1..], first["nextCursor"].as_str()).is_err());
     }
 }
-
