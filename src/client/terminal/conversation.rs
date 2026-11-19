@@ -2437,7 +2437,11 @@ impl State {
                 } else {
                     String::new()
                 };
-                let label = format!("{}{suffix}", self.conversation.canvas.label(g.left));
+                let label = if self.conversation.view == View::Activity && !self.help {
+                    format!("conversation{suffix}")
+                } else {
+                    format!("{}{suffix}", self.conversation.canvas.label(g.left))
+                };
                 if g.left < 32 {
                     self.chat_line(&format!("ssmcp · {label}"), PanelTone::Muted, g.left)
                 } else {
@@ -2482,7 +2486,7 @@ impl State {
                 } else {
                     String::new()
                 };
-                let gap = " ".repeat(available.saturating_sub(detail.width()));
+                let gap = "─".repeat(available.saturating_sub(detail.width()));
                 self.chat_line(
                     &format!("  {title}{gap}{detail}  "),
                     PanelTone::Muted,
@@ -2874,7 +2878,7 @@ mod tests {
             let screen = display(&mut state).screen().contents();
             let header = screen.lines().next().unwrap().trim();
             assert!(header.starts_with(expected), "{header}");
-            assert!(header.ends_with("conversation  2/8"), "{header}");
+            assert!(header.ends_with("conversation"), "{header}");
             assert!(!header.contains("agents") && !header.contains("code audit"));
         }
         state.set_context("/workspace/alpha-project", Some("Review uploads"));
@@ -4297,7 +4301,7 @@ mod tests {
                     .lines()
                     .next()
                     .unwrap()
-                    .contains("conversation  2/8")
+                    .contains("conversation")
             );
             assert!(conversation.contains("cargo test --lib"));
             assert!(!conversation.contains("A quieter workspace"));
@@ -4325,7 +4329,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap()
-                .contains("conversation  2/8")
+                .contains("conversation")
         );
         assert!(!conversation.contains("A quieter workspace"));
     }
