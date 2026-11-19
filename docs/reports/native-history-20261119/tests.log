@@ -1,0 +1,64 @@
+   Compiling ssmcp v0.9.4 (<checkout>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 21s
+     Running unittests src/lib.rs (<shared-target>/debug/build/ssmcp/727970303ec1af32/out/ssmcp-727970303ec1af32)
+
+running 56 tests
+test client::composer::tests::history_restores_draft_and_cursor_without_mutating_accepted_requests ... ok
+test client::git_status::tests::cached_history_tracks_the_exact_head_and_failed_reads_hide_old_commits ... ok
+test client::git_status::tests::parses_native_history_without_losing_hashes_times_or_terminal_safety ... ok
+test client::handoff::tests::empty_history_still_exports_pending_questions_and_excludes_answered_questions ... ok
+test client::composer::tests::history_is_bounded_by_both_entries_and_bytes ... ok
+test client::interface::history::tests::search_rejects_bad_queries_paths_roles_and_schema_fields ... ok
+test client::interface::history::tests::incomplete_or_newer_schema_files_are_not_resumed ... ok
+test client::interface::history::tests::active_history_cannot_be_resumed_by_another_client ... ok
+test client::interface::history::tests::history_is_scoped_to_workspace_and_rejects_path_traversal ... ok
+test client::interface::history::tests::current_export_reads_only_the_active_conversation_without_selecting_old_history ... ok
+test client::interface::messages::tests::restoring_copy_uses_assistant_history_without_replaying_user_answers ... ok
+test client::interface::history::tests::delivered_request_source_uses_original_identity_without_rewriting_history ... ok
+test client::interface::history::tests::private_storage_rejects_symlinks_hardlinks_fifo_and_shared_modes ... ok
+test client::interface::history::tests::records_versioned_jsonl_with_standard_roles_and_redacted_content ... ok
+test client::interface::history::tests::transaction_lock_releases_while_an_inherited_descriptor_stays_open ... ok
+test broker::management::tests::graceful_shutdown_drains_wire_disconnect_history_before_task_abort ... ok
+test client::interface::history::tests::identified_agent_replies_share_jsonl_without_duplicate_records ... ok
+test client::interface::history::tests::resume_restores_text_only_and_continues_the_selected_file ... ok
+test client::interface::history::tests::accepted_request_identity_deduplicates_retries_and_keeps_real_edits ... ok
+test client::interface::history::tests::metadata_and_search_are_read_only_scoped_and_keep_source_positions ... ok
+test client::audit_view::tests::retained_callers_survive_repeated_calls_until_history_eviction ... ok
+test client::steering::tests::headless_publish_ack_produces_one_history_record_without_consuming_ui_events ... ok
+test client::steering::tests::missing_history_reconciliation_ignores_stale_snapshots_and_pending_mutations ... ok
+test client::panel::tests::history_never_labels_a_different_head_or_missing_observation_as_current ... ok
+test history::tests::configuration_rejects_unbounded_retention_and_storage ... ok
+test commerce::pancake::reconcile::tests::empty_payment_history_requires_one_proven_canceled_order ... ok
+test history::tests::corrupted_or_truncated_journal_is_not_silently_discarded ... ok
+test history::tests::count_bound_compacts_and_survives_restart ... ok
+test client::panel::tests::git_history_follows_activity_and_adapts_to_available_rows ... ok
+test client::interface::questions::tests::retained_history_reclaims_completed_records_and_keeps_pending_ones ... ok
+test bridge::tests::cancellation_and_history_are_bounded ... ok
+test history::tests::pending_action_is_durable_before_completion ... ok
+test client::interface::tests::get_projection_excludes_large_unrelated_audit_history ... ok
+test history::tests::private_permissions_single_writer_and_links_are_enforced ... ok
+test history::tests::persistence_overwrites_client_cursors_and_filters_actor_or_owner_exactly ... ok
+test history::tests::restart_removes_owned_orphan_compactions_without_touching_unrelated_files ... ok
+test history::tests::retention_boundary_and_clock_order_do_not_resurrect_history ... ok
+test history::tests::schema_rejects_secrets_freeform_arguments_and_forged_identity_metadata ... ok
+test portal::dashboard::tests::history_cursor_rejects_identity_scope_and_duplicate_fields ... ok
+test observer::tests::observer_tail_is_bounded_and_reports_lost_history ... ok
+test history::tests::startup_query_write_and_idle_prune_physically_remove_expired_events ... ok
+test client::terminal::conversation::tests::editing_navigation_cannot_replace_a_taken_back_request_with_history ... ok
+test client::terminal::conversation::tests::wrapped_input_arrows_move_the_cursor_before_recalling_history ... ok
+test client::terminal::tests::appearance_resizes_preserve_history_and_render_rgb_defaults ... ok
+test client::interface::history::tests::search_bounds_manually_imported_files_and_reports_incomplete_scope ... ok
+test client::audit_view::tests::history_is_bounded_without_splitting_utf8 ... ok
+test client::git_status::tests::native_history_is_bounded_read_only_and_pinned_across_checkouts ... ok
+test client::interface::history::tests::retention_keeps_active_history_and_bounds_closed_sessions ... ok
+test code_mode::tests::history_helpers_route_metadata_search_and_reject_action_overrides ... ok
+test client::handoff::tests::export_is_bounded_and_retains_recent_history_with_explicit_omissions ... ok
+test client::steering::tests::trimmed_server_history_marks_requests_uncertain_without_replaying ... ok
+test client::interface::history::tests::search_snippets_find_late_unicode_matches_and_paginate_within_budget ... ok
+test backend::shell::tests::failed_start_preserves_the_full_retained_history ... ok
+test history::tests::journal_byte_bound_reclaims_a_batch_before_appending ... ok
+test client::interface::history::tests::per_session_budget_discards_old_messages_with_an_explicit_count ... ok
+test bridge::tests::failed_cleanup_stays_visible_survives_history_eviction_and_can_be_retried ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 6.00s
+
