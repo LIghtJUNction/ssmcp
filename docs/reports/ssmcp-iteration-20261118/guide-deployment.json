@@ -1,0 +1,47 @@
+{
+  "schema": "ssmcp.static-guide-deployment.v1",
+  "created_at_utc": "2026-11-18T14:15:49.224442+00:00",
+  "source_commit": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+  "baseline_sha256": "43b24d9bb201c642e25d84b563929e2d4026fccdfd2c8caa396266fde2196b70",
+  "candidate_sha256": "c558813127c12f1c37912f4f8e0e1f9706e606f5155d94b03b67ba0136c036fc",
+  "assets": [
+    {
+      "name": "index.html",
+      "bytes": 9730,
+      "sha256": "cbae275fa92818ac5239f96566f00684d605b45b219a273abd97b6f96d51bc2e"
+    },
+    {
+      "name": "en.html",
+      "bytes": 9730,
+      "sha256": "cbae275fa92818ac5239f96566f00684d605b45b219a273abd97b6f96d51bc2e"
+    },
+    {
+      "name": "zh.html",
+      "bytes": 9544,
+      "sha256": "ee6fcd5d9d57665134cfced7d6e18c510b9e3b20ec208ac9543622f79bd5af8a"
+    },
+    {
+      "name": "style.css",
+      "bytes": 4974,
+      "sha256": "345b07c68fa2ce2eaebf5e212d02c1d3083507f558963dacb840097c79cd28af"
+    }
+  ],
+  "state": "reloaded_v2",
+  "relay_action": "none",
+  "config_sha256": "c558813127c12f1c37912f4f8e0e1f9706e606f5155d94b03b67ba0136c036fc",
+  "no_remote_backup_files_created": true,
+  "main_processes_unchanged": true,
+  "header_patch": {
+    "previous_sha256": "a9e05b8b4ba49aa44f57b5d4308b7406306b2f5d7e80e0e3843762421d0e3218",
+    "new_sha256": "c558813127c12f1c37912f4f8e0e1f9706e606f5155d94b03b67ba0136c036fc",
+    "main_processes_unchanged": true,
+    "finished_at_utc": "2026-11-18T14:30:24.519510+00:00",
+    "change": "charset_types text/css in exact /guide/style.css location"
+  },
+  "raw_receipt_sha256": "6fb98435a923f67b9c9dd57d3c593761c1684d197b5190194bb5ede78de3f998",
+  "public_urls": [
+    "https://ssmcp.lmm.best/guide/",
+    "https://ssmcp.lmm.best/guide/en",
+    "https://ssmcp.lmm.best/guide/zh"
+  ]
+}

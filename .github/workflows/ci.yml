@@ -44,6 +44,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable action
         with:
@@ -96,9 +97,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - run: cargo test --workspace --locked
+      - name: Build the explicit native plugin fixture
+        run: cargo build --example native_plugin_fixture --locked
+      - name: Exercise the native plugin through Runtime
+        run: cargo test --lib --locked runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact
       - name: Exercise system Node.js and bubblewrap
         run: |
           cargo test --locked --lib code_mode::tests -- --include-ignored
+          cargo test --locked --test server_runtime -- --include-ignored
           cargo test --locked --test two_tools -- --include-ignored
           cargo test --locked --test workspace_bridge -- --ignored --test-threads=1
           cargo test --locked --test context_helpers -- --ignored --test-threads=1
@@ -213,6 +219,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -223,6 +230,10 @@ jobs:
           components: clippy
       - run: cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings
       - run: cargo test --locked --lib --bin ssmcp --test release_client
+      - name: Build the explicit native plugin fixture
+        run: cargo build --example native_plugin_fixture --locked
+      - name: Exercise the native plugin through Runtime
+        run: cargo test --lib --locked runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact
       - name: Check and test the zero-dependency TUI primitives
         run: |
           cargo clippy --locked -p ztui-core --all-targets -- -D warnings

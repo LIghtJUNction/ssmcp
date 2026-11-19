@@ -268,7 +268,7 @@ impl Default for Ui {
             pet: pet::Pet::default(),
             layout: Layout::default(),
             log_height_percent: 60,
-            sidebar: true,
+            sidebar: false,
             sidebar_width: 37,
             panels: vec![
                 Panel::Agents,
@@ -377,6 +377,22 @@ impl Ui {
         } else {
             color_code(&self.colors.background, true).unwrap_or_else(|| "49".into())
         }
+    }
+
+    /// A quiet input surface; explicit background overrides remain authoritative.
+    pub(crate) fn input_background(&self) -> String {
+        if !self.colors.background.is_empty() {
+            return self.background();
+        }
+        match self.theme {
+            Theme::Dark => "48;2;44;46;50",
+            Theme::CodexDark => "48;2;41;44;50",
+            Theme::Nord => "48;2;59;66;82",
+            Theme::Solarized => "48;2;7;54;66",
+            Theme::Light => "48;2;241;243;244",
+            Theme::Minimal => return self.background(),
+        }
+        .into()
     }
 
     pub(crate) fn to_toml(&self) -> Result<String, String> {
@@ -531,7 +547,7 @@ mod tests {
     #[test]
     fn partial_patch_preserves_other_colors_and_rejects_invalid_data() {
         let old = Ui::default()
-            .merge_json(json!({"colors":{"accent":"#123456"}}))
+            .merge_json(json!({"colors":{"accent":"#123456"},"sidebar":true}))
             .unwrap();
         let new = old
             .merge_json(json!({"colors":{"background":"black"},"sidebar":false}))
