@@ -503,6 +503,24 @@ impl Manager {
         Ok(())
     }
 
+    fn take_back_latest(&mut self) -> Result<Option<String>, String> {
+        let Some(record) = self
+            .outbox
+            .records
+            .iter()
+            .rev()
+            .find(|record| record.message.state == SteeringState::Queued)
+        else {
+            return Ok(None);
+        };
+        if record.pending.is_some() {
+            return Err("Waiting for queue confirmation · your draft is preserved".into());
+        }
+        let id = record.message.id.clone();
+        self.take_back(&id)?;
+        Ok(Some(id))
+    }
+
     fn take_back(&mut self, id: &str) -> Result<(), String> {
         self.mutable()?;
         let index = self.index(id)?;
@@ -1236,6 +1254,9 @@ pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String>
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
     with(|manager| manager.publish_edit(id, text, target))
 }
+pub(super) fn take_back_latest() -> Result<Option<String>, String> {
+    with(|manager| manager.take_back_latest())
+}
 pub(super) fn take_back(id: &str) -> Result<(), String> {
     with(|manager| manager.take_back(id))
 }
@@ -1942,6 +1963,139 @@ mod tests {
     }
 
     #[test]
+    fn latest_takeback_reclaims_only_the_latest_unsent_request() {
+        let mut manager = Manager::default();
+        let first = manager.submit("keep queued", None).unwrap();
+        let latest = manager.submit("edit this", None).unwrap();
+        let cancelled = manager.submit("cancelled", None).unwrap();
+        manager.cancel(&cancelled).unwrap();
+        assert_eq!(manager.take_back_latest().unwrap(), Some(latest.clone()));
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: latest.clone(),
+                text: "edit this".into()
+            })
+        );
+        assert_eq!(manager.snapshot()["queue"][0]["id"], first);
+        assert_eq!(manager.snapshot()["queue"][0]["status"], "offline");
+        assert_eq!(manager.snapshot()["queue"][1]["status"], "editing");
+        assert_eq!(manager.snapshot()["queue"][2]["status"], "cancelled");
+        assert!(manager.requests.is_empty());
+    }
+
+    #[test]
+    fn latest_takeback_waits_for_publication_and_recall_acknowledgements() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let first = publish(&mut manager, &mut receiver, "keep queued", None);
+        let latest = manager.submit("take back", None).unwrap();
+        assert!(
+            manager
+                .take_back_latest()
+                .unwrap_err()
+                .contains("confirmation")
+        );
+        assert!(manager.events.is_empty());
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { message_id, .. } if message_id == latest)
+        );
+        assert!(receiver.try_recv().is_err());
+        let mut message = manager.outbox.records.last().unwrap().message.clone();
+        message.revision = 1;
+        manager
+            .reply(
+                publish_id,
+                Ok(snapshot_for(
+                    "room_one",
+                    2,
+                    vec![first.clone(), message.clone()],
+                )),
+            )
+            .unwrap();
+        assert!(
+            matches!(manager.events.pop_front(), Some(UiEvent::Accepted { id, .. }) if id == latest)
+        );
+        assert_eq!(manager.take_back_latest().unwrap(), Some(latest.clone()));
+        assert!(
+            manager.events.is_empty(),
+            "the UI must wait for the takeback ACK"
+        );
+        assert!(
+            manager.take_back_latest().is_err(),
+            "repeated Up cannot reclaim another item"
+        );
+        let (takeback_id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Takeback { message_id, expected_revision: 1, .. } if message_id == latest)
+        );
+        assert!(receiver.try_recv().is_err());
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(
+                takeback_id,
+                Ok(snapshot_for("room_one", 3, vec![first.clone(), message])),
+            )
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: latest,
+                text: "take back".into()
+            })
+        );
+        assert_eq!(manager.outbox.records[0].message, first);
+    }
+
+    #[test]
+    fn latest_takeback_disconnect_keeps_the_request_and_requires_confirmation() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message = publish(&mut manager, &mut receiver, "keep this request", None);
+        assert_eq!(
+            manager.take_back_latest().unwrap(),
+            Some(message.id.clone())
+        );
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(request, SteeringCommand::Takeback { .. }));
+        manager.disconnect();
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(manager.outbox.records[0].message, message);
+        assert!(manager.outbox.records[0].uncertain);
+        assert!(manager.take_back_latest().is_err());
+        assert!(
+            manager
+                .events
+                .iter()
+                .all(|event| !matches!(event, UiEvent::Editable { .. }))
+        );
+    }
+
+    #[test]
+    fn latest_takeback_never_skips_uncertain_or_retarget_required_input() {
+        let mut manager = Manager::default();
+        manager.submit("older draft", None).unwrap();
+        manager.submit("latest draft", None).unwrap();
+        manager.outbox.records[1].uncertain = true;
+        assert!(manager.take_back_latest().is_err());
+        manager.outbox.records[1].uncertain = false;
+        manager.outbox.records[1].retarget_required = true;
+        assert!(manager.take_back_latest().is_err());
+        assert!(manager.events.is_empty());
+        assert!(
+            manager
+                .outbox
+                .records
+                .iter()
+                .all(|record| record.message.state == SteeringState::Queued)
+        );
+    }
+
+    #[test]
     fn enqueue_ack_and_edit_use_the_same_message_and_expected_revision() {
         let mut manager = Manager::default();
         let mut receiver = manager.connect("room_one", 7);
@@ -2006,7 +2160,10 @@ mod tests {
         let mut receiver = manager.connect("room_one", 7);
         ready(&mut manager, &mut receiver, "room_one");
         let mut message = publish(&mut manager, &mut receiver, "one request", None);
-        manager.take_back(&message.id).unwrap();
+        assert_eq!(
+            manager.take_back_latest().unwrap(),
+            Some(message.id.clone())
+        );
         let (id, _) = command(&mut manager, &mut receiver);
         manager
             .reply(
