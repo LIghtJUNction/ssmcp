@@ -2290,6 +2290,21 @@ impl State {
         }
     }
 
+    fn chat_update_notice(&self) -> Option<&str> {
+        if self.help
+            || self.selection
+            || self.conversation.logs_open
+            || self.conversation.view != View::Activity
+            || self.conversation.content_focus
+            || !self.conversation.composer.is_empty()
+            || self.chat_menu_visible()
+            || self.conversation.composer.completion_loading()
+        {
+            return None;
+        }
+        self.update_notice.as_deref()
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
@@ -2393,13 +2408,15 @@ impl State {
             let line = if g.rows >= 3 && index == g.rows - 1 {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
-                let priority_hint = self.notice.is_some() || scroll_hint.is_some();
+                let update_hint = self.chat_update_notice().map(str::to_owned);
+                let priority_hint =
+                    self.notice.is_some() || scroll_hint.is_some() || update_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
                     PanelTone::Muted
                 };
-                let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
+                let hint = self.notice.clone().or(scroll_hint).or(update_hint).unwrap_or_else(|| {
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
@@ -4424,6 +4441,87 @@ mod tests {
         );
         assert_eq!(state.conversation.composer.text(), "新的要求");
     }
+
+    #[test]
+    fn update_notice_is_visible_in_idle_chat_without_editing_state() {
+        for width in [24, 60, 120] {
+            let mut state = preview(30, width);
+            state.conversation.composer.set_text("");
+            state.conversation.content_focus = false;
+            state.conversation.view = View::Activity;
+            state.conversation.target = Some("example-builder".into());
+            state.events.latest();
+            state.update_notice = Some("ssmcp update · v1.2.4 available".into());
+            let canvas = state.conversation.canvas.snapshot();
+            let shown = display(&mut state).screen().contents();
+            assert!(shown.contains("ssmcp update"), "{width}: {shown}");
+            assert!(state.conversation.composer.is_empty());
+            assert_eq!(
+                state.conversation.target.as_deref(),
+                Some("example-builder")
+            );
+            assert_eq!(state.conversation.canvas.snapshot(), canvas);
+        }
+    }
+
+    #[test]
+    fn update_notice_does_not_replace_active_chat_operations() {
+        let message = "ssmcp update · v1.2.4 available";
+        for view in [
+            View::Queue,
+            View::Tasks,
+            View::History,
+            View::Questions,
+            View::Agents,
+            View::Audit,
+            View::Logs,
+        ] {
+            let mut state = preview(30, 120);
+            state.conversation.view = view;
+            state.conversation.content_focus = true;
+            let before = state.chat_frame(Instant::now()).rows.pop().unwrap();
+            state.update_notice = Some(message.into());
+            let after = state.chat_frame(Instant::now()).rows.pop().unwrap();
+            assert_eq!(after, before, "{view:?}");
+            assert!(!after.contains("ssmcp update"));
+        }
+        for operation in ["draft", "help", "notice", "logs", "menu"] {
+            let mut state = preview(30, 120);
+            match operation {
+                "draft" => {
+                    state.conversation.composer.set_text("unsent\nrequest");
+                }
+                "help" => state.help = true,
+                "notice" => state.notice = Some("Paste rejected".into()),
+                "logs" => state.logs_open(),
+                "menu" => {
+                    input(&mut state, b"/");
+                }
+                _ => unreachable!(),
+            }
+            let draft = state.conversation.composer.text().to_owned();
+            let cursor = state.conversation.composer.cursor();
+            let before = state.chat_frame(Instant::now()).rows.pop().unwrap();
+            state.update_notice = Some(message.into());
+            let after = state.chat_frame(Instant::now()).rows.pop().unwrap();
+            assert_eq!(after, before, "{operation}");
+            assert!(!after.contains("ssmcp update"));
+            assert_eq!(state.conversation.composer.text(), draft);
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+        }
+        let mut state = preview(30, 120);
+        state.update_notice = Some(message.into());
+        for index in 0..80 {
+            let text = format!("retained update-test event {index}");
+            state.log_message("user", &text, format!("\n[USER] {text}\n").as_bytes());
+        }
+        display(&mut state);
+        input(&mut state, b"\x1b[1;5H");
+        let shown = display(&mut state).screen().contents();
+        assert!(shown.contains("Ctrl+End"));
+        assert!(!shown.contains("ssmcp update"));
+    }
+
     #[test]
     fn scrolling_shows_return_hint_and_control_end_preserves_the_draft() {
         for end in [b"\x1b[1;5F".as_slice(), b"\x1b[4;5~", b"\x1b[8;5~"] {

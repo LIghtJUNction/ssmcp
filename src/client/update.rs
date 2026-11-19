@@ -1,4 +1,4 @@
-//! Explicit self-update through the bundled, checksum-verifying installers.
+//! Cached update notices and explicit, checksum-verified self-update.
 use std::{
     cmp::Ordering,
     ffi::OsString,
@@ -104,6 +104,190 @@ async fn latest_release(client: &reqwest::Client, url: &str) -> crate::Result<Ve
         body.extend_from_slice(&chunk);
     }
     release_version(&body)
+}
+
+const NOTICE_TTL: u64 = 24 * 60 * 60;
+const NOTICE_BACKOFF: u64 = 60 * 60;
+const NOTICE_CACHE_LIMIT: u64 = 4096;
+const NOTICE_CACHE_FILE: &str = "release.json";
+static NOTICE_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct NoticeCache {
+    schema: u8,
+    checked_at: u64,
+    succeeded: bool,
+    latest: Option<String>,
+}
+
+struct NoticeCheck {
+    directory: super::interface::history::SafeDirectory,
+    _lock: super::interface::history::HistoryLock,
+    previous: Option<Version>,
+}
+
+enum NoticePreparation {
+    Cached(Option<Version>),
+    Check(NoticeCheck),
+}
+
+fn notice_cache_directory() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .map(|path| path.join("ssmcp/cache/update"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .map(|path| path.join(".cache"))
+            })
+            .map(|path| path.join("ssmcp/update"))
+    }
+}
+
+fn read_notice_cache(
+    directory: &super::interface::history::SafeDirectory,
+    now: u64,
+) -> Option<NoticeCache> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    directory
+        .open(NOTICE_CACHE_FILE, false, false, false)
+        .ok()?
+        .take(NOTICE_CACHE_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > NOTICE_CACHE_LIMIT {
+        return None;
+    }
+    let cache: NoticeCache = serde_json::from_slice(&bytes).ok()?;
+    if cache.schema != 1
+        || cache.checked_at > now
+        || (cache.succeeded && cache.latest.is_none())
+        || cache
+            .latest
+            .as_ref()
+            .is_some_and(|tag| Version::parse(tag).is_err())
+    {
+        return None;
+    }
+    Some(cache)
+}
+
+fn write_notice_cache(
+    directory: &super::interface::history::SafeDirectory,
+    now: u64,
+    succeeded: bool,
+    latest: Option<Version>,
+) -> Option<()> {
+    let bytes = serde_json::to_vec(&NoticeCache {
+        schema: 1,
+        checked_at: now,
+        succeeded,
+        latest: latest.map(Version::tag),
+    })
+    .ok()?;
+    directory.write_atomic(NOTICE_CACHE_FILE, &bytes).ok()
+}
+
+fn prepare_notice(directory: PathBuf, now: u64) -> Option<NoticePreparation> {
+    let directory = super::interface::history::SafeDirectory::at(directory).ok()?;
+    // This lock is nonblocking. Another process checking updates is a reason to
+    // skip this optional notice, never to delay an interactive session.
+    let lock = directory.lock().ok()?;
+    let cache = read_notice_cache(&directory, now);
+    let previous = cache
+        .as_ref()
+        .and_then(|cache| cache.latest.as_deref())
+        .and_then(|tag| Version::parse(tag).ok());
+    if cache.as_ref().is_some_and(|cache| {
+        now - cache.checked_at
+            < if cache.succeeded {
+                NOTICE_TTL
+            } else {
+                NOTICE_BACKOFF
+            }
+    }) {
+        return Some(NoticePreparation::Cached(previous));
+    }
+    // Persist the attempt before networking. Timeout, cancellation or process
+    // exit still leave a short backoff instead of a request on every reconnect.
+    write_notice_cache(&directory, now, false, previous)?;
+    Some(NoticePreparation::Check(NoticeCheck {
+        directory,
+        _lock: lock,
+        previous,
+    }))
+}
+
+fn available_text(current: Version, latest: Option<Version>) -> Option<String> {
+    latest.filter(|latest| *latest > current).map(|latest| {
+        // Keep the command first so a narrow footer does not hide the action.
+        format!("ssmcp update · {} available", latest.tag())
+    })
+}
+
+async fn notice_at(
+    client: reqwest::Client,
+    url: &str,
+    directory: PathBuf,
+    current: Version,
+    now: u64,
+) -> Option<String> {
+    let prepared = tokio::task::spawn_blocking(move || prepare_notice(directory, now))
+        .await
+        .ok()??;
+    let check = match prepared {
+        NoticePreparation::Cached(latest) => return available_text(current, latest),
+        NoticePreparation::Check(check) => check,
+    };
+    // This request belongs to the caller's future: aborting the Session probe
+    // drops it and its client. No detached request or installer is spawned.
+    let result = latest_release(&client, url).await;
+    let succeeded = result.is_ok();
+    let latest = result.ok().or(check.previous);
+    let notice = available_text(current, latest);
+    let _ = tokio::task::spawn_blocking(move || {
+        let owned = check;
+        write_notice_cache(&owned.directory, now, succeeded, latest)
+    })
+    .await;
+    notice
+}
+
+pub(super) async fn available_notice() -> Option<String> {
+    use std::sync::atomic::Ordering;
+    if NOTICE_SHOWN.load(Ordering::Acquire) {
+        return None;
+    }
+    let current = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    let directory = notice_cache_directory()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
+        .pool_max_idle_per_host(0)
+        .build()
+        .ok()?;
+    notice_at(client, API, directory, current, now).await
+}
+
+pub(super) fn mark_notice_shown() -> bool {
+    !NOTICE_SHOWN.swap(true, std::sync::atomic::Ordering::AcqRel)
 }
 
 fn package_manager_hint(executable: &Path, cargo_home: Option<&Path>) -> Option<&'static str> {
@@ -349,6 +533,220 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         path
     }
+
+    struct NoticeServer {
+        root: PathBuf,
+        url: String,
+        requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        worker: tokio::task::JoinHandle<()>,
+    }
+    impl NoticeServer {
+        async fn start(status: &str, body: &str) -> Self {
+            use std::sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(AtomicUsize::new(0));
+            let count = requests.clone();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let worker = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0; 1024];
+                    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        let size = stream.read(&mut buffer).await.unwrap();
+                        if size == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..size]);
+                        assert!(request.len() <= 8192);
+                    }
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            });
+            Self {
+                root: temporary(),
+                url,
+                requests,
+                worker,
+            }
+        }
+        fn directory(&self) -> PathBuf {
+            self.root.join("cache")
+        }
+        fn hits(&self) -> usize {
+            self.requests.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn client(&self) -> reqwest::Client {
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_millis(500))
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap()
+        }
+        async fn check(&self, current: &str, now: u64) -> Option<String> {
+            notice_at(self.client(), &self.url, self.directory(), v(current), now).await
+        }
+    }
+    impl Drop for NoticeServer {
+        fn drop(&mut self) {
+            self.worker.abort();
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+    const NOTICE_RELEASE: &str = r#"{"tag_name":"v1.2.4","draft":false,"prerelease":false}"#;
+
+    #[tokio::test]
+    async fn notice_cache_only_announces_newer_versions_and_refreshes_after_a_day() {
+        let fixture = NoticeServer::start("200 OK", NOTICE_RELEASE).await;
+        let expected = Some("ssmcp update · v1.2.4 available".to_owned());
+        assert_eq!(fixture.check("1.2.3", 1000).await, expected);
+        assert_eq!(fixture.hits(), 1);
+        assert_eq!(fixture.check("1.2.3", 1001).await, expected);
+        assert_eq!(fixture.check("1.2.4", 1001).await, None);
+        assert_eq!(fixture.check("2.0.0", 1001).await, None);
+        assert_eq!(
+            fixture.check("1.2.3", 1000 + NOTICE_TTL - 1).await,
+            expected
+        );
+        assert_eq!(fixture.hits(), 1, "a fresh cache never contacts the server");
+        assert_eq!(fixture.check("1.2.3", 1000 + NOTICE_TTL).await, expected);
+        assert_eq!(fixture.hits(), 2);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = fixture.directory().join(NOTICE_CACHE_FILE);
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn notice_failures_back_off_without_losing_a_known_newer_release() {
+        let failure = NoticeServer::start("503 Unavailable", "offline").await;
+        assert_eq!(failure.check("1.2.3", 1000).await, None);
+        assert_eq!(
+            failure.check("1.2.3", 1000 + NOTICE_BACKOFF - 1).await,
+            None
+        );
+        assert_eq!(failure.hits(), 1);
+        assert_eq!(failure.check("1.2.3", 1000 + NOTICE_BACKOFF).await, None);
+        assert_eq!(failure.hits(), 2);
+        let directory =
+            super::super::interface::history::SafeDirectory::at(failure.directory()).unwrap();
+        write_notice_cache(&directory, 1000, true, Some(v("1.2.4"))).unwrap();
+        let expected = Some("ssmcp update · v1.2.4 available".to_owned());
+        assert_eq!(failure.check("1.2.3", 1000 + NOTICE_TTL).await, expected);
+        assert_eq!(failure.hits(), 3);
+        assert_eq!(failure.check("1.2.3", 1001 + NOTICE_TTL).await, expected);
+        assert_eq!(failure.hits(), 3);
+    }
+
+    #[tokio::test]
+    async fn notice_revalidates_corrupt_oversized_and_future_caches() {
+        for content in [
+            b"not JSON".to_vec(),
+            vec![b'x'; NOTICE_CACHE_LIMIT as usize + 1],
+            br#"{"schema":1,"checked_at":1001,"succeeded":true,"latest":"v9.9.9"}"#.to_vec(),
+            br#"{"schema":1,"checked_at":1000,"succeeded":true,"latest":"v9.9.9\u001b[31m"}"#
+                .to_vec(),
+            br#"{"schema":1,"checked_at":1000,"succeeded":true,"latest":null}"#.to_vec(),
+        ] {
+            let fixture = NoticeServer::start("200 OK", NOTICE_RELEASE).await;
+            let directory =
+                super::super::interface::history::SafeDirectory::at(fixture.directory()).unwrap();
+            directory.write_atomic(NOTICE_CACHE_FILE, &content).unwrap();
+            assert_eq!(
+                fixture.check("1.2.3", 1000).await,
+                Some("ssmcp update · v1.2.4 available".into())
+            );
+            assert_eq!(fixture.hits(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn notice_ignores_untrusted_release_tags_and_busy_cache() {
+        for body in [
+            r#"{"tag_name":"v9.9.9\u001b[31m","draft":false,"prerelease":false}"#,
+            r#"{"tag_name":"v9.9.9","draft":true,"prerelease":false}"#,
+            r#"{"tag_name":"v9.9.9","draft":false,"prerelease":true}"#,
+        ] {
+            let fixture = NoticeServer::start("200 OK", body).await;
+            assert_eq!(fixture.check("1.2.3", 1000).await, None);
+            assert_eq!(fixture.check("1.2.3", 1001).await, None);
+            assert_eq!(fixture.hits(), 1);
+        }
+        let fixture = NoticeServer::start("200 OK", NOTICE_RELEASE).await;
+        let directory =
+            super::super::interface::history::SafeDirectory::at(fixture.directory()).unwrap();
+        let lock = directory.lock().unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(200), fixture.check("1.2.3", 1000))
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            fixture.hits(),
+            0,
+            "a competing process never waits or starts another request"
+        );
+        drop(lock);
+        assert!(fixture.check("1.2.3", 1000).await.is_some());
+        assert_eq!(fixture.hits(), 1);
+    }
+
+    #[tokio::test]
+    async fn notice_timeout_closes_the_request_and_keeps_reconnect_backoff() {
+        let fixture = NoticeServer::start("200 OK", NOTICE_RELEASE).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let size = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(size, 0);
+                request.extend_from_slice(&buffer[..size]);
+                assert!(request.len() < 8192);
+            }
+            let closed = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
+                .await
+                .unwrap();
+            assert!(matches!(closed, Ok(0)) || closed.is_err(), "{closed:?}");
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .pool_max_idle_per_host(0)
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let notice = tokio::time::timeout(
+            Duration::from_secs(2),
+            notice_at(client, &url, fixture.directory(), v("1.2.3"), 1000),
+        )
+        .await
+        .unwrap();
+        assert_eq!(notice, None);
+        server.await.unwrap();
+        assert_eq!(fixture.check("1.2.3", 1001).await, None);
+        assert_eq!(fixture.hits(), 0);
+        let directory =
+            super::super::interface::history::SafeDirectory::at(fixture.directory()).unwrap();
+        let _released = directory.lock().unwrap();
+    }
+
     #[test]
     fn options_are_local_and_unambiguous() {
         assert_eq!(mode(&[]).unwrap(), Mode::Install);

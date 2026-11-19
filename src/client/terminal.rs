@@ -58,6 +58,7 @@ pub(crate) struct Session {
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
     account_probe: Option<tokio::task::JoinHandle<()>>,
+    update_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -173,11 +174,18 @@ impl Session {
                         }
                     }))
                 });
+                let update_probe = spawn_update_probe(
+                    &shared,
+                    endpoint.is_some(),
+                    io::stdout().is_terminal(),
+                    super::update::available_notice(),
+                );
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
                     account_probe,
+                    update_probe,
                 }))
             }
             Err(error) => {
@@ -192,6 +200,51 @@ impl Session {
     }
 }
 
+fn spawn_update_probe(
+    shared: &Arc<Shared>,
+    connected: bool,
+    stdout_is_terminal: bool,
+    check: impl std::future::Future<Output = Option<String>> + Send + 'static,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // Session::start already requires interactive stdin/stderr, Pretty output,
+    // a dashboard, and a real terminal. Stdout may still be a machine pipe.
+    if !connected || !stdout_is_terminal {
+        return None;
+    }
+    let runtime = tokio::runtime::Handle::try_current().ok()?;
+    let display = Arc::downgrade(shared);
+    Some(runtime.spawn(async move {
+        let Some(message) = check.await else {
+            return;
+        };
+        publish_update_notice(&display, message, super::update::mark_notice_shown);
+    }))
+}
+
+fn publish_update_notice(
+    display: &std::sync::Weak<Shared>,
+    message: String,
+    claim: impl FnOnce() -> bool,
+) -> bool {
+    let Some(shared) = display.upgrade() else {
+        return false;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if shared.stop.load(Ordering::Acquire)
+        || !shared.alive.load(Ordering::Acquire)
+        || state.preview
+        || !claim()
+    {
+        return false;
+    }
+    state.update_notice = Some(message);
+    state.dirty = true;
+    true
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
@@ -199,6 +252,9 @@ impl Drop for Session {
             probe.abort();
         }
         if let Some(probe) = self.account_probe.take() {
+            probe.abort();
+        }
+        if let Some(probe) = self.update_probe.take() {
             probe.abort();
         }
         if let Some(thread) = self.thread.take() {
@@ -1127,6 +1183,7 @@ struct State {
     filter_offset: usize,
     preview: bool,
     notice: Option<String>,
+    update_notice: Option<String>,
     actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
@@ -1174,6 +1231,7 @@ impl State {
             filter_offset: 0,
             preview: false,
             notice: None,
+            update_notice: None,
             actions: Vec::new(),
             previous_cr: false,
             dirty: true,
@@ -1761,6 +1819,12 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let level = ["all", "commands", "errors"][usize::from(self.log_level)];
+                let idle_update = !self.help
+                    && !self.filter_editing
+                    && self.notice.is_none()
+                    && self.log_query.is_empty()
+                    && self.log_level == 0
+                    && self.update_notice.is_some();
                 let hint = if self.filter_editing {
                     format!(" / {}_   Enter Apply · Esc Cancel ", self.filter_draft)
                 } else if let Some(notice) = &self.notice {
@@ -1770,6 +1834,8 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
+                } else if idle_update {
+                    self.update_notice.clone().unwrap_or_default()
                 } else if g.cols < 100 {
                     " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
@@ -1781,7 +1847,7 @@ impl State {
                     self.server_origin.as_ref(),
                     connection,
                     g.cols,
-                    self.notice.is_some() || self.filter_editing,
+                    self.notice.is_some() || self.filter_editing || idle_update,
                 );
                 rows.push(self.tone(
                     if self.keyboard.logs {
@@ -3227,6 +3293,177 @@ mod tests {
                 .is_none()
         );
     }
+
+    fn update_shared() -> Arc<Shared> {
+        Arc::new(Shared {
+            state: Mutex::new(State::new(30, 110, &split_ui())),
+            stop: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+        })
+    }
+
+    #[tokio::test]
+    async fn update_probe_skips_stdout_pipes_and_preview_without_polling_the_check() {
+        use std::sync::atomic::AtomicUsize;
+        let shared = update_shared();
+        for (connected, stdout_is_terminal) in [(true, false), (false, true), (false, false)] {
+            let polls = Arc::new(AtomicUsize::new(0));
+            let observed = polls.clone();
+            // Exercise the final probe gate after all other Session startup
+            // conditions, rather than accidentally passing at a stdin gate.
+            assert!(
+                spawn_update_probe(&shared, connected, stdout_is_terminal, async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    None
+                })
+                .is_none()
+            );
+            tokio::task::yield_now().await;
+            assert_eq!(polls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn update_notice_stays_with_its_live_session_and_only_claims_once() {
+        let old = update_shared();
+        let next = update_shared();
+        let claimed = AtomicBool::new(false);
+        let claim = || !claimed.swap(true, Ordering::SeqCst);
+        old.stop.store(true, Ordering::Release);
+        assert!(!publish_update_notice(
+            &Arc::downgrade(&old),
+            "old".into(),
+            claim
+        ));
+        old.stop.store(false, Ordering::Release);
+        old.alive.store(false, Ordering::Release);
+        assert!(!publish_update_notice(
+            &Arc::downgrade(&old),
+            "old".into(),
+            claim
+        ));
+        old.alive.store(true, Ordering::Release);
+        old.state.lock().unwrap().preview = true;
+        assert!(!publish_update_notice(
+            &Arc::downgrade(&old),
+            "old".into(),
+            claim
+        ));
+        let expired = Arc::downgrade(&old);
+        drop(old);
+        assert!(!publish_update_notice(&expired, "old".into(), claim));
+        assert!(!claimed.load(Ordering::SeqCst));
+        assert!(next.state.lock().unwrap().update_notice.is_none());
+        assert!(publish_update_notice(
+            &Arc::downgrade(&next),
+            "current".into(),
+            claim
+        ));
+        assert!(!publish_update_notice(
+            &Arc::downgrade(&next),
+            "duplicate".into(),
+            claim
+        ));
+        assert_eq!(
+            next.state.lock().unwrap().update_notice.as_deref(),
+            Some("current")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_probe_session_drop_cancels_the_http_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        struct Finished(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Finished {
+            fn drop(&mut self) {
+                if let Some(done) = self.0.take() {
+                    let _ = done.send(());
+                }
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (started, request_started) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let size = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(size, 0);
+                request.extend_from_slice(&buffer[..size]);
+                assert!(request.len() < 8192);
+            }
+            started.send(()).unwrap();
+            // Do not send headers: the request is certainly in flight when
+            // Session drops. Observe socket closure, not only a cancelled flag.
+            let closed = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buffer))
+                .await
+                .unwrap();
+            assert!(matches!(closed, Ok(0)) || closed.is_err(), "{closed:?}");
+            let _ = stream.shutdown().await;
+        });
+        let shared = update_shared();
+        let (finished, request_dropped) = tokio::sync::oneshot::channel();
+        let probe = spawn_update_probe(&shared, true, true, async move {
+            let _finished = Finished(Some(finished));
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .pool_max_idle_per_host(0)
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap();
+            let _ = client.get(url).send().await;
+            None
+        })
+        .unwrap();
+        let session = Session {
+            shared,
+            thread: None,
+            guide_probe: None,
+            account_probe: None,
+            update_probe: Some(probe),
+        };
+        tokio::time::timeout(Duration::from_secs(1), request_started)
+            .await
+            .unwrap()
+            .unwrap();
+        let started = Instant::now();
+        drop(session);
+        assert!(started.elapsed() < Duration::from_millis(100));
+        tokio::time::timeout(Duration::from_secs(1), request_dropped)
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn update_notice_keeps_errors_and_log_filter_actions_visible() {
+        let mut state = State::new(30, 110, &split_ui());
+        state.update_notice = Some("ssmcp update · v1.2.4 available".into());
+        assert!(
+            physical(&state.frame(Instant::now()))
+                .screen()
+                .contents()
+                .contains("ssmcp update")
+        );
+        state.notice = Some("Paste rejected".into());
+        let shown = physical(&state.frame(Instant::now())).screen().contents();
+        assert!(shown.contains("Paste rejected"));
+        assert!(!shown.contains("ssmcp update"));
+        state.notice = None;
+        state.log_query = "warning".into();
+        let shown = physical(&state.frame(Instant::now())).screen().contents();
+        assert!(shown.contains("Logs:"));
+        assert!(!shown.contains("ssmcp update"));
+        state.filter_editing = true;
+        state.filter_draft = "error".into();
+        let shown = physical(&state.frame(Instant::now())).screen().contents();
+        assert!(shown.contains("Enter Apply"));
+        assert!(!shown.contains("ssmcp update"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_exit_restores_alternate_screen_and_joins_within_a_deadline() {
@@ -3282,6 +3519,7 @@ mod tests {
             thread: Some(thread),
             guide_probe: None,
             account_probe: None,
+            update_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
