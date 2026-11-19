@@ -1,0 +1,24 @@
+{
+  "old_source": "70aebd09d56cfa21cd0229da6c0e3c3cdaae2200",
+  "product_source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "source_file": "examples/vt_snapshot.rs",
+  "source_bytes_equal": true,
+  "source_sha256": "118386a69d58dfdb5ecc35c567d1ce77afb891d57a8a62dfadde0be8ec1621c0",
+  "parser_lock_entry_equal": true,
+  "parser_lock_entries": [
+    {
+      "name": "vt100",
+      "version": "0.18.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "eb05cdd19ae8707bf6a0a269972c07e6358103a7079faec749dec318a5b3dc23",
+      "dependencies": [
+        "itoa",
+        "unicode-width",
+        "vte"
+      ]
+    }
+  ],
+  "decoder_sha256": "70ba4cb707cb572e9b1754dc673c0d57c04973e59fde6e6e6001b1e610a207a8",
+  "decoder_bytes": 6472176,
+  "scope": "read-only ANSI JSONL decoder; independent observational tool, not the new product binary"
+}
