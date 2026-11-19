@@ -22,6 +22,8 @@ socket = "/run/ssmcpd/control.sock"
 # See https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md.
 
 [oauth]
+# Also stores hash-only account grants in oauth-clients.toml.grants.json.
+# Keep the registry and grant snapshot together when backing up; do not clear a .pending marker blindly.
 client_registry = "/var/lib/ssmcpd/oauth-clients.toml"
 access_token_ttl = 28800
 refresh_token_idle_ttl = 2592000
@@ -42,6 +44,8 @@ client_registration_ttl = 31536000
 # process does not share the gateway's in-memory login or session state.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
+# Optional public-only renderer; account/auth/traffic/device routes stay in this core.
+# frontend_socket = "/run/ssmcp-frontend/render.sock"
 # Legacy SSH deployments can use a separate portal service: omit state_dir
 # here and use --portal-only with --portal-state-dir in that service.
 # Client account endpoints and connected sessions must still share one Broker.
@@ -53,6 +57,12 @@ client_registration_ttl = 31536000
 # admin_usernames = ["maintainer"]
 # Per-account bytes/second in EACH direction, shared across connections.
 # default_rate_limit_bps = 8388608
+# Monthly gifts in bytes. Both omitted default to 1,000,000,000 each.
+# A paid user has a server-verified successful production recharge record.
+# Zero means no gift, not unlimited; purchased packages are added separately.
+# Changing these values preserves usage and per-account monthly overrides.
+# free_user_monthly_traffic_bytes = 1000000000
+# paid_user_monthly_traffic_bytes = 10000000000 # Optional larger gift; default is 1 GB.
 # Legacy GitHub ID/login administrator configuration remains supported:
 # admin_github_ids = []
 # admin_github_users = []

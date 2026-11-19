@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -9,14 +9,14 @@ ssmcp 对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工�
 先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，并自动发现 `PATH` 中可用的 Codex、Claude Code、Pi、OpenCode 原生接口。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
-ssmcp --ssh --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
+ssmcp --server https://relay.example --allow alice@relay.example --name dev --title "检查当前项目并修复构建"
 ```
 
 | 参数 | 作用 |
 | --- | --- |
 | `--name NAME` | 客户端显示名称；默认包含主机名和进程 ID |
 | `--title TITLE` | 供 agent 识别任务的会话标题；最多 512 个 UTF-8 字节 |
-| `--allow USER@PROVIDER` | 指定可访问身份；目前支持 `github`，可重复或以逗号分隔，最多 32 个不同身份 |
+| `--allow USER@SERVER` | 指定当前中继上已注册的控制账号；可重复或以逗号分隔，最多 32 个不同账号 |
 | `--shell /absolute/path` | 选择交互式 shell；Unix 默认使用绝对路径的 `SHELL` 或 `/bin/sh`，Windows 使用绝对路径的 `COMSPEC` 或系统 `cmd.exe` |
 | `--context-root PATH` | 增加只读 skills／AGENTS 文档根目录；最多 8 个，不扩展普通文件写入范围 |
 | `--list-tools` | 发现并打印本机工具目录后退出；不连接 SSH、不接受 SSH 目标或 `--allow` |
@@ -26,14 +26,14 @@ ssmcp --ssh --allow octocat@github --name dev --title "检查当前项目并修�
 
 ### 从旧的后端选择参数迁移
 
-删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --ssh --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，并把旧 SSH 接入改为明确的 HTTPS 服务器与账号名单。例如使用 `ssmcp --server https://relay.example --name dev --allow alice@relay.example`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。[账号接入](client-accounts.md)
 
 ```sh
 # 不连接 SSH，先检查这台电脑实际发现了什么。
 ssmcp --list-tools
 
 # 同一连接提供 shell 和成功初始化的原生适配器。
-ssmcp --ssh --name dev --title "继续项目开发" --allow octocat@github my-server
+ssmcp --server https://relay.example --name dev --title "继续项目开发" --allow alice@relay.example
 ```
 
 | 来源 | 本机原生入口或实现 | 可调用范围 |
@@ -57,7 +57,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 
 `ssmcpd` 和代码模式的隔离执行环境运行在 Linux。服务端通过系统 Node.js、bubblewrap 与 util-linux 的 `prlimit` 执行编排代码；客户端只需本机 OpenSSH 与所选 shell。服务端的安装条件见[部署说明](deployment.md#系统代码运行环境)。原生 rsync 端点目前也仅在 Linux 客户端提供；macOS／Windows 可使用文件和 loopback 网络原语。[rsync 平台分支](../src/rsync.rs)
 
-带 `--allow` 时使用 `/mcp` 的 GitHub OAuth；省略它时使用 `/<SSH 用户名>` 的一次性登录码授权。交互式终端显示连接摘要；重定向 stdout 或使用 `--raw` 时得到机器可读连接 JSON。两种方式均经原有 SSH 公钥认证，具体流程见[配置与登录](configuration.md)。
+被控端使用 `--allow 用户名@中继服务器` 明确列出控制账号，本机不需要登录；省略名单时要求已保存有效登录并仅授权自己。控制端始终使用真实账号认证与连接 ACL。交互终端显示连接摘要，重定向 stdout 或 `--raw` 使用机器可读输出。[账号与授权](client-accounts.md)
 
 ## 2. 用 list 找到客户端和能力
 
@@ -85,7 +85,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 返回 `list`、`code_mode`、`collab` 和 `invite`，没有后续页。`invite` 依据当前已验证的 OAuth 授权生成一次性安装接入命令，详见[控制者邀请](client-accounts.md#已在-mcp-应用授权的控制者)。`collab` 的 `action` 选择加入、成员发现、发送、收取或确认等协作操作。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
+MCP 协议本身的 `tools/list` 返回 `list`、`code_mode`、`collab`，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、接收或确认等会话内 agent 操作；它不代替控制端登录。`terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 
@@ -362,9 +362,9 @@ Context 的 `ssmcp.skill.discovered` 表示返回具体技能元数据，`ssmcp.
 
 输出、任务、工具代号和审计游标属于各自连接；每次调用重新检查授权与提供者。文件存储在共享用户目录不意味着另一连接可读取它。断线与 reload 会清理连接拥有的进程和路由，旧连接 ID 不再可用。Pi/OpenCode 的既有外部服务不属于连接拥有的进程；ssmcp 关闭与它们的桥接，不终止这些服务。
 
-GitHub 模式在客户端接入时，把 `--allow` 中的用户名解析为稳定的 GitHub 用户 ID；浏览器登录取得的身份只能访问明确允许此 ID 的在线客户端。同一授权可发现随后接入且允许该身份的客户端，也可以在尚无可访问客户端时完成授权，此时 `list` 为空。身份绑定只保留到本条 SSH 连接结束，重连会重新解析用户名。GitHub 授权不绑定某一条 SSH 来源连接；客户端离线会移除它自身，但不会因此撤销 GitHub OAuth 令牌。[身份解析](../src/identity.rs) · [访问控制](../src/broker.rs)
+注册连接时，服务器把 `--allow` 中当前中继的门户用户名解析为稳定账号 ID；控制请求按已验证身份和目标 ACL 检查。注册者仅是来源记录，匿名连接没有注册者；调用与结果流量计入实际控制账号。[解析](../src/broker/allow.rs) · [访问与计费](../src/broker.rs)
 
-传统登录码模式允许访问同一 SSH 账户下当前及后来连接、且未设置 `--allow` 的客户端，始终排除所有带有 `--allow` 的客户端。每次内部调用会检查签发登录码的来源连接；该连接断开时，其关联的 access token 和 refresh token 立即失效，即使其他客户端仍在线。[OAuth 实现](../src/oauth.rs)
+CLI 的邀请、join 和旧 SSH 登录码入口已退出当前设备接入流程。被控设备直接指定服务器账号；会话内 agent 的 `collab.join` 保留。[迁移用法](client-accounts.md)
 
 默认 access token 有效期为 8 小时；refresh token 闲置期为 30 天，每次成功刷新后重新计时并轮换令牌，同一授权从首次登录起最长 90 天。客户端登记默认有效 365 天。新注册省略 `grant_types` 时默认提供刷新授权；显式只申请 `authorization_code` 时不签发 refresh token。MCP 客户端负责保存轮换后的新令牌并主动刷新，access token 到期本身不要求重新交互登录。传统模式的登录码有效 30 分钟、只能使用一次；需要重新授权时，应从新连接取得新码。访问令牌、刷新令牌与未完成授权仍保存在内存中，ssmcpd 重启后需要重新授权；启用客户端登记持久化时，未过期的登记可跨重启保留。见[静默续期流程](configuration.md#silent-refresh)与[有效期及撤销规则](deployment.md#oauth-lifetimes)。
 

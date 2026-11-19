@@ -50,6 +50,7 @@ pub(crate) fn limits() -> Value {
 
 #[derive(Default)]
 pub(crate) struct Hub {
+    session_id: String,
     state: Mutex<State>,
 }
 
@@ -63,6 +64,7 @@ struct State {
 
 struct Agent {
     id: String,
+    session_id: String,
     token: String,
     owner: String,
     name: String,
@@ -105,6 +107,7 @@ enum Request {
     },
     List {},
     Update {
+        #[serde(alias = "thread_id")]
         agent_id: String,
         token: String,
         name: Option<String>,
@@ -113,6 +116,7 @@ enum Request {
         capabilities: Option<Vec<String>>,
     },
     Send {
+        #[serde(alias = "thread_id")]
         agent_id: String,
         token: String,
         to: String,
@@ -122,6 +126,7 @@ enum Request {
         idempotency_key: Option<String>,
     },
     Receive {
+        #[serde(alias = "thread_id")]
         agent_id: String,
         token: String,
         after: Option<u64>,
@@ -131,11 +136,13 @@ enum Request {
         wait_ms: u64,
     },
     Ack {
+        #[serde(alias = "thread_id")]
         agent_id: String,
         token: String,
         through: u64,
     },
     Leave {
+        #[serde(alias = "thread_id")]
         agent_id: String,
         token: String,
     },
@@ -149,6 +156,9 @@ impl Agent {
     fn public(&self) -> Value {
         json!({
             "agent_id": self.id,
+            "thread_id": self.id,
+            "session_id": self.session_id,
+            "pending_messages": self.inbox.len(),
             "name": self.name,
             "role": self.role,
             "status": self.status,
@@ -206,6 +216,13 @@ impl State {
 }
 
 impl Hub {
+    pub(crate) fn for_session(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.into(),
+            ..Self::default()
+        }
+    }
+
     /// Public roster for the connected local client's UI. Mailboxes, owner keys
     /// and private participant tokens never cross this interface.
     pub(crate) fn presence(&self) -> Result<Vec<crate::wire::SteeringAgent>, String> {
@@ -287,7 +304,9 @@ impl Hub {
             } => self.join(owner, name, role, capabilities),
             Request::List {} => {
                 let state = self.locked()?;
-                Ok(json!({"agents":state.public_agents(), "limits":limits()}))
+                Ok(
+                    json!({"session_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
+                )
             }
             Request::Update {
                 agent_id,
@@ -396,6 +415,7 @@ impl Hub {
         let (changed, _) = watch::channel(());
         let agent = Agent {
             id: id.clone(),
+            session_id: self.session_id.clone(),
             token: token.clone(),
             owner: owner.into(),
             name,
@@ -417,6 +437,8 @@ impl Hub {
         state.agents.insert(id.clone(), agent);
         Ok(json!({
             "agent_id":id,
+            "thread_id":id,
+            "session_id":self.session_id,
             "token":token,
             "lease_ms":LEASE_MS,
             "expires_at_ms":expires_at_ms,
@@ -486,6 +508,8 @@ impl Hub {
             "seq":seq,
             "message_id":message_id,
             "from":id,
+            "from_thread_id":id,
+            "session_id":self.session_id,
             "to":args.to,
             "payload":args.payload,
             "topic":args.topic,
@@ -522,6 +546,8 @@ impl Hub {
             "message_id":message_id,
             "seq":seq,
             "recipients":recipients,
+            "session_id":self.session_id,
+            "delivery":"queued",
             "duplicate":false
         });
         let sender = state.agents.get_mut(id).expect("authenticated sender");
@@ -585,6 +611,8 @@ impl Hub {
                     agent.renew();
                     return Ok(json!({
                         "messages":messages,
+                        "session_id":self.session_id,
+                        "thread_id":id,
                         "next_cursor":next,
                         "has_more":more,
                         "acked_cursor":agent.acked,

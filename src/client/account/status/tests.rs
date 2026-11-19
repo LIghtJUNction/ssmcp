@@ -18,7 +18,8 @@ fn reply() -> Value {
     json!({
         "identity": {"provider":"github", "subject":"123", "login":"alice",
                      "principal":"alice@github", "username":"alice-dev"},
-        "traffic": {"limit_bytes":1_000_000_000u64, "remaining_bytes":750_000_000u64}
+        "traffic": {"used_bytes":250_000_000u64, "limit_bytes":1_000_000_000u64,
+                    "remaining_bytes":750_000_000u64, "reset_at":1_796_054_400u64, "utc_offset_minutes":480}
     })
 }
 
@@ -55,39 +56,15 @@ fn absent_and_partial_traffic_never_mean_unlimited_or_zero() {
     ] {
         let traffic = Traffic::from_reply(&value);
         assert_eq!(traffic, Traffic::Unknown, "{value}");
-        assert_ne!(traffic.label(), "∞");
+        assert!(!traffic.progress(40).contains("∞"));
     }
-    assert_eq!(
-        Traffic::from_reply(&json!({"traffic":{"limit_bytes":null,"remaining_bytes":null}})),
-        Traffic::Unlimited
-    );
-    assert_eq!(
-        Traffic::from_reply(&json!({"traffic":{"limit_bytes":100,"remaining_bytes":0}})),
-        Traffic::Remaining(0)
-    );
-    assert_eq!(
-        Traffic::from_reply(&reply()),
-        Traffic::Remaining(750_000_000)
-    );
-}
-
-#[test]
-fn remaining_uses_decimal_gb_without_rounding_positive_traffic_to_zero() {
-    for (bytes, expected) in [
-        (0, "0 GB"),
-        (1, "<0.01 GB"),
-        (9_999_999, "<0.01 GB"),
-        (10_000_000, "0.01 GB"),
-        (750_000_000, "0.75 GB"),
-        (999_999_999, "0.99 GB"),
-        (1_000_000_000, "1.00 GB"),
-        (u64::MAX, "18446744073.70 GB"),
-    ] {
-        assert_eq!(Traffic::Remaining(bytes).label(), expected);
-    }
-    assert_eq!(Traffic::Unlimited.label(), "∞");
+    let unlimited =
+        Traffic::from_reply(&json!({"traffic":{"limit_bytes":null,"remaining_bytes":null}}));
+    assert!(unlimited.progress(40).contains("Max ∞"));
+    let used = Traffic::from_reply(&reply());
+    assert!(used.progress(40).contains("250 MB / Max 1 GB"));
     for status in [Status::Loading, Status::SignedOut, Status::Unavailable] {
-        let rows = status.rows().join("\n");
+        let rows = status.rows(40).join("\n");
         assert!(!rows.contains("GB") && !rows.contains('∞'));
     }
 }
@@ -96,15 +73,12 @@ fn remaining_uses_decimal_gb_without_rounding_positive_traffic_to_zero() {
 fn public_identity_must_match_the_saved_principal_and_subject() {
     let saved = credential("https://selected.example");
     let status = Status::from_reply(&reply(), &saved);
-    assert_eq!(
-        status.rows(),
-        [" 账号  alice (alice-dev)", " 本月剩余  0.75 GB"]
-    );
+    assert_eq!(status.rows(40)[0], " Local alice-dev");
     let mut unlimited = reply();
     unlimited["traffic"] = json!({"limit_bytes":null, "remaining_bytes":null});
     assert_eq!(
-        Status::from_reply(&unlimited, &saved).rows(),
-        [" 账号  alice (alice-dev)", " 本月剩余  ∞"]
+        Status::from_reply(&unlimited, &saved).rows(40)[1],
+        " Max ∞ · Used ?"
     );
     let mut other = reply();
     other["identity"]["subject"] = json!("456");
@@ -116,8 +90,8 @@ fn public_identity_must_match_the_saved_principal_and_subject() {
     other = reply();
     other.as_object_mut().unwrap().remove("traffic");
     assert_eq!(
-        Status::from_reply(&other, &saved).rows()[1],
-        " 本月剩余  未提供"
+        Status::from_reply(&other, &saved).rows(40)[1],
+        " Quota unavailable"
     );
 }
 
@@ -176,7 +150,8 @@ async fn refresh_uses_selected_server_even_when_another_account_is_default() {
     other.token = "b".repeat(64);
     save_at(&root.0, &other).unwrap();
     let status = Status::refresh_at(&root.0, &origin).await;
-    assert_eq!(status.rows()[1], " 本月剩余  0.75 GB");
+    assert!(status.rows(40)[1].contains("250 MB / Max 1 GB"));
+    assert_eq!(status.rows(40)[2], " Reset 2026-12-01 UTC+08");
     let request = request.await.unwrap().to_ascii_lowercase();
     assert!(request.starts_with("get /api/client/whoami http/1.1\r\n"));
     assert!(request.contains(&format!("authorization: bearer {}\r\n", "a".repeat(64))));
@@ -211,7 +186,7 @@ async fn failed_api_calls_never_reuse_or_invent_account_quota() {
         let (origin, request) = server(http_status, body).await;
         let status = Status::fetch(&credential(&origin)).await;
         assert_eq!(status, expected, "{http_status}");
-        assert!(!status.rows().join(" ").contains(&"a".repeat(64)));
+        assert!(!status.rows(40).join(" ").contains(&"a".repeat(64)));
         request.await.unwrap();
     }
 }

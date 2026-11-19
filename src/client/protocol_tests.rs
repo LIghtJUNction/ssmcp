@@ -68,7 +68,8 @@ elif scenario == "no-login":
 elif scenario == "no-expiry":
     code, ttl = "a" * 64, 0
 print(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
-                  "login_code":code, "login_expires_in":ttl, "client_id":"b"*64}), flush=True)
+                  "login_code":code, "login_expires_in":ttl, "client_id":"b"*64,
+                  **({"capabilities":[os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]]} if scenario == "session-access" else {})}), flush=True)
 # Keep registration live until its test explicitly performs normal cleanup.
 sys.stdin.read()
 "#;
@@ -104,6 +105,10 @@ impl Fixture {
             .args(["-u", "-c", PEER])
             .env("SSMCP_PROTOCOL_FIXTURE", &self.directory)
             .env("SSMCP_PROTOCOL_SCENARIO", scenario)
+            .env(
+                "SSMCP_PROTOCOL_ACCESS_CAPABILITY",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+            )
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
             .stdin(Stdio::piped())
@@ -157,7 +162,7 @@ fn metadata(allow: bool) -> ClientMetadata {
         cwd: std::env::current_dir().unwrap().to_str().unwrap().into(),
         hostname: "fixture".into(),
         allow: if allow {
-            vec!["octocat@github".into()]
+            vec!["octocat@ssmcp.test".into()]
         } else {
             Vec::new()
         },
@@ -179,6 +184,38 @@ async fn close(mut registration: RegisteredSsh) {
 }
 
 const READY_LIMIT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport() {
+    let fixture = Fixture::new();
+    let metadata = metadata(true);
+    let mut registered = false;
+    let (result, _) = fixture
+        .register("current", &metadata, &mut registered, READY_LIMIT)
+        .await;
+    let mut registration = result.unwrap().unwrap();
+    let error = registration
+        .require_allow_access(&metadata.allow)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("account access controls"));
+    assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
+    assert!(
+        registration.ssh.id().is_none(),
+        "the unsupported relay was not reaped"
+    );
+
+    let (result, _) = fixture
+        .register("session-access", &metadata, &mut registered, READY_LIMIT)
+        .await;
+    let mut registration = result.unwrap().unwrap();
+    assert!(registration.access_supported);
+    registration
+        .require_allow_access(&["colleague@ssmcp.test".into(), "alice@ssmcp.test".into()])
+        .await
+        .unwrap();
+    close(registration).await;
+}
 
 #[tokio::test]
 async fn current_protocol_preserves_metadata_for_login_and_allow() {
@@ -274,10 +311,18 @@ async fn authentication_errors_and_untyped_failures_never_retry_registration() {
 #[tokio::test]
 async fn current_protocol_preserves_allow_checks_and_login_requirements() {
     for (scenario, allow, expected) in [
-        ("policy-login", true, "did not acknowledge the --allow"),
-        ("policy-ttl", true, "did not acknowledge the --allow"),
-        ("no-login", false, "returned no login code"),
-        ("no-expiry", false, "returned no login code"),
+        (
+            "policy-login",
+            true,
+            "did not acknowledge the explicit account allow policy",
+        ),
+        (
+            "policy-ttl",
+            true,
+            "did not acknowledge the explicit account allow policy",
+        ),
+        ("no-login", false, "returned no account access policy"),
+        ("no-expiry", false, "returned no account access policy"),
     ] {
         let fixture = Fixture::new();
         let metadata = metadata(allow);

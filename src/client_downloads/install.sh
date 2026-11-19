@@ -1,11 +1,11 @@
 #!/bin/sh
-# Same-origin compatible release; verified user installation, then temporary join.
+# Same-origin compatible release; verified user installation, then an explicit relay connection.
 set -eu
 umask 077
 server=@@ORIGIN@@
 required_wire=@@WIRE@@
 fail() { printf 'ssmcp: %s\n' "$*" >&2; exit 1; }
-[ "$#" -gt 0 ] || fail 'Generate an installation command with ssmcp invite on the controller first.'
+[ "$#" -gt 0 ] || fail 'Pass connection options, for example --allow username@relay-server.'
 case "$(uname -m)" in
     x86_64|amd64) arch=x86_64 ;;
     aarch64|arm64) arch=aarch64 ;;
@@ -110,10 +110,10 @@ chmod 700 "$stage"
 mv -f "$stage" "$installed" || fail 'Cannot replace the client; the previous installation remains available.'
 stage=
 printf 'Installed ssmcp %s at %s\n' "$version" "$installed" >&2
-printf 'Starting the authorized temporary session. Keep this terminal open; Ctrl-C stops it.\n' >&2
+printf 'Starting the controlled connection. Keep this terminal open; Ctrl-C stops it.\n' >&2
 # Absolute path: installation does not depend on PATH or modify shell startup files.
 if ( : < /dev/tty ) 2>/dev/null; then
-    "$installed" join "$@" < /dev/tty
+    "$installed" --server "$server" "$@" < /dev/tty
 else
-    "$installed" join "$@"
+    "$installed" --server "$server" "$@"
 fi
