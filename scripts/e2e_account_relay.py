@@ -156,6 +156,16 @@ class WebSocket:
                 self.close(4001)
             while True:
                 frame = self.read()
+                if frame["type"] == "access":
+                    # The current client requests the relay-owned allow list at
+                    # startup. This fixture supports only that read, not ACL edits.
+                    assert frame["command"] == {"action": "list"}
+                    self.send({"type": "access_reply", "id": frame["id"], "result": {"Ok": {
+                        "entries": [{"principal": self.state.allow_principal,
+                                     "login": IDENTITY["username"], "subject": IDENTITY["subject"],
+                                     "owner": bool(self.token)}],
+                    }}})
+                    continue
                 if frame["type"] == "steering":
                     # Account lifecycle tests have no user requirements. Only
                     # v7 presence polling is valid here; never simulate queue
@@ -167,7 +177,7 @@ class WebSocket:
                         "agents": [], "messages": [],
                     }}})
                     continue
-                assert frame["type"] == "reply"
+                assert frame["type"] == "reply", f"unexpected client frame type: {frame['type']}"
                 with self.state.lock:
                     result = self.pending.get(frame["id"])
                 if result is not None:
@@ -411,6 +421,7 @@ class Harness:
         self.foreign_server.server_close()
 
     def diagnostics(self):
+        print("Gateway protocol errors:", self.redacted(json.dumps(self.state.errors + self.foreign.errors)))
         for out, err, out_file, err_file in self.logs:
             out_file.flush()
             err_file.flush()
@@ -552,7 +563,7 @@ class Harness:
                    "logout revokes and removes the selected origin's account credential")
         self.check(not self.state.errors and not self.foreign.errors,
                    "gateways observed no malformed client protocol frames")
-        return {"status": "passed", "checks": len(self.checks), "transport": "loopback WebSocket",
+        return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks, "transport": "loopback WebSocket",
                 "oauth": "synthetic GitHub provider", "device": "unsigned explicit same-origin allow",
                 "ssh": False, "models_started": False,
                 "binary_sha256": hashlib.file_digest(Path(self.binary).open("rb"), "sha256").hexdigest(),
