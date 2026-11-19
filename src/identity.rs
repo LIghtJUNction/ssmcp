@@ -135,7 +135,7 @@ impl IdentityProviders {
         Ok(providers)
     }
 
-    /// Resolve once when a connection registers its ACL. No username-to-ID cache is retained.
+    /// Resolve GitHub subjects for an initial ACL or an explicit grant. No username-to-ID cache is retained.
     pub async fn resolve_allow(&self, principals: &[String]) -> Result<Vec<Identity>, String> {
         if principals.is_empty() || principals.len() > MAX_ALLOWED_PRINCIPALS {
             return Err(format!(

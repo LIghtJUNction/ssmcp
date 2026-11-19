@@ -383,6 +383,8 @@ impl Credentials {
 pub(crate) struct Registration {
     pub identity: Identity,
     pub username: String,
+    /// Negotiation only; identity still comes exclusively from the authenticated credential.
+    pub session_access: bool,
     key: String,
 }
 
@@ -524,6 +526,7 @@ async fn authenticate(
             login: account.github_login,
         },
         username: account.username,
+        session_access: false,
         key,
     })
 }
@@ -896,12 +899,29 @@ async fn call_tool(
     }.map_err(|_|fail(StatusCode::BAD_GATEWAY,"client_call_failed"))?;
     Ok(Json(result))
 }
+fn session_access_requested(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(wire::CAPABILITIES_HEADER).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value.to_str().ok().is_some_and(|value| {
+        value.len() <= 256
+            && value
+                .split(',')
+                .any(|capability| capability.trim() == wire::SESSION_ACCESS_CAPABILITY)
+    })
+}
+
 async fn connect(
     State(broker): State<Arc<Broker>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    let registration = authenticate(&broker, &headers, false).await?;
+    let mut registration = authenticate(&broker, &headers, false).await?;
+    registration.session_access = session_access_requested(&headers);
     let quota = broker
         .traffic_quota(&registration.identity.subject)
         .await
@@ -1363,6 +1383,14 @@ mod tests {
         }
     }
     async fn open_socket(base: &str, token: &str, allow: Vec<String>) -> Socket {
+        open_socket_with_access(base, token, allow, false).await
+    }
+    async fn open_socket_with_access(
+        base: &str,
+        token: &str,
+        allow: Vec<String>,
+        access: bool,
+    ) -> Socket {
         use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
         let mut request = format!("{}/api/client/connect", base.replace("http://", "ws://"))
             .into_client_request()
@@ -1370,6 +1398,12 @@ mod tests {
         request
             .headers_mut()
             .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        if access {
+            request.headers_mut().insert(
+                wire::CAPABILITIES_HEADER,
+                wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
+            );
+        }
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         let hello = wire::Frame::Hello {
             version: wire::VERSION,
@@ -1387,6 +1421,317 @@ mod tests {
             .await
             .unwrap();
         socket
+    }
+
+    #[test]
+    fn session_access_capability_requires_an_exact_bounded_http_token() {
+        for value in ["session_access_v1", "other, session_access_v1"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(wire::CAPABILITIES_HEADER, value.parse().unwrap());
+            assert!(session_access_requested(&headers));
+        }
+        for value in [
+            "",
+            "session_access_v10",
+            "prefix_session_access_v1",
+            "session_access_v1;admin",
+            "SESSION_ACCESS_V1",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(wire::CAPABILITIES_HEADER, value.parse().unwrap());
+            assert!(!session_access_requested(&headers), "{value}");
+        }
+        let mut headers = HeaderMap::new();
+        assert!(!session_access_requested(&headers));
+        headers.append(
+            wire::CAPABILITIES_HEADER,
+            wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
+        );
+        headers.append(wire::CAPABILITIES_HEADER, "other".parse().unwrap());
+        assert!(!session_access_requested(&headers));
+    }
+
+    #[tokio::test]
+    async fn session_access_wss_negotiation_and_live_oauth_revocation() {
+        use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+        async fn grant(
+            socket: &mut Socket,
+            id: u64,
+            command: wire::AccessCommand,
+        ) -> Result<wire::AccessSnapshot, String> {
+            socket
+                .send(Message::Binary(
+                    serde_json::to_vec(&wire::Frame::Access { id, command })
+                        .unwrap()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            match receive(socket).await.unwrap() {
+                wire::Frame::AccessReply {
+                    id: reply_id,
+                    result,
+                } => {
+                    assert_eq!(reply_id, id);
+                    result
+                }
+                _ => panic!("missing access reply"),
+            }
+        }
+        let directory = Temporary::new();
+        let mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mock_origin = format!("http://{}", mock.local_addr().unwrap());
+        let mock_server = tokio::spawn(async move {
+            axum::serve(
+                mock,
+                Router::new().route(
+                    "/users/bob",
+                    get(|| async { Json(json!({"id":456,"login":"bob","type":"User"})) }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let mut broker = Broker::new("https://ssmcp.test".into());
+        broker.identities = crate::identity::IdentityProviders::with_github_test_endpoints(
+            "https://ssmcp.test",
+            crate::identity::GitHubConfig {
+                client_id: "fixture".into(),
+                client_secret: "fixture-secret".into(),
+            },
+            &mock_origin,
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        broker
+            .portal
+            .storage(|store| {
+                for (subject, login) in [("123", "alice"), ("456", "bob")] {
+                    store.login(&Identity {
+                        provider: "github".into(),
+                        subject: subject.into(),
+                        login: login.into(),
+                    })?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let device = broker
+            .portal
+            .client_storage(|store| store.login("123".into()))
+            .await
+            .unwrap()
+            .0;
+        // Issued before the grant, and deliberately reused after revocation.
+        let bob_token = broker.oauth.test_identity_tokens("mcp", "456")["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let forged_token = broker.oauth.test_identity_tokens("mcp", "999")["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let broker = Arc::new(broker);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        // A capability header conveys no identity and cannot skip credential checks.
+        let mut unauthorized = format!("{}/api/client/connect", base.replace("http://", "ws://"))
+            .into_client_request()
+            .unwrap();
+        unauthorized.headers_mut().insert(
+            wire::CAPABILITIES_HEADER,
+            wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
+        );
+        assert!(
+            matches!(tokio_tungstenite::connect_async(unauthorized).await, Err(tokio_tungstenite::tungstenite::Error::Http(response)) if response.status() == StatusCode::UNAUTHORIZED)
+        );
+        let mut forged_registration =
+            open_socket_with_access(&base, &device, vec!["bob@github".into()], true).await;
+        assert!(matches!(
+            receive(&mut forged_registration).await,
+            Some(wire::Frame::Reject { .. })
+        ));
+
+        let mut legacy = open_socket(&base, &device, vec![]).await;
+        let bytes = match legacy.next().await.unwrap().unwrap() {
+            Message::Binary(data) => data.to_vec(),
+            Message::Text(text) => text.as_bytes().to_vec(),
+            _ => panic!("ready frame"),
+        };
+        let old_ready: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(old_ready["type"], "ready");
+        assert_eq!(old_ready.as_object().unwrap().len(), 5);
+        assert!(old_ready.get("capabilities").is_none());
+        let other_id = old_ready["client_id"].as_str().unwrap().to_owned();
+
+        let mut socket = open_socket_with_access(&base, &device, vec![], true).await;
+        let id = match receive(&mut socket).await.unwrap() {
+            wire::Frame::Ready {
+                client_id,
+                capabilities,
+                ..
+            } => {
+                assert_eq!(capabilities, [wire::SESSION_ACCESS_CAPABILITY]);
+                client_id
+            }
+            _ => panic!("capable ready"),
+        };
+        let initial = grant(&mut socket, 1, wire::AccessCommand::List {})
+            .await
+            .unwrap();
+        assert_eq!(initial.entries.len(), 1);
+        assert!(initial.entries[0].owner);
+        let bob = broker
+            .authenticate(IDENTITY_RESOURCE, &bob_token)
+            .await
+            .unwrap();
+        assert!(broker.client(IDENTITY_RESOURCE, &bob, &id).await.is_err());
+        grant(
+            &mut socket,
+            2,
+            wire::AccessCommand::Add {
+                principal: "bob@github".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let bob = broker
+            .authenticate(IDENTITY_RESOURCE, &bob_token)
+            .await
+            .unwrap();
+        let held = broker.client(IDENTITY_RESOURCE, &bob, &id).await.unwrap();
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &bob, &other_id)
+                .await
+                .is_err()
+        );
+        let forged = broker
+            .authenticate(IDENTITY_RESOURCE, &forged_token)
+            .await
+            .unwrap();
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &forged, &id)
+                .await
+                .is_err()
+        );
+        let info_uri = format!("ssmcp://clients/{id}/info");
+        assert!(
+            crate::resources::read(&broker, IDENTITY_RESOURCE, &bob, &info_uri)
+                .await
+                .is_ok()
+        );
+        assert!(
+            grant(
+                &mut socket,
+                3,
+                wire::AccessCommand::Remove {
+                    principal: "alice@github".into()
+                }
+            )
+            .await
+            .unwrap_err()
+            .contains("所有者")
+        );
+
+        let called = held.clone();
+        let calling_bob = bob.clone();
+        let call = tokio::spawn(async move {
+            called
+                .call_with_authorization(Operation::Status {}, None, &calling_bob)
+                .await
+        });
+        let call_id = match receive(&mut socket).await.unwrap() {
+            wire::Frame::Call { id, .. } => id,
+            _ => panic!("granted call"),
+        };
+        socket
+            .send(Message::Binary(
+                serde_json::to_vec(&wire::Frame::Reply {
+                    id: call_id,
+                    result: Ok(json!({"ok":true})),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(call.await.unwrap().unwrap()["ok"], true);
+
+        // A read that was already dispatched must withhold its data after revocation.
+        let reading_broker = broker.clone();
+        let reading_bob = bob.clone();
+        let tools_uri = format!("ssmcp://clients/{id}/tools");
+        let read = tokio::spawn(async move {
+            crate::resources::read(&reading_broker, IDENTITY_RESOURCE, &reading_bob, &tools_uri)
+                .await
+        });
+        let read_id = match receive(&mut socket).await.unwrap() {
+            wire::Frame::Call { id, .. } => id,
+            _ => panic!("resource call"),
+        };
+        let removed = grant(
+            &mut socket,
+            4,
+            wire::AccessCommand::Remove {
+                principal: "bob@github".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed.entries.len(), 1);
+        socket
+            .send(Message::Binary(
+                serde_json::to_vec(&wire::Frame::Reply {
+                    id: read_id,
+                    result: Ok(json!({"tools":[],"secret":"withhold"})),
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(
+            read.await.unwrap(),
+            Err(crate::resources::ResourceError::NotFound)
+        ));
+        let revoked = broker
+            .authenticate(IDENTITY_RESOURCE, &bob_token)
+            .await
+            .unwrap();
+        assert!(
+            broker
+                .client(IDENTITY_RESOURCE, &revoked, &id)
+                .await
+                .is_err()
+        );
+        assert!(
+            held.call_with_authorization(Operation::Status {}, None, &revoked)
+                .await
+                .unwrap_err()
+                .contains("revoked")
+        );
+        assert!(
+            crate::resources::read(&broker, IDENTITY_RESOURCE, &revoked, &info_uri)
+                .await
+                .is_err()
+        );
+        assert!(
+            grant(&mut socket, 5, wire::AccessCommand::List {})
+                .await
+                .unwrap()
+                .entries[0]
+                .owner
+        );
+        socket.close(None).await.unwrap();
+        legacy.close(None).await.unwrap();
+        server.abort();
+        mock_server.abort();
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
+mod access;
 pub(crate) mod account;
 pub(crate) mod attachments;
 mod audit_view;
@@ -1651,6 +1652,7 @@ struct RegisteredSsh {
     writer: tokio::process::ChildStdin,
     reader: BufReader<ChildStdout>,
     ready: (String, String, u64, String),
+    access_supported: bool,
 }
 
 // A replacement transport must not start until the rejected SSH process and its
@@ -1737,7 +1739,13 @@ async fn register_ssh(
             login_code,
             login_expires_in,
             client_id,
-        }) => (url, login_code, login_expires_in, client_id),
+            capabilities,
+        }) => (
+            (url, login_code, login_expires_in, client_id),
+            capabilities
+                .iter()
+                .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
+        ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
             // Only a parsed registration rejection is terminal for the protocol.
@@ -1761,6 +1769,7 @@ async fn register_ssh(
         }
     };
     *registered = true;
+    let (ready, access_supported) = ready;
     let github_auth = !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
         stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1776,6 +1785,7 @@ async fn register_ssh(
         writer,
         reader,
         ready,
+        access_supported,
     }))
 }
 
@@ -1839,6 +1849,7 @@ async fn reclaim_steering(
                 },
                 frame = incoming.frames.recv() => match frame {
                     Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result)?,
+                    Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
                     Some(Ok(Some(Frame::Call { id, .. }))) => {
                         let mut writer = writer.lock().await;
@@ -1937,6 +1948,7 @@ async fn connect(
         writer,
         reader,
         ready: (url, login_code, login_expires_in, client_id),
+        access_supported,
     }) = registration
     else {
         return Ok(ConnectionExit::Stopped);
@@ -2091,6 +2103,7 @@ async fn connect(
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
     let mut steering_commands = steering::connect(&client_id, VERSION);
+    let mut access_commands = access::connect(access_supported);
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -2102,6 +2115,21 @@ async fn connect(
         tokio::select! {
             _ = steering_updates.tick() => {
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
+                access::poll();
+            },
+            Some(request) = access_commands.recv() => {
+                let sent = timeout(Duration::from_secs(10), async {
+                    let mut writer = writer.lock().await;
+                    if access::pending(request.id) {
+                        write_frame(&mut *writer, &Frame::Access { id: request.id, command: request.command }).await?;
+                    }
+                    Ok::<(), io::Error>(())
+                }).await;
+                match sent {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => break Err(error.into()),
+                    Err(_) => break Err("session access request write timed out".into()),
+                }
             },
             command = steering_commands.recv() => match command {
                 Some(steering::Transport::Wire { id, .. }) => {
@@ -2194,6 +2222,7 @@ async fn connect(
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
+                                        Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
                                             write_frame(&mut *writer, &Frame::Reply { id: next_id, result: Err("client reload is already pending; call list after reconnection".into()) }).await?;
@@ -2246,6 +2275,7 @@ async fn connect(
                 Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
                     if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
                 }
+                Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
                 Some(Ok(Some(_))) => break Err("unexpected SSH protocol frame".into()),
@@ -2267,6 +2297,7 @@ async fn connect(
         input.shutdown().await;
     }
     steering::disconnect();
+    access::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     if let Some(observer) = git_status {

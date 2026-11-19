@@ -64,7 +64,7 @@ async fn allowed_tool_access_cannot_list_or_disconnect_another_owners_connection
         .remove(foreign.client_id());
     Arc::get_mut(&mut foreign)
         .unwrap()
-        .allow
+        .allowed()
         .push(identity("123"));
     broker
         .sessions
@@ -276,7 +276,7 @@ async fn verified_callers_are_audited_separately_from_session_owners_and_control
         .remove(session.client_id());
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
     let mutable = Arc::get_mut(&mut session).unwrap();
-    mutable.allow = vec![identity("456"), identity("789")];
+    mutable.allow = std::sync::Mutex::new(vec![identity("456"), identity("789")]);
     mutable.sender = sender;
     mutable.slots = tokio::sync::Semaphore::new(4);
     broker

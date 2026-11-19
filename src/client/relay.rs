@@ -100,6 +100,12 @@ pub(super) async fn run() -> crate::Result<()> {
         .map_err(|_| "invalid client credential")?;
     authorization.set_sensitive(true);
     request.headers_mut().insert("authorization", authorization);
+    // Unknown HTTP headers are harmless on older servers. They keep the original
+    // strict v7 Ready shape, which leaves access controls disabled in the parent.
+    request.headers_mut().insert(
+        crate::wire::CAPABILITIES_HEADER,
+        HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY),
+    );
     let configuration = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME))
         .max_frame_size(Some(MAX_FRAME));
