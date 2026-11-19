@@ -423,6 +423,10 @@ impl State {
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
+        if let Some(body) = listener::body(text) {
+            self.chat_force_send(body)?;
+            return Ok(true);
+        }
         if let Some(command) = text.strip_prefix('!') {
             if self.preview {
                 return Err("Preview does not execute shell commands".into());
@@ -471,7 +475,6 @@ impl State {
             "/login" => self.chat_login(rest)?,
             "/allow" => self.chat_allow(rest)?,
             "/logout" => self.chat_logout(rest)?,
-            "/send" => self.chat_force_send(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -770,7 +773,7 @@ impl State {
         if text.trim().is_empty() {
             return;
         }
-        if text.split_whitespace().next() == Some("/send") {
+        if listener::body(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }
