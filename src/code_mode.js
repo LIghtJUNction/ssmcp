@@ -109,6 +109,11 @@ function bridge(kind, clientId, name, encoded) {
       return failure('tool cursor must be null or a string of at most 128 bytes');
     }
     request = { op: 'tools', client_id: clientId, cursor: args };
+  } else if (kind === 'wait_user') {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      return failure('user wait arguments must be a JSON object');
+    }
+    request = { op: 'wait_user', client_id: clientId, arguments: args };
   } else {
     return failure('unknown code_mode host request');
   }
@@ -496,10 +501,10 @@ const bootstrap = `(() => {
   const reload = id => workspaceResult(id, 'ssmcp.client.reload');
   const say = (id, message) => workspaceResult(id, 'ssmcp.ui.message',
     typeof message === 'string' ? {text: message} : message);
-  const ui = freeze(Object.fromEntries(
+  const ui = freeze({ ...Object.fromEntries(
     ['get', 'set', 'action', 'filter', 'queue', 'message', 'present', 'ask', 'questions', 'history', 'harness'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.ui.' + name, args)])
-  ));
+  ), wait: (id, args = {}) => dispatch('wait_user', id, 'wait', args) });
   const sessions = freeze(Object.fromEntries(
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
@@ -871,3 +876,4 @@ input.on('close', () => {
   if (!finished) fail(new Error('parent closed code_mode input before completion'));
 });
 input.on('error', fail);
+

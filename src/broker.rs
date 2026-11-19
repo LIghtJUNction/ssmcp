@@ -64,7 +64,7 @@ impl Authorization {
         }
     }
 
-    fn permits(&self, session: &Session) -> bool {
+    pub(crate) fn permits(&self, session: &Session) -> bool {
         match self {
             Self::Legacy { .. } => session.allowed().is_empty(),
             Self::Identity(identity) => session.allowed().iter().any(|allowed| {
@@ -237,6 +237,8 @@ impl Session {
             Operation::CallTool { name, .. } => Some(name.clone()),
             _ => None,
         };
+        let ending_intent = matches!(&operation, Operation::CallTool { name, arguments }
+            if name == "ssmcp.ui.message" && arguments["kind"] == "answer");
         if audit_tool.is_some()
             && self
                 .audit_call(
@@ -325,6 +327,9 @@ impl Session {
             }
         }
         if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
+            if ending_intent {
+                run.native_ending_intent(self.client_id(), value);
+            }
             run.native_reply(
                 self.client_id(),
                 reply_agent.as_deref(),
@@ -616,6 +621,7 @@ impl Broker {
         for session in &active {
             session.alive.store(false, Ordering::Release);
             session.collaboration.close();
+            session.steering.close();
             session.disconnect.notify_one();
         }
         // Drain normal wire cleanup and its bounded audit writes before the
@@ -1073,6 +1079,7 @@ impl Broker {
         drop(writer);
         session.alive.store(false, Ordering::Release);
         session.collaboration.close();
+        session.steering.close();
         let mut sessions = self.sessions.write().await;
         if let Some(clients) = sessions.get_mut(&user) {
             if clients

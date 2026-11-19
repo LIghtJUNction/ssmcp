@@ -1,4 +1,5 @@
 //! Local operator messages, atomically editable until claimed by an HTTP reply.
+mod waiting;
 use crate::wire::{
     MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringDelivery,
     SteeringMessage, SteeringSnapshot, SteeringState,
@@ -7,9 +8,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+pub(crate) use waiting::Reservation;
 
 const MAX_HISTORY: usize = 64;
 const MAX_RETAINED_BYTES: usize = 512 * 1024;
@@ -18,9 +20,22 @@ const MAX_SEQUENCE: u64 = (1_u64 << 53) - 1;
 pub(crate) const MAX_DELIVERY_MESSAGES: usize = 8;
 pub(crate) const MAX_DELIVERY_BYTES: usize = 64 * 1024;
 
-#[derive(Default)]
+#[derive(Clone)]
 pub(crate) struct Queue {
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
+    changed: tokio::sync::watch::Sender<()>,
+    waiters: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        let (changed, _) = tokio::sync::watch::channel(());
+        Self {
+            state: Arc::new(Mutex::new(State::default())),
+            changed,
+            waiters: Arc::new(tokio::sync::Semaphore::new(4)),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -29,6 +44,8 @@ struct State {
     messages: VecDeque<SteeringMessage>,
     commands: VecDeque<(String, [u8; 32])>,
     reminders: crate::code_mode::reminders::State,
+    reservations: Vec<waiting::Reserved>,
+    closed: bool,
 }
 
 fn pending(message: &SteeringMessage) -> bool {
@@ -82,11 +99,32 @@ impl State {
         max_messages: usize,
         max_bytes: usize,
     ) -> Vec<Value> {
+        self.claim_selected(client_id, run_id, agent_id, max_messages, max_bytes, None)
+    }
+
+    fn claim_selected(
+        &mut self,
+        client_id: &str,
+        run_id: &str,
+        agent_id: Option<&str>,
+        max_messages: usize,
+        max_bytes: usize,
+        selected: Option<&[(String, u64)]>,
+    ) -> Vec<Value> {
         let mut claimed = Vec::new();
         let mut used = 0usize;
         for message in &mut self.messages {
             if message.state != SteeringState::Queued
                 || (message.target != "next" && Some(message.target.as_str()) != agent_id)
+                || self
+                    .reservations
+                    .iter()
+                    .any(|reserved| reserved.message_id == message.id)
+                || selected.is_some_and(|selected| {
+                    !selected
+                        .iter()
+                        .any(|(id, revision)| id == &message.id && revision == &message.revision)
+                })
             {
                 continue;
             }
@@ -155,6 +193,9 @@ impl Queue {
         command: SteeringCommand,
     ) -> Result<SteeringSnapshot, String> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.closed {
+            return Err("user message connection is closed".into());
+        }
         if matches!(command, SteeringCommand::Snapshot {}) {
             return Ok(state.snapshot(client_id, agents));
         }
@@ -192,6 +233,7 @@ impl Queue {
             return Ok(state.snapshot(client_id, agents));
         }
         let command_id = command_id.clone();
+        let changed_message = message_id.clone();
         let index = state
             .messages
             .iter()
@@ -287,12 +329,20 @@ impl Queue {
             SteeringCommand::Snapshot {} => unreachable!(),
         }
         state.revision = queue_revision;
+        // An edited or withdrawn revision immediately stops being reserved.
+        // The old waiter will report superseded; the new text stays eligible.
+        state
+            .reservations
+            .retain(|entry| entry.message_id != changed_message);
         state.commands.push_back((command_id, fingerprint));
         if state.commands.len() > MAX_COMMANDS {
             state.commands.pop_front();
         }
         state.trim();
-        Ok(state.snapshot(client_id, agents))
+        let snapshot = state.snapshot(client_id, agents);
+        drop(state);
+        self.changed.send_replace(());
+        Ok(snapshot)
     }
 
     /// Claims, CAS edits and reminder lifecycle share one lock after HTTP
