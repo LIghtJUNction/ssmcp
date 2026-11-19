@@ -1,0 +1,69 @@
+sleep
+
+running 6 tests
+test client::terminal::sleep::tests::sleep_dismissal_follows_episode_and_connection_with_bounded_memory ... ok
+test client::terminal::sleep::tests::sleep_frame_dims_resets_and_preserves_wide_and_narrow_geometry ... ok
+test client::terminal::sleep::tests::sleep_keyboard_preserves_first_unicode_key_and_bracketed_paste ... ok
+test client::terminal::sleep::tests::sleep_mouse_absorbs_complete_gesture_without_mutating_conversation ... ok
+test client::terminal::sleep::tests::sleep_timeout_before_redraw_keeps_visible_overlay_input_barrier ... ok
+test client::terminal::sleep::tests::sleep_transition_breaks_copy_freeze_and_restores_copy_mode ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1510 filtered out; finished in 0.07s
+
+
+frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty
+
+running 1 test
+test client::terminal::tests::frame_diff_erases_old_text_when_a_row_shrinks_or_becomes_empty ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.00s
+
+
+visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client
+
+running 1 test
+test client::terminal::tests::visible_log_diff_keeps_hidden_terminal_modes_out_of_the_client ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.01s
+
+
+synchronized_frame_includes_initial_clear_rows_and_native_images
+
+running 1 test
+test client::terminal::tests::synchronized_frame_includes_initial_clear_rows_and_native_images ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.01s
+
+
+synchronized_frame_remains_open_until_a_split_scroll_write_completes
+
+running 1 test
+test client::terminal::tests::synchronized_frame_remains_open_until_a_split_scroll_write_completes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.01s
+
+
+nonblocking_output_keeps_partial_bytes_for_the_next_frame
+
+running 1 test
+test client::terminal::tests::nonblocking_output_keeps_partial_bytes_for_the_next_frame ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.00s
+
+
+geometry_reserves_real_panes_and_survives_narrow_resize
+
+running 1 test
+test client::terminal::tests::geometry_reserves_real_panes_and_survives_narrow_resize ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.00s
+
+
+split_unicode_is_preserved_in_logs_and_hidden_native_terminal
+
+running 1 test
+test client::terminal::tests::split_unicode_is_preserved_in_logs_and_hidden_native_terminal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1515 filtered out; finished in 0.00s
+
+

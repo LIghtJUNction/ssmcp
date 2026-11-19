@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "ssmcp"
-version = "0.10.13"
+version = "0.10.14"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -1460,7 +1460,8 @@ dependencies = [
  "zharness",
  "zmcpio",
  "zplugin",
- "ztui-core",
+ "ztuio",
+ "zuse-computer",
 ]
 
 [[package]]
@@ -2130,6 +2131,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "z64"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ccc3887095be912cf1f99f655f49a5c9be993fa8873f4478c1784e4f7f15193"
+
+[[package]]
 name = "zcall"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2137,6 +2144,12 @@ checksum = "82a8650e8302ae5e0ebd861e9062809c9d9162d0a839c7e8f9b6e54afbd2d20d"
 dependencies = [
  "zconv",
 ]
+
+[[package]]
+name = "zclap"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5efb5b25a7eb925fe9943888238d1e261224fa629456f4abe203b1deb34ac102"
 
 [[package]]
 name = "zconv"
@@ -2270,8 +2283,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ztui-core"
-version = "0.1.2"
+name = "ztuio"
+version = "0.1.0"
 
 [[package]]
 name = "zune-core"
@@ -2286,4 +2299,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
+]
+
+[[package]]
+name = "zuse-computer"
+version = "0.1.0"
+dependencies = [
+ "z64",
+ "zclap",
+ "zmcpio",
 ]

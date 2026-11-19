@@ -2996,6 +2996,7 @@ mod tests {
         assert!(!thumbnail.contains("[IMAGE]"), "{thumbnail}");
         assert!(view.open(), "explicitly open the decoded thumbnail");
         assert_eq!(view.snapshot()["events"][0]["expanded"], true);
+        assert!(!view.open(), "opening the same preview is idempotent");
         assert!(
             !view
                 .render(80, 12, &plain_ui(), true)
