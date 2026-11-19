@@ -432,39 +432,17 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
         .unwrap();
     assert!(registered_home.contains("ssmcp alice-dev@ssmcp.test"));
     assert!(!registered_home.contains("注册用户名"));
-    let fingerprint = parse_key(&key(), "").unwrap().fingerprint;
-    let denied = client
-        .post(format!("{base}/account/keys/delete"))
-        .header("cookie", &new_cookie)
-        .header("origin", "https://ssmcp.test")
-        .form(&[("csrf", csrf), ("fingerprint", &fingerprint)])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), 404);
-    let injection = client
-        .post(format!("{base}/account/keys"))
-        .header("cookie", &new_cookie)
-        .header("origin", "https://ssmcp.test")
-        .form(&[
-            ("csrf", csrf),
-            ("label", "mine"),
-            ("public_key", &key()),
-            ("owner", "456"),
-        ])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(injection.status(), 400);
-    let added = client
-        .post(format!("{base}/account/keys"))
-        .header("cookie", &new_cookie)
-        .header("origin", "https://ssmcp.test")
-        .form(&[("csrf", csrf), ("label", "mine"), ("public_key", &key())])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(added.status(), 303);
+    assert!(!registered_home.contains("旧版 SSH 公钥管理"));
+    for route in ["/account/keys", "/account/keys/delete"] {
+        let response = client
+            .post(format!("{base}{route}"))
+            .header("cookie", &new_cookie)
+            .header("origin", "https://ssmcp.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404);
+    }
     assert_eq!(
         broker
             .portal
@@ -478,7 +456,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
 }
 
 #[tokio::test]
-async fn audit_unavailable_prevents_key_logout_and_login_mutations() {
+async fn audit_unavailable_prevents_logout_and_login_mutations() {
     let temporary = Temp::new();
     let mut broker = Broker::new("https://ssmcp.test".into());
     broker.portal = Portal::open(&temporary.0.join("accounts")).unwrap();
@@ -514,52 +492,6 @@ async fn audit_unavailable_prevents_key_logout_and_login_mutations() {
             ))
             .unwrap()
     };
-    let added = add_key(
-        State(broker.clone()),
-        request(
-            "/account/keys",
-            vec![
-                ("csrf", csrf.clone()),
-                ("label", "fixture".into()),
-                ("public_key", key()),
-            ],
-        ),
-    )
-    .await;
-    assert_eq!(added.err(), Some(Problem::AuditUnavailable));
-    assert!(
-        broker
-            .portal
-            .storage(|store| Ok(store.account("123")?.keys.is_empty()))
-            .await
-            .unwrap()
-    );
-
-    let public_key = parse_key(&key(), "existing").unwrap();
-    let fingerprint = public_key.fingerprint.clone();
-    broker
-        .portal
-        .storage(move |store| store.add("123", public_key))
-        .await
-        .unwrap();
-    let removed = delete_key(
-        State(broker.clone()),
-        request(
-            "/account/keys/delete",
-            vec![("csrf", csrf.clone()), ("fingerprint", fingerprint)],
-        ),
-    )
-    .await;
-    assert_eq!(removed.err(), Some(Problem::AuditUnavailable));
-    assert_eq!(
-        broker
-            .portal
-            .storage(|store| Ok(store.account("123")?.keys.len()))
-            .await
-            .unwrap(),
-        1
-    );
-
     let logged_out = logout(
         State(broker.clone()),
         request("/account/logout", vec![("csrf", csrf.clone())]),

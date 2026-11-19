@@ -2,7 +2,7 @@
 //! No backend, installed coding harness, network, credentials, or model is used.
 use super::*;
 use serde_json::Value;
-use std::{cell::Cell, fs, path::Path};
+use std::{cell::Cell, fs, path::Path, process::Stdio};
 
 const PEER: &str = r#"
 import json, os, pathlib, sys, time
