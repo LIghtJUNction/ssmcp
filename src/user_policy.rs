@@ -18,6 +18,48 @@ const MAX_BURST: u64 = 64 * 1024;
 pub const FREE_MONTHLY_TRAFFIC_BYTES: u64 = 1_000_000_000;
 pub const DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES: i32 = 8 * 60;
 
+/// Monthly gifts selected only from a durable server-side account record.
+/// Both defaults preserve the pre-configuration one-GB allowance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonthlyTrafficAllowances {
+    pub free_user_bytes: u64,
+    pub paid_user_bytes: u64,
+}
+impl Default for MonthlyTrafficAllowances {
+    fn default() -> Self {
+        Self {
+            free_user_bytes: FREE_MONTHLY_TRAFFIC_BYTES,
+            paid_user_bytes: FREE_MONTHLY_TRAFFIC_BYTES,
+        }
+    }
+}
+impl MonthlyTrafficAllowances {
+    pub(crate) fn budget(self, has_recharged: bool, unlimited: bool) -> TrafficBudget {
+        TrafficBudget {
+            free_bytes: if has_recharged {
+                self.paid_user_bytes
+            } else {
+                self.free_user_bytes
+            },
+            unlimited,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TrafficBudget {
+    pub free_bytes: u64,
+    pub unlimited: bool,
+}
+// Existing journal fixtures use the old one-GB policy explicitly; production
+// callers must provide the selected account budget.
+#[cfg(test)]
+impl From<bool> for TrafficBudget {
+    fn from(unlimited: bool) -> Self {
+        MonthlyTrafficAllowances::default().budget(false, unlimited)
+    }
+}
+
 /// Server-authoritative monthly allowance. A missing limit means an administrator
 /// explicitly named by ManagementPolicy, never a role supplied by a client.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +80,10 @@ pub struct TrafficQuota {
     pub legacy_used_bytes: u64,
     pub limit_bytes: Option<u64>,
     pub remaining_bytes: Option<u64>,
+    /// First instant of the next calendar month at the configured server offset.
+    /// Older server responses omit this field.
+    #[serde(default)]
+    pub reset_at: Option<u64>,
 }
 
 impl TrafficQuota {
@@ -46,20 +92,22 @@ impl TrafficQuota {
         utc_offset_minutes: i32,
         used_bytes: u64,
         paid_bytes: u64,
-        unlimited: bool,
+        budget: TrafficBudget,
     ) -> Self {
-        let limit = FREE_MONTHLY_TRAFFIC_BYTES.saturating_add(paid_bytes);
+        let limit = budget.free_bytes.saturating_add(paid_bytes);
+        let reset_at = traffic_reset_at(&period, utc_offset_minutes);
         Self {
             period,
             utc_offset_minutes,
-            free_bytes: FREE_MONTHLY_TRAFFIC_BYTES,
+            free_bytes: budget.free_bytes,
             paid_bytes,
             used_bytes,
             uploaded_bytes: 0,
             downloaded_bytes: 0,
             legacy_used_bytes: used_bytes,
-            limit_bytes: (!unlimited).then_some(limit),
-            remaining_bytes: (!unlimited).then_some(limit.saturating_sub(used_bytes)),
+            limit_bytes: (!budget.unlimited).then_some(limit),
+            remaining_bytes: (!budget.unlimited).then_some(limit.saturating_sub(used_bytes)),
+            reset_at,
         }
     }
 }
@@ -105,6 +153,30 @@ pub fn traffic_period_at(unix_seconds: u64, utc_offset_minutes: i32) -> String {
     let month = month_from_march + if month_from_march < 10 { 3 } else { -9 };
     year += i64::from(month <= 2);
     format!("{year:04}-{month:02}")
+}
+
+/// The reset timestamp is derived from the quota's own period, not the client's
+/// clock. Gregorian arithmetic is the inverse of traffic_period_at.
+pub fn traffic_reset_at(period: &str, utc_offset_minutes: i32) -> Option<u64> {
+    if !valid_traffic_period(period) || !valid_traffic_utc_offset(utc_offset_minutes) {
+        return None;
+    }
+    let year = period[..4].parse::<i64>().ok()?;
+    let month = period[5..].parse::<i64>().ok()?;
+    let (year, month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_from_march = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * month_from_march + 2) / 5;
+    let days = era * 146_097 + year_of_era * 365 + year_of_era / 4 - year_of_era / 100
+        + day_of_year
+        - 719_468;
+    u64::try_from(days * 86_400 - i64::from(utc_offset_minutes) * 60).ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -550,5 +622,69 @@ mod tests {
         ] {
             assert!(!valid_traffic_period(period), "{period}");
         }
+    }
+
+    #[test]
+    fn monthly_reset_is_the_server_calendar_boundary() {
+        assert_eq!(traffic_reset_at("2026-11", 480), Some(1_796_054_400));
+        assert_eq!(traffic_reset_at("2026-12", 480), Some(1_798_732_800));
+        assert_eq!(traffic_reset_at("2028-02", 480), Some(1_835_452_800));
+        assert_eq!(traffic_reset_at("1969-12", -720), Some(43_200));
+        assert_eq!(traffic_reset_at("1969-12", 480), None);
+        for year in [1970, 1999, 2000, 2026, 2028, 2100, 2400, 9999] {
+            for month in 1..=12 {
+                let period = format!("{year:04}-{month:02}");
+                let next = if month == 12 {
+                    format!("{}-01", year + 1)
+                } else {
+                    format!("{year:04}-{:02}", month + 1)
+                };
+                for offset in [-720, 0, 480, 840] {
+                    let reset = traffic_reset_at(&period, offset).unwrap();
+                    assert_eq!(traffic_period_at(reset - 1, offset), period);
+                    assert_eq!(traffic_period_at(reset, offset), next);
+                }
+            }
+        }
+        for invalid in ["", "0000-01", "2026-00", "2026-13", "２０２６-11"] {
+            assert_eq!(traffic_reset_at(invalid, 0), None);
+        }
+        for offset in [-721, 841, i32::MIN, i32::MAX] {
+            assert_eq!(traffic_reset_at("2026-11", offset), None);
+        }
+    }
+
+    #[test]
+    fn monthly_quota_missing_reset_is_compatible_and_zero_is_finite() {
+        let quota = TrafficQuota::new(
+            "2026-11".into(),
+            480,
+            0,
+            0,
+            TrafficBudget {
+                free_bytes: 0,
+                unlimited: false,
+            },
+        );
+        assert_eq!(quota.limit_bytes, Some(0));
+        assert_eq!(quota.remaining_bytes, Some(0));
+        assert_eq!(quota.reset_at, Some(1_796_054_400));
+        let mut json = serde_json::to_value(&quota).unwrap();
+        json.as_object_mut().unwrap().remove("reset_at");
+        let restored: TrafficQuota = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.reset_at, None);
+        assert_eq!(restored.limit_bytes, Some(0));
+        let unlimited = TrafficQuota::new(
+            "2026-11".into(),
+            480,
+            1,
+            0,
+            TrafficBudget {
+                free_bytes: 0,
+                unlimited: true,
+            },
+        );
+        assert_eq!(unlimited.limit_bytes, None);
+        assert_eq!(unlimited.remaining_bytes, None);
     }
 }

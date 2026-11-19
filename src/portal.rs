@@ -296,6 +296,20 @@ impl Portal {
             commerce: None,
         })
     }
+    /// Apply server policy without changing stored counters or account identities.
+    pub fn configure_monthly_allowances(
+        &self,
+        allowances: crate::user_policy::MonthlyTrafficAllowances,
+    ) -> crate::Result<()> {
+        self.store
+            .as_ref()
+            .ok_or("monthly traffic allowances require portal storage")?
+            .lock()
+            .map_err(|_| "portal storage lock poisoned")?
+            .configure_monthly_allowances(allowances);
+        Ok(())
+    }
+
     /// The private socket carries only requests authenticated by this portal's sessions.
     pub fn configure_management(&mut self, socket: PathBuf) {
         self.management = Some(ManagementClient::new(socket));

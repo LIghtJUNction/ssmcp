@@ -68,6 +68,7 @@ pub(crate) struct Store {
     database: Database,
     failed: bool,
     traffic: super::traffic::TrafficLedger,
+    monthly_allowances: crate::user_policy::MonthlyTrafficAllowances,
 }
 
 impl Drop for Store {
@@ -175,6 +176,7 @@ impl Store {
             database,
             failed: false,
             traffic,
+            monthly_allowances: Default::default(),
         })
     }
 
@@ -369,6 +371,14 @@ impl Store {
         self.save(next)
     }
 
+    pub(crate) fn configure_monthly_allowances(
+        &mut self,
+        allowances: crate::user_policy::MonthlyTrafficAllowances,
+    ) {
+        // Server configuration changes policy, never the persisted usage journal.
+        self.monthly_allowances = allowances;
+    }
+
     pub(crate) fn traffic_quota(
         &self,
         subject: &str,
@@ -376,9 +386,14 @@ impl Store {
         utc_offset_minutes: i32,
         unlimited: bool,
     ) -> Result<crate::user_policy::TrafficQuota, Problem> {
-        self.account(subject)?;
-        self.traffic
-            .snapshot(subject, period, utc_offset_minutes, unlimited)
+        let account = self.account(subject)?;
+        self.traffic.snapshot(
+            subject,
+            period,
+            utc_offset_minutes,
+            self.monthly_allowances
+                .budget(account.has_recharged, unlimited),
+        )
     }
 
     pub(crate) fn set_traffic_remaining(
@@ -388,13 +403,16 @@ impl Store {
         utc_offset_minutes: i32,
         remaining_bytes: u64,
     ) -> Result<(), Problem> {
-        self.account_record(subject)?;
+        let account = self.account_record(subject)?;
         self.traffic.set_remaining(
             &self.directory,
             subject,
             period,
             utc_offset_minutes,
             remaining_bytes,
+            self.monthly_allowances
+                .budget(account.has_recharged, false)
+                .free_bytes,
         )
     }
 
@@ -404,9 +422,15 @@ impl Store {
         period: &str,
         utc_offset_minutes: i32,
     ) -> Result<u64, Problem> {
+        let account = self.account_record(subject)?;
         Ok(self
             .traffic
-            .snapshot(subject, period, utc_offset_minutes, false)?
+            .snapshot(
+                subject,
+                period,
+                utc_offset_minutes,
+                self.monthly_allowances.budget(account.has_recharged, false),
+            )?
             .remaining_bytes
             .expect("finite quota"))
     }
@@ -419,14 +443,15 @@ impl Store {
         frame: crate::user_policy::TrafficFrame,
         unlimited: bool,
     ) -> Result<(), Problem> {
-        self.account(subject)?;
+        let account = self.account(subject)?;
         self.traffic.reserve_frame(
             &self.directory,
             subject,
             period,
             utc_offset_minutes,
             frame,
-            unlimited,
+            self.monthly_allowances
+                .budget(account.has_recharged, unlimited),
         )
     }
 
@@ -439,14 +464,15 @@ impl Store {
         bytes: u64,
         unlimited: bool,
     ) -> Result<(), Problem> {
-        self.account(subject)?;
+        let account = self.account(subject)?;
         self.traffic.reserve(
             &self.directory,
             subject,
             period,
             utc_offset_minutes,
             bytes,
-            unlimited,
+            self.monthly_allowances
+                .budget(account.has_recharged, unlimited),
         )
     }
 
@@ -758,5 +784,198 @@ mod tests {
         assert!(Store::open(&temporary.0).is_err());
         drop(reopened);
         assert!(Store::open(&temporary.0).is_ok());
+    }
+
+    fn monthly_allowances(free: u64, paid: u64) -> crate::user_policy::MonthlyTrafficAllowances {
+        crate::user_policy::MonthlyTrafficAllowances {
+            free_user_bytes: free,
+            paid_user_bytes: paid,
+        }
+    }
+    fn monthly_quota(store: &Store, subject: &str) -> crate::user_policy::TrafficQuota {
+        store.traffic_quota(subject, "2026-11", 480, false).unwrap()
+    }
+    fn monthly_frame(
+        store: &mut Store,
+        uploaded: bool,
+        bytes: u64,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        store.reserve_traffic_frame(
+            "123",
+            "2026-11",
+            480,
+            crate::user_policy::TrafficFrame { uploaded, bytes },
+            unlimited,
+        )
+    }
+
+    #[test]
+    fn monthly_tier_uses_durable_recharge_not_login_or_handle_labels() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "paid")).unwrap();
+        store.claim_handle("123", "paid-user").unwrap();
+        store.login(&identity("456", "ordinary")).unwrap();
+        store.record_recharge("456").unwrap();
+        assert_eq!(
+            monthly_quota(&store, "123").limit_bytes,
+            Some(1_000_000_000)
+        );
+        assert_eq!(
+            monthly_quota(&store, "456").limit_bytes,
+            Some(1_000_000_000)
+        );
+        store.configure_monthly_allowances(monthly_allowances(100, 1_000));
+        assert_eq!(monthly_quota(&store, "123").free_bytes, 100);
+        assert_eq!(monthly_quota(&store, "456").free_bytes, 1_000);
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(100, 1_000));
+        store.login(&identity("456", "renamed")).unwrap();
+        assert_eq!(monthly_quota(&store, "456").free_bytes, 1_000);
+        assert_eq!(monthly_quota(&store, "123").free_bytes, 100);
+        assert!(matches!(
+            store.traffic_quota("999", "2026-11", 480, false),
+            Err(Problem::Unauthorized)
+        ));
+        store.set_policy("456", Some(true), None).unwrap();
+        assert!(matches!(
+            store.traffic_quota("456", "2026-11", 480, true),
+            Err(Problem::Banned)
+        ));
+        assert_eq!(
+            store
+                .admin_traffic_remaining("456", "2026-11", 480)
+                .unwrap(),
+            1_000
+        );
+    }
+
+    #[test]
+    fn monthly_tier_changes_preserve_directional_and_legacy_usage_across_restart() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(100, 1_000));
+        store
+            .reserve_traffic("123", "2026-11", 480, 7, false)
+            .unwrap();
+        monthly_frame(&mut store, true, 40, false).unwrap();
+        monthly_frame(&mut store, false, 25, false).unwrap();
+        assert_eq!(monthly_quota(&store, "123").used_bytes, 47);
+        store.record_recharge("123").unwrap();
+        let paid = monthly_quota(&store, "123");
+        assert_eq!((paid.limit_bytes, paid.used_bytes), (Some(1_000), 47));
+        store.configure_monthly_allowances(monthly_allowances(20, 30));
+        let reduced = monthly_quota(&store, "123");
+        assert_eq!((reduced.used_bytes, reduced.remaining_bytes), (47, Some(0)));
+        assert!(matches!(
+            monthly_frame(&mut store, true, 1, false),
+            Err(Problem::TrafficQuotaExceeded)
+        ));
+        monthly_frame(&mut store, true, 3, true).unwrap();
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(100, 200));
+        let restored = monthly_quota(&store, "123");
+        assert_eq!(
+            (
+                restored.uploaded_bytes,
+                restored.downloaded_bytes,
+                restored.legacy_used_bytes
+            ),
+            (43, 25, 7)
+        );
+        assert_eq!(
+            (restored.used_bytes, restored.remaining_bytes),
+            (50, Some(150))
+        );
+        let next = store.traffic_quota("123", "2026-12", 480, false).unwrap();
+        assert_eq!(
+            (next.used_bytes, next.free_bytes, next.paid_bytes),
+            (0, 200, 0)
+        );
+        assert_eq!(monthly_quota(&store, "123").used_bytes, 50);
+    }
+
+    #[test]
+    fn monthly_admin_override_wins_even_when_initial_edit_matches_the_default() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(100, 1_000));
+        monthly_frame(&mut store, true, 40, false).unwrap();
+        // Explicitly pin the same total of 100, before an upgrade changes the default.
+        store
+            .set_traffic_remaining("123", "2026-11", 480, 60)
+            .unwrap();
+        store.record_recharge("123").unwrap();
+        assert_eq!(monthly_quota(&store, "123").limit_bytes, Some(100));
+        assert!(
+            store
+                .grant_paid_traffic("123", "2026-11", "2026-11", "monthly-pack", 50)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .grant_paid_traffic("123", "2026-11", "2026-11", "monthly-pack", 50)
+                .unwrap()
+        );
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(1, 2));
+        let quota = monthly_quota(&store, "123");
+        assert_eq!(
+            (quota.free_bytes, quota.paid_bytes, quota.used_bytes),
+            (2, 50, 40)
+        );
+        assert_eq!(
+            (quota.limit_bytes, quota.remaining_bytes),
+            (Some(150), Some(110))
+        );
+        assert_eq!(
+            store
+                .admin_traffic_remaining("123", "2026-11", 480)
+                .unwrap(),
+            110
+        );
+        let unlimited = store.traffic_quota("123", "2026-11", 480, true).unwrap();
+        assert_eq!(
+            (unlimited.limit_bytes, unlimited.remaining_bytes),
+            (None, None)
+        );
+        let next = store.traffic_quota("123", "2026-12", 480, false).unwrap();
+        assert_eq!(
+            (next.limit_bytes, next.used_bytes, next.paid_bytes),
+            (Some(2), 0, 0)
+        );
+    }
+
+    #[test]
+    fn monthly_zero_gift_and_paid_packs_do_not_grant_unlimited_access() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.configure_monthly_allowances(monthly_allowances(0, 0));
+        monthly_frame(&mut store, true, 0, false).unwrap();
+        assert!(matches!(
+            monthly_frame(&mut store, true, 1, false),
+            Err(Problem::TrafficQuotaExceeded)
+        ));
+        store.record_recharge("123").unwrap();
+        assert_eq!(monthly_quota(&store, "123").limit_bytes, Some(0));
+        store
+            .grant_paid_traffic("123", "2026-11", "2026-11", "zero-tier-pack", 10)
+            .unwrap();
+        monthly_frame(&mut store, true, 10, false).unwrap();
+        monthly_frame(&mut store, false, 10, false).unwrap();
+        assert_eq!(monthly_quota(&store, "123").used_bytes, 10);
+        assert!(matches!(
+            monthly_frame(&mut store, false, 1, false),
+            Err(Problem::TrafficQuotaExceeded)
+        ));
+        monthly_frame(&mut store, false, 1, true).unwrap();
+        assert_eq!(monthly_quota(&store, "123").used_bytes, 11);
     }
 }

@@ -616,6 +616,7 @@ mod tests {
             utc_offset_minutes: 480,
             free_bytes: 1_000_000_000,
             paid_bytes: 0,
+            reset_at: Some(1_796_054_400),
         }
     }
 
