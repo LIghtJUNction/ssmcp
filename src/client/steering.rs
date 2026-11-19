@@ -256,6 +256,15 @@ struct DeliveredMemory {
     target: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ThreadDeliveredMemory {
+    session_id: String,
+    thread_id: String,
+    id: String,
+    text: String,
+    revision: u64,
+}
+
 #[derive(Default)]
 struct Manager {
     outbox: Outbox,
@@ -272,6 +281,7 @@ struct Manager {
     // Pure Manager operations never perform history I/O.
     accepted_history: Vec<AcceptedHistory>,
     delivered_memory: Vec<DeliveredMemory>,
+    thread_delivered_memory: Vec<ThreadDeliveredMemory>,
     frozen: bool,
     reload_requested: bool,
     error: Option<String>,
@@ -329,7 +339,13 @@ impl Manager {
     fn snapshot(&self) -> Value {
         json!({
             "schema_version":1,"connected":self.connected,"supported":self.supported,
-            "room_id":self.outbox.room_id,"revision":self.revision,"agents":self.agents,
+            "room_id":self.outbox.room_id,"session_id":self.outbox.room_id,"revision":self.revision,
+            "agents":self.agents.iter().map(|agent| {
+                let mut value = serde_json::to_value(agent).expect("serializable agent");
+                value["thread_id"] = json!(agent.agent_id);
+                value["session_id"] = json!(self.outbox.room_id);
+                value
+            }).collect::<Vec<_>>(),
             "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor},
             "draft_context":self.outbox.context,
             "queue":self.outbox.records.iter().map(|record| json!({
@@ -337,6 +353,7 @@ impl Manager {
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
+                "source":if record.message.id.starts_with("webhook_") {"webhook"} else {"client_user"},
                 "retarget_required":record.retarget_required,"uncertain":record.uncertain
             })).collect::<Vec<_>>(),
             "error":self.error,"reloading":self.frozen || self.reload_requested
@@ -360,6 +377,13 @@ impl Manager {
         let target = target.unwrap_or("next");
         if target == "next" {
             return Ok(target.into());
+        }
+        if target == "global" {
+            return if self.connected && self.ready && !self.agents.is_empty() {
+                Ok(target.into())
+            } else {
+                Err("global messages require an active session with at least one thread".into())
+            };
         }
         if !valid_id(target)
             || !self.connected
@@ -907,6 +931,31 @@ impl Manager {
         self.agents.clone_from(&snapshot.agents);
         self.error = None;
         for message in &snapshot.messages {
+            if message.state == SteeringState::Delivered
+                && !message.id.starts_with("webhook_")
+                && let Some(thread_id) = message
+                    .delivery
+                    .as_ref()
+                    .and_then(|delivery| delivery.agent_id.as_ref())
+                && self
+                    .outbox
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.message.id == message.id && record.room_id == self.outbox.room_id
+                    })
+                    .is_none_or(|record| {
+                        !record.terminal() && message.revision > record.message.revision
+                    })
+            {
+                self.thread_delivered_memory.push(ThreadDeliveredMemory {
+                    session_id: snapshot.client_id.clone(),
+                    thread_id: thread_id.clone(),
+                    id: message.id.clone(),
+                    text: super::references::source(&message.text).to_owned(),
+                    revision: message.revision,
+                });
+            }
             if let Some(record) = self.outbox.records.iter_mut().find(|record| {
                 record.message.id == message.id && record.room_id == self.outbox.room_id
             }) {
@@ -914,8 +963,12 @@ impl Manager {
                     if !record.terminal()
                         && message.revision > record.message.revision
                         && message.state == SteeringState::Delivered
-                        && message.delivery.is_some()
+                        && message
+                            .delivery
+                            .as_ref()
+                            .is_some_and(|delivery| delivery.agent_id.is_none())
                         && message.target == "next"
+                        && !message.id.starts_with("webhook_")
                     {
                         self.delivered_memory.push(DeliveredMemory {
                             id: message.id.clone(),
@@ -1011,6 +1064,9 @@ impl Manager {
     }
 
     fn reply(&mut self, id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+        if id == 0 {
+            return self.merge(&result?);
+        }
         let Some(request) = self.requests.remove(&id) else {
             return Ok(());
         };
@@ -1300,12 +1356,13 @@ pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
 pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
-    let (outcome, accepted, delivered) = with(|manager| {
+    let (outcome, accepted, delivered, thread_delivered) = with(|manager| {
         let outcome = manager.reply(id, result);
         (
             outcome,
             std::mem::take(&mut manager.accepted_history),
             std::mem::take(&mut manager.delivered_memory),
+            std::mem::take(&mut manager.thread_delivered_memory),
         )
     });
     // Disk and display work happen after releasing the request manager lock.
@@ -1316,6 +1373,27 @@ pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result
                 "history",
                 "Warning",
                 &format!("Request was accepted, but its history could not be saved: {error}"),
+            );
+        }
+    }
+    for message in thread_delivered {
+        let result = super::interface::history::workspace().and_then(|root| {
+            super::context_memory::record_thread_delivered_request(
+                Path::new(&root),
+                &message.session_id,
+                &message.thread_id,
+                &message.id,
+                &message.text,
+                message.revision,
+            )
+        });
+        if let Err(error) = result {
+            super::render::status(
+                "memory",
+                "Warning",
+                &format!(
+                    "Thread delivery was confirmed, but its memory could not be saved: {error}"
+                ),
             );
         }
     }
@@ -2579,5 +2657,41 @@ mod tests {
         let pending = &manager.outbox.records[manager.index(&pending_id).unwrap()];
         assert!(!pending.uncertain);
         assert_eq!(pending.status(true), "sending");
+    }
+    #[test]
+    fn bound_next_delivery_enters_only_its_thread_context_and_pushes_are_idempotent() {
+        let mut manager = Manager::default();
+        manager.outbox.room_id = Some("room_one".into());
+        let message = SteeringMessage {
+            id: "message_thread".into(),
+            revision: 2,
+            text: "private requirement".into(),
+            target: "next".into(),
+            state: SteeringState::Delivered,
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            delivery: Some(crate::wire::SteeringDelivery {
+                run_id: "run".into(),
+                agent_id: Some("agent_one".into()),
+                included_at_ms: 2,
+            }),
+        };
+        let snapshot = snapshot_for("room_one", 2, vec![message.clone()]);
+        manager.reply(0, Ok(snapshot.clone())).unwrap();
+        assert!(manager.delivered_memory.is_empty());
+        assert_eq!(manager.thread_delivered_memory.len(), 1);
+        assert_eq!(manager.thread_delivered_memory[0].thread_id, "agent_one");
+        assert_eq!(manager.thread_delivered_memory[0].session_id, "room_one");
+        manager.reply(0, Ok(snapshot)).unwrap();
+        assert_eq!(manager.thread_delivered_memory.len(), 1);
+        let webhook = SteeringMessage {
+            id: "webhook_event".into(),
+            ..message
+        };
+        manager
+            .reply(0, Ok(snapshot_for("room_one", 3, vec![webhook])))
+            .unwrap();
+        assert_eq!(manager.thread_delivered_memory.len(), 1);
+        assert!(manager.delivered_memory.is_empty());
     }
 }

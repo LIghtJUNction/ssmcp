@@ -29,7 +29,7 @@ use subtle::ConstantTimeEq;
 use tokio::{
     io::BufReader,
     net::UnixStream,
-    sync::{Notify, RwLock, Semaphore, mpsc, oneshot},
+    sync::{Notify, OnceCell, RwLock, Semaphore, mpsc, oneshot},
     time::{Instant, timeout},
 };
 
@@ -164,6 +164,8 @@ struct SessionTrafficFailure {
 pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
+    thread_scope: OnceCell<bool>,
+    queue_changed: Notify,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
@@ -242,6 +244,102 @@ impl Session {
             .command(self.client_id(), self.collaboration.presence()?, command)
     }
 
+    /// The caller must authorize this session before invoking this user action.
+    pub(crate) fn dispatch_user_message(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, String> {
+        self.dispatch_message(
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            crate::steering::MessageSource::User,
+        )
+    }
+
+    /// Webhook events remain external data at delivery; they cannot impersonate
+    /// a user requirement merely by using the same waiting queue.
+    pub(crate) fn dispatch_notification(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, String> {
+        self.dispatch_message(
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            crate::steering::MessageSource::Webhook,
+        )
+    }
+
+    fn dispatch_message(
+        &self,
+        thread_id: Option<&str>,
+        text: &str,
+        broadcast: bool,
+        idempotency_key: Option<&str>,
+        source: crate::steering::MessageSource,
+    ) -> Result<Value, String> {
+        if !self.is_alive() {
+            return Err("client connection is closed".into());
+        }
+        let receipt = self.steering.enqueue(
+            self.client_id(),
+            self.collaboration.presence()?,
+            thread_id,
+            text,
+            broadcast,
+            idempotency_key,
+            source,
+        )?;
+        self.queue_changed.notify_one();
+        Ok(receipt)
+    }
+
+    /// Probe with the legacy-safe frame before adding optional scope metadata.
+    /// The response comes from this authenticated connection, never from caller
+    /// arguments or a controller display name.
+    async fn supports_thread_scope(&self) -> Result<bool, String> {
+        self.thread_scope
+            .get_or_try_init(|| async {
+                let _permit = self
+                    .slots
+                    .try_acquire()
+                    .map_err(|_| "client busy; retry later")?;
+                let (reply, response) = oneshot::channel();
+                self.sender
+                    .try_send(Call {
+                        operation: Operation::CallTool {
+                            name: "ssmcp.client.capabilities".into(),
+                            arguments: serde_json::json!({}),
+                        },
+                        controller: None,
+                        code_context: None,
+                        reply,
+                    })
+                    .map_err(|_| "client disconnected or busy; scope probe was not dispatched")?;
+                let result = timeout(Duration::from_secs(15), response)
+                    .await
+                    .map_err(|_| "thread scope capability probe timed out")?
+                    .map_err(|_| "client disconnected during thread scope capability probe")?;
+                let value = result?;
+                if value["isError"].as_bool() == Some(true) {
+                    return Err("thread scope capability query failed; retry the call".into());
+                }
+                let native = value.get("structuredContent").unwrap_or(&value);
+                Ok(native["thread_scope"].as_u64() == Some(1))
+            })
+            .await
+            .copied()
+    }
+
     pub async fn call(&self, operation: Operation) -> CallResult {
         self.call_with_controller(operation, None).await
     }
@@ -305,7 +403,20 @@ impl Session {
         if let Some(controller) = &controller {
             controller.validate()?;
         }
-        let code_context = audit_run.as_ref().map(|run| (*run.context).clone());
+        let mut code_context = audit_run.as_ref().map(|run| (*run.context).clone());
+        if let Some(binding) = audit_run
+            .as_ref()
+            .and_then(|run| run.binding(self.client_id()))
+        {
+            self.collaboration
+                .bind(&binding.owner, &binding.agent_id, &binding.token)?;
+            if self.supports_thread_scope().await?
+                && let Some(context) = &mut code_context
+            {
+                context.session_id = Some(self.client_id().into());
+                context.thread_id = Some(binding.agent_id);
+            }
+        }
         let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
             return Err(self.connection_error(false, "client disconnected"));
@@ -607,8 +718,10 @@ impl Broker {
         let (reports, _reports_rx) = mpsc::channel(1);
         let id = generate_secret().unwrap();
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -940,8 +1053,10 @@ impl Broker {
         let (sender, mut requests) = mpsc::channel::<Call>(wire::MAX_INFLIGHT);
         let (reports, mut code_reports) = mpsc::channel::<wire::CodeCompletion>(wire::MAX_INFLIGHT);
         let session = Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1148,6 +1263,13 @@ impl Broker {
                             if let Some(frame) = frame {
                                 timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                             }
+                        }
+                        _ = session.queue_changed.notified() => {
+                            let frame = Frame::SteeringReply { id:0, result:session.steering_command(wire::SteeringCommand::Snapshot {}) };
+                            if let Some(subject) = legacy_subject {
+                                self.charge_relay(subject, true, serde_json::to_vec(&frame)?.len() + 1).await?;
+                            }
+                            timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
                         }
                         _ = expiry.tick() => {
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
@@ -1753,8 +1875,10 @@ mod tests {
         let (sender, _rx) = mpsc::channel(1);
         let (reports, _reports_rx) = mpsc::channel(1);
         Arc::new(Session {
-            collaboration: crate::collab::Hub::default(),
+            collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
+            thread_scope: OnceCell::new(),
+            queue_changed: Notify::new(),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -2459,5 +2583,96 @@ mod tests {
             &broker.redeem_login(&user, &"a".repeat(64)).await.unwrap(),
             &anchor
         ));
+    }
+    #[tokio::test]
+    async fn native_thread_scope_is_bound_and_capability_gated_once() {
+        for supported in [false, true] {
+            let mut session = session("session_one", "unused");
+            let (sender, mut receiver) = mpsc::channel::<Call>(4);
+            Arc::get_mut(&mut session).unwrap().sender = sender;
+            let joined = session
+                .collaboration
+                .dispatch("owner", "join", serde_json::json!({"name":"worker"}))
+                .await
+                .unwrap();
+            let thread = joined["thread_id"].as_str().unwrap().to_owned();
+            let run = crate::code_mode::AuditRun::new("return true;", None).unwrap();
+            run.bind(
+                "session_one",
+                "owner",
+                &thread,
+                joined["token"].as_str().unwrap(),
+            )
+            .unwrap();
+            let expected = thread.clone();
+            let client = tokio::spawn(async move {
+                let probe = receiver.recv().await.unwrap();
+                assert!(probe.code_context.is_none());
+                assert!(
+                    matches!(probe.operation,Operation::CallTool{name,..} if name == "ssmcp.client.capabilities")
+                );
+                probe.reply.send(Ok(serde_json::json!({"structuredContent":{"thread_scope":if supported {1} else {0}}}))).unwrap();
+                for _ in 0..2 {
+                    let call = receiver.recv().await.unwrap();
+                    let context = call.code_context.unwrap();
+                    assert_eq!(
+                        context.session_id.as_deref(),
+                        supported.then_some("session_one")
+                    );
+                    assert_eq!(
+                        context.thread_id.as_deref(),
+                        supported.then_some(expected.as_str())
+                    );
+                    call.reply.send(Ok(serde_json::json!({"ok":true}))).unwrap();
+                }
+            });
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                crate::code_mode::AUDIT_RUN.scope(run, async {
+                    assert_eq!(
+                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        true
+                    );
+                    assert_eq!(
+                        session.call(Operation::Status {}).await.unwrap()["ok"],
+                        true
+                    );
+                    client.await.unwrap();
+                }),
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_probe_errors_are_retryable_and_do_not_cache_a_false_capability() {
+        let mut session = session("session_retry", "unused");
+        let (sender, mut receiver) = mpsc::channel::<Call>(4);
+        Arc::get_mut(&mut session).unwrap().sender = sender;
+        let client = tokio::spawn(async move {
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .reply
+                .send(Err("temporarily busy".into()))
+                .unwrap();
+            receiver
+                .recv()
+                .await
+                .unwrap()
+                .reply
+                .send(Ok(serde_json::json!({"thread_scope":1})))
+                .unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            assert!(session.supports_thread_scope().await.is_err());
+            assert!(session.supports_thread_scope().await.unwrap());
+            assert!(session.supports_thread_scope().await.unwrap());
+            client.await.unwrap();
+        })
+        .await
+        .unwrap();
     }
 }

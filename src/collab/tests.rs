@@ -675,3 +675,87 @@ async fn explicit_null_payload_is_valid_but_missing_payload_is_rejected() {
     assert!(received["messages"][0]["payload"].is_null());
     assert_eq!(received["messages"][0]["message_id"], sent["message_id"]);
 }
+
+#[tokio::test]
+async fn logical_ids_and_thread_alias_preserve_private_mailboxes() {
+    let hub = Hub::for_session("session_one");
+    let one = hub
+        .dispatch("owner", "join", json!({"name":"one"}))
+        .await
+        .unwrap();
+    let two = hub
+        .dispatch("owner", "join", json!({"name":"two"}))
+        .await
+        .unwrap();
+    assert_eq!(one["session_id"], "session_one");
+    assert_eq!(one["thread_id"], one["agent_id"]);
+    let list = hub.dispatch("owner", "list", json!({})).await.unwrap();
+    assert_eq!(list["session_id"], "session_one");
+    assert!(
+        list["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|agent| agent["session_id"] == "session_one"
+                && agent["thread_id"] == agent["agent_id"]
+                && agent.get("token").is_none())
+    );
+    let sent = hub
+        .dispatch(
+            "owner",
+            "send",
+            json!({
+                "thread_id":one["thread_id"],"token":one["token"],"to":two["thread_id"],
+                "payload":{"text":"private handoff"},"idempotency_key":"once"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sent["delivery"], "queued");
+    assert!(
+        hub.dispatch(
+            "owner",
+            "receive",
+            json!({
+                "thread_id":two["thread_id"],"token":one["token"]
+            })
+        )
+        .await
+        .is_err()
+    );
+    let own = hub
+        .dispatch(
+            "owner",
+            "receive",
+            json!({
+                "thread_id":one["thread_id"],"token":one["token"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(own["messages"], json!([]));
+    let received = hub
+        .dispatch(
+            "owner",
+            "receive",
+            json!({
+                "thread_id":two["thread_id"],"token":two["token"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(received["messages"][0]["from_thread_id"], one["thread_id"]);
+    assert_eq!(received["thread_id"], two["thread_id"]);
+    assert_eq!(received["session_id"], "session_one");
+    assert!(
+        hub.dispatch(
+            "different_owner",
+            "receive",
+            json!({
+                "thread_id":two["thread_id"],"token":two["token"]
+            })
+        )
+        .await
+        .is_err()
+    );
+}
