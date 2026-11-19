@@ -33,7 +33,7 @@ fn intent_text(intent: Intent) -> &'static str {
 
 fn outcome_text(outcome: Outcome) -> &'static str {
     match outcome {
-        Outcome::Ready => "消息已就绪，等待外层交付",
+        Outcome::Ready => "消息已就绪，等待提交",
         Outcome::TimedOut => "本轮等待超时",
         Outcome::Cancelled => "等待已取消，会话继续",
         Outcome::Disconnected => "连接已断开",
@@ -59,7 +59,12 @@ fn detail(snapshot: &Snapshot) -> String {
             snapshot.active.len()
         ));
         for entries in episodes.values() {
-            let first = entries[0];
+            let first = entries
+                .iter()
+                .copied()
+                .find(|entry| entry.intent == Intent::Finish)
+                .unwrap_or(entries[0]);
+            let mixed = entries.iter().any(|entry| entry.intent != first.intent);
             let recipient = if first.recipient == "next" {
                 "Next caller"
             } else {
@@ -72,7 +77,15 @@ fn detail(snapshot: &Snapshot) -> String {
             }
             for entry in entries {
                 let remaining = entry.remaining_ms.div_ceil(1000);
-                lines.push(format!("#{} · 本轮剩余 {remaining}s", entry.wait_id));
+                lines.push(if mixed {
+                    format!(
+                        "#{} · {} · 本轮剩余 {remaining}s",
+                        entry.wait_id,
+                        intent_text(entry.intent)
+                    )
+                } else {
+                    format!("#{} · 本轮剩余 {remaining}s", entry.wait_id)
+                });
                 let notification = match entry.notification {
                     Some(report) => {
                         let status = match report.status {
@@ -109,14 +122,24 @@ fn detail(snapshot: &Snapshot) -> String {
             ));
         }
     }
-    lines.push("只有外层 user_wait.received 随附用户消息，才表示交付已提交".into());
+    lines.push("取消只结束等待；你的消息仍按队列状态处理".into());
     lines.join("\n")
 }
 
 fn hint(snapshot: &Snapshot) -> Option<String> {
     let episodes = groups(snapshot);
+    let finish = snapshot
+        .active
+        .iter()
+        .any(|entry| entry.intent == Intent::Finish);
     if episodes.len() > 1 {
-        Some(format!("{} 项等待你的回应 · /wait", episodes.len()))
+        Some(if finish {
+            format!("{} 项等待 · 含结束确认 · /wait", episodes.len())
+        } else {
+            format!("{} 项等待你的回应 · /wait", episodes.len())
+        })
+    } else if finish {
+        Some(format!("{} · /wait", intent_text(Intent::Finish)))
     } else {
         snapshot
             .active
@@ -164,5 +187,118 @@ impl State {
             return None;
         }
         hint(&waiting::snapshot())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::interface::user_wait::Completion;
+    use crate::client::notification::{Reason, Report};
+
+    fn entry(id: &str, episode: &str, intent: Intent) -> Entry {
+        Entry {
+            wait_id: id.into(),
+            episode_id: episode.into(),
+            intent,
+            recipient: "next".into(),
+            reason: Some("Synthetic wait reason".into()),
+            remaining_ms: 12_500,
+            notification_requested: false,
+            notification: None,
+        }
+    }
+
+    #[test]
+    fn user_wait_commands_stay_local_and_preserve_an_edited_draft() {
+        assert_eq!(
+            arguments("  /wait\n cancel exact-id  "),
+            Some("cancel exact-id")
+        );
+        assert_eq!(arguments("/wait"), Some(""));
+        assert_eq!(arguments("/waiting for text"), None);
+        assert_eq!(arguments("/waiter"), None);
+        for draft in ["/wait", "  /wait cancel exact-id"] {
+            let mut state = super::super::super::preview_state(24, 48, &Ui::default());
+            state.conversation.composer.set_text(draft);
+            state.conversation.editing = Some("untouched-queue-id".into());
+            state.conversation.target = Some("untouched-agent".into());
+            state.chat_submit();
+            assert_eq!(state.notice.as_deref(), Some("预览不连接真实的用户等待"));
+            assert_eq!(state.conversation.composer.text(), draft);
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("untouched-queue-id")
+            );
+            assert_eq!(
+                state.conversation.target.as_deref(),
+                Some("untouched-agent")
+            );
+            assert!(!state.conversation.exit_requested);
+            assert!(state.actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn user_wait_display_groups_retry_episodes_and_keeps_exact_cancel_ids() {
+        let snapshot = Snapshot {
+            connected: true,
+            active: vec![
+                entry("wait-alpha", "episode-a", Intent::NeedUser),
+                entry("wait-alpine", "episode-a", Intent::NeedUser),
+                entry("wait-beta", "episode-b", Intent::Finish),
+            ],
+            ..Snapshot::default()
+        };
+        assert_eq!(
+            hint(&snapshot).as_deref(),
+            Some("2 项等待 · 含结束确认 · /wait")
+        );
+        let text = detail(&snapshot);
+        assert_eq!(text.matches("Synthetic wait reason").count(), 2);
+        for id in ["#wait-alpha", "#wait-alpine", "#wait-beta"] {
+            assert!(text.contains(id));
+        }
+        assert!(text.contains("完整编号或唯一前缀"));
+        assert!(text.contains("等待你确认是否结束"));
+        let mixed = Snapshot {
+            active: vec![
+                entry("first-input", "same-episode", Intent::NeedUser),
+                entry("second-finish", "same-episode", Intent::Finish),
+            ],
+            ..Snapshot::default()
+        };
+        assert_eq!(hint(&mixed).as_deref(), Some("等待你确认是否结束 · /wait"));
+        let text = detail(&mixed);
+        assert!(text.contains("#first-input · 等待你的输入"));
+        assert!(text.contains("#second-finish · 等待你确认是否结束"));
+        assert!(!text.contains("user_wait.received"));
+    }
+
+    #[test]
+    fn user_wait_ready_and_notification_never_claim_user_delivery_or_seen() {
+        let mut active = entry("wait-visible", "episode", Intent::Finish);
+        active.notification_requested = true;
+        active.notification = Some(Report {
+            status: Status::Sent,
+            reason: Reason::Submitted,
+            deduplicated: true,
+            user_seen: None,
+        });
+        let snapshot = Snapshot {
+            connected: true,
+            active: vec![active],
+            recent: vec![Completion {
+                wait_id: "previous-wait".into(),
+                status: Outcome::Ready,
+                notification: None,
+            }],
+            ..Snapshot::default()
+        };
+        let text = detail(&snapshot);
+        assert!(text.contains("未确认已读"));
+        assert!(text.contains("消息已就绪，等待提交"));
+        assert!(!text.contains("已收到") && !text.contains("用户已读"));
+        assert!(unicode_width::UnicodeWidthStr::width(hint(&snapshot).unwrap().as_str()) <= 48);
     }
 }
