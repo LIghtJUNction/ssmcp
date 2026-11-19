@@ -363,6 +363,8 @@ mod tests {
                 "ssmcp-skill-sources-{}",
                 u128::from_le_bytes(random)
             ));
+            fs::create_dir_all(&root).unwrap();
+            let root = fs::canonicalize(root).unwrap();
             let project = root.join("project");
             let global = root.join("global-skills");
             fs::create_dir_all(&project).unwrap();
