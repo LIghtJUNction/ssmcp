@@ -353,7 +353,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
             .text()
             .await
             .unwrap()
-            .contains("href=\"/portal.css\"")
+            .contains(&format!("href=\"{}\"", assets::url("portal.css")))
     );
     let callback = client
         .get(&callback_url)
