@@ -7,6 +7,7 @@ mod canvas;
 mod hints;
 mod history;
 mod login;
+pub(super) mod logout;
 mod questions;
 mod tasks;
 
@@ -86,6 +87,8 @@ pub(super) struct Conversation {
     input_task: Option<attachments::Task>,
     login_task: Option<crate::client::account::login::Task>,
     access_request: Option<u64>,
+    pub(super) logout_task: Option<logout::Task>,
+    pub(super) exit_message: Option<String>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
@@ -307,6 +310,7 @@ impl State {
         self.chat_poll_input();
         self.chat_poll_login();
         self.chat_poll_access();
+        self.chat_poll_logout();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -458,6 +462,7 @@ impl State {
             }
             "/login" => self.chat_login(rest)?,
             "/allow" => self.chat_allow(rest)?,
+            "/logout" => self.chat_logout(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -670,13 +675,17 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
-        // Exit is local even while editing a queued request or waiting for an acknowledgement.
+        // Exit and logout remain local while editing a queued request or awaiting acknowledgement.
         let text = self.conversation.composer.text().to_owned();
-        if matches!(text.split_whitespace().next(), Some("/exit" | "/quit")) {
+        if matches!(text.split_whitespace().next(), Some("/exit" | "/quit" | "/logout")) {
             if let Err(error) = self.chat_command(text.trim()) {
                 self.notice = Some(error);
             }
             self.dirty = true;
+            return;
+        }
+        if self.conversation.logout_task.is_some() {
+            self.notice = Some("Signing out · your draft is preserved".into());
             return;
         }
         if self.chat_wait_for_input() {
