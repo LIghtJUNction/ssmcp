@@ -58,6 +58,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "强制发送给当前监听程序：/send <正文>；无监听者时保留草稿",
     },
     SlashCommand {
+        name: "/wait",
+        description: "查看用户等待；/wait cancel <唯一编号> 取消对应等待，会话继续",
+    },
+    SlashCommand {
         name: "/audit",
         description: "Open code audit",
     },

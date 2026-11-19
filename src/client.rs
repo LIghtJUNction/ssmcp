@@ -23,6 +23,7 @@ pub(crate) mod input;
 pub(crate) mod interface;
 #[cfg(target_os = "linux")]
 mod local;
+pub(crate) mod notification;
 mod panel;
 pub(crate) mod presentation;
 #[cfg(test)]
