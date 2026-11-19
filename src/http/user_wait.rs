@@ -143,6 +143,10 @@ pub(super) async fn wait(
                     Some("cancelled") => Outcome::Cancelled,
                     Some("timed_out") => Outcome::TimedOut,
                     Some("busy") => Outcome::Busy,
+                    Some("disconnected") => Outcome::Disconnected,
+                    Some("authorization_revoked") => Outcome::AuthorizationRevoked,
+                    Some("binding_invalid") => Outcome::BindingInvalid,
+                    Some("superseded") => Outcome::Superseded,
                     // A native caller can finish UI state. It cannot reserve or
                     // deliver an authenticated user's message on the server.
                     _ => Outcome::Cancelled,
@@ -214,6 +218,9 @@ pub(super) async fn wait(
                 Some("ready") => None,
                 Some("cancelled") => Some(Outcome::Cancelled),
                 Some("timed_out") => Some(Outcome::TimedOut),
+                Some("disconnected") => Some(Outcome::Disconnected),
+                Some("authorization_revoked") => Some(Outcome::AuthorizationRevoked),
+                Some("binding_invalid") => Some(Outcome::BindingInvalid),
                 _ => Some(Outcome::Superseded),
             };
             if let Some(negative) = negative {
@@ -606,7 +613,10 @@ mod tests {
     #[tokio::test]
     async fn user_wait_real_host_rejects_native_forged_ready_and_does_not_claim_after_timeout() {
         let mut fixture = Fixture::new().await;
-        for (index, native_status) in ["ready", "timed_out"].into_iter().enumerate() {
+        for (index, native_status) in ["ready", "timed_out", "disconnected"]
+            .into_iter()
+            .enumerate()
+        {
             let (run, task) = fixture.start_wait(1_000);
             let (call, arguments) = fixture.next_call().await;
             let id = arguments["wait_id"].clone();
@@ -624,7 +634,7 @@ mod tests {
             let expected = if native_status == "ready" {
                 "cancelled"
             } else {
-                "timed_out"
+                native_status
             };
             assert_eq!(task.await.unwrap().unwrap()["status"], expected);
             fixture.publish(&format!("late-{index}")).await;
