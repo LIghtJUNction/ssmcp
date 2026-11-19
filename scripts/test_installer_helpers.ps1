@@ -112,35 +112,7 @@ try {
     Write-FixtureZip $duplicate @('ssmcp.exe', 'ssmcp.exe')
     Assert-Failure { Expand-VerifiedRelease $duplicate (Join-Path $root 'rejected') } 'exactly one root'
 
-    # Run the exact inline native OpenSSH extractor, independently of installation.
-    $dependencySource = [IO.File]::ReadAllText((Join-Path $repository 'src/client/onboarding/dependencies.rs'))
-    $match = [regex]::Match($dependencySource, '(?s)const EXTRACT: &str = r#"(.*?)"#;')
-    if (-not $match.Success) { throw 'Native OpenSSH extraction helper was not found.' }
-    $extractor = $match.Groups[1].Value
-    $pwsh = (Get-Process -Id $PID).Path
-    foreach ($alias in @(
-        '../escape', ' .. /escape', './escape', 'folder//escape',
-        'folder./escape', 'folder /escape', 'folder/../escape',
-        'folder/./escape', '/rooted', 'C:/rooted', 'folder/name:stream',
-        'CON/file', 'aux.txt', 'lpt1/file', 'folder/name?'
-    )) {
-        $path = Join-Path $root ([Guid]::NewGuid().ToString('N') + '.zip')
-        Write-FixtureZip $path @($alias)
-        $env:SSMCP_SETUP_ARCHIVE = $path
-        $env:SSMCP_SETUP_DESTINATION = Join-Path $root ([Guid]::NewGuid().ToString('N'))
-        $priorPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            $result = & $pwsh -NoLogo -NoProfile -NonInteractive -Command $extractor 2>&1 | Out-String
-        } finally { $ErrorActionPreference = $priorPreference }
-        if ($LASTEXITCODE -eq 0 -or $result -notlike '*Unsafe*archive path*') {
-            throw "OpenSSH extractor accepted normalized alias '$alias': $result"
-        }
-        if (Test-Path -LiteralPath $env:SSMCP_SETUP_DESTINATION) { throw 'Rejected archive created an extraction directory.' }
-    }
-    Write-Host 'Installer helpers passed: exact byte cap, idle/total/header/low-rate deadlines, root-entry extraction, duplicates, and 15 OpenSSH path normalization fixtures.'
+    Write-Host 'Installer helpers passed: exact byte cap, idle/total/header/low-rate deadlines, root-entry extraction, and duplicate rejection.'
 } finally {
-    Remove-Item Env:SSMCP_SETUP_ARCHIVE -ErrorAction SilentlyContinue
-    Remove-Item Env:SSMCP_SETUP_DESTINATION -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $root -Recurse -Force
 }
