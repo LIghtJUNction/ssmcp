@@ -37,6 +37,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
+const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
@@ -1579,11 +1580,20 @@ impl State {
         if !self.preview && (!output.is_empty() || !actions.is_empty()) {
             crate::client::interface::computer::local_input();
         }
+        let selection_input =
+            self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return Vec::new();
+            }
+            if matches!(action, Key::Select) || (self.selection && matches!(action, Key::Escape)) {
+                self.set_selection_mode(!self.selection);
+                continue;
+            }
+            if self.selection {
+                continue;
             }
             if matches!(action, Key::Escape) && showing_help {
                 self.help = false;
@@ -1714,6 +1724,13 @@ impl State {
             self.dirty = true;
         }
 
+        if selection_input {
+            self.keyboard.logs = old_focus;
+            if self.selection && output == b"\x1b" {
+                self.set_selection_mode(false);
+            }
+            return Vec::new();
+        }
         if old_focus != self.keyboard.logs {
             self.dirty = true;
         }
@@ -1765,6 +1782,19 @@ impl State {
             }
         }
         Vec::new()
+    }
+
+    fn set_selection_mode(&mut self, enabled: bool) {
+        if self.selection == enabled {
+            return;
+        }
+        self.selection = enabled;
+        if enabled {
+            self.notice = Some(COPY_HINT.into());
+        } else if self.notice.as_deref() == Some(COPY_HINT) {
+            self.notice = None;
+        }
+        self.dirty = true;
     }
 
     fn should_redraw(
@@ -1832,7 +1862,9 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let level = ["all", "commands", "errors"][usize::from(self.log_level)];
-                let hint = if self.filter_editing {
+                let hint = if self.selection {
+                    COPY_HINT.into()
+                } else if self.filter_editing {
                     format!(" / {}_   Enter Apply · Esc Cancel ", self.filter_draft)
                 } else if let Some(notice) = &self.notice {
                     format!(" {notice} · F1 Help ")
@@ -1842,9 +1874,9 @@ impl State {
                         self.log_query
                     )
                 } else if g.cols < 100 {
-                    " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
+                    " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
                 } else {
-                    " Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help · F4 Theme ".into()
+                    " F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ".into()
                 };
                 let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
                 let text = footer::render(
@@ -1911,6 +1943,8 @@ impl State {
                 "F3         Show or hide the sidebar".into(),
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
+                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
+                "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
                 "Left       Return to the audit list".into(),
@@ -1936,11 +1970,15 @@ impl State {
                 lines.splice(2..2, links);
             }
             for (row, line) in rows.iter_mut().enumerate() {
-                let content = lines
-                    .get(row.saturating_sub(1))
-                    .filter(|_| row > 0)
-                    .map(String::as_str)
-                    .unwrap_or("");
+                let content = if self.selection && g.rows >= 3 && row + 1 == usize::from(g.rows) {
+                    COPY_HINT
+                } else {
+                    lines
+                        .get(row.saturating_sub(1))
+                        .filter(|_| row > 0)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                };
                 let text = fit(&format!("  {content}"), g.cols);
                 let padded = format!(
                     "{text}{}",
@@ -2654,6 +2692,99 @@ mod tests {
         );
         assert!(upload.contains(&format!("a=t,t=d,f=100,i={next_id},")));
         assert!(!upload.contains(&format!("a=t,t=d,f=100,i={rejected_id},")));
+    }
+
+    #[test]
+    fn copy_mode_releases_mouse_and_freezes_all_dashboard_layouts() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Audit, Layout::Logs] {
+            let ui = Ui {
+                layout,
+                ..Ui::default()
+            };
+            let mut state = State::new(24, 100, &ui);
+            state.preview = true;
+            state.filter_editing = true;
+            state.keyboard.logs = true;
+            state.filter_draft = "keep this filter".into();
+            state.conversation.composer.set_text("keep this draft");
+            let now = Instant::now();
+            let before = state.frame(now);
+            assert!(before.mouse_capture);
+            assert!(state.keyboard(b"\x1b[18~", now, false).is_empty());
+            assert!(state.selection);
+            let selected = state.frame(now);
+            assert!(!selected.mouse_capture);
+            let diff = String::from_utf8(selected.diff(Some(&before))).unwrap();
+            assert!(diff.contains("\x1b[?1000l") && diff.contains("\x1b[?1006l"));
+            assert!(
+                physical(&selected)
+                    .screen()
+                    .contents()
+                    .contains("Copy mode")
+            );
+            state.keyboard(b"/changed\r\x1b[<65;1;1M", now, false);
+            assert_eq!(state.filter_draft, "keep this filter");
+            assert!(state.filter_editing);
+            if layout != Layout::Chat {
+                assert!(state.keyboard.logs);
+            }
+            assert_eq!(state.conversation.composer.text(), "keep this draft");
+            state.log_message("assistant", "background update", b"background update\n");
+            assert!(!state.should_redraw(Some(&selected), state.graphics.cell()));
+            state.notice = Some("A background operation failed".into());
+            state.keyboard(b"\x1b[18~", now, false);
+            assert!(!state.selection);
+            assert_eq!(
+                state.notice.as_deref(),
+                Some("A background operation failed")
+            );
+            assert!(state.should_redraw(Some(&selected), state.graphics.cell()));
+            let resumed = state.frame(now);
+            assert!(resumed.mouse_capture);
+            let diff = String::from_utf8(resumed.diff(Some(&selected))).unwrap();
+            assert!(diff.contains("\x1b[?1000h") && diff.contains("\x1b[?1006h"));
+        }
+    }
+
+    #[test]
+    fn copy_mode_escape_returns_without_changing_the_filter_or_draft() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Audit, Layout::Logs] {
+            let mut state = State::new(
+                24,
+                100,
+                &Ui {
+                    layout,
+                    ..Ui::default()
+                },
+            );
+            state.preview = true;
+            state.log_query = "keep query".into();
+            state.conversation.composer.set_text("keep draft");
+            let now = Instant::now();
+            state.keyboard(b"\x1b[18~", now, false);
+            state.keyboard(b"\x1b", now, false);
+            state.keyboard(&[], now + Duration::from_millis(100), true);
+            assert!(!state.selection);
+            assert_eq!(state.log_query, "keep query");
+            assert_eq!(state.conversation.composer.text(), "keep draft");
+            assert!(state.keyboard.pending.is_empty());
+            assert!(state.frame(now).mouse_capture);
+        }
+    }
+
+    #[test]
+    fn copy_mode_resize_refreshes_once_without_recapturing_the_mouse() {
+        let mut state = State::new(24, 100, &split_ui());
+        state.preview = true;
+        let now = Instant::now();
+        state.keyboard(b"\x1b[18~", now, false);
+        let before = state.frame(now);
+        state.resize(18, 72);
+        assert!(state.should_redraw(Some(&before), state.graphics.cell()));
+        let resized = state.frame(now);
+        assert!(!resized.mouse_capture);
+        assert_eq!(resized.rows.len(), 18);
+        assert!(!state.should_redraw(Some(&resized), state.graphics.cell()));
     }
 
     #[test]
