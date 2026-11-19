@@ -32,5 +32,5 @@ for (const facts of document.querySelectorAll('dl[aria-label="账户流量"]')) 
   const label = document.createElement("p");
   label.className = "traffic-meter-caption";
   label.textContent = `已用 ${percent}`;
-  facts.before(meter, label);
+  facts.after(meter, label);
 }

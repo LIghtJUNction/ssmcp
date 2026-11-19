@@ -224,7 +224,7 @@ fn agent_message(
     };
     let mut bytes = Vec::new();
     if raw {
-        let safe = crate::audit::event(event);
+        let safe = crate::audit::event(event.clone());
         let _ = writeln!(bytes, "{safe}");
     } else {
         if !super::terminal::active() {
@@ -254,7 +254,7 @@ fn agent_message(
         }
         let _ = writeln!(bytes);
     }
-    publish(&bytes, None);
+    publish_event("agent", &event, &bytes, None);
     // No terminal or history lock is held while the /copy cache is updated.
     super::interface::messages::remember_last(text);
     saved

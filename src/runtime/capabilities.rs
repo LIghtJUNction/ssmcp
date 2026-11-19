@@ -155,12 +155,20 @@ fn native_limits() -> Value {
                 "oversized_descriptor":"explicit error; use original tools() without truncating schema"
             }
         },
+        "optional_harnesses":{
+            "default":"not_loaded",
+            "automatic_startup":false,
+            "list":"ssmcp.harnesses.list",
+            "load":"ssmcp.harnesses.load",
+            "failure_retry":"explicit load with refresh:true",
+            "native_tools_require_harness":false
+        },
         "computer_use":{
             "computer_namespace":"ssmcp.computer.*",
             "omarchy_namespace":"ssmcp.omarchy.*",
             "desktop_platforms":["linux","windows","macos"],
             "browser_namespace":"ssmcp.browser.*",
-            "browser_extension_namespace":"playwright.* when native MCP discovery succeeds",
+            "browser_extension_namespace":"playwright.* only after explicit optional harness loading succeeds",
             "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
             "model_invocation":false,
             "input_scope":"all desktop observation and input defaults to isolated; host access requires explicit desktop:host",
@@ -363,7 +371,7 @@ impl Runtime {
                 return content(
                     uri,
                     "text/markdown",
-                    include_str!("../../skills/ssmcp/SKILL.md").into(),
+                    crate::context::BUILTIN_SSMCP_SKILL.into(),
                 );
             }
             "capabilities" => return json_content(uri, self.client_capabilities()?),
@@ -447,8 +455,8 @@ processing the returned messages. Direct waits do not occupy code_mode workers. 
 inside code_mode accept clientId first and limit receive waits to 1000ms. Read ssmcp://collaboration \
 for identity binding, retry deduplication, queue bounds and the connection lifetime.\n\n\
 Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. Add name_prefix:'ssmcp.browser.' to match registered names only; the optional prefix is case-insensitive and combines with query. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. exec.run is a JavaScript helper composing ssmcp.exec.start/wait/read, not a registered tool. Continue with the same client, query, name_prefix, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
-New clients always provide a shell and automatically discover installed Codex, Claude Code, \
-Pi, OpenCode and Playwright MCP tools. ssmcp.harnesses.list reports status and registered tool counts.\n\n\
+New clients provide native ssmcp tools without requiring another harness. Codex, Claude Code, \
+Pi, OpenCode and Playwright MCP are optional and start unloaded. Prefer native tools. ssmcp.harnesses.list reads cached status without probing executables. Only when an optional capability is needed, explicitly call ssmcp.harnesses.load with its provider name; inspect the resulting registered catalog before calling its actual tools. Concurrent requests share initialization, failed attempts stay cached, and refresh:true explicitly retries only that provider. Startup, ordinary catalog reads and native calls never load external harnesses.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
@@ -464,7 +472,7 @@ After app_launch has started a private desktop, use image(await computer.screens
 {target_id})) for visible MCP image content, then return only metadata. Do not print image \
 base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
 element refs come from the current snapshot and expire on navigation or replacement.\n\n\
-For the operator's existing browser, prefer the authorized ChatGPT Browser plugin when the calling application actually exposes it for that requested browser. Its native API is outside ssmcp code_mode; the client cannot invoke the public ChatGPT browser JavaScript API. Otherwise call ssmcp.browser.discover for read-only metadata and cached registered routes, and ssmcp.harnesses.list for provider readiness. Prefer actual registered Playwright extension tools before explicitly selected CDP. Extension files alone do not prove an active connection. Installed Playwright MCP starts in its native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
+Prefer ssmcp's native browser tools for ordinary browser work. If the user specifically requests an existing ChatGPT Browser session, use its authorized plugin only when the calling application actually exposes that requested session. Its native API is outside ssmcp code_mode; the client cannot invoke the public ChatGPT browser JavaScript API. Otherwise call ssmcp.browser.discover for read-only metadata and cached registered routes, and ssmcp.harnesses.list for provider readiness. Keep optional Playwright extension tools unloaded unless they are needed for the explicitly requested existing browser; native CDP remains available without that harness. Extension files alone do not prove an active connection. Playwright MCP remains unloaded by default. If its extension capabilities are explicitly needed, call ssmcp.harnesses.load with provider:'playwright'; that selected bridge starts in native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \
@@ -547,7 +555,7 @@ Read ssmcp://clients/{id}/context for configured context roots, /skills for skil
  an instruction path. Follow nextUri to continue a page without changing its cursor. Every \
  read fetches the current files from the client; no build-time or server-side file cache is used. \
  context.roots, skills.list/read/view and agents.list/read/resolve expose the same native views \
- in code_mode without invoking a model. Additional --context-root directories are explicit, \
+ in code_mode without invoking a model. Installed global skill directories and linked packages grant skills only; additional --context-root directories are explicit, \
  read-only context sources; they do not expand filesystem write access.\n\n\
 Use fs.readText for bounded UTF-8 text with byte offsets and next_offset, fs.writeText to \
  create or explicitly overwrite text, and fs.editText for one exact literal replacement. \

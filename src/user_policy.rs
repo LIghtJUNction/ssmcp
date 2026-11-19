@@ -11,6 +11,7 @@ use std::{
 use tokio::{sync::Notify, time::Instant};
 
 pub const DEFAULT_RATE_LIMIT_BPS: u64 = 8 * 1024 * 1024;
+pub(crate) const RECHARGED_RATE_LIMIT_BPS: u64 = 64 * 1024 * 1024;
 pub const MAX_RATE_LIMIT_BPS: u64 = 1024 * 1024 * 1024;
 const MAX_BURST: u64 = 64 * 1024;
 
@@ -105,6 +106,127 @@ impl std::fmt::Display for TrafficError {
     }
 }
 impl std::error::Error for TrafficError {}
+
+pub(crate) fn traffic_recharge_url(public_url: &str) -> String {
+    format!("{}/account/traffic", public_url.trim_end_matches('/'))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrafficOutcome {
+    NotDispatched,
+    ResultNotDelivered,
+    Unknown,
+}
+
+impl TrafficError {
+    pub(crate) fn notice(self, public_url: &str, outcome: TrafficOutcome) -> String {
+        let outcome = match outcome {
+            TrafficOutcome::NotDispatched => "请求未发送到客户端，未执行。",
+            TrafficOutcome::ResultNotDelivered => {
+                "客户端结果未能送达；操作可能已经执行，请先检查实际状态，勿直接重复执行。"
+            }
+            TrafficOutcome::Unknown => {
+                "连接已中断；已发送的请求可能已经执行，重试前请先检查实际状态。"
+            }
+        };
+        if self == Self::Exhausted {
+            format!(
+                "traffic_quota_exceeded: 本月剩余流量不足。{outcome}充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{}",
+                traffic_recharge_url(public_url)
+            )
+        } else {
+            format!("{self}; {outcome}")
+        }
+    }
+}
+
+/// A trusted transport failure, never a frame supplied by a remote client.
+/// Call and reply IDs distinguish an undispatched request from a lost result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrafficFailure {
+    pub(crate) error: TrafficError,
+    blocked_call: Option<u64>,
+    blocked_reply: Option<u64>,
+}
+
+impl TrafficFailure {
+    pub(crate) fn new(error: TrafficError) -> Self {
+        Self {
+            error,
+            blocked_call: None,
+            blocked_reply: None,
+        }
+    }
+
+    pub(crate) fn rejected_call(error: TrafficError, id: u64) -> Self {
+        Self {
+            error,
+            blocked_call: Some(id),
+            blocked_reply: None,
+        }
+    }
+
+    pub(crate) fn rejected_reply(error: TrafficError, id: u64) -> Self {
+        Self {
+            error,
+            blocked_call: None,
+            blocked_reply: Some(id),
+        }
+    }
+
+    pub(crate) fn notice(self, public_url: &str) -> String {
+        let outcome = if self.blocked_call.is_some() {
+            TrafficOutcome::NotDispatched
+        } else if self.blocked_reply.is_some() {
+            TrafficOutcome::ResultNotDelivered
+        } else {
+            TrafficOutcome::Unknown
+        };
+        self.error.notice(public_url, outcome)
+    }
+
+    pub(crate) fn call_notice(self, public_url: &str, id: u64) -> String {
+        // The broker assigns increasing IDs and writes calls in order. Once
+        // an outbound call is refused, no later buffered call can be delivered.
+        let outcome = if self
+            .blocked_call
+            .is_some_and(|first_unsent| id >= first_unsent)
+        {
+            TrafficOutcome::NotDispatched
+        } else if self.blocked_reply == Some(id) {
+            TrafficOutcome::ResultNotDelivered
+        } else {
+            TrafficOutcome::Unknown
+        };
+        self.error.notice(public_url, outcome)
+    }
+}
+
+impl std::fmt::Display for TrafficFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+impl std::error::Error for TrafficFailure {}
+
+/// Set before either duplex half is dropped, so EOF cannot erase the reason.
+/// This state is shared only by the server's WebSocket pumps and broker.
+#[derive(Clone, Default)]
+pub(crate) struct TrafficFailureState(Arc<Mutex<Option<TrafficFailure>>>);
+
+impl TrafficFailureState {
+    pub(crate) fn record(&self, failure: TrafficFailure) -> TrafficFailure {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert(failure)
+    }
+
+    pub(crate) fn get(&self) -> Option<TrafficFailure> {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 pub fn default_rate_limit() -> u64 {
     DEFAULT_RATE_LIMIT_BPS
@@ -261,6 +383,21 @@ impl UserPolicies {
             .get(subject)
             .is_some_and(|entry| entry.banned())
     }
+    pub(crate) fn apply_account(
+        &self,
+        subject: &str,
+        banned: bool,
+        rate: Option<u64>,
+        has_recharged: bool,
+    ) {
+        let default = if has_recharged {
+            self.default_rate().max(RECHARGED_RATE_LIMIT_BPS)
+        } else {
+            self.default_rate()
+        };
+        self.get(subject).configure(banned, rate.unwrap_or(default));
+    }
+    #[cfg(test)]
     pub(crate) fn set(&self, subject: &str, banned: bool, rate: Option<u64>) {
         self.get(subject)
             .configure(banned, rate.unwrap_or_else(|| self.default_rate()));
@@ -325,6 +462,31 @@ mod tests {
         assert!(bandwidth.charge(true, 1).await.is_err());
         policies.set("123", false, None);
         assert!(!bandwidth.banned());
+    }
+
+    #[test]
+    fn recharge_updates_the_existing_bucket_and_preserves_explicit_rates() {
+        let policies = UserPolicies::default();
+        policies.set_default(16 * 1024 * 1024).unwrap();
+        let active = policies.get("123");
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        policies.apply_account("123", true, Some(1024), true);
+        assert_eq!(active.settings.read().unwrap().rate, 1024);
+        assert!(active.banned());
+        policies.apply_account("123", false, None, true);
+        assert_eq!(
+            active.settings.read().unwrap().rate,
+            RECHARGED_RATE_LIMIT_BPS
+        );
+        assert!(!active.banned());
+        assert_eq!(
+            policies.get("456").settings.read().unwrap().rate,
+            policies.default_rate()
+        );
     }
 
     #[test]

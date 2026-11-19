@@ -17,30 +17,34 @@ pub(super) fn escape(s: &str) -> String {
 }
 
 pub(super) fn page(title: &str, body: &str) -> String {
+    let favicon_url = super::assets::url("brand-mark.png");
+    let base_css_url = super::assets::url("portal.css");
+    let portal_css_url = super::assets::url("portal-refresh.css");
+    let traffic_script_url = super::assets::url("traffic-meter.js");
     format!(
         r##"<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0c0d0f">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#eeefeb">
   <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
-  <link rel="stylesheet" href="/portal.css">
-  <link rel="stylesheet" href="/portal-refresh.css">
-  <script defer src="/traffic-meter.js"></script>
+  <link rel="icon" href="{favicon_url}" type="image/png">
+  <link rel="stylesheet" href="{base_css_url}">
+  <link rel="stylesheet" href="{portal_css_url}">
+  <script defer src="{traffic_script_url}"></script>
 </head>
 <body>
 <a class="skip-link" href="#content">跳到主要内容</a>
 <header class="site-header">
   <nav class="site-nav container" aria-label="主导航">
-    <a class="brand" href="/" aria-label="ssmcp 首页"><span class="brand-mark" aria-hidden="true">&gt;_</span><span class="brand-name">ssmcp</span><span class="brand-label">账号门户</span></a>
-    <div class="nav-links"><a href="/#guide">连接指南 <span class="arrow" aria-hidden="true">↓</span></a><a href="https://github.com/LIghtJUNction/ssmcp">GitHub <span class="arrow" aria-hidden="true">↗</span></a></div>
+    <a class="brand" href="/" aria-label="ssmcp 首页"><img class="brand-mark" src="{favicon_url}" width="36" height="36" alt="" aria-hidden="true"><span class="brand-name">ssmcp</span></a>
+    <div class="nav-links"><a href="/#guide">连接指南 <span class="arrow" aria-hidden="true">↓</span></a><a href="https://github.com/LIghtJUNction/ssmcp">GitHub <span class="arrow" aria-hidden="true">↗</span></a><a class="nav-account" href="/#account">账户 <span class="arrow" aria-hidden="true">↗</span></a></div>
   </nav>
 </header>
 <main class="container" id="content">{body}</main>
-<footer class="site-footer container"><p class="footer-brand">ssmcp<span>your machine, connected.</span></p><p>HTTPS 接入 · GitHub 身份验证 · MCP 工具调用</p><a href="https://github.com/LIghtJUNction/ssmcp">开源代码 ↗</a></footer>
 </body>
 </html>"##,
         escape(title)
@@ -90,7 +94,7 @@ pub(super) fn traffic_panel(traffic: &TrafficQuota) -> String {
     let Some(limit_bytes) = traffic.limit_bytes else {
         return format!(
             r#"<dl class="account-facts" aria-label="账户流量"><div><dt>流量额度</dt><dd>无限</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div></dl>
-<p class="dashboard-note">管理员账户，无总流量上限。<br>{period}。<br>上下行合计，包含应用协议封装；重试会重新计入。</p>"#,
+<details class="traffic-details"><summary>流量统计说明</summary><p class="dashboard-note">管理员账户，无总流量上限。<br>{period}。<br>上下行合计，包含应用协议封装；重试会重新计入。</p></details>"#,
             traffic.used_bytes,
         );
     };
@@ -105,14 +109,14 @@ pub(super) fn traffic_panel(traffic: &TrafficQuota) -> String {
     let free = traffic_bytes(traffic.free_bytes);
     let paid = traffic_bytes(traffic.paid_bytes);
     let exhausted = if remaining_bytes == 0 {
-        r#"<p class="dashboard-note">本月流量已用完。</p>"#
+        r#"<p class="traffic-alert" role="status">本月流量已用完。<a href="/account/traffic">查看流量与订单 <span aria-hidden="true">↗</span></a></p>"#
     } else {
         ""
     };
     format!(
         r#"<dl class="account-facts" aria-label="账户流量"><div><dt>剩余流量</dt><dd title="{remaining_bytes} 字节">{remaining}</dd></div><div><dt>本月已用</dt><dd title="{} 字节">{used}</dd></div><div><dt>本月额度</dt><dd title="{limit_bytes} 字节">{limit}</dd></div></dl>
-<p class="dashboard-note">每月免费 <span title="{} 字节">{free}</span>，本月付费 <span title="{} 字节">{paid}</span>。<br>{period}，免费与付费流量月底到期，不滚存。{expiration}<br>上下行合计，包含应用协议封装；重试会重新计入。</p>
-{exhausted}<p class="dashboard-note">服务器流量有限，经常使用请购买流量包。</p>"#,
+{exhausted}<details class="traffic-details"><summary>额度与计费说明</summary><p class="dashboard-note">每月免费 <span title="{} 字节">{free}</span>，本月付费 <span title="{} 字节">{paid}</span>。<br>{period}，免费与付费流量月底到期，不滚存。{expiration}<br>上下行合计，包含应用协议封装；重试会重新计入。</p>
+<p class="dashboard-note">服务器流量有限，经常使用请购买流量包。</p></details>"#,
         traffic.used_bytes, traffic.free_bytes, traffic.paid_bytes,
     )
 }
@@ -127,16 +131,15 @@ fn account_panel(
     let (status_class, status) = if account.is_some() {
         ("status signed-in", "已登录")
     } else if enabled {
-        ("status", "未登录")
+        ("status", "尚未登录")
     } else {
         ("status", "尚未启用")
     };
     let mut html = format!(
         r#"<section class="account-panel" id="account" aria-labelledby="account-title">
-<div class="panel-bar"><span class="eyebrow">01 / ACCOUNT</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
+<div class="panel-bar"><span class="eyebrow">你的账户</span><span class="{status_class}">{status}</span></div><div class="account-body">"#
     );
     if let Some(a) = account {
-        let traffic_html = traffic.map(traffic_panel).unwrap_or_default();
         let username_form = if a.handle.is_none() {
             format!(
                 r#"<form class="key-form" method="post" action="/account/username"><input type="hidden" name="csrf" value="{csrf}"><label for="account-username">服务器用户名<input id="account-username" name="username" required minlength="3" maxlength="32" autocapitalize="none" spellcheck="false" aria-describedby="username-help"></label><small id="username-help">3–32 个英文字母、数字、下划线或连字符。以字母开头，以字母或数字结尾。登记后绑定当前 GitHub 账号。</small><button type="submit">注册用户名</button></form>"#
@@ -144,28 +147,43 @@ fn account_panel(
         } else {
             String::new()
         };
+        let primary_action = if management_enabled {
+            r#"<a class="button secondary" href="/account/sessions">查看我的会话 <span class="arrow" aria-hidden="true">↗</span></a>"#
+        } else {
+            r##"<a class="button secondary" href="#connect">连接电脑 <span class="arrow" aria-hidden="true">↗</span></a>"##
+        };
+        let traffic_action = if traffic.is_none() {
+            r#"<a class="text-link" href="/account/traffic">流量与订单 <span aria-hidden="true">↗</span></a>"#
+        } else {
+            ""
+        };
         html.push_str(&format!(
-            r##"<h2 id="account-title">{}</h2><p class="account-description">在项目目录运行连接命令，即可使用已授权的工具。</p>
-<dl class="account-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
-{username_form}{traffic_html}<div class="account-actions"><a class="button secondary" href="/account/traffic">流量与订单</a><a class="button" href="#connect">连接这台电脑 <span class="arrow" aria-hidden="true">↗</span></a><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="secondary" type="submit">退出门户</button></form></div>
-<small class="account-note">用户名绑定 GitHub 账号编号，GitHub 改名后保持不变。</small>"##,
-            escape(a.handle.as_deref().unwrap_or(&a.github_login)),
+            r#"<h2 id="account-title">账户信息</h2>
+<dl class="account-facts identity-facts"><div><dt>服务器用户名</dt><dd class="mono">{}</dd></div><div><dt>GitHub 账户</dt><dd>{}</dd></div></dl>
+{username_form}<div class="account-actions">{primary_action}{traffic_action}</div>"#,
             escape(a.handle.as_deref().unwrap_or("尚未注册")),
             escape(&a.github_login),
         ));
+        if management_enabled {
+            html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/history">历史记录 <span aria-hidden="true">↗</span></a>"#);
+            if traffic.is_some_and(|quota| quota.limit_bytes.is_none()) {
+                html.push_str(r#"<a class="text-link" href="/account/admin#registered-users">用户管理 <span aria-hidden="true">↗</span></a>"#);
+            }
+            html.push_str("</div>");
+        }
+        html.push_str(&format!(
+            r#"<div class="account-footer"><small class="account-note">GitHub 身份已绑定</small><form method="post" action="/account/logout"><input type="hidden" name="csrf" value="{csrf}"><button class="quiet" type="submit">退出登录</button></form></div>"#
+        ));
     } else if enabled {
         html.push_str(&format!(
-            r#"<h2 id="account-title">一条命令，连接电脑。</h2><p class="account-description">使用 GitHub 登录后，可以在这里注册服务器用户名、查看流量和订单。</p>
+            r#"<h2 id="account-title">从这里开始连接。</h2><p class="account-description">使用 GitHub 登录，管理用户名、连接与流量。</p>
 <form class="login-form" method="post" action="/account/login"><input type="hidden" name="csrf" value="{csrf}"><button class="login-button" type="submit">{GITHUB_ICON}使用 GitHub 登录<span class="arrow" aria-hidden="true">↗</span></button></form>
-<small class="account-note">门户用于查看账户和连接；从终端开始即可完成首次接入。</small>"#
+<small class="account-note">首次使用？先安装客户端也可以。</small>"#
         ));
     } else {
         html.push_str(
-            r#"<h2 id="account-title">账户门户尚未启用。</h2><p class="account-description">服务器完成 GitHub 登录与账户存储配置后，即可用自选用户名连接。</p><small class="account-note">请联系服务器管理员完成配置。</small>"#,
+            r##"<h2 id="account-title">账户登录暂未开放。</h2><p class="account-description">可以先安装客户端。账号服务启用后，在这里完成登录。</p><a class="text-link" href="#install">查看安装步骤 <span aria-hidden="true">↗</span></a>"##,
         );
-    }
-    if account.is_some() && management_enabled {
-        html.push_str(r#"<div class="account-shortcuts"><a class="text-link" href="/account/sessions">我的会话 ↗</a><a class="text-link" href="/account/history">历史记录 ↗</a></div>"#);
     }
     html.push_str("</div></section>");
     html
@@ -224,6 +242,7 @@ fn keys_panel(account: Option<&Account>, csrf: &str, enabled: bool) -> String {
 }
 
 fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
+    let copy_script_url = super::assets::url("copy-command.js");
     let origin = public_url.trim_end_matches('/');
     let host = origin
         .strip_prefix("https://")
@@ -239,19 +258,19 @@ fn connect_panel(account: Option<&Account>, public_url: &str) -> String {
         "把 myname 换成你想使用的用户名"
     };
     format!(
-        r#"<section class="workspace-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">02 / CONNECT</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
-<div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
+        r#"<section class="workspace-section setup-section" id="connect" aria-labelledby="connect-title"><div class="section-heading"><p class="eyebrow">第二步</p><h2 id="connect-title">连接你的工作目录</h2><p class="section-description">安装客户端后，在需要操作的项目目录运行。</p></div>
+<div class="section-content"><div class="terminal" aria-label="本机连接命令"><div class="terminal-bar"><span>terminal</span><span class="terminal-label">~/your-project</span></div><div class="terminal-content"><p class="terminal-comment"># 在本机执行</p><pre class="command"><code id="client-command">{}</code></pre></div></div>
 <div class="connect-actions"><p class="command-hint">{hint}</p><button id="copy-client-command" class="secondary" type="button" hidden>复制命令</button><span id="copy-command-status" role="status"></span></div>
-<script src="/copy-command.js" defer></script>
+<script src="{copy_script_url}" defer></script>
 <p class="section-description">首次连接时，浏览器会引导 GitHub 登录。核对用户名和设备后允许连接；后续自动复用本机凭据。</p>
 <a class="text-link" href="https://github.com/LIghtJUNction/ssmcp#安装与升级">安装与升级 <span class="arrow" aria-hidden="true">↗</span></a>
-<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>Shell 始终可用。客户端自动发现本机已安装的工具；工具需要的本机登录和授权仍由你管理。</p></details></section>"#,
+<details><summary>用户名和工具发现</summary><p>用户名为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾。名称不区分大小写，已占名称只允许原绑定 GitHub 账户登录。</p><p>终端命令始终可用。客户端默认提供内置工具，额外工具在你启用后加载；工具需要的本机登录和授权仍由你管理。</p></details></div></section>"#,
         escape(&command)
     )
 }
 
 const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-title">
-<div class="guide-header"><div><p class="eyebrow">03 / CHATGPT</p><h2 id="guide-title">最后一步，在 ChatGPT 中连接。</h2></div><a class="text-link" href="https://chatgpt.com/plugins">打开插件设置 <span class="arrow" aria-hidden="true">↗</span></a></div>
+<div class="guide-header"><div><p class="eyebrow">第三步</p><h2 id="guide-title">在 ChatGPT 中添加连接</h2></div><a class="text-link" href="https://chatgpt.com/plugins">打开插件设置 <span class="arrow" aria-hidden="true">↗</span></a></div>
 <div class="guide-grid">
 <div class="guide-step"><span class="step-number">01</span><h3>添加一个插件</h3><p>启动本机客户端后，打开 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a>，点击 <strong>Add</strong>。</p></div>
 <div class="guide-step"><span class="step-number">02</span><h3>填写连接信息</h3><dl class="connection-fields"><div><dt>Name</dt><dd>ssmcp</dd></div><div><dt>Connection</dt><dd>{mcp_url}</dd></div></dl></div>
@@ -259,6 +278,17 @@ const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-
 </div>
 <details class="guide-help"><summary>已添加插件，接下来怎么用？</summary><div><p>回到 ChatGPT，调用 <code>list</code> 查看在线客户端，再使用 <code>code_mode</code> 调用工具。列表为空时，检查本机客户端是否运行，以及插件与客户端是否使用同一 GitHub 账户。</p><p>插件授权时请核对 MCP 客户端与回调来源。插件可以调用你已授权的本机工具，包括执行命令和修改文件。</p></div></details>
 </section>"#;
+
+// A static explanation of the product, never a simulated live account or session.
+const PRODUCT_SCENE: &str = r#"<figure class="product-scene" aria-labelledby="scene-caption">
+<div class="scene-topline"><span>FROM PROMPT TO LOCAL TOOLS</span><span>连接示意 / 非实时状态</span></div>
+<div class="scene-flow">
+  <div class="scene-client"><span class="scene-symbol" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="2"><path d="M40 7v66M7 40h66M17 17l46 46m0-46L17 63"/><circle cx="40" cy="40" r="16"/></svg></span><strong>你的 AI</strong><span>ChatGPT · MCP 客户端</span></div>
+  <span class="scene-wire" aria-hidden="true">→</span>
+  <div class="scene-terminal"><div class="scene-terminal-bar"><span><i></i><i></i><i></i></span><span>~/your-project</span><span>本机执行</span></div><div class="scene-terminal-body"><div class="scene-command"><span>$</span> ssmcp<span class="scene-cursor" aria-hidden="true">_</span></div><p>把项目目录连接到对话。</p><div class="scene-tool-row"><span>01</span><span>终端命令</span><span>exec</span></div><div class="scene-tool-row"><span>02</span><span>文件与代码</span><span>files</span></div><div class="scene-tool-row"><span>03</span><span>已启用的本机工具</span><span>tools</span></div></div></div>
+  <span class="scene-wire" aria-hidden="true">→</span>
+  <div class="scene-local"><span class="scene-folder" aria-hidden="true"><svg viewBox="0 0 100 76" fill="none"><path d="M4 20V6h33l10 14h49v50H4V20Z" stroke="currentColor" stroke-width="2"/><path d="M4 20h92" stroke="currentColor" stroke-width="2"/><path d="m41 38-8 8 8 8m18-16 8 8-8 8" stroke="currentColor" stroke-width="2"/></svg></span><strong>你的工作目录</strong><span>工具在你的电脑上运行</span></div>
+</div><figcaption id="scene-caption"><span>一个连接，继续用你的环境。</span><span>Linux / macOS / Windows</span></figcaption></figure>"#;
 
 pub(super) fn home(
     account: Option<&Account>,
@@ -269,9 +299,27 @@ pub(super) fn home(
     traffic: Option<&TrafficQuota>,
 ) -> String {
     let csrf = escape(csrf.unwrap_or(""));
-    let mut body = String::from(
-        r#"<section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><p class="eyebrow">LOCAL TOOLS. OPEN POSSIBILITIES.</p><h1 id="hero-title">本机工具，<br><span>连接你的 AI。</span></h1><p class="hero-description">用一个用户名，把本机工具接入 ChatGPT。<br>工具在本机执行，访问权限由你掌控。</p><div class="protocol" aria-label="本机通过 HTTPS 和 MCP 连接 ChatGPT"><span>YOUR MACHINE</span><span class="arrow" aria-hidden="true">→</span><span>HTTPS / MCP</span><span class="arrow" aria-hidden="true">→</span><span>ChatGPT</span></div></div>"#,
-    );
+    let mut body = if let Some(account) = account {
+        let name = escape(account.handle.as_deref().unwrap_or(&account.github_login));
+        format!(
+            r##"<div class="portal-home is-signed-in"><section class="account-workspace" aria-labelledby="hero-title"><header class="workspace-intro"><div><p class="eyebrow">账户概览</p><h1 id="hero-title">你好，{name}。</h1><p class="hero-description">管理你的连接与本月用量。</p></div><a class="button" href="#connect">连接电脑 <span class="arrow" aria-hidden="true">↗</span></a></header><div class="workspace-overview">"##
+        )
+    } else {
+        String::from(
+            r##"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><div class="hero-kicker"><p class="eyebrow">本地工具 · 开放连接</p><span>SSMCP / 01</span></div><h1 id="hero-title">让 AI，<br><span>在你的电脑上动手。</span></h1><div class="hero-bottom"><p class="hero-description">从对话到终端、文件与项目。<br>用一个用户名，连接你已经在用的工作环境。</p><div class="hero-actions"><a class="button" href="#install">安装客户端 <span class="arrow" aria-hidden="true">↗</span></a><a class="button secondary source-link" href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">源代码仓库 <span class="arrow" aria-hidden="true">↗</span></a></div></div></div>"##,
+        )
+    };
+    if let Some(traffic) = traffic.filter(|_| account.is_some()) {
+        body.push_str(
+            r#"<section class="account-traffic" aria-labelledby="traffic-title"><div class="traffic-heading"><div><p class="eyebrow">用量</p><h2 id="traffic-title">本月流量</h2></div><a class="text-link" href="/account/traffic">流量与订单 <span aria-hidden="true">↗</span></a></div>"#,
+        );
+        body.push_str(&traffic_panel(traffic));
+        body.push_str("</section>");
+    }
+    if account.is_none() {
+        body.push_str(PRODUCT_SCENE);
+        body.push_str("</section><div class=\"visitor-account\">");
+    }
     body.push_str(&account_panel(
         account,
         &csrf,
@@ -279,17 +327,25 @@ pub(super) fn home(
         management_enabled,
         traffic,
     ));
+    if account.is_some() {
+        body.push_str("</div></section>");
+    } else {
+        body.push_str("</div>");
+    }
     body.push_str(
-        r#"</section><div class="workspace-header"><p class="eyebrow">WORKSPACE / 接入配置</p><p>选择用户名，完成 GitHub 绑定，即可连接。</p></div><div class="workspace-flow">"#,
+        r#"<div class="workspace-header"><h2>连接新设备</h2><p>从安装客户端开始，三步完成连接。</p></div><div class="workspace-flow">"#,
     );
-    body.push_str(include_str!("client-install.html"));
+    body.push_str(&include_str!("client-install.html").replace(
+        "{install_script_url}",
+        super::assets::url("client-install-copy.js"),
+    ));
     body.push_str(&connect_panel(account, public_url));
-    body.push_str("<details><summary>旧版 SSH 公钥管理</summary>");
+    body.push_str(r#"<details class="workspace-legacy"><summary>旧版 SSH 公钥管理</summary>"#);
     body.push_str(&keys_panel(account, &csrf, enabled));
-    body.push_str("</details>");
-    body.push_str("</div>");
+    body.push_str("</details></div>");
     let mcp_url = format!("{}/mcp", public_url.trim_end_matches('/'));
     body.push_str(&GUIDE.replace("{mcp_url}", &escape(&mcp_url)));
+    body.push_str("</div>");
     page("账号门户", &body)
 }
 
@@ -306,6 +362,7 @@ mod tests {
             handle: Some("developer".into()),
             banned: false,
             rate_limit_bps: None,
+            has_recharged: false,
         }
     }
 
@@ -346,6 +403,28 @@ mod tests {
         assert!(html.contains("服务器流量有限，经常使用请购买流量包。"));
         assert!(!html.contains("不自动重置"));
         assert!(!html.contains("checkout"));
+        assert!(!html.contains(r#"href="/account/admin#registered-users""#));
+    }
+
+    #[test]
+    fn account_keeps_orders_navigation_without_a_quota_snapshot() {
+        let account = sample_account();
+        let quota = monthly_quota(0);
+        let orders_link = r#"href="/account/traffic""#;
+        for management_enabled in [false, true] {
+            let without_quota =
+                account_panel(Some(&account), "csrf", true, management_enabled, None);
+            assert_eq!(without_quota.matches(orders_link).count(), 1);
+            let with_quota = account_panel(
+                Some(&account),
+                "csrf",
+                true,
+                management_enabled,
+                Some(&quota),
+            );
+            assert!(!with_quota.contains(orders_link));
+        }
+        assert!(!account_panel(None, "csrf", true, true, None).contains(orders_link));
     }
 
     #[test]
@@ -367,6 +446,7 @@ mod tests {
         traffic.remaining_bytes = None;
         let html = logged_in_home(&traffic);
         assert!(html.contains("<dt>流量额度</dt><dd>无限</dd>"));
+        assert!(html.contains(r#"href="/account/admin#registered-users""#));
         assert!(html.contains(r#"title="2000000000 字节">2 GB</dd>"#));
         assert!(!html.contains("每月免费"));
         assert!(!html.contains("到期"));

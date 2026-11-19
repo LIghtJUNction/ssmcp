@@ -1,0 +1,222 @@
+{
+  "source": "aa8b95d66655adfd4d97ac8191e2b935bcd57c44",
+  "steps": [
+    {
+      "label": "fetch",
+      "exit_code": 0,
+      "seconds": 0.035
+    },
+    {
+      "label": "checkout",
+      "exit_code": 0,
+      "seconds": 0.033
+    },
+    {
+      "label": "fmt",
+      "exit_code": 0,
+      "seconds": 1.835
+    },
+    {
+      "label": "build-bins",
+      "exit_code": 0,
+      "seconds": 20.705
+    },
+    {
+      "label": "test-workspace",
+      "exit_code": 0,
+      "seconds": 223.602
+    },
+    {
+      "label": "clippy",
+      "exit_code": 0,
+      "seconds": 41.192
+    },
+    {
+      "label": "code-mode-including-ignored",
+      "exit_code": 0,
+      "seconds": 4.264
+    },
+    {
+      "label": "node-exec",
+      "exit_code": 0,
+      "seconds": 3.474
+    },
+    {
+      "label": "bootstrap",
+      "exit_code": 0,
+      "seconds": 1.465
+    },
+    {
+      "label": "release-tests",
+      "exit_code": 0,
+      "seconds": 1.482
+    },
+    {
+      "label": "package-workspace",
+      "exit_code": 0,
+      "seconds": 5.767
+    },
+    {
+      "label": "release-build",
+      "exit_code": 0,
+      "seconds": 187.513
+    }
+  ],
+  "active": null,
+  "default_rust": {
+    "groups": [
+      {
+        "passed": 1021,
+        "failed": 0,
+        "ignored": 10
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 14,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 7
+      },
+      {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 3
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "passed": 1142,
+    "failed": 0,
+    "ignored": 26
+  },
+  "explicit_code_mode": {
+    "passed": 29,
+    "failed": 0,
+    "ignored": 0,
+    "overlaps_default": true
+  },
+  "node": {
+    "passed": 62,
+    "failed": 0
+  },
+  "bootstrap_python": {
+    "passed": 7,
+    "failed": 0
+  },
+  "release_python": {
+    "passed": 58,
+    "failed": 0
+  },
+  "checkpoint_note": "Pinned aa8b95d before the subsequently requested Windows dependencies and lazy harness work."
+}

@@ -1,7 +1,8 @@
-//! One authenticated shell with independently discovered native providers.
+//! Native tools are always available; optional external harnesses load only on request.
 pub mod cc;
 pub mod codex;
 pub mod events;
+mod lazy;
 pub mod opencode;
 pub mod pi;
 pub mod playwright;
@@ -22,11 +23,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, sync::Notify, task::JoinHandle};
+use tokio::io::AsyncReadExt;
 
 #[derive(Clone)]
 enum Driver {
@@ -76,6 +77,8 @@ impl Driver {
     }
 }
 
+type Installed = (PathBuf, u64, std::time::SystemTime);
+
 pub struct Backend {
     terminal: Arc<Terminals>,
     observer: Option<Arc<crate::observer::Pool>>,
@@ -84,10 +87,9 @@ pub struct Backend {
     output: Arc<OutputStore>,
     drivers: StdMutex<BTreeMap<Provider, Driver>>,
     diagnostics: StdMutex<BTreeMap<Provider, Value>>,
-    tasks: StdMutex<Vec<JoinHandle<()>>>,
+    loads: lazy::Loads,
+    installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
-    initial: AtomicUsize,
-    discovered: Notify,
 }
 impl Backend {
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
@@ -137,12 +139,7 @@ impl Backend {
         )?;
         registry.replace(Provider::Exec, shell::Shell::tools())?;
         registry.replace(Provider::Ui, crate::client::interface::tools())?;
-        registry.replace(Provider::Harnesses,vec![json!({
-            "name":"ssmcp.harnesses.list",
-            "description":"Inspect actual discovery status, installed version, protocol scope and diagnostics for each native provider. A ready RPC bridge does not imply enumerable model tools.",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
-            "annotations":{"readOnlyHint":true,"destructiveHint":false}
-        })])?;
+        registry.replace(Provider::Harnesses, lazy::tools())?;
         let backend = Arc::new(Self {
             terminal,
             observer,
@@ -150,64 +147,57 @@ impl Backend {
             registry,
             output,
             drivers: StdMutex::new(BTreeMap::new()),
-            diagnostics: StdMutex::new(BTreeMap::new()),
-            tasks: StdMutex::new(Vec::new()),
+            diagnostics: StdMutex::new(lazy::initial_diagnostics()),
+            loads: lazy::Loads::default(),
+            installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
-            initial: AtomicUsize::new(5),
-            discovered: Notify::new(),
         });
-        for (provider, name) in [
-            (Provider::Codex, "codex"),
-            (Provider::Claude, "claude"),
-            (Provider::Pi, "pi"),
-            (Provider::OpenCode, "opencode"),
-            (Provider::Playwright, "playwright"),
-        ] {
-            backend
-                .diagnostics
-                .lock()
-                .unwrap()
-                .insert(provider, json!({"status":"discovering","provider":name}));
-            let weak = Arc::downgrade(&backend);
-            let task = tokio::spawn(async move {
-                let mut first = true;
-                let mut installed: Option<(PathBuf, u64, std::time::SystemTime)> = None;
-                loop {
-                    let Some(backend) = weak.upgrade() else { break };
-                    if backend.closed.load(Ordering::Acquire) {
-                        break;
-                    }
-                    backend.refresh(provider, name, &mut installed).await;
-                    crate::memory::release_unused_heap();
-                    if first {
-                        first = false;
-                        backend.initial.fetch_sub(1, Ordering::AcqRel);
-                        backend.discovered.notify_waiters();
-                    }
-                    drop(backend);
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                }
-            });
-            backend.tasks.lock().unwrap().push(task);
-        }
         Ok(backend)
     }
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
+    /// Wait only for explicitly requested optional loads; startup does not probe them.
     pub async fn wait_discovery(&self) {
-        loop {
-            let notified = self.discovered.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if self.initial.load(Ordering::Acquire) == 0 || self.closed.load(Ordering::Acquire) {
-                return;
-            }
-            notified.await;
-        }
+        self.loads.wait().await;
     }
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
+    }
+
+    async fn load(self: &Arc<Self>, provider: Provider, refresh: bool) -> Result<Value, String> {
+        self.registry.ensure_open()?;
+        let backend = Arc::clone(self);
+        let pending = self.loads.request(provider, refresh, async move {
+            backend.registry.ensure_open()?;
+            let name = provider.label();
+            {
+                let mut diagnostics = backend.diagnostics.lock().unwrap();
+                let diagnostic = diagnostics.entry(provider).or_insert_with(
+                    || json!({"provider":name,"tools":0,"executable":null,"version":null}),
+                );
+                // Retain the last observed version while an explicit refresh
+                // reuses a live driver. Observation itself never probes it.
+                diagnostic["status"] = json!("loading");
+                diagnostic["activation"] = json!("explicit");
+            }
+            let mut installed = backend.installed.lock().unwrap().get(&provider).cloned();
+            let result = backend.refresh(provider, name, &mut installed).await;
+            {
+                let mut known = backend.installed.lock().unwrap();
+                match installed {
+                    Some(identity) => {
+                        known.insert(provider, identity);
+                    }
+                    None => {
+                        known.remove(&provider);
+                    }
+                }
+            }
+            crate::memory::release_unused_heap();
+            result
+        })?;
+        pending.await
     }
     pub fn terminal(&self) -> Arc<Terminal> {
         self.terminal.primary()
@@ -220,8 +210,8 @@ impl Backend {
         &self,
         provider: Provider,
         name: &str,
-        installed: &mut Option<(PathBuf, u64, std::time::SystemTime)>,
-    ) {
+        installed: &mut Option<Installed>,
+    ) -> Result<Value, String> {
         let mut detected_program = None;
         let mut detected_version = None;
         let outcome = async {
@@ -308,7 +298,7 @@ impl Backend {
         };
         if changed {
             crate::client::render::status(
-                "detect",
+                "harness",
                 if diagnostic["status"] == "ready" {
                     "Result"
                 } else {
@@ -325,9 +315,20 @@ impl Backend {
                 ),
             );
         }
+        if diagnostic["status"] == "ready" {
+            self.registry.ensure_open()?;
+            Ok(diagnostic)
+        } else {
+            Err(format!(
+                "optional {name} harness is unavailable: {}; after fixing its configuration, explicitly retry ssmcp.harnesses.load with provider={name} and refresh=true",
+                diagnostic["reason"]
+                    .as_str()
+                    .unwrap_or("initialization failed")
+            ))
+        }
     }
 
-    pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
+    pub async fn perform(self: &Arc<Self>, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
             Operation::ListTools { cursor } => {
@@ -350,7 +351,11 @@ impl Backend {
             }
         }
     }
-    pub async fn dispatch(&self, tool: &RegisteredTool, arguments: Value) -> Result<Value, String> {
+    pub async fn dispatch(
+        self: &Arc<Self>,
+        tool: &RegisteredTool,
+        arguments: Value,
+    ) -> Result<Value, String> {
         self.registry.validate(tool)?;
         match tool.provider {
             Provider::Ui => {
@@ -368,16 +373,26 @@ impl Backend {
                 .call(&tool.native_name, arguments)
                 .await
                 .map(result),
-            Provider::Harnesses => {
-                if !arguments.as_object().is_some_and(|a| a.is_empty()) {
-                    return Err("ssmcp.harnesses.list takes no arguments".into());
+            Provider::Harnesses => match tool.native_name.as_str() {
+                "ssmcp.harnesses.list" => {
+                    if !arguments.as_object().is_some_and(|a| a.is_empty()) {
+                        return Err("ssmcp.harnesses.list takes no arguments".into());
+                    }
+                    let harnesses: Vec<_> =
+                        self.diagnostics.lock().unwrap().values().cloned().collect();
+                    Ok(result(json!({
+                        "harnesses":harnesses,
+                        "generation":self.registry.generation(),
+                        "activation":"explicit",
+                        "default":"native_tools"
+                    })))
                 }
-                let harnesses: Vec<_> =
-                    self.diagnostics.lock().unwrap().values().cloned().collect();
-                Ok(result(
-                    json!({"harnesses":harnesses,"generation":self.registry.generation()}),
-                ))
-            }
+                "ssmcp.harnesses.load" => {
+                    let (provider, refresh) = lazy::parse(arguments)?;
+                    self.load(provider, refresh).await.map(result)
+                }
+                _ => Err("unknown optional harness primitive".into()),
+            },
             provider if provider.is_harness() || provider == Provider::Playwright => {
                 let driver = self
                     .drivers
@@ -406,14 +421,7 @@ impl Backend {
     pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
         self.registry.close();
-        self.discovered.notify_waiters();
-        let tasks = std::mem::take(&mut *self.tasks.lock().unwrap());
-        for task in &tasks {
-            task.abort()
-        }
-        for task in tasks {
-            let _ = task.await;
-        }
+        self.loads.shutdown().await;
         let drivers = std::mem::take(&mut *self.drivers.lock().unwrap());
         let futures = drivers
             .into_values()
@@ -431,14 +439,7 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.registry.close();
-        for task in self
-            .tasks
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .drain(..)
-        {
-            task.abort()
-        }
+        self.loads.abort();
     }
 }
 

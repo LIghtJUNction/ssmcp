@@ -38,7 +38,6 @@ use subtle::ConstantTimeEq;
 
 const TRANSACTION_TTL: Duration = Duration::from_secs(crate::broker::LOGIN_LIFETIME);
 const CODE_TTL: Duration = Duration::from_secs(60);
-const PROVIDER_TTL: Duration = Duration::from_secs(600);
 const MAX_CLIENTS: usize = 1024;
 const MAX_TRANSACTIONS: usize = 2048;
 const MAX_CODES: usize = 4096;
@@ -175,7 +174,9 @@ impl Binding {
     }
 }
 
+#[derive(Clone)]
 struct ProviderLogin {
+    started: bool,
     transaction_id: String,
     provider: String,
     verifier: String,
@@ -187,21 +188,24 @@ struct ProviderLogin {
 // an interrupted exchange unlocks the form without accepting that state twice.
 struct ProviderAttempt {
     state: Arc<Mutex<Store>>,
+    key: Key,
     login: ProviderLogin,
     transaction: Transaction,
 }
 
 impl Drop for ProviderAttempt {
     fn drop(&mut self) {
-        if let Some(transaction) = self
-            .state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        if let Some(transaction) = state
             .transactions
             .get_mut(&hash(&self.login.transaction_id))
         {
             transaction.provider_busy = false;
+            if transaction.identity.is_some() {
+                return;
+            }
         }
+        state.upstream.remove(&self.key);
     }
 }
 
@@ -1049,12 +1053,13 @@ impl OAuth {
         let state_value = random("idp_")?;
         let verifier = random("pkce_")?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let expires = (now + PROVIDER_TTL).min(transaction.expires);
+        let expires = transaction.expires;
         transaction.provider_busy = true;
         transaction.attempts += 1;
         state.upstream.insert(
             hash(&state_value),
             ProviderLogin {
+                started: false,
                 transaction_id: id.into(),
                 provider: provider.into(),
                 verifier,
@@ -1084,7 +1089,8 @@ impl OAuth {
             .upstream
             .get(&key)
             .filter(|login| {
-                now < login.expires
+                !login.started
+                    && now < login.expires
                     && login.provider == provider
                     && bool::from(login.csrf.ct_eq(&hash(csrf)))
             })
@@ -1104,12 +1110,40 @@ impl OAuth {
             })
             .cloned()
             .ok_or_else(|| OAuthError::invalid("Authorization form has expired"))?;
-        let login = state.upstream.remove(&key).unwrap();
+        let login = state.upstream.get_mut(&key).unwrap();
+        login.started = true;
+        let attempt_login = login.clone();
+        login.verifier.clear();
         Ok(ProviderAttempt {
             state: self.state.clone(),
-            login,
+            key,
+            login: attempt_login,
             transaction,
         })
+    }
+
+    fn resumed_provider_login(
+        &self,
+        raw: &str,
+        csrf: &str,
+        provider: &str,
+    ) -> Option<(String, Option<Transaction>)> {
+        let now = Instant::now();
+        let state = self.state.lock().unwrap();
+        let login = state.upstream.get(&hash(raw)).filter(|login| {
+            login.started
+                && now < login.expires
+                && login.provider == provider
+                && bool::from(login.csrf.ct_eq(&hash(csrf)))
+        })?;
+        let transaction = state
+            .transactions
+            .get(&hash(&login.transaction_id))
+            .filter(|t| now < t.expires && !t.busy && bool::from(t.csrf.ct_eq(&hash(csrf))))?;
+        Some((
+            login.transaction_id.clone(),
+            transaction.identity.is_some().then(|| transaction.clone()),
+        ))
     }
 
     fn finish_provider_login(
@@ -1659,12 +1693,12 @@ fn form_redirect(target: &RedirectTarget, issuer: &str, values: &[(&str, &str)])
     let callback = escape(callback_url(target, issuer, values).as_str());
     Html(page_with_head(
         "连接已授权",
-        &format!("<p>正在返回 MCP 客户端。</p><p><a href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
+        &format!("<p>正在返回 MCP 客户端。</p><p><a class=button href=\"{callback}\" rel=noreferrer>返回客户端</a></p>"),
         &format!("<meta http-equiv=refresh content=\"0;url={callback}\">"),
     )).into_response()
 }
 
-const CSS: &str = "*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font:16px/1.6 system-ui,sans-serif}main{max-width:460px;margin:10vh auto;padding:32px}header{font:14px ui-monospace,monospace;color:#5f6368;letter-spacing:.05em}h1{font-size:28px;line-height:1.3;font-weight:500;margin:32px 0 20px}p{margin:14px 0}.muted,dt{color:#5f6368;font-size:14px}dl{margin:28px 0}dd{margin:2px 0 14px;overflow-wrap:anywhere;font-family:ui-monospace,monospace;font-size:13px}label{display:block;margin:24px 0 8px}input{width:100%;padding:13px;border:1px solid #dadce0;border-radius:6px;font:14px ui-monospace,monospace}input:focus{outline:2px solid #1a73e8;outline-offset:1px}button{display:block;width:100%;margin-top:20px;padding:12px;border:0;border-radius:6px;background:#1a73e8;color:white;font:500 16px system-ui;cursor:pointer}.error{color:#b3261e;font-size:14px}@media(max-width:540px){main{margin:4vh auto;padding:24px}}";
+const CSS: &str = include_str!("oauth/page.css");
 
 fn escape(text: &str) -> String {
     text.chars()
@@ -1685,7 +1719,29 @@ fn page(title: &str, content: &str) -> String {
 
 fn page_with_head(title: &str, content: &str, extra_head: &str) -> String {
     format!(
-        "<!doctype html><html lang=zh-CN><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>{} · ssmcp</title><style>{CSS}</style>{extra_head}</head><body><main><header>ssmcp</header><h1>{}</h1>{content}</main></body></html>",
+        r###"<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d0f">
+<title>{} · ssmcp</title>
+<style>{CSS}</style>{extra_head}
+</head>
+<body>
+<header class="oauth-header container">
+<a class="brand" href="/" aria-label="ssmcp 首页"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/><path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="8" r="2.5" fill="#eff8f2"/><circle cx="12" cy="32" r="2.5" fill="#eff8f2"/></svg><span class="brand-name">ssmcp</span></a>
+<span class="header-label">YOUR MACHINE. YOUR WORKSPACE.</span>
+</header>
+<main class="oauth-shell" id="content" aria-labelledby="auth-title">
+<p class="eyebrow">SSMCP / AUTHORIZATION</p>
+<h1 id="auth-title">{}</h1>
+<div class="auth-content">{content}</div>
+</main>
+<footer class="oauth-footer container"><p>your machine, connected.</p><a href="/">返回账户门户 <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>"###,
         escape(title),
         escape(title)
     )
@@ -1744,7 +1800,7 @@ fn consent_page(
         return page(
             "允许客户端连接？",
             &format!(
-                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
+                "<p>已登录 <strong>{}@{}</strong>。</p>{details}{error}{count}<p>授权后，此客户端可以调用当前及今后明确允许此账号访问的会话工具，包括执行命令和读写文件。每次调用仍受会话权限及本机工具权限约束。</p><form class=consent-actions method=post action=/oauth/authorize>{hidden}<button type=submit name=decision value=allow>允许连接</button><button type=submit name=decision value=deny>取消</button></form><p class=muted>只登录 GitHub 不会自动授权这个 MCP 客户端。</p>",
                 escape(&identity.login),
                 escape(&identity.provider)
             ),
@@ -1960,7 +2016,7 @@ async fn login(State(broker): State<Arc<Broker>>, request: Request) -> Response 
             // A 303 can inherit the original form-action CSP in some browsers.
             let location = escape(&location);
             return Ok(Html(page_with_head("登录你的账号",
-                &format!("<p>正在前往登录页面。</p><p><a href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
+                &format!("<p>正在前往登录页面。</p><p><a class=button href=\"{location}\" rel=noreferrer>继续登录</a></p>"),
                 &format!("<meta http-equiv=refresh content=\"0;url={location}\">"))).into_response());
         }
         let attempt = broker.oauth.begin_login(id, csrf)?;
@@ -2036,7 +2092,28 @@ async fn provider_callback(
         let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
         let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
             "Authorization cookie is missing; restart the connection in the same browser"))?;
-        let attempt = broker.oauth.take_provider_login(parameters.required("state")?, csrf, &provider)?;
+        let state = parameters.required("state")?;
+        let attempt = match broker.oauth.take_provider_login(state, csrf, &provider) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                let resumed = tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        match broker.oauth.resumed_provider_login(state, csrf, &provider) {
+                            Some((id, Some(transaction))) => return Some((id, transaction)),
+                            Some((_, None)) => tokio::time::sleep(Duration::from_millis(100)).await,
+                            None => return None,
+                        }
+                    }
+                }).await.ok().flatten();
+                let (id, transaction) = resumed.ok_or(error)?;
+                let identity = transaction.identity.clone().ok_or_else(OAuthError::grant)?;
+                let _policy_update = broker.user_policy_updates.lock().await;
+                let allowed = broker.clients(&transaction.user, &Authorization::Identity(identity)).await
+                    .map_err(|_| OAuthError::grant())?.len();
+                return Ok(consent_response(&id, &transaction, None, StatusCode::OK,
+                    &broker.identities.names(), Some(allowed)));
+            }
+        };
         if parameters.get("error").is_some() {
             return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
                 Some("第三方登录已取消或未成功。你可以重新登录。"), StatusCode::BAD_REQUEST,
@@ -2046,19 +2123,25 @@ async fn provider_callback(
         if code.is_empty() || code.len() > 2048 {
             return Err(OAuthError::invalid("Invalid identity-provider authorization code"));
         }
-        let identity = match broker.identities.exchange(&provider, code, &attempt.login.verifier).await {
-            Ok(identity) => identity,
-            Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
-                Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
-                StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
-        };
-        // A ban can occur during the upstream exchange. Validate and save the
-        // identity under the policy lock so its consent cannot outlive revocation.
-        let _policy_update = broker.user_policy_updates.lock().await;
-        let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
-            .map_err(|_| OAuthError::grant())?.len();
-        let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
-        Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        let code = code.to_owned();
+        let broker = broker.clone();
+        tokio::spawn(async move {
+            let identity = match broker.identities.exchange(&provider, &code, &attempt.login.verifier).await {
+                Ok(identity) => identity,
+                Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
+                    Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
+                    StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
+            };
+            // A ban can occur during the upstream exchange. Validate and save the
+            // identity under the policy lock so its consent cannot outlive revocation.
+            let _policy_update = broker.user_policy_updates.lock().await;
+            let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
+                .map_err(|_| OAuthError::grant())?.len();
+            let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
+            Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        })
+        .await
+        .map_err(|_| OAuthError::internal())?
     }.await;
     match outcome {
         Ok(response) => response,
@@ -2204,6 +2287,16 @@ mod tests {
             ok(oauth.finish_provider_login(attempt, github_identity("42", "alice")));
         assert_eq!(id, form.id);
         assert_eq!(transaction.identity.unwrap().subject, "42");
+        let (resumed_id, resumed) = oauth
+            .resumed_provider_login(&state, &form.csrf, "github")
+            .unwrap();
+        assert_eq!(resumed_id, form.id);
+        assert_eq!(resumed.unwrap().identity.unwrap().subject, "42");
+        assert!(
+            oauth
+                .resumed_provider_login(&state, &ok(random("csrf_")), "github")
+                .is_none()
+        );
         assert!(
             oauth
                 .begin_provider_login(&form.id, &form.csrf, "github")

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <title>ssmcp</title>
+  <rect x="1" y="1" width="38" height="38" rx="11" fill="#18251f"/>
+  <path d="M28 8H17a6 6 0 0 0 0 12h6a6 6 0 0 1 0 12H12" stroke="#c6ebd9" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="28" cy="8" r="2.5" fill="#eff8f2"/>
+  <circle cx="12" cy="32" r="2.5" fill="#eff8f2"/>
+</svg>

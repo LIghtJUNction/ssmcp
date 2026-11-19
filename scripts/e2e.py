@@ -44,7 +44,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
     "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
-    "ssmcp.context.status", "ssmcp.context.read", "ssmcp.context.list",
+    "ssmcp.context.status", "ssmcp.context.list", "ssmcp.context.read",
     "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
@@ -56,7 +56,8 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
-    "ssmcp.harnesses.list", "ssmcp.audit.events",
+    "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
+    "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
     "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
     "ssmcp.browser.discover",
     "ssmcp.browser.status",
@@ -322,8 +323,8 @@ class Harness:
             await fs.writeText(id, {path:"workspace-check/AGENTS.md",text:"Parent rule.\n"});
             await fs.writeText(id, {path:"workspace-check/nested/agents.md",text:"Nested rule.\n"});
             const roots = await context.roots(id);
-            const index = await skills.list(id);
-            const view = await skills.view(id);
+            const index = await skills.list(id, {root:"workspace"});
+            const view = await skills.view(id, {root:"workspace"});
             const full = await skills.read(id, {path:"skills/ssh-skill/SKILL.md"});
             const rules = await agents.resolve(id, {path:"workspace-check/nested/new.rs"});
             const instruction = await agents.read(id, {path:"workspace-check/AGENTS.md"});
@@ -361,7 +362,7 @@ class Harness:
                    == ["Parent rule.\n", "Nested rule.\n"]
                    and result["instruction"]["content"] == "Parent rule.\n",
                    f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
-        recipient = client_id or self.client_id
+        expected_client = client_id or self.client_id
         for resource_key, native_key, field, kind in (
             ("skillResource", "index", "skills", "skills"),
             ("ruleResource", "rules", "files", "agents"),
@@ -370,18 +371,48 @@ class Harness:
             expected = [
                 {
                     **row,
-                    "readUri": f"ssmcp://clients/{recipient}/{kind}/read?"
+                    "readUri": f"ssmcp://clients/{expected_client}/{kind}/read?"
                     + urlencode({"root": row.get("root", native["root"])["id"],
                                  "path": row["path"]}),
                 }
                 for row in native[field]
             ]
             resource = result[resource_key]
-            self.check(resource["client"]["id"] == recipient
+            self.check(resource["client"]["id"] == expected_client
                        and resource["root"] == native["root"]
                        and resource[field] == expected,
                        f"{label}: dynamic {kind} resource preserves source metadata "
                        "and binds content links to the exact client and root")
+        resource_files = result["ruleResource"]["files"]
+        native_files = result["rules"]["files"]
+        self.check(len(resource_files) == len(native_files),
+                   f"{label}: the instruction resource preserves the native chain length")
+        for resource_file, native_file in zip(resource_files, native_files):
+            parsed = urlsplit(resource_file["readUri"])
+            self.check(resource_file["path"] == native_file["path"]
+                       and parsed.scheme == "ssmcp" and parsed.netloc == "clients"
+                       and parsed.path == f"/{expected_client}/agents/read" and not parsed.fragment
+                       and parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                       == {"root": ["workspace"], "path": [native_file["path"]]},
+                       f"{label}: instruction readUri names the exact client, root and file")
+        readback_code = "return await Promise.all(%s.map(uri => resources.read(uri)));" % json.dumps(
+            [row["readUri"] for row in resource_files]
+        )
+        readback = self.public_call("code_mode", {"code": readback_code})["result"]
+        self.check(len(readback) == len(native_files)
+                   and all(value["contents"] == [{
+                       "uri": resource_file["readUri"], "mimeType": "text/markdown",
+                       "text": native_file["content"],
+                   }] for value, resource_file, native_file in zip(readback, resource_files, native_files)),
+                   f"{label}: every instruction readUri returns the exact original text through SSH")
+        undecorated = []
+        for resource_file in resource_files:
+            native_copy = dict(resource_file)
+            del native_copy["readUri"]
+            undecorated.append(native_copy)
+        self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
+                   and undecorated == native_files,
+                   f"{label}: dynamic resources preserve all native fields beside their verified readUri")
 
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout
@@ -491,11 +522,27 @@ class Harness:
 
         wait_for(ssh_ready, description="isolated sshd")
 
+    def external_invocations(self, label):
+        """Read only this fixture client's bounded external-program invocation log."""
+        path = self.directory / f"{label}-bin" / "external-invocations.jsonl"
+        if not path.exists():
+            return []
+        if path.stat().st_size > 1024 * 1024:
+            raise AssertionError("external fixture invocation log exceeded its bound")
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        if not all(isinstance(row.get("provider"), str)
+                   and isinstance(row.get("argv"), list)
+                   and all(isinstance(argument, str) for argument in row["argv"])
+                   and isinstance(row.get("pid"), int) for row in rows):
+            raise AssertionError("invalid external fixture invocation record")
+        return rows
+
     def client_environment(self, label, *, harness=None, fixture=None, fixture_args=(), harnesses=()):
         """Expose only shell utilities and the explicitly selected local fixture.
 
-        The production client discovers coding harnesses from PATH. Never inherit
+        Production loads external providers only on explicit request. Never inherit
         installed harnesses here: the tests must not start a real model account.
+        Every fixture invocation is recorded before even handling --version.
         """
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
@@ -513,19 +560,31 @@ class Harness:
             installed.append((harness, fixture, fixture_args))
         elif fixture is not None or fixture_args:
             raise ValueError("fixture arguments require an explicit harness")
-        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
+        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode",
+                 "playwright": "playwright-mcp"}
         for kind, program, arguments in installed:
             if kind not in names or program is None:
                 raise ValueError("a known harness and local fixture must be supplied together")
             wrapper = directory / names[kind]
             if wrapper.exists():
                 raise ValueError(f"duplicate harness fixture: {kind}")
-            command = shlex.join([sys.executable, str(Path(program).resolve())])
-            extra = shlex.join([str(argument) for argument in arguments])
+            provider = "claude" if kind == "cc" else kind
+            invocation_log = directory / "external-invocations.jsonl"
+            executable = [sys.executable, str(Path(program).resolve())]
+            extra = [str(argument) for argument in arguments]
             wrapper.write_text(
-                f'#!/bin/sh\nif [ "$1" = "--version" ]; then printf "%s\\n" '
-                f'"{names[kind]} fixture 2.3.0"; exit 0; fi\n'
-                f'exec {command} "$@" {extra}\n'
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                f"record = {{'provider': {provider!r}, 'argv': sys.argv[1:], 'pid': os.getpid()}}\n"
+                f"fd = os.open({str(invocation_log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"
+                "try:\n"
+                "    os.write(fd, (json.dumps(record, separators=(',', ':')) + '\\n').encode())\n"
+                "finally:\n"
+                "    os.close(fd)\n"
+                "if sys.argv[1:2] == ['--version']:\n"
+                f"    print({(names[kind] + ' fixture 2.3.0')!r})\n"
+                "    raise SystemExit(0)\n"
+                f"os.execv({sys.executable!r}, {executable!r} + sys.argv[1:] + {extra!r})\n"
             )
             wrapper.chmod(0o700)
         # Cached account credentials can automatically select GitHub SSH ACLs.

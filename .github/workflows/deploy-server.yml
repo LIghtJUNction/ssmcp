@@ -1,0 +1,104 @@
+name: Deploy server
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      commit:
+        required: true
+        type: string
+    secrets:
+      SSMCP_DEPLOY_HOST:
+        required: true
+      SSMCP_DEPLOY_SSH_KEY:
+        required: true
+      SSMCP_DEPLOY_KNOWN_HOSTS:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable release tag
+        required: true
+        type: string
+      commit:
+        description: Full source commit from that release manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: ssmcp-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 20
+    env:
+      DEPLOY_TAG: ${{ inputs.tag }}
+      DEPLOY_COMMIT: ${{ inputs.commit }}
+      DEPLOY_HOST: ${{ secrets.SSMCP_DEPLOY_HOST }}
+      DEPLOY_KEY: ${{ secrets.SSMCP_DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.SSMCP_DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PORT: ${{ vars.SSMCP_DEPLOY_PORT || '22' }}
+      DEPLOY_USER: ${{ vars.SSMCP_DEPLOY_USER || 'ssmcp-deploy' }}
+    steps:
+      - name: Deploy the verified frontend and server release
+        shell: bash
+        run: |
+          set -euo pipefail
+          private_dir="$(mktemp -d "$RUNNER_TEMP/ssmcp-deploy.XXXXXX")"
+          trap 'rm -rf "$private_dir"' EXIT
+          export DEPLOY_PRIVATE_DIR="$private_dir"
+          python3 - <<'PY'
+          import os, pathlib, re
+          def require(ok, message):
+              if not ok:
+                  raise SystemExit(message)
+          for name in ['DEPLOY_HOST', 'DEPLOY_KEY', 'DEPLOY_KNOWN_HOSTS']:
+              require(bool(os.environ[name].strip()), 'Configure the required deployment secret: ' + name)
+          require(re.fullmatch(r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', os.environ['DEPLOY_TAG']), 'Invalid stable tag')
+          require(re.fullmatch(r'[0-9a-f]{40}', os.environ['DEPLOY_COMMIT']), 'Invalid source commit')
+          require(re.fullmatch(r'[A-Za-z0-9.:-]+', os.environ['DEPLOY_HOST']), 'Invalid deployment host')
+          require(re.fullmatch(r'[a-z_][a-z0-9_-]*', os.environ['DEPLOY_USER']), 'Invalid deployment user')
+          require(os.environ['DEPLOY_PORT'].isdigit() and 0 < int(os.environ['DEPLOY_PORT']) < 65536, 'Invalid SSH port')
+          private = pathlib.Path(os.environ['DEPLOY_PRIVATE_DIR'])
+          for name, variable in [('key', 'DEPLOY_KEY'), ('known_hosts', 'DEPLOY_KNOWN_HOSTS')]:
+              path = private / name
+              path.write_text(os.environ[variable].rstrip() + '\n')
+              path.chmod(0o600)
+          PY
+          unset DEPLOY_KEY DEPLOY_KNOWN_HOSTS
+          ssh -T -i "$private_dir/key" -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$private_dir/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "deploy $DEPLOY_TAG $DEPLOY_COMMIT ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            > deployment-receipt.json
+          python3 - <<'PY'
+          import json, os, pathlib
+          result = json.loads(pathlib.Path('deployment-receipt.json').read_text())
+          assert result.get('status') == 'deployed' and result.get('completed') is True, 'Deployment did not complete'
+          assert result.get('commit') == os.environ['DEPLOY_COMMIT'], 'Wrong deployed source'
+          assert result.get('version') == os.environ['DEPLOY_TAG'][1:], 'Wrong deployed version'
+          assert result.get('running_sha256') == result.get('target_sha256'), 'Running artifact differs'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Production deployment\n\n')
+              summary.write('| Version | Source | Result |\n| --- | --- | --- |\n')
+              summary.write('| ' + result['version'] + ' | `' + result['commit'] + '` | deployed |\n')
+          PY
+      - name: Preserve the deployment receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-deployment-${{ inputs.tag }}-${{ github.run_attempt }}
+          path: deployment-receipt.json
+          if-no-files-found: warn
+          retention-days: 14

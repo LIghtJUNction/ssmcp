@@ -20,6 +20,7 @@ import tempfile
 import time
 
 from e2e_input_history import InputHistory, png_fixture
+from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
@@ -159,7 +160,7 @@ try {
         )
         front = self.frontend("context-memory", self.config("context-memory"))
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the real composer in an isolated context workspace")
         initial = self.current()
         original_id = initial["branch"]["id"]
