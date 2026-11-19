@@ -4,7 +4,7 @@
 
 ## 账号与设备接入
 
-设备通过 HTTPS/WSS 连接中继，使用 `--allow 用户名@服务器` 明确允许控制者。被控设备可以不保存登录；控制者必须在该服务器完成真实账号认证。显式名单只授权列出的人，已登录设备省略名单时只允许自己。
+设备通过 HTTPS/WSS 连接中继，使用 `--allow 用户名@服务器` 明确允许控制者。被控设备可以不保存登录；控制者必须在该服务器完成真实账号认证。显式名单只授权列出的人，已登录设备省略名单时只允许自己。启动阶段即收到撤权通知的未登录设备会正确退出，并停止自动重连。
 
 ~~~sh
 # 控制者先在目标服务器注册或登录。
@@ -48,10 +48,10 @@ zuse-computer 0.1.0 以 git 子模块固定到 `c0dbfda315f8cf1cd03ddb0a3db15f3d
 
 终端基础库改用独立发布的 ztuio 0.1.0，固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，保留原内嵌 0.1.2 的公共接口和绘制优化。应用仓库不再保存另一份终端核心，正式发布只发布 ssmcp；独立依赖分别维护和发布。
 
-本版继续使用经过配对的 zharness 0.5.0 与 zplugin 0.3.0。后续 zplugin 0.3.1 的消费者升级将在匹配的 zharness 来源完成后单独迭代。[依赖与构建](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/dependencies.md)
+本版继续使用经过配对的 zharness 0.5.0 与 zplugin 0.3.0。zharness 0.5.1、zplugin/macros 0.3.1 与 zuse-computer 0.2.0 的组合升级单独验证，未包含在本版中。[依赖与构建](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/dependencies.md)
 
 ## 安装与验证
 
-已安装客户端可运行 `ssmcp update --check` 查看新版本，再运行 `ssmcp update`。安装器替换磁盘上的程序，正在运行的会话仍需从已更新入口重启或按现有受控重载流程接管；服务端需要单独部署。
+通过官方安装器安装的客户端可运行 `ssmcp update --check` 查看新版本，再运行 `ssmcp update`。通过 Cargo、Homebrew、Scoop 或系统包管理器安装的客户端，请用原包管理器升级。安装器替换磁盘上的程序，正在运行的会话仍需从已更新入口重启或按现有受控重载流程接管；服务端需要单独部署。
 
 归档、安装器、SHA256SUMS 和 release-manifest.json 随正式 Release 提供。manifest 固定发布源码、子模块及归档摘要；正式工作流另记录六个平台构建、安装验证、crate 发布与服务器部署结果。具体检查和实际覆盖范围见[本轮恢复与验收报告](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/reports/history-resume-20261120/README.md)。
