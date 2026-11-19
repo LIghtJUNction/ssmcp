@@ -63,23 +63,89 @@ impl Event {
                 self.meta.author.clone()
             };
         }
+        // Work only on the already-redacted renderer summary. Native command
+        // metadata can contain secrets that the human transcript has removed.
         let plain = unstyled(&self.summary);
-        let title = heading(&plain);
-        let title = title
+        let heading = heading(&plain);
+        let (tag, mut title) = heading
             .strip_prefix('[')
             .and_then(|text| text.split_once(']'))
-            .map_or(title, |(_, text)| text)
-            .trim();
-        title
-            .split_whitespace()
-            .filter(|word| {
-                !word.strip_prefix('#').is_some_and(|id| {
-                    id.len() > 12
-                        || (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
-                })
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+            .map_or(("", heading), |(tag, text)| (tag.trim(), text.trim()));
+        if self.meta.command && matches!(tag, "RUN" | "OK" | "ERR" | "WARN") {
+            for key in &self.meta.keys {
+                let mut parts = key.split('\0');
+                let (Some(provider), Some("job"), Some(id)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    continue;
+                };
+                let source = if provider.is_empty() {
+                    None
+                } else {
+                    title
+                        .strip_prefix(provider)
+                        .and_then(|text| text.strip_prefix(' '))
+                };
+                let provider_prefix = source.is_some();
+                let Some((shown_id, command)) = source.unwrap_or(title).split_once(' ') else {
+                    continue;
+                };
+                let compact_id = shown_id.strip_prefix('#').is_some_and(|shown| {
+                    shown == id
+                        || id.rsplit_once('-').is_some_and(|(nonce, suffix)| {
+                            nonce.len() == 32
+                                && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                && suffix == shown
+                                && !shown.is_empty()
+                                && shown.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                });
+                // Without a provider, strip only the exact known job ID or
+                // its display abbreviation, never an arbitrary command #arg.
+                if shown_id == id
+                    || compact_id
+                    || (provider_prefix
+                        && shown_id.strip_prefix('#').is_some_and(|id| !id.is_empty()))
+                    || shown_id.strip_prefix('…').is_some_and(|tail| {
+                        tail.chars().count() == 12 && id.chars().count() > 18 && id.ends_with(tail)
+                    })
+                {
+                    title = command.trim_start();
+                    if tag == "RUN" {
+                        title = title.strip_suffix(" started").unwrap_or(title);
+                    } else if let Some((_, command)) = title.split_once(" · ") {
+                        title = command;
+                    }
+                    break;
+                }
+            }
+        } else if !self.meta.command
+            && tag == "REQ"
+            && let Some((tool, call)) = title.rsplit_once(" call=")
+            && call.ends_with(" started")
+        {
+            title = tool;
+        }
+        title.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn chat_title(&self) -> String {
+        let heading = self.chat_heading();
+        match self.meta.status {
+            Some(Status::Done | Status::Exit(0)) => format!("{heading} · done"),
+            Some(status) => format!("{heading} · {}", status.label()),
+            None => heading,
+        }
+    }
+
+    fn chat_tone(&self, selected: bool) -> &'static str {
+        match self.meta.status {
+            Some(status) if status.failed() => status.tone(),
+            _ if matches!(self.tone, "error" | "warning") => self.tone,
+            Some(Status::Running) => "accent",
+            _ if selected => "accent",
+            _ => "muted",
+        }
     }
 
     fn append(&mut self, text: String, truncated: bool) {
@@ -823,6 +889,7 @@ impl EventView {
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
+        let mut previous_compact_tool = false;
         let palette = format!(
             "{}:{}:{}",
             palette_key(ui),
@@ -837,9 +904,15 @@ impl EventView {
             new_images |= new_image == Some(event.id);
             let selected = Some(event.id) == self.selected;
             let chat = self.scope == EventScope::Conversation;
-            if chat && !rows.is_empty() {
+            let compact_tool = chat
+                && event.meta.kind == Kind::Tool
+                && event.image.is_none()
+                && !event.expanded(self.scope)
+                && self.query.is_empty();
+            if chat && !rows.is_empty() && !(previous_compact_tool && compact_tool) {
                 rows.push((event.id, String::new()));
             }
+            previous_compact_tool = compact_tool;
             if selected {
                 selected_row = Some(rows.len());
             }
@@ -847,11 +920,14 @@ impl EventView {
             if conversation && event.image.is_none() {
                 let role = event.chat_heading();
                 let tone = if event.meta.user { "accent" } else { "heading" };
+                let marker = if event.meta.user { "❯" } else { "●" };
                 rows.push((
                     event.id,
-                    format!(
-                        "  {}",
-                        paint(&clip_plain(&role, width.saturating_sub(2)), tone, ui, true)
+                    paint(
+                        &clip_plain(&format!("  {marker} {role}"), width),
+                        tone,
+                        ui,
+                        true,
                     ),
                 ));
                 if event
@@ -874,20 +950,16 @@ impl EventView {
                     event.cache = Some((body_width, palette.clone(), lines));
                 }
                 for row in &event.cache.as_ref().unwrap().2 {
-                    rows.push((event.id, format!("  {row}")));
+                    rows.push((event.id, format!("{}{row}", " ".repeat(indent))));
                 }
                 continue;
             }
             let expanded = event.expanded(self.scope);
             let title = if chat {
-                let heading = event.chat_heading();
                 if conversation {
-                    heading
+                    event.chat_heading()
                 } else {
-                    match event.meta.status {
-                        Some(status) => format!("{heading} · {}", status.label()),
-                        None => heading,
-                    }
+                    event.chat_title()
                 }
             } else {
                 event.summary_with_status()
@@ -895,7 +967,9 @@ impl EventView {
             let marker = if expanded { "▾" } else { "▸" };
             let prefix = format!("{} {marker} ", if selected && focused { "›" } else { " " });
             let prefix = clip_plain(&prefix, indent);
-            let tone = if selected && focused {
+            let tone = if chat {
+                event.chat_tone(selected && focused)
+            } else if selected && focused {
                 "accent"
             } else {
                 event.meta.status.map_or(event.tone, Status::tone)
@@ -1611,6 +1685,173 @@ mod tests {
             assert!(rows.contains(expected), "missing {expected}: {rows}");
         }
         assert!(!rows.contains("plain fallback only"));
+    }
+
+    #[test]
+    fn conversation_command_updates_replace_lifecycle_chrome_without_changing_logs() {
+        let mut view = EventView::new();
+        let job = "1234567890abcdef1234567890abcdef-1a";
+        let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n";
+        let output = b"first-result\nsecond-result\n";
+        let finished =
+            b"[OK ] shell #1a completed exit=0 0.04s \xc2\xb7 bash -lc \xc2\xb7 2 lines\n";
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":job,"command":["bash","-lc","printf first"]}),
+            started,
+        );
+        view.set_scope(EventScope::Conversation);
+        let running = view.render(100, 12, &plain_ui(), false).join("\n");
+        assert!(
+            running.contains("bash -lc · 2 lines · running"),
+            "{running}"
+        );
+        assert!(!running.contains("shell #1a") && !running.contains("started"));
+        view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":job}), output);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+            finished,
+        );
+        let done = view.render(100, 12, &plain_ui(), false).join("\n");
+        assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
+        assert!(!done.contains("exit=0") && !done.contains("first-result"));
+        let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        let bytes = view.bytes;
+        view.set_scope(EventScope::All);
+        view.open();
+        let logs = view.render(100, 20, &plain_ui(), false).join("\n");
+        for detail in [
+            "shell #1a",
+            "started",
+            "exit=0",
+            "first-result",
+            "second-result",
+        ] {
+            assert!(logs.contains(detail), "missing {detail}: {logs}");
+        }
+        assert_eq!(view.bytes, bytes);
+        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
+
+        for (job, summary, expected) in [
+            (
+                "17",
+                "[RUN] #17 cargo test --lib",
+                "cargo test --lib · done",
+            ),
+            (
+                "1234567890abcdef1234567890abcdef-1a",
+                "[RUN] #1a cargo check",
+                "cargo check · done",
+            ),
+            (
+                "17",
+                "[RUN] printf #17 started",
+                "printf #17 started · done",
+            ),
+            (
+                "17",
+                "[RUN] #other cargo check",
+                "#other cargo check · done",
+            ),
+        ] {
+            let mut preview = EventView::new();
+            preview.ingest_event(
+                "preview",
+                &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+                summary.as_bytes(),
+            );
+            preview.set_scope(EventScope::Conversation);
+            let rendered = preview.render(100, 8, &plain_ui(), false).join("\n");
+            assert!(rendered.contains(expected), "{rendered}");
+            assert_eq!(preview.events[0].text, summary);
+        }
+    }
+
+    #[test]
+    fn conversation_command_arguments_and_failure_states_remain_visible_when_selected() {
+        for (mut outcome, status, tone) in [
+            (json!({"exit_code":7}), "exit=7", "error"),
+            (json!({"cancelled":true}), "cancelled", "warning"),
+            (json!({"timed_out":true}), "timeout", "warning"),
+            (json!({"exit_signal":9}), "signal=9", "error"),
+        ] {
+            let mut view = EventView::new();
+            let job = "1234567890abcdef1234567890abcdef-abc";
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":job,"command":["printf","#123","started"]}),
+                b"[RUN ] shell #abc printf '#123' started started\n",
+            );
+            outcome["type"] = json!("exec.exited");
+            outcome["job_id"] = json!(job);
+            view.ingest_event("shell", &outcome, b"[ERR ] diagnostic-detail\n");
+            view.set_scope(EventScope::Conversation);
+            let ui = Ui::default();
+            let rendered = view.render(100, 8, &ui, true).join("\n");
+            let plain = unstyled(&rendered);
+            assert!(
+                plain.contains(&format!("printf '#123' started · {status}")),
+                "{plain}"
+            );
+            assert!(!plain.contains("shell #abc") && !plain.contains(" · done"));
+            assert!(!plain.contains("diagnostic-detail"));
+            assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
+            view.open();
+            let expanded = view.render(100, 12, &plain_ui(), true).join("\n");
+            assert!(expanded.contains("diagnostic-detail"), "{expanded}");
+        }
+    }
+
+    #[test]
+    fn compact_tool_runs_keep_message_spacing_and_exact_mouse_targets() {
+        let mut view = EventView::new();
+        view.ingest_conversation(b"[USER] queued\nPlease check the project.\n");
+        for (id, command, detail) in [
+            ("a", "cargo check", "first-result"),
+            ("b", "cargo test", "second-result"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id,"command":["cargo",command]}),
+                format!("[RUN ] shell {id} {command} started\n{detail}\n").as_bytes(),
+            );
+        }
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","author":"Ada","kind":"answer","text":"Both checks are running."}),
+            b"",
+        );
+        view.set_scope(EventScope::Conversation);
+        let rows = view.render(100, 20, &plain_ui(), false);
+        let first = rows
+            .iter()
+            .position(|row| row.contains("cargo check"))
+            .unwrap();
+        let second = rows
+            .iter()
+            .position(|row| row.contains("cargo test"))
+            .unwrap();
+        let answer = rows.iter().position(|row| row.contains("Ada")).unwrap();
+        assert_eq!(second, first + 1, "folded tools share a compact group");
+        assert!(rows[first - 1].is_empty(), "{rows:?}");
+        assert_eq!(
+            answer,
+            second + 2,
+            "assistant prose starts a separate paragraph"
+        );
+        assert_eq!(view.hit_rows[first], Some(view.events[1].id));
+        assert_eq!(view.hit_rows[second], Some(view.events[2].id));
+        assert!(view.mouse_select(second as u16));
+        assert_eq!(view.selected, Some(view.events[2].id));
+        assert!(view.open());
+        let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert!(expanded.contains("second-result"), "{expanded}");
+        assert!(!expanded.contains("first-result"), "{expanded}");
+        assert_eq!(view.events.len(), 4);
     }
 
     #[test]
