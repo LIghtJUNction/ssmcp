@@ -232,6 +232,55 @@ pub(crate) fn exit_requested() -> bool {
     })
 }
 
+/// Keep the account actually used by this connection private to its local UI.
+pub(super) fn set_logout_target(target: Option<(&str, &str)>) {
+    if let Some(shared) = shared() {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .logout_target = target.map(|(server, token)| conversation::logout::Target {
+            server: server.to_owned(),
+            token: token.to_owned(),
+        });
+    }
+}
+
+/// A revoked connection may close before its logout HTTP response arrives.
+/// Wait outside the display lock so teardown cannot restart authorization early.
+pub(super) async fn finish_pending_logout() -> Option<String> {
+    let shared = shared()?;
+    let task = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .conversation
+        .logout_task
+        .take()?;
+    let result = task.finish().await;
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.chat_finish_logout(result);
+    state
+        .conversation
+        .exit_message
+        .clone()
+        .or_else(|| state.notice.clone())
+}
+
+/// Read before Session is dropped, print only after the physical screen is restored.
+pub(super) fn take_exit_message() -> Option<String> {
+    shared()?
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .conversation
+        .exit_message
+        .take()
+}
+
 /// Wake the display after asynchronous local discovery without publishing a log.
 pub(super) fn invalidate() {
     if let Some(shared) = shared() {
@@ -1102,6 +1151,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     server_origin: Option<footer::Origin>,
+    logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
     graphics: images::Graphics,
@@ -1141,6 +1191,7 @@ impl State {
             events: events::EventView::new(),
             context_label: String::new(),
             server_origin: None,
+            logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
             graphics: images::Graphics::default(),
@@ -2531,12 +2582,12 @@ mod tests {
         state.image(rejected, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -2573,7 +2624,7 @@ mod tests {
         state.image(next, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -2622,7 +2673,7 @@ mod tests {
         state.image(image, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(state.events.open());
+        assert!(!state.events.open(), "decoded images are already expanded");
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();

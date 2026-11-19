@@ -1834,6 +1834,14 @@ async fn connect(
                 None
             }
         };
+    terminal::set_logout_target(if options.temporary || options.username.is_none() {
+        None
+    } else {
+        options
+            .relay
+            .as_ref()
+            .map(|credential| (credential.server.as_str(), credential.token.as_str()))
+    });
     let mut incoming = Incoming::start(reader);
     render::status(
         "shell",
@@ -1978,7 +1986,7 @@ async fn connect(
     let mut intentionally_stopped = false;
     let mut service_updates = tokio::time::interval(Duration::from_secs(1));
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let result: crate::Result<()> = 'connected: loop {
+    let mut result: crate::Result<()> = 'connected: loop {
         tokio::select! {
             _ = steering_updates.tick() => {
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
@@ -2167,6 +2175,12 @@ async fn connect(
     access::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
+    let pending_logout_message = terminal::finish_pending_logout().await;
+    if pending_logout_message.is_some() || terminal::exit_requested() {
+        intentionally_stopped = true;
+        reload_requested = false;
+        result = Ok(());
+    }
     if let Some(observer) = git_status {
         observer.shutdown().await;
     }
@@ -2175,7 +2189,11 @@ async fn connect(
     let _ = ssh.start_kill();
     backend.shutdown().await;
     let _ = ssh.wait().await;
+    let exit_message = terminal::take_exit_message().or(pending_logout_message);
     drop(display_session);
+    if let Some(message) = exit_message {
+        render::status("account", "Result", &message);
+    }
     render::status("shell", "Result", "DISCONNECTED");
     if reload_requested {
         return Ok(ConnectionExit::Reload {

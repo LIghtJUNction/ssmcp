@@ -70,8 +70,8 @@ def run(binary, decoder, output, checks):
             check("Improve the client experience" in body(initial)
                   and "src/client/terminal/events.rs" in body(initial)
                   and "done" in body(initial)
-                  and "test client::ui::custom_colors" in body(initial)
-                  and "Source retained in the code audit" not in body(initial)
+                  and "Command completed successfully" in body(initial)
+                  and "4–6/6" in body(initial)
                   and "expanded = false" in body(initial)
                   and "@@ -1 +1 @@" not in body(initial),
                   "conversation retains user messages and result summaries while tool and diff details start collapsed")

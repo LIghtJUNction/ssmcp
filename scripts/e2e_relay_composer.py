@@ -393,7 +393,7 @@ class RelayComposer(Composer):
         self.check(self.record(restored, message_id=first["id"])["status"] == "delivered"
                    and self.record(restored, message_id=editable["id"])["status"] == "delivered",
                    "previously delivered relay history remains delivered after the room changes")
-        front.send(b"\x1bOQ" * 3)
+        self.activate_column(front, "queue")
         front.until(lambda shot: visible_record(shot, pending["text"], "queued", pending["id"]),
                     "safe undelivered work acknowledged by the replacement relay room")
         resumed = self.record(self.queue(), message_id=pending["id"])

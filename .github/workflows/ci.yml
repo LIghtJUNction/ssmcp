@@ -53,7 +53,7 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends openssh-server nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
+          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap util-linux rsync apparmor-profiles shellcheck
           if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
             if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
               sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
@@ -126,79 +126,16 @@ jobs:
       - run: cargo build --locked --bins --example vt_snapshot
       - name: Preserve DCR through a real daemon restart
         run: python3 scripts/test_registry_restart.py --bin-dir target/debug
-      - name: Exercise real SSH, OAuth, HTTP and PTY
-        run: python3 scripts/e2e.py --bin-dir target/debug
-      - name: Exercise automatic setup and cancellation through a real PTY
-        run: python3 scripts/e2e_onboarding.py --binary target/debug/ssmcp --output "$RUNNER_TEMP/ssmcp-onboarding-report.json"
-      - name: Exercise session title, reload and output artifacts
-        run: python3 scripts/e2e_session_features.py --bin-dir target/debug
-      - name: Exercise discovered harness fixtures through SSH and OAuth
-        run: python3 scripts/e2e_agents.py --bin-dir target/debug
-      - name: Exercise unified execution, audit and connection isolation
+      - name: Verify the installed daemon rejects legacy SSH attachment
         run: |
-          python3 scripts/test_e2e_unified.py
-          python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
-      - name: Exercise computer-use, Omarchy discovery and image transport
-        if: matrix.runner == 'ubuntu-24.04'
-        run: python3 scripts/e2e_computer_use.py --bin-dir target/debug --evidence-dir "$RUNNER_TEMP/ssmcp-computer-use" --report "$RUNNER_TEMP/ssmcp-computer-use-report.json"
-      - name: Exercise terminal dashboard and Git observer through a real PTY
-        run: python3 scripts/e2e_dashboard.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
-      - name: Exercise conversation UI and SSH/account relay request queues
-        run: make test-client-ui
-      - name: Exercise background sessions and watchdog with real user systemd
-        timeout-minutes: 8
-        run: |
-          ssmcp_ci_uid="$(id -u)"
-          ssmcp_ci_user="$(id -un)"
-          ssmcp_ci_manager_log="$RUNNER_TEMP/ssmcp-daemon-manager.log"
-          ssmcp_ci_restore_linger=0
-          export XDG_RUNTIME_DIR="/run/user/$ssmcp_ci_uid"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          restore_ci_linger() {
-            if test "$ssmcp_ci_restore_linger" = 1; then
-              timeout 20s sudo -n loginctl disable-linger "$ssmcp_ci_user" >>"$ssmcp_ci_manager_log" 2>&1 ||
-                echo '::warning::Could not restore the hosted runner linger setting; see daemon manager evidence.'
-            fi
-          }
-          trap restore_ci_linger EXIT
-          if ! timeout 5s systemctl --user --no-pager show --property=Version >"$ssmcp_ci_manager_log" 2>&1; then
-            # This prepares the ephemeral CI runner, not the product's startup policy.
-            ssmcp_ci_linger="$(timeout 5s loginctl show-user "$ssmcp_ci_user" --property=Linger --value 2>>"$ssmcp_ci_manager_log" || true)"
-            if test "$ssmcp_ci_linger" != yes; then
-              if timeout 20s sudo -n loginctl enable-linger "$ssmcp_ci_user" >>"$ssmcp_ci_manager_log" 2>&1; then
-                ssmcp_ci_restore_linger=1
-              else
-                echo '::warning::Hosted runner linger setup failed; checking the actual user manager next.'
-              fi
-            fi
-            if ! timeout 20s sudo -n systemctl start "user@$ssmcp_ci_uid.service" >>"$ssmcp_ci_manager_log" 2>&1; then
-              echo '::warning::Hosted runner user manager startup failed; daemon preflight will report the result.'
-            fi
-            for ssmcp_ci_attempt in {1..10}; do
-              echo "User manager readiness attempt $ssmcp_ci_attempt/10" >>"$ssmcp_ci_manager_log"
-              if timeout 3s systemctl --user --no-pager show --property=Version >>"$ssmcp_ci_manager_log" 2>&1; then
-                break
-              fi
-              sleep 1
-            done
+          if target/debug/ssmcpd attach; then
+            echo "The SSH attachment command should be retired" >&2
+            exit 1
           fi
-          # Missing manager support is exit 2 with a blocked report, never a skipped pass.
-          python3 scripts/e2e_daemon.py --bin-dir target/debug --timeout 300 \
-            --report "$RUNNER_TEMP/ssmcp-daemon-report.json" --revision "$(git rev-parse HEAD)"
-      - name: Save unified acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: unified-acceptance-${{ matrix.runner }}
-          path: |
-            ${{ runner.temp }}/ssmcp-unified-report*
-            ${{ runner.temp }}/ssmcp-dashboard-report*
-            ${{ runner.temp }}/ssmcp-computer-use-report.json
-            ${{ runner.temp }}/ssmcp-onboarding-report.json
-            ${{ runner.temp }}/ssmcp-daemon-report*
-            ${{ runner.temp }}/ssmcp-daemon-manager.log
-          if-no-files-found: warn
-          retention-days: 14
+      - name: Exercise OAuth account login and relay lifecycle
+        run: python3 scripts/e2e_account_relay.py --binary target/debug/ssmcp
+      - name: Exercise OAuth router and conversation through a real PTY
+        run: make test-client-ui
       - run: cargo build --locked --release
       - name: Check staged Linux installation
         run: |

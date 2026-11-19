@@ -134,7 +134,8 @@ def logs_open(shot):
 
 
 def left_rows(shot):
-    return [row.split("│", 1)[0] for row in shot["rows"]]
+    divider = shot["rows"][0].find("│")
+    return [row if divider < 0 else row[:divider] for row in shot["rows"]]
 
 
 def prompt_start(shot):
@@ -246,7 +247,7 @@ def main():
             check(not initial["hide_cursor"] and initial["bracketed_paste"]
                   and not initial["application_cursor"] and not initial["application_keypad"],
                   "default keyboard modes belong to the visible composer")
-            check("Reviewer" not in text(initial) and "│" not in text(initial),
+            check("Reviewer" not in text(initial) and "Builder" not in text(initial),
                   "the default conversation keeps the sidebar hidden")
             account_row = left_rows(initial)[prompt_start(initial)]
             check("example" in account_row and "0.75 GB" in account_row,
@@ -259,11 +260,11 @@ def main():
                   and "Message the agent" in prompt_text(initial),
                   "F3 exposes both sample agents while preserving the current page and composer")
 
-            check("done" in body_text(initial)
-                  and "test client::ui::custom_colors" in body_text(initial)
-                  and "test client::audit_view::browse" in body_text(initial)
-                  and "Source retained in the code audit" not in body_text(initial),
-                  "completed commands show two result lines while longer output stays collapsed")
+            check("cargo test --lib · done" in body_text(initial)
+                  and "Command completed successfully" in body_text(initial)
+                  and "4–6/6" in body_text(initial)
+                  and "test client::ui::custom_colors" not in body_text(initial),
+                  "completed commands show the latest lines in a bounded panel")
             check("src/client/terminal/events.rs" in body_text(initial)
                   and "expanded = true" in body_text(initial)
                   and "expanded = false" in body_text(initial)
@@ -272,7 +273,8 @@ def main():
             command_row = next(index for index, row in enumerate(initial["rows"])
                                if "▸" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
-            expanded = preview.until(lambda s: "Source retained in the code audit" in body_text(s),
+            expanded = preview.until(lambda s: "▾ cargo test --lib" in body_text(s)
+                                     and "test client::ui::custom_colors" in body_text(s),
                                      "click-expanded command output beyond its two-line preview")
             check("done" in body_text(expanded)
                   and "test client::ui::custom_colors" in body_text(expanded)
@@ -286,8 +288,8 @@ def main():
                                if "▾" in row and "cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
             collapsed = preview.until(lambda s: view(s, "conversation")
-                                      and "test client::ui::custom_colors" in body_text(s)
-                                      and "Source retained in the code audit" not in body_text(s),
+                                      and "▸ cargo test --lib" in body_text(s)
+                                      and "4–6/6" in body_text(s),
                                       "click-collapsed command output returning to its result preview")
             diff_row = next(index for index, row in enumerate(collapsed["rows"])
                             if "▸" in row and "src/client/terminal/events.rs" in row)
@@ -297,8 +299,8 @@ def main():
                                  and "expanded = false" in body_text(s)
                                  and "@@ -1 +1 @@" in body_text(s),
                                  "click-expanded diff with both source versions")
-            check("test client::ui::custom_colors" in body_text(diff)
-                  and "Source retained in the code audit" not in body_text(diff),
+            check("▸ cargo test --lib" in body_text(diff)
+                  and "4–6/6" in body_text(diff),
                   "expanding a diff keeps the neighboring command at its compact preview")
             save_shot(args.out, "diff-expanded", diff)
             diff_row = next(index for index, row in enumerate(diff["rows"])
@@ -321,8 +323,8 @@ def main():
             preview.until(lambda s: column(s) == ("conversation", 2, 8)
                           and "done" in body_text(s)
                           and "A quieter workspace" not in body_text(s)
-                          and "test client::ui::custom_colors" in body_text(s)
-                          and "Source retained in the code audit" not in body_text(s)
+                          and "▸ cargo test --lib" in body_text(s)
+                          and "4–6/6" in body_text(s)
                           and "expanded = false" in body_text(s)
                           and "@@ -1 +1 @@" not in body_text(s),
                           "raw toggle restoring the conversation and collapsed cards")
@@ -515,7 +517,7 @@ def main():
                           and not s["hide_cursor"], "horizontal navigation back to the conversation")
 
             preview.send(b"\x1bOR")
-            preview.until(lambda s: "│" not in text(s) and "Builder" not in body_text(s), "collapsed sidebar")
+            preview.until(lambda s: "│" not in s["rows"][0] and "Builder" not in body_text(s), "collapsed sidebar")
             preview.send(b"\x1bOR")
             preview.until(lambda s: "│" in text(s) and "Reviewer" in text(s), "restored sidebar")
             check(True, "F3 collapses and restores the sidebar")
