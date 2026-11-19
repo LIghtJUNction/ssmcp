@@ -18,6 +18,25 @@ use tokio_tungstenite::{
 pub(super) const AUTH_EXPIRED: &str = "ssmcp authorization expired or revoked";
 const UNSUPPORTED: &str = "server does not support account clients; upgrade ssmcpd";
 
+const QUOTA_CODE: &str = "traffic_quota_exceeded:";
+
+fn is_quota_failure(message: &str) -> bool {
+    message.starts_with(QUOTA_CODE)
+        || message
+            .strip_prefix("SSH server rejected the connection: ")
+            .is_some_and(|message| message.starts_with(QUOTA_CODE))
+}
+
+fn quota_rejection(server: &str, _body: Option<&[u8]>) -> crate::Result<String> {
+    // A 402 from this authenticated endpoint means the connection has no quota.
+    // Error-body prose and URLs are untrusted display input. Construct both the
+    // explanation and recharge link locally, including for older bodyless replies.
+    let origin = super::account::normalize_server(server)?;
+    Ok(format!(
+        "traffic_quota_exceeded: 本月剩余流量不足。请求未发送到客户端，未执行。充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{origin}/account/traffic"
+    ))
+}
+
 #[derive(Debug)]
 pub(super) struct PermanentFailure(pub String);
 
@@ -29,7 +48,7 @@ impl std::fmt::Display for PermanentFailure {
 impl std::error::Error for PermanentFailure {}
 
 pub(super) fn failure(message: String) -> crate::Error {
-    if message == AUTH_EXPIRED || message == UNSUPPORTED {
+    if message == AUTH_EXPIRED || message == UNSUPPORTED || is_quota_failure(&message) {
         Box::new(PermanentFailure(message))
     } else {
         message.into()
@@ -97,6 +116,18 @@ pub(super) async fn run() -> crate::Result<()> {
     .map_err(|_| "relay connection timed out")?;
     let websocket = match connected {
         Ok((socket, _)) => socket,
+        Err(tungstenite::Error::Http(response))
+            if response.status() == StatusCode::PAYMENT_REQUIRED =>
+        {
+            write_frame(
+                &mut tokio::io::stdout(),
+                &Frame::Reject {
+                    message: quota_rejection(&server, response.body().as_deref())?,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         Err(tungstenite::Error::Http(response))
             if matches!(
                 response.status(),
@@ -205,6 +236,67 @@ pub(super) async fn run() -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_http_rejection_uses_only_the_validated_server_origin() {
+        let server = "https://relay.example";
+        let expected = quota_rejection(server, None).unwrap();
+        assert!(expected.starts_with(QUOTA_CODE));
+        assert!(expected.contains("未执行"));
+        assert!(expected.ends_with("https://relay.example/account/traffic"));
+        for recharge in [
+            "https://relay.example/account/traffic",
+            "https://account.example/account/traffic",
+            "https://user:password@relay.example/account/traffic",
+            "https://relay.example/unknown",
+            "https://relay.example/account/traffic?token=secret",
+            "javascript:alert(1)",
+        ] {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "error": "traffic_quota_exceeded",
+                "message": "traffic_quota_exceeded: visit https://attacker.example/unknown\n\u{1b}[31m",
+                "recharge_url": recharge,
+            })).unwrap();
+            assert_eq!(quota_rejection(server, Some(&body)).unwrap(), expected);
+        }
+        assert_eq!(
+            quota_rejection(server, Some(b"not json")).unwrap(),
+            expected
+        );
+        assert_eq!(
+            quota_rejection("HTTPS://RELAY.EXAMPLE:443/", None).unwrap(),
+            expected
+        );
+        assert!(quota_rejection("https://user:password@relay.example", None).is_err());
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            expected,
+            crate::user_policy::TrafficError::Exhausted
+                .notice(server, crate::user_policy::TrafficOutcome::NotDispatched)
+        );
+    }
+
+    #[test]
+    fn quota_rejection_stops_reconnects_without_treating_other_failures_as_quota() {
+        for message in [
+            quota_rejection("https://relay.example/", None).unwrap(),
+            format!(
+                "SSH server rejected the connection: {}",
+                quota_rejection("https://relay.example", None).unwrap()
+            ),
+        ] {
+            assert!(
+                failure(message)
+                    .downcast_ref::<PermanentFailure>()
+                    .is_some()
+            );
+        }
+        assert!(
+            failure("encrypted relay connection failed".into())
+                .downcast_ref::<PermanentFailure>()
+                .is_none()
+        );
+    }
 
     #[test]
     fn relay_transport_requires_an_origin_and_secure_remote_connection() {

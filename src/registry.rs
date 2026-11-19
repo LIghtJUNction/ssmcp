@@ -18,6 +18,7 @@ pub enum Provider {
     Computer,
     Omarchy,
     Harnesses,
+    Plugins,
     Workspace,
     Context,
     Rsync,
@@ -42,6 +43,7 @@ impl Provider {
             Self::Computer => "computer",
             Self::Omarchy => "omarchy",
             Self::Harnesses => "harnesses",
+            Self::Plugins => "plugins",
             Self::Workspace => "workspace",
             Self::Context => "context",
             Self::Rsync => "rsync",
@@ -140,6 +142,24 @@ impl Registry {
         provider: Provider,
         tools: Vec<ToolDescriptor>,
     ) -> Result<u64, String> {
+        self.replace_catalog_inner(provider, tools, true)
+    }
+
+    /// Transactional extension updates must not revoke previously accepted tools.
+    pub(crate) fn replace_preserving(
+        &self,
+        provider: Provider,
+        tools: Vec<Value>,
+    ) -> Result<u64, String> {
+        self.replace_catalog_inner(provider, catalog::compact(tools)?, false)
+    }
+
+    fn replace_catalog_inner(
+        &self,
+        provider: Provider,
+        tools: Vec<ToolDescriptor>,
+        invalidate_on_error: bool,
+    ) -> Result<u64, String> {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         if state.closed {
             return Err("client connection is closed".into());
@@ -148,8 +168,10 @@ impl Registry {
         let entries = match prepared {
             Ok(entries) => entries,
             Err(error) => {
-                state.tools.retain(|_, tool| tool.provider != provider);
-                state.generation += 1;
+                if invalidate_on_error {
+                    state.tools.retain(|_, tool| tool.provider != provider);
+                    state.generation += 1;
+                }
                 return Err(error);
             }
         };
@@ -159,8 +181,10 @@ impl Registry {
                 .get(id)
                 .is_some_and(|tool| tool.provider != provider)
         }) {
-            state.tools.retain(|_, tool| tool.provider != provider);
-            state.generation += 1;
+            if invalidate_on_error {
+                state.tools.retain(|_, tool| tool.provider != provider);
+                state.generation += 1;
+            }
             return Err(format!(
                 "{} tried to register a name owned by another provider",
                 provider.label()
@@ -181,8 +205,10 @@ impl Registry {
             return Ok(state.generation);
         }
         if state.tools.len().saturating_sub(old_count) + entries.len() > 8192 {
-            state.tools.retain(|_, tool| tool.provider != provider);
-            state.generation += 1;
+            if invalidate_on_error {
+                state.tools.retain(|_, tool| tool.provider != provider);
+                state.generation += 1;
+            }
             return Err("combined tool registry exceeds 8192 entries".into());
         }
         state.generation += 1;
@@ -343,7 +369,25 @@ fn prepare(
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),
             Provider::Omarchy => id.starts_with("ssmcp.omarchy."),
-            Provider::Harnesses => id == "ssmcp.harnesses.list",
+            Provider::Harnesses => {
+                matches!(id.as_str(), "ssmcp.harnesses.list" | "ssmcp.harnesses.load")
+            }
+            Provider::Plugins => {
+                matches!(
+                    id.as_str(),
+                    "ssmcp.plugins.list" | "ssmcp.plugins.load" | "ssmcp.plugins.unload"
+                ) || id
+                    .strip_prefix("plugins.")
+                    .and_then(|name| name.split_once('.'))
+                    .is_some_and(|(namespace, name)| {
+                        !namespace.is_empty()
+                            && namespace.len() <= 32
+                            && namespace
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+                            && !name.is_empty()
+                    })
+            }
             Provider::Workspace => id.starts_with("ssmcp.fs.") || id.starts_with("ssmcp.net."),
             Provider::Context => ["ssmcp.skills.", "ssmcp.agents.", "ssmcp.context."]
                 .iter()

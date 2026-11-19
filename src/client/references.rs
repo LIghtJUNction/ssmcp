@@ -496,6 +496,15 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    fn quoted_file(path: &Path) -> String {
+        format!(
+            "@\"{}\"",
+            path.to_str()
+                .unwrap()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        )
+    }
     fn payload(text: &str) -> Value {
         serde_json::from_str(
             text.strip_suffix(END)
@@ -522,6 +531,19 @@ mod tests {
         assert!(parse("@'line\nbreak'").is_err());
         assert_eq!(parse("@a @a $same $same").unwrap().len(), 2);
         assert!(parse(&(0..9).map(|i| format!("@file{i} ")).collect::<String>()).is_err());
+    }
+
+    #[test]
+    fn quoted_file_references_preserve_windows_verbatim_prefixes() {
+        for path in [
+            r"\\?\C:\workspace\allowed file.txt",
+            r"\\?\UNC\server\share\allowed file.txt",
+        ] {
+            assert_eq!(
+                parse(&quoted_file(Path::new(path))).unwrap(),
+                [Reference::File(path.into())]
+            );
+        }
     }
 
     #[tokio::test]
@@ -575,15 +597,20 @@ mod tests {
             "@missing.txt".to_owned(),
             "@.".into(),
             "@../outside.txt".into(),
-            format!("@\"{}\"", outside.0.join("outside.txt").display()),
         ] {
             assert!(
                 expand(&draft, &workspace, &context).await.is_err(),
                 "{draft}"
             );
         }
-        let path = fixture.0.join("allowed.txt");
-        let absolute = format!("@\"{}\"", path.to_string_lossy().replace('\\', "\\\\"));
+        let external = quoted_file(&outside.0.join("outside.txt"));
+        assert!(
+            expand(&external, &workspace, &context)
+                .await
+                .unwrap_err()
+                .contains("outside this session's workspace")
+        );
+        let absolute = quoted_file(&fixture.0.join("allowed.txt"));
         assert_eq!(
             payload(&expand(&absolute, &workspace, &context).await.unwrap())["references"][0]["path"],
             "allowed.txt"

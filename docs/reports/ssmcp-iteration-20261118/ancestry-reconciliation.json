@@ -1,0 +1,19 @@
+{
+  "qr_commit": "d22be5491313018b3cc85e99e22b52619fe04ed7",
+  "code_tree": "ec22c8521ac6e125c02363d07ca0cc25921fbcbc",
+  "merges": [
+    {
+      "pr": 26,
+      "reviewed_head": "8253343710373f6906d6b99423015553696fdaa1",
+      "merge": "3a12170e6c97967aa43ada3547c0e163f10504d9"
+    },
+    {
+      "pr": 30,
+      "reviewed_head": "c27502879a05c24e2e4495be45d9083548d2b32f",
+      "merge": "3078d145920383507da701fa291d171dc7e9c74d"
+    }
+  ],
+  "head": "3078d145920383507da701fa291d171dc7e9c74d",
+  "strategy": "ours; product semantics adapted and historical blobs preserved before merge",
+  "unchanged_tree": true
+}

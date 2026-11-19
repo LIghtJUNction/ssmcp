@@ -1,0 +1,6 @@
+[submodule "zharness"]
+	path = crates/zharness
+	url = https://github.com/LIghtJUNction/zharness.git
+[submodule "zplugin"]
+	path = crates/zplugin
+	url = https://github.com/LIghtJUNction/zplugin.git

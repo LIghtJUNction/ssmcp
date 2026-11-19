@@ -141,11 +141,12 @@ Usage: ssmcp username@server [options]
   --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
-  --list-tools         Discover native and workspace tools as JSON, then exit without SSH
+  --list-tools         List native and workspace tools as JSON, then exit without SSH
 
-The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
-harnesses are discovered automatically and their native tools are registered in
-one code_mode. Tools keep their native schemas and permission/approval behavior.
+The client provides native tools without another harness. Optional Codex, Claude
+Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
+Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
+Tools keep their native schemas and permission/approval behavior.
 
 Examples:
   ssmcp alice@ssmcp.lmm.best
@@ -443,14 +444,14 @@ impl Options {
                     return Ok(None);
                 }
                 Some("-t" | "--type" | "--backend") => {
-                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; optional harnesses load only when explicitly requested".into());
                 }
                 Some(value)
                     if value.starts_with("--type=")
                         || value.starts_with("--backend=")
                         || value.starts_with("-t=") =>
                 {
-                    return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
                 }
                 Some("--ssh") => ssh = true,
                 Some("--no-browser") => no_browser = true,
@@ -1952,7 +1953,7 @@ async fn connect(
     render::status(
         "shell",
         "Progress",
-        "Starting shell and discovering installed harness tools",
+        "Starting native tools; optional harnesses stay unloaded",
     );
     let backend = tokio::select! {
         biased;
@@ -1998,7 +1999,7 @@ async fn connect(
             return Err(error);
         }
     };
-    // Core tools are ready immediately; optional providers continue discovery independently.
+    // Native tools are ready immediately; optional providers stay unloaded until requested.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
