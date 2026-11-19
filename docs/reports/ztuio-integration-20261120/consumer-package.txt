@@ -1,0 +1,3 @@
+   Packaging ssmcp v0.10.13 (<consumer-checkout>)
+    Updating crates.io index
+    Packaged 634 files, 16.3MiB (8.4MiB compressed)
