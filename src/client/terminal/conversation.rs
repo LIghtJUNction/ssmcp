@@ -2,6 +2,7 @@
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
+mod access;
 mod canvas;
 mod hints;
 mod history;
@@ -84,6 +85,7 @@ pub(super) struct Conversation {
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
     login_task: Option<crate::client::account::login::Task>,
+    access_request: Option<u64>,
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
@@ -304,6 +306,7 @@ impl State {
         }
         self.chat_poll_input();
         self.chat_poll_login();
+        self.chat_poll_access();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -454,6 +457,7 @@ impl State {
                 self.chat_start_input(attachments::Source::Copy(text), true)?;
             }
             "/login" => self.chat_login(rest)?,
+            "/allow" => self.chat_allow(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
