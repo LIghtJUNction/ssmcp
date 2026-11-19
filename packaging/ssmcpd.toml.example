@@ -44,6 +44,8 @@ client_registration_ttl = 31536000
 # process does not share the gateway's in-memory login or session state.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
+# Optional public-only renderer; account/auth/traffic/device routes stay in this core.
+# frontend_socket = "/run/ssmcp-frontend/render.sock"
 # Legacy SSH deployments can use a separate portal service: omit state_dir
 # here and use --portal-only with --portal-state-dir in that service.
 # Client account endpoints and connected sessions must still share one Broker.

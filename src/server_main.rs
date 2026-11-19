@@ -38,6 +38,8 @@ Configuration:
   Precedence: command line > environment > TOML > built-in defaults.
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
   --portal-only runs the account HTTP portal without running the gateway management service.
+  Public UI: [portal] frontend_socket connects an independent ssmcp-frontend renderer.
+  Only public guide/assets use it; OAuth, accounts, traffic and device connections stay in the core.
   --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
   Management: [portal] admin_usernames = ["your-ssmcp-username"] after registering that name.
   Relay bandwidth: [portal] default_rate_limit_bps = 8388608 (8 MiB/s in each direction per user).
@@ -100,6 +102,7 @@ struct FileConfig {
 struct PortalConfig {
     state_dir: Option<PathBuf>,
     gateway_socket: Option<PathBuf>,
+    frontend_socket: Option<PathBuf>,
     admin_github_ids: Vec<String>,
     admin_github_users: Vec<String>,
     admin_usernames: Vec<String>,
@@ -118,6 +121,7 @@ impl Default for PortalConfig {
         Self {
             state_dir: None,
             gateway_socket: None,
+            frontend_socket: None,
             admin_github_ids: Vec::new(),
             admin_github_users: Vec::new(),
             admin_usernames: Vec::new(),
@@ -441,6 +445,9 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    if let Some(socket) = &portal.frontend_socket {
+        absolute_path(socket, "portal.frontend_socket")?;
+    }
     config.commerce.validate()?;
     if config.commerce.enabled && (config.portal_only || portal.state_dir.is_none()) {
         return Err("commerce requires the gateway process with portal.state_dir; --portal-only cannot own billing".into());
@@ -615,6 +622,10 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         }
     }
 
+    if let Some(socket) = &config.portal.frontend_socket {
+        broker.portal.configure_public_frontend(socket.clone())?;
+    }
+
     broker
         .configure_traffic_timezone(config.commerce.utc_offset_minutes)
         .map_err(|_| "invalid commerce monthly timezone")?;
@@ -778,6 +789,20 @@ mod tests {
             commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         }
+    }
+
+    #[test]
+    fn public_frontend_is_optional_and_does_not_open_a_second_account_store() {
+        assert!(parse_file_config("").unwrap().portal.frontend_socket.is_none());
+        let parsed = parse_file_config("[portal]\nfrontend_socket = '/run/ssmcp-frontend/render.sock'\n").unwrap();
+        let mut config = portal_config_fixture();
+        config.portal = parsed.portal;
+        assert!(config.portal.state_dir.is_none());
+        assert!(validate_portal_config(&config).is_ok());
+        config.portal.frontend_socket = Some("relative.sock".into());
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.frontend_socket = Some("/run/../tmp/render.sock".into());
+        assert!(validate_portal_config(&config).is_err());
     }
 
     #[test]
