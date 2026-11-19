@@ -223,8 +223,6 @@ fn command(platform: Platform, title: &str, body: &str) -> Command {
                 "-NoProfile",
                 "-NonInteractive",
                 "-STA",
-                "-WindowStyle",
-                "Hidden",
                 "-Command",
                 POWERSHELL,
             ]
@@ -298,7 +296,16 @@ async fn submit(title: &str, body: &str) -> Report {
     #[cfg(target_os = "macos")]
     let platform = Platform::Macos;
     #[cfg(windows)]
-    let platform = Platform::Windows;
+    let platform = {
+        // Reuse the client's console with redirected stdio. Creating PowerShell
+        // from a consoleless service can create a window; -WindowStyle Hidden
+        // can instead hide an inherited console. Neither is acceptable here.
+        // SAFETY: GetConsoleWindow has no parameters or borrowed memory.
+        if unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() }.is_null() {
+            return Report::new(Status::Unavailable, Reason::DesktopSessionUnavailable);
+        }
+        Platform::Windows
+    };
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (title, body);
