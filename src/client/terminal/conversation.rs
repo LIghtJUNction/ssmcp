@@ -64,6 +64,7 @@ struct InputStamp {
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
+    pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
     canvas: canvas::Canvas,
@@ -112,18 +113,18 @@ impl Conversation {
     }
 }
 
-pub(super) fn prompt_rows(rows: u16) -> u16 {
-    if rows >= 10 {
-        3
-    } else if rows >= 6 {
-        1
-    } else {
-        0
+pub(super) fn prompt_rows(rows: u16, preferred: Option<u16>) -> u16 {
+    if rows < 6 {
+        return 0;
     }
+    // Keep a header, a body row, the input separator and the footer visible.
+    preferred
+        .unwrap_or(if rows >= 10 { 3 } else { 1 })
+        .clamp(1, rows - 4)
 }
-pub(super) fn body_rows(rows: u16) -> u16 {
+pub(super) fn body_rows(rows: u16, input_rows: u16) -> u16 {
     if rows >= 6 {
-        rows.saturating_sub(prompt_rows(rows) + 3).max(1)
+        rows.saturating_sub(input_rows + 3).max(1)
     } else {
         rows.saturating_sub(u16::from(rows >= 3)).max(1)
     }
@@ -131,8 +132,8 @@ pub(super) fn body_rows(rows: u16) -> u16 {
 pub(super) fn body_top(rows: u16) -> u16 {
     u16::from(rows >= 6)
 }
-pub(super) fn prompt_top(rows: u16) -> u16 {
-    body_top(rows) + body_rows(rows)
+pub(super) fn prompt_top(geometry: Geometry) -> u16 {
+    body_top(geometry.rows) + geometry.log_rows
 }
 
 fn field<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -662,7 +663,7 @@ impl State {
             && self
                 .conversation
                 .composer
-                .menu_visible(self.geometry.left, prompt_rows(self.geometry.rows))
+                .menu_visible(self.geometry.left, self.geometry.input_rows)
     }
 
     fn chat_wait_for_input(&mut self) -> bool {
@@ -912,6 +913,22 @@ impl State {
         self.chat_move(delta);
     }
 
+    fn chat_resize_input(&mut self, grow: bool) {
+        let geometry = self.geometry;
+        if geometry.input_rows == 0 {
+            return;
+        }
+        let rows = if grow {
+            geometry.input_rows.saturating_add(1).min(geometry.rows - 4)
+        } else {
+            geometry.input_rows.saturating_sub(1).max(1)
+        };
+        if rows != geometry.input_rows {
+            self.conversation.preferred_input_rows = Some(rows);
+            self.resize(geometry.rows, geometry.cols);
+        }
+    }
+
     fn chat_key(&mut self, key: Key) {
         self.events.set_scope(events::EventScope::Conversation);
         if matches!(key, Key::Interrupt) {
@@ -928,6 +945,10 @@ impl State {
             return;
         }
         if self.selection {
+            return;
+        }
+        if matches!(key, Key::InputGrow | Key::InputShrink) {
+            self.chat_resize_input(matches!(key, Key::InputGrow));
             return;
         }
         if let Key::Mouse {
@@ -990,7 +1011,7 @@ impl State {
             return;
         }
         if self.help {
-            let page = usize::from(body_rows(self.geometry.rows).saturating_sub(1).max(1));
+            let page = usize::from(self.geometry.log_rows.saturating_sub(1).max(1));
             match key {
                 Key::Help | Key::Escape => self.chat_escape(),
                 Key::AuditUp => {
@@ -1218,7 +1239,7 @@ impl State {
             } if !release && x < self.geometry.left => {
                 if button & 64 != 0 {
                     let delta = if button & 1 == 0 { -3 } else { 3 };
-                    if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry.rows) {
+                    if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry) {
                         let inside_panel = self.conversation.view == View::Activity
                             && !self.raw_logs
                             && self
@@ -1228,7 +1249,7 @@ impl State {
                             self.chat_move(delta);
                         }
                     }
-                } else if y > prompt_top(self.geometry.rows) {
+                } else if y > prompt_top(self.geometry) {
                     self.conversation.content_focus = false;
                 } else {
                     self.conversation.content_focus = true;
@@ -2270,7 +2291,7 @@ impl State {
 
     fn chat_list_hit(&self, row: u16) -> Option<usize> {
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
-        if relative >= body_rows(self.geometry.rows).saturating_sub(1) {
+        if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
         }
         let index = usize::from(relative / 2);
@@ -2323,7 +2344,7 @@ impl State {
             .filter(|item| matches!(field(item, "status"), "queued" | "sending" | "editing"))
             .count();
         let top = body_top(g.rows);
-        let height = body_rows(g.rows);
+        let height = g.log_rows;
         let mut body = match self.conversation.view {
             View::Activity => {
                 self.events.filter("", 0);
@@ -2363,7 +2384,7 @@ impl State {
         };
         let mut prompt = input.rows(
             g.left,
-            prompt_rows(g.rows).max(1),
+            g.input_rows.max(1),
             &self.ui,
             self.conversation.view != View::Questions
                 && !self.conversation.content_focus
@@ -2374,11 +2395,9 @@ impl State {
             prompt.lines[0] =
                 self.chat_input_line("❯ Type an answer · number selects an option", g.left);
         }
-        prompt
-            .lines
-            .resize_with(usize::from(prompt_rows(g.rows)), || {
-                self.chat_input_line("", g.left)
-            });
+        prompt.lines.resize_with(usize::from(g.input_rows), || {
+            self.chat_input_line("", g.left)
+        });
         let mut label = self
             .conversation
             .target
@@ -2499,7 +2518,7 @@ impl State {
                 }
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
-            } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
+            } else if index == prompt_top(g) && g.input_rows > 0 {
                 let title = if self.conversation.view == View::Questions {
                     format!(" Answer · {label} ")
                 } else if self.conversation.editing.is_some() {
@@ -2535,7 +2554,7 @@ impl State {
             } else {
                 prompt
                     .lines
-                    .get(usize::from(index.saturating_sub(prompt_top(g.rows) + 1)))
+                    .get(usize::from(index.saturating_sub(prompt_top(g) + 1)))
                     .cloned()
                     .unwrap_or_else(|| self.chat_line("", PanelTone::Normal, g.left))
             };
@@ -2648,14 +2667,14 @@ impl State {
             }
         }
         let cursor = (
-            (prompt_top(g.rows) + 1 + prompt.cursor_row).min(g.rows - 1),
+            (prompt_top(g) + 1 + prompt.cursor_row).min(g.rows - 1),
             prompt.cursor_col.min(g.left - 1),
         );
         Frame {
             geometry: g,
             rows,
             cursor,
-            hidden: self.help || self.conversation.content_focus || prompt_rows(g.rows) == 0,
+            hidden: self.help || self.conversation.content_focus || g.input_rows == 0,
             application_cursor: false,
             application_keypad: false,
             bracketed_paste: true,
@@ -2782,7 +2801,7 @@ mod tests {
             state.chat_key(Key::Mouse {
                 button: 64,
                 x: 8,
-                y: prompt_top(state.geometry.rows) + 1,
+                y: prompt_top(state.geometry) + 1,
                 release: false,
             });
             assert_eq!(
@@ -3472,7 +3491,7 @@ mod tests {
             state.conversation.content_focus = true;
             state.conversation.selected = 15;
             state.conversation.selected_agent = None;
-            let rows = state.chat_list_rows(&data, body_rows(state.geometry.rows));
+            let rows = state.chat_list_rows(&data, state.geometry.log_rows);
             let start = state.conversation.list_start;
             assert!(start > 0);
             assert_eq!(state.conversation.list_count, 5);
@@ -3519,7 +3538,7 @@ mod tests {
             state.chat_key(Key::Mouse {
                 button: 2,
                 x: 1,
-                y: prompt_top(state.geometry.rows),
+                y: prompt_top(state.geometry),
                 release: false,
             });
             assert_eq!(
@@ -4083,7 +4102,7 @@ mod tests {
             let mut theme = vt100::Parser::new(nonzero(1), nonzero(1), 0);
             theme.process(format!("\x1b[{}m ", ui.background()).as_bytes());
             let background = theme.screen().cell(0, 0).unwrap().bgcolor();
-            for row in body_top(g.rows)..body_top(g.rows) + body_rows(g.rows) {
+            for row in body_top(g.rows)..body_top(g.rows) + g.log_rows {
                 assert_eq!(
                     screen.cell(row, g.left - 1).unwrap().bgcolor(),
                     background,
@@ -4114,17 +4133,134 @@ mod tests {
     }
 
     #[test]
+    fn input_height_shortcuts_preserve_draft_cursor_recipient_and_notices() {
+        for (sequence, expected) in [
+            (b"\x1b[1;3A".as_slice(), 4),
+            (b"\x1b[1;3B".as_slice(), 2),
+            (b"\x1b[57352;3u".as_slice(), 4),
+            (b"\x1b[57353;3u".as_slice(), 2),
+        ] {
+            for split in 0..=sequence.len() {
+                let mut state = preview(24, 100);
+                input(&mut state, "first line\nsecond 界 line".as_bytes());
+                input(&mut state, b"\x1b[D");
+                state.conversation.target = Some("selected-recipient".into());
+                state.notice = Some("Keep the current operation visible".into());
+                let text = state.conversation.composer.text().to_owned();
+                let cursor = state.conversation.composer.cursor();
+                input(&mut state, &sequence[..split]);
+                input(&mut state, &sequence[split..]);
+                assert_eq!(state.geometry.input_rows, expected, "split {split}");
+                assert_eq!(state.conversation.composer.text(), text);
+                assert_eq!(state.conversation.composer.cursor(), cursor);
+                assert_eq!(
+                    state.conversation.target.as_deref(),
+                    Some("selected-recipient")
+                );
+                assert_eq!(
+                    state.notice.as_deref(),
+                    Some("Keep the current operation visible")
+                );
+                assert!(state.keyboard.pending.is_empty());
+                assert!(state.actions.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn input_height_clamps_without_forgetting_the_preferred_size() {
+        let mut state = preview(24, 100);
+        input(&mut state, b"keep this draft");
+        for _ in 0..5 {
+            input(&mut state, b"\x1b[1;3A");
+        }
+        assert_eq!(state.geometry.input_rows, 8);
+        for (rows, visible) in [(6, 2), (4, 0), (24, 8)] {
+            state.resize(rows, 100);
+            assert_eq!(state.geometry.input_rows, visible);
+            assert_eq!(state.conversation.preferred_input_rows, Some(8));
+            let frame = state.chat_frame(Instant::now());
+            assert_eq!(frame.rows.len(), usize::from(rows));
+            assert!(frame.cursor.0 < rows);
+            assert_eq!(frame.hidden, rows < 6);
+            assert_eq!(state.conversation.composer.text(), "keep this draft");
+        }
+        for _ in 0..40 {
+            input(&mut state, b"\x1b[1;3A");
+        }
+        assert_eq!(state.geometry.input_rows, 20);
+        assert_eq!(state.geometry.log_rows, 1);
+        assert_eq!(prompt_top(state.geometry), 2);
+        for _ in 0..40 {
+            input(&mut state, b"\x1b[1;3B");
+        }
+        assert_eq!(state.geometry.input_rows, 1);
+        assert_eq!(state.geometry.log_rows, 20);
+    }
+
+    #[test]
+    fn input_height_changes_mouse_regions_and_keeps_the_editor_visible() {
+        let mut state = preview(18, 100);
+        input(
+            &mut state,
+            b"line one\nline two\nline three\nvisible cursor",
+        );
+        for _ in 0..3 {
+            input(&mut state, b"\x1b[1;3A");
+        }
+        let frame = state.chat_frame(Instant::now());
+        let input_top = prompt_top(state.geometry) + 1;
+        assert_eq!(state.geometry.input_rows, 6);
+        assert!(frame.cursor.0 >= input_top && frame.cursor.0 < 17);
+        assert!(
+            display(&mut state)
+                .screen()
+                .contents()
+                .contains("visible cursor")
+        );
+        state.conversation.content_focus = true;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: input_top,
+            release: false,
+        });
+        assert!(!state.conversation.content_focus);
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: input_top - 2,
+            release: false,
+        });
+        assert!(state.conversation.content_focus);
+    }
+
+    #[test]
+    fn pasted_input_height_shortcuts_do_not_resize_the_editor() {
+        let mut state = preview(18, 100);
+        input(&mut state, b"\x1b[200~draft\x1b[1;3A\x1b[57353;3u\x1b[201~");
+        assert_eq!(state.geometry.input_rows, 3);
+        assert_eq!(state.conversation.preferred_input_rows, None);
+        assert!(!state.keyboard.pasting);
+        assert!(state.conversation.composer.text().contains("draft"));
+    }
+
+    #[test]
     fn every_terminal_size_keeps_frames_and_cursor_inside_the_screen() {
         for rows in [1, 2, 3, 5, 6, 9, 10, 18, 36] {
             for cols in [1, 2, 4, 20, 95, 96, 120] {
-                let mut state = preview(rows, cols);
-                input(&mut state, "界面\nLong input line".as_bytes());
-                let frame = state.chat_frame(Instant::now());
-                assert_eq!(frame.rows.len(), usize::from(rows));
-                assert!(frame.cursor.0 < rows && frame.cursor.1 < cols);
-                let screen = display(&mut state);
-                assert!(screen.screen().cursor_position().0 < rows);
-                assert_eq!(screen.screen().size(), (nonzero(rows), nonzero(cols)));
+                for preferred in [None, Some(1), Some(8), Some(u16::MAX)] {
+                    let mut state = preview(rows, cols);
+                    state.conversation.preferred_input_rows = preferred;
+                    state.resize(rows, cols);
+                    input(&mut state, "界面\nLong input line".as_bytes());
+                    let frame = state.chat_frame(Instant::now());
+                    assert_eq!(frame.rows.len(), usize::from(rows));
+                    assert!(frame.cursor.0 < rows && frame.cursor.1 < cols);
+                    let screen = display(&mut state);
+                    assert!(screen.screen().cursor_position().0 < rows);
+                    assert_eq!(screen.screen().size(), (nonzero(rows), nonzero(cols)));
+                }
             }
         }
     }
@@ -4234,7 +4370,7 @@ mod tests {
         );
 
         state.audit.ingest(&json!({"type":"ssmcp.code_mode","run_id":"new-call","phase":"started","code":"return 3;"}));
-        state.chat_list_rows(&data, body_rows(state.geometry.rows));
+        state.chat_list_rows(&data, state.geometry.log_rows);
         assert_eq!(field(&state.chat_selected().unwrap(), "run_id"), selected);
         state.chat_move(-1);
         assert_ne!(field(&state.chat_selected().unwrap(), "run_id"), selected);
