@@ -97,3 +97,5 @@ python3 scripts/e2e_listener_transports.py \
 ```
 
 特定候选版本的实际通过项目、源码摘要和可执行文件摘要记录在对应验收报告中。脚本存在不等于该候选已经通过验证。
+
+已验证候选 1001a0dba75795ca723a24ab4311546500ae4c43 的结果见[2026-11-19 验收记录](reports/thread-listeners-20261119/README.zh-CN.md)：89 项去重 Rust 测试、118 项强制发送检查和 73 项双程序检查通过；该记录不表示已部署运行中的服务。
