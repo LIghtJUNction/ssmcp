@@ -6,6 +6,7 @@ mod access;
 mod canvas;
 mod hints;
 mod history;
+mod listener;
 mod login;
 pub(super) mod logout;
 mod questions;
@@ -84,6 +85,7 @@ pub(super) struct Conversation {
     target: Option<String>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
+    force_task: Option<listener::Task>,
     parked: Option<steering::SavedDraft>,
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
@@ -111,6 +113,7 @@ impl Conversation {
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
+            "force_pending":self.force_task.is_some(),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
@@ -315,6 +318,7 @@ impl State {
         self.chat_poll_login();
         self.chat_poll_access();
         self.chat_poll_logout();
+        self.chat_poll_force_send();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -467,6 +471,7 @@ impl State {
             "/login" => self.chat_login(rest)?,
             "/allow" => self.chat_allow(rest)?,
             "/logout" => self.chat_logout(rest)?,
+            "/send" => self.chat_force_send(rest)?,
             "/handoff" => {
                 if self.preview {
                     return Err("Preview cannot export a live conversation".into());
@@ -763,6 +768,13 @@ impl State {
             self.conversation.composer.text().to_owned()
         };
         if text.trim().is_empty() {
+            return;
+        }
+        if text.split_whitespace().next() == Some("/send") {
+            if let Err(error) = self.chat_command(&text) {
+                self.notice = Some(error);
+            }
+            // Force-send retains the exact draft until an accepted receipt.
             return;
         }
         if self.conversation.editing.is_none() {

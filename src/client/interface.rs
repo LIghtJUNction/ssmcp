@@ -15,6 +15,7 @@ use std::{
 pub(crate) mod computer;
 pub(crate) mod harness;
 pub(crate) mod history;
+pub(crate) mod listener;
 pub(crate) mod messages;
 pub(crate) mod questions;
 
@@ -59,6 +60,7 @@ pub(crate) fn get() -> Value {
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
         "steering": super::steering::snapshot(),
+        "listener": listener::snapshot(),
         "questions": questions::snapshot(),
     })
 }
@@ -480,6 +482,10 @@ pub(crate) async fn call(
     arguments: Value,
     terminals: &crate::terminals::Terminals,
 ) -> Result<Value, String> {
+    // A listener's bounded wait must not hold the UI configuration lock.
+    if name == "ssmcp.ui.listener" {
+        return listener::call(arguments).await;
+    }
     // User-facing messages commit JSONL and derived memory before their ACK.
     // Keep their existing serial order while all storage/display work runs on
     // a blocking worker; no mutex is held across an await.
@@ -581,6 +587,7 @@ pub(crate) fn tools() -> Vec<Value> {
     });
     vec![
         queue_tool(),
+        listener::tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
