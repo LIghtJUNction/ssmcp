@@ -1,0 +1,127 @@
+{
+  "schema": "ssmcp.zuse.integration.v1",
+  "status": "passed",
+  "scope": "zuse computer integration; complete library gate is recorded separately",
+  "product_source_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "strict_cancellation_fixture_commit": "560cd81fd8ba30bb0f975a5cdabe099bc65451b9",
+  "unit_tests": {
+    "passed": 36,
+    "failed": 0,
+    "ignored": 5
+  },
+  "explicit_private_display_tests": {
+    "passed": 2,
+    "failed": 0
+  },
+  "external_embedding_entry_test": {
+    "passed": 1,
+    "failed": 0
+  },
+  "release_python_gate": {
+    "passed": 73,
+    "failed": 0,
+    "log_sha256": "0b135f246f118c0bf90416350d7168ee805e5f68576d2352818f4f7d35a90c3e"
+  },
+  "stages": [
+    {
+      "stage": "computer-unit",
+      "command": [
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+        "computer::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 4.723,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/computer-unit.log",
+      "log_sha256": "16c5a1fe9f8b580ab1a3384202302569272955c749b435c13fae787dd2262096"
+    },
+    {
+      "stage": "isolated-native",
+      "command": [
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+        "--exact",
+        "computer::isolated::tests::private_display_input_capture_and_cleanup",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 1.469,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/isolated-native.log",
+      "log_sha256": "a6db5810718a5f62edb834d46fba109eeff7b6b824b56aa03ed316ad6f16489d"
+    },
+    {
+      "stage": "isolated-lifecycle",
+      "command": [
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+        "--exact",
+        "computer::isolated::tests::app_launch_auto_starts_private_display_and_releases_owned_state",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.114,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/isolated-lifecycle.log",
+      "log_sha256": "4aa3985c5a2582e2c50f69a143c8d001112f5dc2e20439f3c09e01ae441cb30a"
+    },
+    {
+      "stage": "embedded-entry",
+      "command": [
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+        "--exact",
+        "missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.115,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/embedded-entry.log",
+      "log_sha256": "cd5c3cc4056684ff58854b2febb648550f0d8ca513fd7c754a34616fdfeb69bf"
+    },
+    {
+      "stage": "private-desktop-mcp",
+      "command": [
+        "python3",
+        "scripts/e2e_private_desktop.py",
+        "--bin-dir",
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug",
+        "--evidence-dir",
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/private-desktop-mcp",
+        "--report",
+        "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/private-desktop-mcp.json"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 3.821,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/private-desktop-mcp-attempt2.log",
+      "log_sha256": "727d200bd3ab3f2dbdd10af961265f006f747f4dc9f3890fced49000414c43f6"
+    }
+  ],
+  "native_worker_reports": [
+    "native-worker-cli.json",
+    "native-worker-daemon.json"
+  ],
+  "image_review": {
+    "method": "actual emitted native JPEGs visually inspected",
+    "width": 640,
+    "height": 480,
+    "scope": "temporary Xvfb fixtures; no operator desktop input"
+  },
+  "compatibility": {
+    "linux": "linked zuse Desktop library in a fixed-environment managed worker",
+    "windows_macos_input_and_status": "existing protected native adapters retained",
+    "monitor_geometry": "existing platform adapters retained",
+    "cursor_true": "existing cursor-capable capture retained on supported Windows/macOS/Wayland backends",
+    "external_embedding": "must call computer::worker_entry at the earliest executable entry; absence returns a recoverable error before spawn",
+    "android_and_arbitrary_dsl": "not added to desktop tools"
+  },
+  "limits": [
+    "Native behavior was exercised on Linux X11; Wayland, Windows and macOS were not available for runtime verification.",
+    "A worker with uncertain input cleanup fails closed; readiness and parameter errors before input do not poison later input.",
+    "The integration pins an immutable upstream commit; uncommitted upstream changes were not imported."
+  ]
+}

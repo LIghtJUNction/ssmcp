@@ -1,0 +1,118 @@
+{
+  "schema": "ssmcp.frozen-validation.v1",
+  "source_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "version": "0.10.14",
+  "source_tree": "4a821abf27d869113e04d9c7213d968c23a918e4",
+  "submodules": {
+    "zuse": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41",
+    "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "zplugin": "3e758b5c21af1bad1cfaf10264b43fe15440e69c",
+    "zharness": "84e370450f1d047d43119bf81caf73f742ba6b0a"
+  },
+  "profile": "debug",
+  "files": {
+    "ssmcpd": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/ssmcpd",
+      "source": "${WORKTREE}/target/debug/ssmcpd",
+      "sha256": "c657bd9216b2ca4e3a89548f5565c44da14a48b14f5b5d6684616e8489f96518",
+      "bytes": 144854696,
+      "version_receipt": "ssmcpd 0.10.14"
+    },
+    "native_plugin_fixture": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/examples/libnative_plugin_fixture.so",
+      "source": "${WORKTREE}/target/debug/examples/libnative_plugin_fixture.so",
+      "sha256": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a",
+      "bytes": 5450784
+    },
+    "ssmcp-frontend": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/ssmcp-frontend",
+      "source": "${WORKTREE}/target/debug/ssmcp-frontend",
+      "sha256": "9bc2c9b2b98d9a8f6a997c3aeda11f735a964b141b70870f75825e75e8a63c5b",
+      "bytes": 86490768,
+      "version_receipt": "ssmcp-frontend 0.10.14"
+    },
+    "ssmcp": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/ssmcp",
+      "source": "${WORKTREE}/target/debug/ssmcp",
+      "sha256": "c80da3aa112d25d9228dfe7a860ed02ceb3aa04cd545eb904d1ebad448bf85f7",
+      "bytes": 187386096,
+      "version_receipt": "ssmcp 0.10.14"
+    },
+    "zuse_worker_entry": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+      "source": "${WORKTREE}/target/debug/build/ssmcp/72862e0bc409e9ff/out/zuse_worker_entry-72862e0bc409e9ff",
+      "sha256": "a3489240de0c281c1d5b87f6a7a5e1f5ceb88ea85c1129558582b4f9235c2a23",
+      "bytes": 90007776
+    },
+    "libtest": {
+      "path": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "${WORKTREE}/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793",
+      "bytes": 282396976
+    }
+  },
+  "build_stages": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/fmt.log"
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/clippy.log"
+    },
+    {
+      "stage": "binaries",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "native_plugin_fixture",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/binaries.log"
+    },
+    {
+      "stage": "libtest",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run",
+        "--lib",
+        "--test",
+        "zuse_worker_entry",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "${WORKTREE}/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/libtest.log"
+    }
+  ],
+  "build_environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "rustc_wrapper": "existing global rustc-serial; unchanged",
+    "target": "independent worktree target; debug profile"
+  }
+}

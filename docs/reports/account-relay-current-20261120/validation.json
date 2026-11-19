@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "component": "current account relay lifecycle",
+  "status": "passed",
+  "execution": {
+    "product_git_sha": "78442aa0849cc1a168db039ff7427ea076594409",
+    "version": "ssmcp 0.10.14",
+    "binary_sha256": "e8f80ea13c0a2ba156e4a6c0628904859fe9c2228933bca224758822b3c910ec",
+    "test_script_path": "scripts/e2e_account_relay.py",
+    "test_script_sha256": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+    "test_script_equals_product_commit": true,
+    "started_at": "2026-11-19T23:32:28.259632+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 10.139,
+    "finished_at": "2026-11-19T23:32:38.399101+00:00",
+    "binary_sha256_after": "e8f80ea13c0a2ba156e4a6c0628904859fe9c2228933bca224758822b3c910ec"
+  },
+  "checks": 47,
+  "product_fix_commit": "e7f5711a3474275b9d5308a809c726636366d78a",
+  "fixture_last_change_commit": "ce0abe65d9e1281553ef09680d2ecb0ca1926ab0",
+  "critical_regression": "Ready followed immediately by WebSocket Close 4001 terminates without watchdog retries",
+  "source_review": {
+    "reviewer": "github_history",
+    "commit": "e7f5711a3474275b9d5308a809c726636366d78a",
+    "result": "three Account transport guards cover credentialed and unsigned sessions; Local unchanged"
+  },
+  "scope": {
+    "cli": "real frozen product",
+    "websocket": "real loopback transport",
+    "native_shell": "real",
+    "oauth_provider": "synthetic fixture",
+    "relay_server": "synthetic fixture",
+    "real_credentials": false,
+    "models_started": false,
+    "ssh_started": false
+  },
+  "pre_fix": {
+    "product_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+    "binary_sha256": "c80da3aa112d25d9228dfe7a860ed02ceb3aa04cd545eb904d1ebad448bf85f7",
+    "result": "early 4001 rejection was lost behind child exit; watchdog reconnected",
+    "excerpt": "pre-fix-excerpt.txt"
+  },
+  "diagnostic_only": {
+    "checks_passed": 46,
+    "excluded": "known failing early-revocation block",
+    "counted_as_release_gate": false
+  },
+  "artifacts": {
+    "raw_report_sha256": "a8da22669aec463fd3edfb2cbefe733268ebd93a6ff7d617cb95469dbe62764b",
+    "published_report_sha256": "cc18c8a6ed4e124c8594473c66fad1d1ebb8fbb9d6fe5afa9605474b2e46f829",
+    "passed_checks_file": "passed-checks.txt",
+    "published_log_sha256": "bf4a9b648fb6e2f48aab83121e480307987806d11b3f17e4326561fdf1031679"
+  },
+  "redactions": [
+    "ephemeral loopback ports",
+    "private checkout and temporary fixture paths in failure excerpt"
+  ]
+}

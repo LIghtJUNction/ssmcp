@@ -179,7 +179,7 @@ gh workflow run bump.yml --ref main -f level=patch -f publish=false
 python3 scripts/release.py bump custom --custom-version 0.10.0 --dry-run
 ```
 
-Bump **只更新 ssmcp 的版本**。ztui-core、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有实际改动时先在自己的仓库处理版本与发布，再更新 SSMCP 的精确依赖和锁文件。脚本在任何写入前检查应用、本地库和 lockfile 的一致性。
+Bump **只更新 ssmcp 的版本**。ztuio、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有实际改动时先在自己的仓库处理版本与发布，再更新 SSMCP 的精确依赖和锁文件。脚本在任何写入前检查应用、本地库和 lockfile 的一致性。
 
 GitHub Token 推送的 tag 不会自行触发另一个 push 工作流，因此 Bump 的 dispatch_release job 显式传入刚创建的 tag。失败后重跑已有 tag 的 Release，或只重跑失败的 dispatch_release job；不要重复点击 Bump 递增出第二个版本。[Bump 工作流](../.github/workflows/bump.yml) · [GitHub 触发规则](https://docs.github.com/en/actions/concepts/security/github_token)
 
@@ -192,13 +192,13 @@ git submodule update --init --recursive
 python3 scripts/release.py validate --build-only
 ```
 
-ztui 保持 workspace member，包名 ztui-core、Rust 库名 ztui。zharness 和 zplugin 保留各自独立 workspace，从父 workspace 排除；应用使用 path 加精确 registry version，根级 patch.crates-io 将 zharness 的传递 zplugin 依赖统一到同一份本地源码。发布脚本核对这个关系，避免本地加载两份不兼容的 Rust 类型。
+ztuio 的包名和 Rust 导入名均为 ztuio。ztuio、zharness 和 zplugin 均作为固定 Git 子模块，从父 workspace 排除；应用使用 path 加精确 registry version，根级 patch.crates-io 将 zharness 的传递 zplugin 依赖统一到同一份本地源码。发布脚本核对这个关系，避免本地加载两份不兼容的 Rust 类型。
 
-源码包仍须实际通过 `cargo package --workspace --locked` 的验证。path 构建成功不等于发布后的 registry 依赖可用；独立依赖尚未发布、版本已撤回或打包字节不一致时必须停止，不能用本地 patch 掩盖。GitHub 自动生成的源码归档不展开 gitlink；需要完整源码时应递归 clone 固定 tag。
+源码包仍须实际通过 `cargo package --locked --package ssmcp` 的验证。path 构建成功不等于发布后的 registry 依赖可用；独立依赖尚未发布、版本已撤回或打包字节不一致时必须停止，不能用本地 patch 掩盖。GitHub 自动生成的源码归档不展开 gitlink；需要完整源码时应递归 clone 固定 tag。
 
 ### 正式发布顺序
 
-validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查和六个构建都成功后，重新核对身份、全部六个平台归档和两份安装脚本，打包验证 workspace，并保存 verified-crates artifact。
+validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查和六个构建都成功后，重新核对身份、全部六个平台归档和两份安装脚本，打包验证 ssmcp 应用，并保存 verified-crates artifact。
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 
@@ -211,19 +211,19 @@ Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`�
 | 包 | 发布责任与校验 |
 | --- | --- |
 | zplugin-macros → zplugin → zharness | 独立仓库发布；SSMCP 的发布预检要求使用的 zplugin、zharness 精确版本已存在且未撤回 |
-| ztui-core → ssmcp | workspace 共同打包验证，按依赖顺序处理；已发布且摘要相同的包直接跳过 |
+| ztuio → ssmcp | ztuio 由独立仓库发布；应用预检要求精确版本存在且未撤回，应用工作流只上传 ssmcp |
 
-ztui-core 的首次独立发布应对应独立仓库的固定源码。父 workspace 复用其子模块；同版本的独立包和 workspace 验证包必须保持字节一致。若不同，摘要保护会停止发布，应核对源码、VCS 信息和打包锁文件，而不是跳过保护或无理由递增库版本。
+独立库的 registry 版本应对应其仓库的固定源码，SSMCP 不从消费方仓库重新发布依赖。应用源码包通过实际 registry 依赖打包验证；已发布应用的摘要必须与验证包一致，冲突时停止。
 
-publish_crates 在首次上传前核对整个已验证包集合，并先检查独立 registry 依赖。未发布的 workspace 包按依赖顺序上传；上传后再次查询 crates.io checksum。GitHub Release 与 crates.io job 在 finalize 后分别执行并报告结果；其中一个成功不会冒充另一个成功。
+publish_crates 在首次上传前核对整个已验证包集合，并先检查独立 registry 依赖。应用包尚未发布时上传 ssmcp；上传后再次查询 crates.io checksum。GitHub Release 与 crates.io job 在 finalize 后分别执行并报告结果；其中一个成功不会冒充另一个成功。
 
 GitHub Release 先创建或找回 draft，上传完整附件并检查大小、摘要后才公开。相同 tag 重跑会复用匹配资产，发现不同内容则停止，不覆盖已发布附件。release-manifest.json 记录应用 commit、递归子模块的 path/commit/tree，以及各归档和安装脚本的 SHA-256。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
 
 ## crates.io 凭据与失败重跑
 
-仓库 Actions secret CARGO_REGISTRY_TOKEN 必须有权发布待上传的 workspace 包。工作流保留历史拼写 CARGO_REGISTY_TOKEN 的兼容，标准名称优先；凭据只传入 crates 发布步骤，不写入源码或发行附件。没有启用未经配置的 OIDC 凭据替代。
+仓库 Actions secret CARGO_REGISTRY_TOKEN 必须有权发布ssmcp 应用包。工作流保留历史拼写 CARGO_REGISTY_TOKEN 的兼容，标准名称优先；凭据只传入 crates 发布步骤，不写入源码或发行附件。没有启用未经配置的 OIDC 凭据替代。
 
-发布读取 finalize 留存的验证包，再以 `cargo publish --locked --no-verify --registry crates-io --package <包名>` 上传；no-verify 复用前一阶段完成的真实验证。相同版本只有在 registry checksum 与验证包完全一致时才跳过；版本已撤回或内容冲突则停止。zharness/zplugin 的新版本必须先从各自仓库发布，SSMCP 工作流不会替它们递增版本或创建 release。
+发布读取 finalize 留存的验证包，再以 `cargo publish --locked --no-verify --registry crates-io --package <包名>` 上传；no-verify 复用前一阶段完成的真实验证。相同版本只有在 registry checksum 与验证包完全一致时才跳过；版本已撤回或内容冲突则停止。ztuio、zharness、zplugin 的新版本必须先从各自仓库发布，SSMCP 工作流不会替它们递增版本或创建 release。
 
 已有 tag 的任务失败时，使用该 tag 重试，保持同一套源码、子模块和制品。修复源码或依赖后需要新 commit、新版本和新 tag，不移动旧 tag。固定归档时间戳用于减少非源码差异，不构成跨任意机器的可重复二进制构建承诺。
 

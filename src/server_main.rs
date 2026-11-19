@@ -245,6 +245,13 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
 }
 
 fn main() {
+    if let Some(result) = ssmcp::computer::worker_entry() {
+        if let Err(error) = result {
+            eprintln!("ssmcpd zuse worker: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(error) = run() {
         eprintln!("ssmcpd: {error}");
         std::process::exit(1);
