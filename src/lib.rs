@@ -56,6 +56,7 @@ pub mod device;
 #[cfg(target_os = "linux")]
 pub mod client_downloads;
 
+#[cfg(target_os = "linux")]
 mod ssh_public_key;
 
 #[cfg(target_os = "linux")]
