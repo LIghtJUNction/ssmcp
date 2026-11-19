@@ -281,19 +281,36 @@ mod tests {
             .import_input(attachments::Source::Text(
                 "local attachment contents".into(),
             ))
-            .await
-            .unwrap();
-        let attachments::Loaded::Reference { reference, .. } = imported else {
-            panic!("text import must retain its ordinary workspace reference");
-        };
-        assert!(
-            fixture
-                .files
-                .expand_references(&reference)
-                .await
-                .unwrap()
-                .contains("local attachment contents")
-        );
+            .await;
+        #[cfg(unix)]
+        {
+            let attachments::Loaded::Reference { reference, .. } = imported.unwrap() else {
+                panic!("text import must retain its ordinary workspace reference");
+            };
+            assert!(
+                fixture
+                    .files
+                    .expand_references(&reference)
+                    .await
+                    .unwrap()
+                    .contains("local attachment contents")
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            // Private paste storage deliberately requires the Unix implementation.
+            let Err(error) = imported else {
+                panic!("private paste must report its platform limitation");
+            };
+            assert_eq!(
+                error,
+                concat!(
+                    "Could not save the private input in .ssmcp/inputs: ",
+                    "automatic private paste files are not supported on this platform yet; ",
+                    "save the text inside the workspace and reference it with @path"
+                )
+            );
+        }
         fixture
             .files
             .reference_completions(&completion::Key::Files(".".into()))
@@ -342,6 +359,11 @@ mod tests {
         let fixture = Fixture::new();
         let listener = fixture.call("ssmcp.net.listen", json!({})).await.unwrap();
         let listener = &listener["structuredContent"];
+        let address: std::net::SocketAddr = listener["address"].as_str().unwrap().parse().unwrap();
+        assert!(
+            std::net::TcpListener::bind(address).is_err(),
+            "the files plugin must own the address before shutdown"
+        );
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(30),
@@ -354,15 +376,11 @@ mod tests {
             .is_err()
         );
         fixture.shutdown().await;
-        assert!(
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                tokio::net::TcpStream::connect(listener["address"].as_str().unwrap()),
-            )
-            .await
-            .unwrap()
-            .is_err()
-        );
+        // Reclaim the exact address instead of timing a refused TCP connection.
+        // No connections were established, so this does not depend on TIME_WAIT.
+        let rebound = std::net::TcpListener::bind(address)
+            .expect("files shutdown must release its listener address");
+        assert_eq!(rebound.local_addr().unwrap(), address);
         assert!(
             fixture
                 .files
