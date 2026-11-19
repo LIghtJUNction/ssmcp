@@ -57,12 +57,12 @@ pub(super) fn failure(message: String) -> crate::Error {
 
 /// Secrets are passed in this one child's environment, never argv, session
 /// manifests, connection output or inherited native-tool environments.
-pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
+pub(super) fn command(executable: &Path, server: &str, credential: Option<&Credential>) -> Command {
     let mut command = Command::new(executable);
     command
         .arg("__relay")
-        .env("SSMCP_RELAY_SERVER", &credential.server)
-        .env("SSMCP_RELAY_TOKEN", &credential.token)
+        .env("SSMCP_RELAY_SERVER", server)
+        .env_remove("SSMCP_RELAY_TOKEN")
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
@@ -75,6 +75,9 @@ pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(credential) = credential {
+        command.env("SSMCP_RELAY_TOKEN", &credential.token);
+    }
     command
 }
 
@@ -115,13 +118,14 @@ fn decode_frame(bytes: &[u8]) -> io::Result<Frame> {
 pub(super) async fn run() -> crate::Result<()> {
     let server = std::env::var("SSMCP_RELAY_SERVER")
         .map_err(|_| "private relay must be started by ssmcp")?;
-    let token = std::env::var("SSMCP_RELAY_TOKEN")
-        .map_err(|_| "private relay requires a client credential")?;
+    let token = std::env::var("SSMCP_RELAY_TOKEN").ok();
     let mut request = websocket_url(&server)?.into_client_request()?;
-    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-        .map_err(|_| "invalid client credential")?;
-    authorization.set_sensitive(true);
-    request.headers_mut().insert("authorization", authorization);
+    if let Some(token) = &token {
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "invalid client credential")?;
+        authorization.set_sensitive(true);
+        request.headers_mut().insert("authorization", authorization);
+    }
     // The parent, not just this helper, must understand the optional Ready fields.
     // This also supports an old running client that starts a newer relay after update.
     // Older servers ignore the HTTP offer and keep the strict v7 Ready shape.
@@ -169,7 +173,11 @@ pub(super) async fn run() -> crate::Result<()> {
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
-                    message: AUTH_EXPIRED.into(),
+                    message: if token.is_some() {
+                        AUTH_EXPIRED.into()
+                    } else {
+                        UNSUPPORTED.into()
+                    },
                 },
             )
             .await?;

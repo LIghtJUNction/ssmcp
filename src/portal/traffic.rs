@@ -5,7 +5,9 @@
 //! Periodic compaction replaces only this journal, never the account database.
 //! A reservation may remain charged if forwarding fails after it is committed.
 use super::{Problem, store::private_file};
-use crate::user_policy::{FREE_MONTHLY_TRAFFIC_BYTES, TrafficQuota, valid_traffic_period};
+use crate::user_policy::{
+    FREE_MONTHLY_TRAFFIC_BYTES, TrafficFrame, TrafficQuota, valid_traffic_period,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -28,7 +30,24 @@ struct Usage {
     used_bytes: u64,
     paid_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    directional: Option<DirectionalUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     adjusted_limit_bytes: Option<u64>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectionalUsage {
+    legacy_used_bytes: u64,
+    uploaded_bytes: u64,
+    downloaded_bytes: u64,
+}
+
+impl DirectionalUsage {
+    fn billed(&self) -> Option<u64> {
+        self.legacy_used_bytes
+            .checked_add(self.uploaded_bytes.max(self.downloaded_bytes))
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +76,12 @@ enum Record {
         subject: String,
         period: String,
         used_bytes: u64,
+    },
+    DirectionalUsed {
+        subject: String,
+        period: String,
+        uploaded_bytes: u64,
+        downloaded_bytes: u64,
     },
     Adjusted {
         subject: String,
@@ -109,6 +134,10 @@ impl LedgerState {
             for (subject, usage) in accounts {
                 if !crate::management::valid_subject(subject)
                     || usage
+                        .directional
+                        .as_ref()
+                        .is_some_and(|directional| directional.billed() != Some(usage.used_bytes))
+                    || usage
                         .paid_bytes
                         .checked_add(FREE_MONTHLY_TRAFFIC_BYTES)
                         .is_none()
@@ -147,7 +176,44 @@ impl LedgerState {
                 if used_bytes < usage.used_bytes {
                     return Err(Problem::Storage);
                 }
+                if let Some(directional) = &mut usage.directional {
+                    directional.legacy_used_bytes = directional
+                        .legacy_used_bytes
+                        .checked_add(used_bytes - usage.used_bytes)
+                        .ok_or(Problem::Storage)?;
+                }
                 usage.used_bytes = used_bytes;
+            }
+            Record::DirectionalUsed {
+                subject,
+                period,
+                uploaded_bytes,
+                downloaded_bytes,
+            } => {
+                if !crate::management::valid_subject(&subject) || !valid_traffic_period(&period) {
+                    return Err(Problem::Storage);
+                }
+                let usage = self
+                    .periods
+                    .entry(period)
+                    .or_default()
+                    .entry(subject)
+                    .or_default();
+                let previous = usage.directional.as_ref();
+                if previous.is_some_and(|value| {
+                    uploaded_bytes < value.uploaded_bytes
+                        || downloaded_bytes < value.downloaded_bytes
+                }) {
+                    return Err(Problem::Storage);
+                }
+                let directional = DirectionalUsage {
+                    legacy_used_bytes: previous
+                        .map_or(usage.used_bytes, |value| value.legacy_used_bytes),
+                    uploaded_bytes,
+                    downloaded_bytes,
+                };
+                usage.used_bytes = directional.billed().ok_or(Problem::Storage)?;
+                usage.directional = Some(directional);
             }
             Record::Adjusted {
                 subject,
@@ -202,6 +268,7 @@ pub(super) struct TrafficLedger {
     state: LedgerState,
     appended: u64,
     failed: bool,
+    version: u8,
 }
 
 impl TrafficLedger {
@@ -236,6 +303,7 @@ impl TrafficLedger {
         }
         let mut state = LedgerState::default();
         let mut appended = 0;
+        let mut version = 2;
         for (index, line) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
             let line = &line[..line.len() - 1];
             if line.is_empty()
@@ -249,15 +317,30 @@ impl TrafficLedger {
             if index == 0 {
                 match record {
                     Record::Snapshot {
-                        version: 1,
+                        version: snapshot_version @ (1 | 2),
                         state: snapshot,
-                    } => state = snapshot,
+                    } => {
+                        version = snapshot_version;
+                        if version == 1
+                            && snapshot
+                                .periods
+                                .values()
+                                .flat_map(BTreeMap::values)
+                                .any(|usage| usage.directional.is_some())
+                        {
+                            return Err("directional traffic requires a version 2 snapshot".into());
+                        }
+                        state = snapshot;
+                    }
                     _ => return Err("traffic journal is missing its initial snapshot".into()),
                 }
                 state
                     .validate()
                     .map_err(|_| "invalid traffic quota snapshot")?;
             } else {
+                if version == 1 && matches!(record, Record::DirectionalUsed { .. }) {
+                    return Err("directional traffic requires a version 2 journal".into());
+                }
                 appended += line.len() as u64 + 1;
                 state
                     .apply(record)
@@ -269,7 +352,7 @@ impl TrafficLedger {
             .map_err(|_| "invalid traffic quota ledger")?;
         if bytes.is_empty() {
             let mut initial = serde_json::to_vec(&Record::Snapshot {
-                version: 1,
+                version: 2,
                 state: LedgerState::default(),
             })?;
             initial.push(b'\n');
@@ -282,6 +365,7 @@ impl TrafficLedger {
             state,
             appended,
             failed: false,
+            version,
         })
     }
 
@@ -306,6 +390,11 @@ impl TrafficLedger {
             usage.paid_bytes,
             unlimited,
         );
+        if let Some(directional) = &usage.directional {
+            quota.uploaded_bytes = directional.uploaded_bytes;
+            quota.downloaded_bytes = directional.downloaded_bytes;
+            quota.legacy_used_bytes = directional.legacy_used_bytes;
+        }
         if let Some(limit) = usage.adjusted_limit_bytes.filter(|_| !unlimited) {
             quota.limit_bytes = Some(limit);
             quota.remaining_bytes = Some(limit.saturating_sub(usage.used_bytes));
@@ -313,6 +402,7 @@ impl TrafficLedger {
         Ok(quota)
     }
 
+    #[cfg(test)]
     pub(super) fn reserve(
         &mut self,
         directory: &File,
@@ -340,6 +430,46 @@ impl TrafficLedger {
                 subject: subject.into(),
                 period: period.into(),
                 used_bytes,
+            },
+        )
+    }
+
+    pub(super) fn reserve_frame(
+        &mut self,
+        directory: &File,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        frame: TrafficFrame,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        let quota = self.snapshot(subject, period, utc_offset_minutes, unlimited)?;
+        if frame.bytes == 0 {
+            return Ok(());
+        }
+        let mut directional = DirectionalUsage {
+            legacy_used_bytes: quota.legacy_used_bytes,
+            uploaded_bytes: quota.uploaded_bytes,
+            downloaded_bytes: quota.downloaded_bytes,
+        };
+        let counter = if frame.uploaded {
+            &mut directional.uploaded_bytes
+        } else {
+            &mut directional.downloaded_bytes
+        };
+        *counter = counter.checked_add(frame.bytes).ok_or(Problem::Limit)?;
+        let billed = directional.billed().ok_or(Problem::Limit)?;
+        if quota.limit_bytes.is_some_and(|limit| billed > limit) {
+            return Err(Problem::TrafficQuotaExceeded);
+        }
+        self.require_period_capacity(subject, period)?;
+        self.append(
+            directory,
+            Record::DirectionalUsed {
+                subject: subject.into(),
+                period: period.into(),
+                uploaded_bytes: directional.uploaded_bytes,
+                downloaded_bytes: directional.downloaded_bytes,
             },
         )
     }
@@ -454,7 +584,7 @@ impl TrafficLedger {
         if self.failed {
             return Err(Problem::Storage);
         }
-        if self.appended >= COMPACT_AFTER {
+        if self.version < 2 || self.appended >= COMPACT_AFTER {
             self.compact(directory)?;
         }
         let mut bytes = serde_json::to_vec(&record).map_err(|_| Problem::Storage)?;
@@ -485,7 +615,7 @@ impl TrafficLedger {
         }
         let mut bytes = serde_json::to_vec(&Snapshot {
             r#type: "snapshot",
-            version: 1,
+            version: 2,
             state: &self.state,
         })
         .map_err(|_| Problem::Storage)?;
@@ -513,6 +643,7 @@ impl TrafficLedger {
             Ok(file) => {
                 self.file = file;
                 self.appended = 0;
+                self.version = 2;
                 Ok(())
             }
             Err(_) => {

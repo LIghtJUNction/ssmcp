@@ -313,6 +313,9 @@ mod tests {
     fn monthly_quota(used_bytes: u64) -> TrafficQuota {
         TrafficQuota {
             used_bytes,
+            uploaded_bytes: 0,
+            downloaded_bytes: 0,
+            legacy_used_bytes: used_bytes,
             limit_bytes: Some(1_000_000_000),
             remaining_bytes: Some(1_000_000_000u64.saturating_sub(used_bytes)),
             period: "2026-11".into(),

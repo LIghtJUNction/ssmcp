@@ -1,5 +1,4 @@
-//! GitHub login and account-scoped control. Enrollment never saves an account
-//! login on the controlled machine.
+//! Account sign-in, inspection, and authenticated remote control.
 use crate::{Result, platform, session::attach::input};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Client, Method, StatusCode, Url};
@@ -10,7 +9,6 @@ use std::{
     ffi::OsString,
     fs::{self, OpenOptions},
     io::{self, IsTerminal, Read, Write},
-    net::IpAddr,
     path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -48,52 +46,7 @@ impl std::fmt::Debug for Credential {
     }
 }
 
-pub(super) fn normalize_server(raw: &str) -> Result<String> {
-    if raw.bytes().any(|b| b.is_ascii_whitespace() || b == b'\\') {
-        return Err("server must not contain whitespace or backslashes".into());
-    }
-    let url = Url::parse(raw).map_err(|_| "server must be an absolute HTTPS origin")?;
-    let loopback = url.host_str().is_some_and(|host| {
-        host.trim_matches(['[', ']'])
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
-    });
-    if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || !matches!(url.path(), "" | "/")
-        || url.host_str().is_none()
-        || url.port() == Some(0)
-    {
-        return Err("server must be an HTTPS origin without credentials, path, query or fragment; HTTP is allowed only for literal loopback addresses".into());
-    }
-    Ok(url.origin().ascii_serialization())
-}
-
-/// A named account destination always selects HTTPS; it never becomes an SSH alias.
-pub(super) fn parse_target(raw: &str) -> Result<(String, String)> {
-    let (username, host) = raw
-        .split_once('@')
-        .ok_or("use username@server, for example alice@ssmcp.lmm.best")?;
-    let username = crate::username::normalize(username)?;
-    if host.is_empty()
-        || host.contains('@')
-        || host.bytes().any(|b| b.is_ascii_whitespace() || b == b'\\')
-    {
-        return Err("invalid server in username@server".into());
-    }
-    let server = if host.contains("://") {
-        normalize_server(host)?
-    } else {
-        if host.contains(['/', '?', '#', '%']) {
-            return Err("server must be a hostname, IPv4 address or bracketed IPv6 address with an optional port".into());
-        }
-        normalize_server(&format!("https://{host}"))?
-    };
-    Ok((username, server))
-}
+pub(super) use crate::server_endpoint::{normalize_server, parse_target};
 
 fn now() -> u64 {
     SystemTime::now()
@@ -313,7 +266,7 @@ fn save_at(root: &Path, credential: &Credential) -> Result<()> {
     Ok(())
 }
 
-/// One selector for login, account commands, normal connections and invitation redemption.
+/// One selector for login, account commands, normal controlled connections.
 pub(super) fn resolve_server(explicit: Option<&str>) -> Result<String> {
     if let Some(server) = explicit {
         return normalize_server(server);
@@ -510,10 +463,6 @@ struct Arguments {
     name: Option<String>,
     client: Option<String>,
     terminal: Option<String>,
-    ttl: Option<u64>,
-    session_ttl: Option<u64>,
-    no_bootstrap: bool,
-    shell: Option<String>,
 }
 impl Arguments {
     fn parse(args: &[OsString]) -> Result<Self> {
@@ -539,27 +488,9 @@ impl Arguments {
                 Some("-i" | "--interactive") => result.interactive = true,
                 Some("--remote") => {}
                 Some("--no-browser") => result.no_browser = true,
-                Some("--no-bootstrap") => result.no_bootstrap = true,
-                Some("--shell") => {
-                    let shell = value()?;
-                    if !matches!(shell.as_str(), "sh" | "powershell") {
-                        return Err("--shell must be sh or powershell".into());
-                    }
-                    result.shell = Some(shell);
-                }
                 Some("--name") => result.name = Some(value()?),
                 Some("--client") => result.client = Some(value()?),
                 Some("--terminal") => result.terminal = Some(value()?),
-                Some("--ttl") => {
-                    result.ttl = Some(value()?.parse().map_err(|_| "--ttl requires seconds")?)
-                }
-                Some("--session-ttl") => {
-                    result.session_ttl = Some(
-                        value()?
-                            .parse()
-                            .map_err(|_| "--session-ttl requires seconds")?,
-                    )
-                }
                 _ => return Err("unknown account option; see ssmcp login --help".into()),
             }
         }
@@ -943,37 +874,6 @@ async fn connect_at(
     .await
 }
 
-/// A legacy SSH ACL resolves a login name. Verify that it still refers to the
-/// stable subject that authorized this CLI before forwarding that name.
-pub(super) async fn verify_identity(credential: &Credential) -> Result<Credential> {
-    let subject = credential.subject.as_deref()
-        .ok_or("saved login has no stable GitHub identity; run ssmcp login again before using automatic SSH access")?;
-    let api = Api::new(&credential.server)?;
-    let reply = api
-        .request(
-            Method::GET,
-            "/api/client/whoami?verify_github=true",
-            Some(&credential.token),
-            None,
-        )
-        .await?;
-    if reply.status == StatusCode::CONFLICT {
-        return Err("GitHub username ownership could not be verified; run ssmcp login again or retry when GitHub is available".into());
-    }
-    let identity = public_identity(&Api::checked(reply)?)?;
-    if identity["subject"].as_str() != Some(subject) {
-        return Err(
-            "verified GitHub identity differs from the saved login; run ssmcp login again".into(),
-        );
-    }
-    let mut verified = credential.clone();
-    verified.principal = identity["principal"].as_str().unwrap().into();
-    if verified.principal != credential.principal {
-        save_at(&state_root()?, &verified)?;
-    }
-    Ok(verified)
-}
-
 async fn require_credential(server: Option<&str>) -> Result<Credential> {
     credentials(server)
         .await?
@@ -1027,7 +927,7 @@ impl LogoutOutcome {
         match self.status {
             LogoutStatus::NotSignedIn => format!("Not signed in to {}.", self.server),
             LogoutStatus::Revoked => format!(
-                "Signed out of {}. This login and its derived invitations and devices were revoked.",
+                "Signed out of {}. This login and its previous delegated credentials were revoked.",
                 self.server
             ),
             LogoutStatus::AlreadyInvalid => format!(
@@ -1126,218 +1026,6 @@ async fn logout_command(args: &Arguments) -> Result<()> {
         println!("{}", outcome.json());
     } else {
         println!("{}", outcome.message());
-    }
-    Ok(())
-}
-
-pub(super) async fn enroll(server: &str, token: &str) -> Result<Credential> {
-    if !valid_secret(token) {
-        return Err("invalid temporary enrollment token".into());
-    }
-    let api = Api::new(server)?;
-    let reply = api
-        .request(
-            Method::POST,
-            "/api/client/enroll",
-            None,
-            Some(json!({"token":token})),
-        )
-        .await?;
-    if matches!(
-        reply.status,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT | StatusCode::GONE
-    ) {
-        return Err("temporary command expired, was already used, or was revoked; generate a new command on device A".into());
-    }
-    let value = Api::checked(reply)?;
-    let principal = crate::wire::canonical_github_principal(
-        value["principal"]
-            .as_str()
-            .ok_or("enrollment omitted its owner")?,
-    )?;
-    let token = value["device_token"]
-        .as_str()
-        .filter(|v| valid_secret(v))
-        .ok_or("invalid device token")?;
-    let expires = value["expires_in"]
-        .as_u64()
-        .filter(|n| (1..=86400 * 30).contains(n))
-        .ok_or("invalid temporary session lifetime")?;
-    Ok(Credential {
-        server: api.server,
-        token: token.into(),
-        principal,
-        subject: None,
-        username: None,
-        expires_at: now().saturating_add(expires),
-    })
-}
-
-fn shell_quote(value: &str, powershell: bool) -> String {
-    if powershell {
-        format!("'{}'", value.replace('\'', "''"))
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
-fn join_command(server: &str, token: &str) -> Result<String> {
-    command(server, token, false, false)
-}
-
-pub(crate) fn command(
-    server: &str,
-    token: &str,
-    bootstrap: bool,
-    powershell: bool,
-) -> Result<String> {
-    let server = normalize_server(server)?;
-    if !valid_secret(token) {
-        return Err("server returned an invalid enrollment token".into());
-    }
-    let quoted_server = shell_quote(&server, powershell);
-    let quoted_token = shell_quote(token, powershell);
-    if !bootstrap {
-        return Ok(format!(
-            "ssmcp join --server {quoted_server} --token {quoted_token}"
-        ));
-    }
-    if powershell {
-        let script = shell_quote(&format!("{server}/client/install.ps1"), true);
-        Ok(format!(
-            "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop {script}).Content)) -Server {quoted_server} -Token {quoted_token}"
-        ))
-    } else {
-        let script = shell_quote(&format!("{server}/client/install.sh"), false);
-        Ok(format!(
-            r#"(ssmcp_bootstrap=$(if command -v curl >/dev/null 2>&1; then curl -fsSL --max-redirs 0 -- {script}; else wget -qO- --tries=1 --max-redirect=0 -- {script}; fi) && test -n "$ssmcp_bootstrap" && sh -c "$ssmcp_bootstrap" sh --server {quoted_server} --token {quoted_token})"#
-        ))
-    }
-}
-
-/// Carry device A's explicitly trusted keys to an already installed client on B.
-/// Downloaded shell code cannot enforce a pin before it has itself been verified.
-fn pinned_join_command(
-    server: &str,
-    token: &str,
-    pins: &[String],
-    powershell: bool,
-) -> Result<String> {
-    let server = normalize_server(server)?;
-    let join = command(&server, token, false, powershell)?;
-    let mut trust = Vec::new();
-    for pin in pins {
-        let encoded = pin
-            .strip_prefix("sha256//")
-            .ok_or("invalid server public key pin")?;
-        if STANDARD
-            .decode(encoded)
-            .map_or(true, |bytes| bytes.len() != 32)
-        {
-            return Err("invalid server public key pin".into());
-        }
-        trust.push(format!(
-            "ssmcp trust add --server {} --pin {}",
-            shell_quote(&server, powershell),
-            shell_quote(pin, powershell),
-        ));
-    }
-    if trust.is_empty() {
-        return Ok(join);
-    }
-    if powershell {
-        // Windows PowerShell 5.1 does not support &&. Check every native exit code.
-        let guard =
-            "; if ($LASTEXITCODE -ne 0) { throw 'Cannot save trusted server public key' }; ";
-        Ok(format!("& {{ {}{guard}{join} }}", trust.join(guard)))
-    } else {
-        trust.push(join);
-        Ok(trust.join(" && "))
-    }
-}
-
-async fn invite(args: &Arguments) -> Result<()> {
-    let ttl = args.ttl.unwrap_or(600);
-    let session_ttl = args.session_ttl.unwrap_or(3600);
-    if !(30..=3600).contains(&ttl) || !(60..=86400).contains(&session_ttl) {
-        return Err(
-            "--ttl must be 30..=3600 seconds; --session-ttl must be 60..=86400 seconds".into(),
-        );
-    }
-    let credential = require_credential(args.server.as_deref()).await?;
-    let value = Api::new(&credential.server)?
-        .post(
-            "/api/client/invites",
-            Some(&credential.token),
-            json!({"ttl_secs":ttl,"session_ttl_secs":session_ttl}),
-        )
-        .await?;
-    let token = value["token"]
-        .as_str()
-        .ok_or("server omitted the enrollment token")?;
-    let pins = super::trust::pins(&credential.server)?;
-    let bootstrap = !args.no_bootstrap && pins.is_empty();
-    let (sh, powershell) = if pins.is_empty() {
-        (
-            if bootstrap {
-                command(&credential.server, token, true, false)?
-            } else {
-                join_command(&credential.server, token)?
-            },
-            command(&credential.server, token, bootstrap, true)?,
-        )
-    } else {
-        (
-            pinned_join_command(&credential.server, token, &pins, false)?,
-            pinned_join_command(&credential.server, token, &pins, true)?,
-        )
-    };
-    let selected =
-        if args
-            .shell
-            .as_deref()
-            .unwrap_or(if cfg!(windows) { "powershell" } else { "sh" })
-            == "powershell"
-        {
-            &powershell
-        } else {
-            &sh
-        };
-    if args.json {
-        println!(
-            "{}",
-            json!({"server":credential.server,"command":selected,"command_sh":sh,"command_powershell":powershell,
-            "bootstrap":bootstrap,"requires_installed_client":!bootstrap,"server_pins":pins,
-            "release":value["release"],"release_error":value["release_error"],
-            "wire_version":crate::wire::VERSION,"supported_targets":value["supported_targets"],
-            "expires_in":value["expires_in"],"session_expires_in":value["session_expires_in"]})
-        );
-    } else {
-        println!("{selected}");
-        if bootstrap {
-            if let Some(version) = value["release"]["version"].as_str() {
-                eprintln!(
-                    "Gateway publication: ssmcp {}; wire {}. The installer verifies the current compatible release before replacing the user installation.",
-                    safe(version),
-                    crate::wire::VERSION
-                );
-            } else if let Some(error) = value["release_error"].as_str() {
-                eprintln!(
-                    "Bootstrap publication unavailable: {}. Use --no-bootstrap with an installed compatible client.",
-                    safe(error)
-                );
-            }
-        }
-        if !pins.is_empty() {
-            eprintln!(
-                "Server public key pinning is enabled. Install ssmcp on device B from a trusted source first; this command saves the trusted keys before joining."
-            );
-        }
-        eprintln!(
-            "Run this once on device B. Claim within {} seconds; session access lasts {} seconds.",
-            value["expires_in"].as_u64().unwrap_or(ttl),
-            value["session_expires_in"].as_u64().unwrap_or(session_ttl)
-        );
     }
     Ok(())
 }
@@ -1587,7 +1275,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
         return Ok(false);
     };
     let (operation, rest, interactive) = match first {
-        "login" | "logout" | "whoami" | "list" | "ls" | "invite" => (first, &args[1..], false),
+        "login" | "logout" | "whoami" | "list" | "ls" => (first, &args[1..], false),
         "sessions"
             if args
                 .iter()
@@ -1605,7 +1293,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     };
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "ssmcp login [--server URL] [--no-browser] [--name NAME]\nssmcp whoami [--server URL] [--json]\nssmcp logout [--server URL] [--json]\nssmcp list [--server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--server URL] [--client ID] [--terminal ID]\nssmcp invite [--server URL] [--ttl SECONDS] [--session-ttl SECONDS] [--shell sh|powershell] [--no-bootstrap] [--json]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
+            "ssmcp login [--server URL] [--no-browser] [--name NAME]\nssmcp whoami [--server URL] [--json]\nssmcp logout [--server URL] [--json]\nssmcp list [--server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--server URL] [--client ID] [--terminal ID]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
         );
         return Ok(true);
     }
@@ -1619,7 +1307,6 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
         "logout" => logout_command(&options).await?,
         "whoami" => whoami(&options).await?,
         "list" | "ls" => list(&options).await?,
-        "invite" => invite(&options).await?,
         _ => unreachable!(),
     }
     Ok(true)
@@ -1775,50 +1462,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn invite_command_cannot_inject_shell_syntax() {
-        let token = "b".repeat(64);
-        assert_eq!(
-            join_command("https://example.com", &token).unwrap(),
-            format!("ssmcp join --server 'https://example.com' --token '{token}'")
-        );
-        assert!(join_command("https://example.com' ; touch /tmp/x", &token).is_err());
-        assert!(join_command("https://example.com", "$(whoami)").is_err());
-        assert!(join_command("https://example.com", &(token + "'")).is_err());
-    }
-    #[test]
-    fn pinned_invitations_carry_keys_and_never_download_unverified_code() {
-        let pin = format!("sha256//{}", STANDARD.encode([7u8; 32]));
-        let token = "b".repeat(64);
-        let shell = pinned_join_command(
-            "https://relay.example",
-            &token,
-            std::slice::from_ref(&pin),
-            false,
-        )
-        .unwrap();
-        assert!(
-            shell.starts_with("ssmcp trust add --server 'https://relay.example' --pin 'sha256//")
-        );
-        assert!(shell.contains(" && ssmcp join --server 'https://relay.example' --token "));
-        assert!(!shell.contains("curl"));
-        assert!(!shell.contains("install.sh"));
-        let powershell =
-            pinned_join_command("https://relay.example", &token, &[pin], true).unwrap();
-        assert!(powershell.contains("if ($LASTEXITCODE -ne 0)"));
-        assert!(!powershell.contains("&&"));
-        assert!(!powershell.contains("Invoke-WebRequest"));
-        assert!(
-            pinned_join_command(
-                "https://relay.example",
-                &token,
-                &["$(whoami)".into()],
-                false
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn duplicate_account_servers_are_rejected() {
         let args = [
             "--server",
@@ -1875,31 +1518,6 @@ mod tests {
         assert!(select_client(&entries, "3").is_err());
     }
     #[cfg(unix)]
-    #[test]
-    fn posix_quoting_preserves_arguments_without_executing_their_content() {
-        let value = "example'$(printf WRONG);\\\\value";
-        let output = std::process::Command::new("sh")
-            .args(["-c", &format!("printf %s {}", shell_quote(value, false))])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
-        let bootstrap = command("https://example.com", &"c".repeat(64), true, false).unwrap();
-        assert!(
-            std::process::Command::new("sh")
-                .args(["-n", "-c", &bootstrap])
-                .status()
-                .unwrap()
-                .success()
-        );
-        assert!(bootstrap.contains("/client/install.sh"));
-        assert!(bootstrap.contains("command -v curl"));
-        assert!(bootstrap.contains("wget -qO-"));
-        let powershell = command("https://example.com", &"c".repeat(64), true, true).unwrap();
-        assert!(powershell.contains("/client/install.ps1"));
-        assert!(powershell.contains("-MaximumRedirection 0"));
-    }
-
     async fn logout_fixture(
         root: &Path,
         status: StatusCode,

@@ -766,7 +766,7 @@ mod tests {
         view.ingest(&json!({"type":"ssmcp.code_mode","phase":"call-finished","run_id":"run","request_id":2,"attribution":attribution,"success":true}));
         assert!(view.snapshot()["selected"]["calls"][1]["attribution"].is_null());
         let text = view.detail_rows(120, 30, &Ui::default()).join("\n");
-        assert!(text.contains("bob@github #456") && text.contains("alice@github #123"));
+        assert!(text.contains("bob · github #456") && text.contains("alice · github #123"));
         assert!(text.contains("ssmcp.exec.start") && text.contains("agent_"));
     }
 

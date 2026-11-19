@@ -27,6 +27,15 @@ pub struct TrafficQuota {
     pub free_bytes: u64,
     pub paid_bytes: u64,
     pub used_bytes: u64,
+    /// Relay payload bytes sent by the authenticated controller this month.
+    #[serde(default)]
+    pub uploaded_bytes: u64,
+    /// Relay payload bytes returned to the authenticated controller this month.
+    #[serde(default)]
+    pub downloaded_bytes: u64,
+    /// Charges imported from journals that did not record a traffic direction.
+    #[serde(default)]
+    pub legacy_used_bytes: u64,
     pub limit_bytes: Option<u64>,
     pub remaining_bytes: Option<u64>,
 }
@@ -46,10 +55,20 @@ impl TrafficQuota {
             free_bytes: FREE_MONTHLY_TRAFFIC_BYTES,
             paid_bytes,
             used_bytes,
+            uploaded_bytes: 0,
+            downloaded_bytes: 0,
+            legacy_used_bytes: used_bytes,
             limit_bytes: (!unlimited).then_some(limit),
             remaining_bytes: (!unlimited).then_some(limit.saturating_sub(used_bytes)),
         }
     }
+}
+
+/// A direction is relative to the authenticated controller, not the device.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TrafficFrame {
+    pub uploaded: bool,
+    pub bytes: u64,
 }
 
 pub fn valid_traffic_utc_offset(minutes: i32) -> bool {
@@ -131,7 +150,7 @@ impl TrafficError {
         };
         if self == Self::Exhausted {
             format!(
-                "traffic_quota_exceeded: 本月剩余流量不足。{outcome}充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{}",
+                "traffic_quota_exceeded: 本月剩余流量不足。{outcome}补充流量后可继续发起新请求，或等待下月额度恢复；本次请求不会自动重放。流量与充值：{}",
                 traffic_recharge_url(public_url)
             )
         } else {

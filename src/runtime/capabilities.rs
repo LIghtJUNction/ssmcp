@@ -410,7 +410,10 @@ impl Runtime {
         if kind == "agents" && !query.contains_key("path") {
             args.insert("path".into(), json!("."));
         }
-        let mut result = self.context.perform(name, Value::Object(args)).await?;
+        let mut result = self
+            .files
+            .context_resource(name, Value::Object(args))
+            .await?;
         if let Some(next) = result["next_cursor"].as_str() {
             let mut query = query.clone();
             query.insert("cursor".into(), next.into());
@@ -536,9 +539,7 @@ display unknown. list reports controller_metadata; v4 clients require an update 
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
-must finish first. Call list again for the new ID. Account sessions reconnect using saved login \
-credentials; GitHub --allow access persists. Login-code connections need new OAuth login. \
-Temporary joined sessions cannot reload; create a new invitation. Both client and server must support reload.\n\n\
+must finish first. Call list again for the new ID. Connections reconnect using the same login or server-qualified --allow policy. Both client and server must support reload.\n\n\
 Long command output is streamed to the client's private ssmcp storage \
 (normally /tmp/ssmcp-<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \

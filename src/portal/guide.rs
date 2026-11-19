@@ -47,9 +47,8 @@ fn page(language: Language, public_url: &str) -> String {
         })
         .map(|url| url.origin().ascii_serialization())
         .unwrap_or_else(|| "https://relay.example".into());
-    let authority = origin
-        .split_once("://")
-        .map_or("relay.example", |(_, host)| host);
+    // Account targets omit HTTPS, but loopback HTTP must keep its scheme.
+    let authority = origin.strip_prefix("https://").unwrap_or(&origin);
     let template = match language {
         Language::English => ENGLISH,
         Language::Chinese => CHINESE,
@@ -79,15 +78,20 @@ mod tests {
                 "tools.search",
                 "/handoff",
                 "/resume",
-                "ssmcp invite --shell powershell",
-                "--no-bootstrap",
-                "session_ttl_secs",
+                "ssmcp --server https://relay.example:8443 --allow yourname@relay.example:8443",
+                "collab.join",
                 r#"desktop: "host""#,
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }
             assert!(!html.contains("{{"));
             assert!(!html.contains("<script"));
+        }
+        for language in [Language::English, Language::Chinese] {
+            let html = page(language, "http://127.0.0.1:4123");
+            assert!(html.contains(
+                "ssmcp --server http://127.0.0.1:4123 --allow yourname@http://127.0.0.1:4123"
+            ));
         }
         for origin in [
             "https://user:secret@relay.example",
