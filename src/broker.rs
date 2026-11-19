@@ -1,4 +1,5 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
+mod access;
 mod management;
 mod traffic;
 use crate::{
@@ -39,6 +40,7 @@ struct Call {
     operation: Operation,
     controller: Option<Controller>,
     code_context: Option<wire::CodeContext>,
+    authorization: Option<Authorization>,
     reply: oneshot::Sender<CallResult>,
 }
 
@@ -64,8 +66,8 @@ impl Authorization {
 
     fn permits(&self, session: &Session) -> bool {
         match self {
-            Self::Legacy { .. } => session.allow.is_empty(),
-            Self::Identity(identity) => session.allow.iter().any(|allowed| {
+            Self::Legacy { .. } => session.allowed().is_empty(),
+            Self::Identity(identity) => session.allowed().iter().any(|allowed| {
                 allowed.provider == identity.provider && allowed.subject == identity.subject
             }),
         }
@@ -86,8 +88,8 @@ pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     login: Mutex<Option<LoginCode>>,
-    // Resolved provider subject IDs are immutable for this SSH connection.
-    allow: Vec<Identity>,
+    // Membership may change, but grants always identify immutable provider subjects.
+    allow: Mutex<Vec<Identity>>,
     info: ClientInfo,
     sender: mpsc::Sender<Call>,
     reports: mpsc::Sender<wire::CodeCompletion>,
@@ -104,6 +106,10 @@ pub struct Session {
 }
 
 impl Session {
+    fn allowed(&self) -> std::sync::MutexGuard<'_, Vec<Identity>> {
+        self.allow.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
     fn connection_error(&self, dispatched: bool, fallback: &str) -> String {
         let failure = self
             .traffic_failure
@@ -164,11 +170,11 @@ impl Session {
         operation: Operation,
         controller: Option<Controller>,
     ) -> CallResult {
-        self.call_with_actor(operation, controller, None, true)
+        self.call_with_actor(operation, controller, None, true, None)
             .await
     }
 
-    /// The caller has already revalidated its OAuth grant and session ACL.
+    /// Recheck current membership even for a previously looked-up session handle.
     /// Audit attribution never uses controller metadata or the access allowlist.
     pub(crate) async fn call_with_authorization(
         &self,
@@ -182,13 +188,14 @@ impl Session {
             }
             _ => None,
         };
-        self.call_with_actor(operation, controller, actor, true)
+        self.call_with_actor(operation, controller, actor, true, Some(authorization))
             .await
     }
 
     /// Internal handle teardown must proceed even if audit storage is unavailable.
     pub(crate) async fn call_cleanup(&self, operation: Operation) -> CallResult {
-        self.call_with_actor(operation, None, None, false).await
+        self.call_with_actor(operation, None, None, false, None)
+            .await
     }
 
     async fn call_with_actor(
@@ -197,7 +204,13 @@ impl Session {
         controller: Option<Controller>,
         actor_subject: Option<&str>,
         audit_required: bool,
+        authorization: Option<&Authorization>,
     ) -> CallResult {
+        if authorization
+            .is_some_and(|authorization| !authorization.is_live() || !authorization.permits(self))
+        {
+            return Err("session access was revoked; refresh the connected clients".into());
+        }
         operation.validate()?;
         let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
         // A later collab.bind in the same run must not reattribute this reply.
@@ -244,6 +257,7 @@ impl Session {
                 operation,
                 controller,
                 code_context,
+                authorization: authorization.cloned(),
                 reply,
             })
             .is_err()
@@ -270,6 +284,13 @@ impl Session {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(self.connection_error(true, "client disconnected")),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
+        };
+        let result = if authorization
+            .is_some_and(|authorization| !authorization.is_live() || !authorization.permits(self))
+        {
+            Err("session access was revoked; response withheld".into())
+        } else {
+            result
         };
         let received_at = std::time::Instant::now();
         if audit_tool.is_some() {
@@ -452,7 +473,7 @@ impl Broker {
             .await
             .get(user)?
             .values()
-            .find(|session| session.is_alive() && session.allow.is_empty())
+            .find(|session| session.is_alive() && session.allowed().is_empty())
             .cloned()
     }
 
@@ -463,7 +484,7 @@ impl Broker {
         }
         let sessions = self.sessions.read().await;
         for session in sessions.get(user)?.values() {
-            if !session.is_alive() || !session.allow.is_empty() {
+            if !session.is_alive() || !session.allowed().is_empty() {
                 continue;
             }
             let mut pending = session.login.lock().unwrap();
@@ -493,7 +514,7 @@ impl Broker {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
-            allow: Vec::new(),
+            allow: Mutex::new(Vec::new()),
             info: ClientInfo {
                 id: id.clone(),
                 name: "test".into(),
@@ -755,6 +776,10 @@ impl Broker {
         } else {
             Vec::new()
         };
+        let access_owner = registration
+            .as_ref()
+            .filter(|registration| registration.session_access)
+            .map(|registration| registration.identity.clone());
         let login_code = if restricted {
             String::new()
         } else {
@@ -772,7 +797,7 @@ impl Broker {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
-            allow,
+            allow: Mutex::new(allow),
             info: ClientInfo {
                 id: client_id.clone(),
                 name: metadata.name,
@@ -874,7 +899,7 @@ impl Broker {
             },
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone() }).await?;
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities: access_owner.as_ref().map(|_| vec![wire::SESSION_ACCESS_CAPABILITY.into()]).unwrap_or_default() }).await?;
             let mut next_id = 0u64;
             let mut delivered_runs = std::collections::VecDeque::<String>::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
@@ -888,6 +913,11 @@ impl Broker {
                         frame = &mut next_frame => break frame?,
                         Some(call) = requests.recv() => {
                             if call.reply.is_closed() { continue; }
+                            // Queue admission does not retain authority after a local revoke.
+                            if call.authorization.as_ref().is_some_and(|authorization| !authorization.is_live() || !authorization.permits(&session) || !self.authorized_account(authorization)) {
+                                let _ = call.reply.send(Err("session access was revoked; tool was not dispatched".into()));
+                                continue;
+                            }
                             if pending.len() >= wire::MAX_INFLIGHT {
                                 let _ = call.reply.send(Err("client busy; retry later".into()));
                                 continue;
@@ -935,6 +965,17 @@ impl Broker {
                         })?;
                 }
                 match received {
+                    Some(Frame::Access { id, command }) => {
+                        // Only this credential-bound connection can edit its own session.
+                        // Capability negotiation grants no authority by itself.
+                        let result = match (access_owner.as_ref(), registration.as_ref()) {
+                            (Some(owner), Some(registration)) if registration.is_live(&self).await => {
+                                session.access_command(&self.identities, owner, command).await
+                            }
+                            _ => Err("session access controls were not negotiated on an authenticated account connection".into()),
+                        };
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
+                    }
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
                         let frame = Frame::SteeringReply { id, result };
@@ -1070,7 +1111,7 @@ fn validate_authorization(
         let anchor = anchor.upgrade().ok_or("authorization connection ended")?;
         let clients = sessions.get(user).ok_or("authorization connection ended")?;
         if !anchor.is_alive()
-            || !anchor.allow.is_empty()
+            || !anchor.allowed().is_empty()
             || !clients
                 .get(anchor.client_id())
                 .is_some_and(|current| Arc::ptr_eq(current, &anchor))
@@ -1520,7 +1561,7 @@ mod tests {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
             })),
-            allow,
+            allow: Mutex::new(allow),
             info: ClientInfo {
                 id: id.into(),
                 name: "same display name".into(),

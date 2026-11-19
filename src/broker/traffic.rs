@@ -418,6 +418,7 @@ mod tests {
                         operation: Operation::ListTools { cursor: None },
                         controller: None,
                         code_context: None,
+                        authorization: None,
                         reply,
                     })
                     .is_ok()

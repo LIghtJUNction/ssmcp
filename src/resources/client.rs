@@ -102,10 +102,14 @@ pub(super) async fn read(
         _ => return Err(ResourceError::NotFound),
     };
     let response = session
-        .call(Operation::CallTool {
-            name: name.into(),
-            arguments,
-        })
+        .call_with_authorization(
+            Operation::CallTool {
+                name: name.into(),
+                arguments,
+            },
+            None,
+            authorization,
+        )
         .await;
     // A response cannot preserve a grant that expired or disconnected during I/O.
     broker
