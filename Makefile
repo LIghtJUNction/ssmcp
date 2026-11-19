@@ -28,6 +28,7 @@ test: test-code-mode
 	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
 	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/test_e2e_unified.py
 	python3 scripts/e2e_unified.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/unified.json
 	python3 scripts/e2e_dashboard.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/dashboard.json
 	$(MAKE) test-client-ui

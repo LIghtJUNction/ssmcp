@@ -274,11 +274,16 @@ class Unified(SessionFeatures):
         return wait_for(complete, timeout=timeout, description="final independent command state")
 
     def events(self, tool, *, cursor=0, client_id=None, secret=None):
-        rows = []
-        while True:
-            page = self.call(tool, {"cursor": cursor, "max_events": 8, "wait_ms": 0}, client_id=client_id, secret=secret)
+        rows, end_cursor = [], None
+        # Every call is itself audited. Freeze the first page's stream boundary,
+        # or audit polling produces new events faster than an empty page can occur.
+        while end_cursor is None or cursor < end_cursor:
+            count = 8 if end_cursor is None else min(8, end_cursor - cursor)
+            page = self.call(tool, {"cursor": cursor, "max_events": count, "wait_ms": 0}, client_id=client_id, secret=secret)
             if page["truncated"]:
                 raise AssertionError(f"{tool} lost a test event before it could be inspected")
+            if end_cursor is None:
+                end_cursor = page["end_cursor"]
             batch = page["events"]
             for row in batch:
                 if row["cursor"] != cursor:
@@ -286,9 +291,10 @@ class Unified(SessionFeatures):
                 cursor += 1
             if cursor != page["next_cursor"]:
                 raise AssertionError(f"{tool} returned an inconsistent next_cursor")
+            if not cursor <= end_cursor <= page["end_cursor"] or (not batch and cursor < end_cursor):
+                raise AssertionError(f"{tool} returned an inconsistent event snapshot")
             rows.extend(batch)
-            if not batch:
-                return rows, cursor
+        return rows, cursor
 
     def poll_exec(self):
         rows, self.exec_cursor = self.events("ssmcp.exec.events", cursor=self.exec_cursor)
@@ -607,7 +613,22 @@ class Unified(SessionFeatures):
                    "a separate client cannot list or address the first client's tasks")
         for tool in ("ssmcp.exec.events", "ssmcp.fs.events", "ssmcp.audit.events"):
             rows, _ = self.events(tool, client_id=self.sibling_id, secret=self.sibling_token)
-            self.check(not rows, f"{tool} on another client does not expose the first client's audit stream")
+            isolated = not rows
+            if tool == "ssmcp.audit.events":
+                # The sibling records our own observations. Every event must be
+                # tied to a run whose source targets this sibling, never the primary.
+                own_runs = {
+                    row["event"]["run_id"] for row in rows
+                    if row["event"]["type"] == "ssmcp.code_mode"
+                    and row["event"].get("phase") == "started"
+                    and json.dumps(self.sibling_id) in row["event"].get("code", "")
+                    and json.dumps(self.client_id) not in row["event"].get("code", "")
+                }
+                isolated = bool(own_runs) and all(
+                    row["event"]["type"] == "ssmcp.code_mode"
+                    and row["event"].get("run_id") in own_runs for row in rows
+                )
+            self.check(isolated, f"{tool} on another client does not expose the first client's audit stream")
         self.call("ssmcp.output.cleanup", client_id=self.sibling_id, secret=self.sibling_token)
         self.check(self.artifact_path(self.retained_artifact).is_file(),
                    "another client's cleanup leaves the first client's retained artifact intact")

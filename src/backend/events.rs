@@ -377,11 +377,14 @@ impl EventLog {
                         next = cursor + 1;
                     }
                     let closed = buffer.closed;
+                    // A consumer can freeze this boundary instead of following
+                    // producers (including its own audit reads) indefinitely.
+                    let end = buffer.next;
                     drop(buffer);
                     let archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
                     let artifact = archive.as_ref().and_then(|capture| capture.metadata());
                     return Ok(
-                        json!({"events":events,"next_cursor":next,"start_cursor":start,"truncated":args.cursor < start,"closed":closed,"artifact":artifact,"archive_format":"jsonl","archive_error":archive.as_ref().and_then(|capture|capture.error())}),
+                        json!({"events":events,"next_cursor":next,"start_cursor":start,"end_cursor":end,"truncated":args.cursor < start,"closed":closed,"artifact":artifact,"archive_format":"jsonl","archive_error":archive.as_ref().and_then(|capture|capture.error())}),
                     );
                 }
             }
@@ -552,6 +555,51 @@ mod tests {
         assert_eq!(page["events"][0]["event"]["type"], "ssmcp.event_truncated");
         assert!(log.buffer.lock().unwrap().bytes <= CAPACITY);
         log.close();
+    }
+
+    #[tokio::test]
+    async fn snapshot_boundary_stays_usable_when_the_stream_grows() {
+        let log = EventLog::create("event-snapshot-fixture", None, AuditMode::default());
+        for index in 0..5 {
+            log.push(json!({"index":index}));
+        }
+        let first = log.read(json!({"max_events":2})).await.unwrap();
+        assert_eq!(first["next_cursor"], 2);
+        assert_eq!(first["end_cursor"], 5);
+
+        // A producer may append between pages, as code-mode audit polling does.
+        let producer = log.clone();
+        tokio::spawn(async move {
+            for index in 5..9 {
+                producer.push(json!({"index":index}));
+            }
+        })
+        .await
+        .unwrap();
+        let end = first["end_cursor"].as_u64().unwrap();
+        let next = first["next_cursor"].as_u64().unwrap();
+        let remainder = log
+            .read(json!({"cursor":next,"max_events":end-next}))
+            .await
+            .unwrap();
+        assert_eq!(remainder["end_cursor"], 9);
+        assert_eq!(remainder["next_cursor"], end);
+        assert_eq!(
+            remainder["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["cursor"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+        let later = log.read(json!({"cursor":end})).await.unwrap();
+        assert_eq!(later["events"][0]["cursor"], 5);
+        assert_eq!(later["next_cursor"], 9);
+        assert_eq!(later["end_cursor"], 9);
+        let empty = log.read(json!({"cursor":9})).await.unwrap();
+        assert_eq!(empty["events"], json!([]));
+        assert_eq!(empty["end_cursor"], 9);
     }
 
     #[tokio::test]
