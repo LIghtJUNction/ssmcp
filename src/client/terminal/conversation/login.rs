@@ -8,6 +8,9 @@ impl State {
         if self.preview {
             return Err("Preview does not start GitHub login or use desktop helpers".into());
         }
+        if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
+            return Err("This session is signing out or closing".into());
+        }
         self.chat_poll_login();
         if let Some(task) = &self.conversation.login_task {
             task.request(mode)?;
