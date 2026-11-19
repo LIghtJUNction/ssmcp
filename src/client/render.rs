@@ -1008,16 +1008,17 @@ impl Renderer {
             .unwrap_or("");
         match kind {
             "exec.started" | "ssmcp.exec.started" => {
-                // Both title and argv come from the audit-redacted event. A
-                // caller-provided purpose supplements the actual invocation.
+                // Both title and argv come from the audit-redacted event. Keep
+                // the invocation before the caller's purpose: defensive line
+                // redaction must not swallow it after a secret-looking title.
                 let command = match value["title"]
                     .as_str()
                     .filter(|title| !title.trim().is_empty())
                 {
                     Some(title) => format!(
                         "{} · {}",
-                        activity::single_line(title, 160),
-                        command_label(&value["command"])
+                        command_label(&value["command"]),
+                        activity::single_line(title, 160)
                     ),
                     None => command_label(&value["command"]),
                 };
@@ -4591,12 +4592,12 @@ mod tests {
                 assert!(shown.contains("python3 -c"), "{shown}");
                 let activity = renderer.activities.snapshot().pop().unwrap();
                 assert_eq!(activity.id, "title-81");
+                assert!(activity.description.starts_with("python3 -c · 2 lines · "));
                 assert!(
                     activity
                         .description
-                        .starts_with("Inspect API_TOKEN=[redacted] · ")
+                        .ends_with("Inspect API_TOKEN=[redacted]")
                 );
-                assert!(activity.description.ends_with("python3 -c · 2 lines"));
                 assert!(!activity.description.contains("private-title-secret"));
             }
             assert_eq!(shown.contains("fixture command"), raw || verbose, "{shown}");
