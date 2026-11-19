@@ -60,6 +60,11 @@ struct GitHubUser {
 }
 
 impl IdentityProviders {
+    /// Local OS-user sessions do not configure or contact an identity provider.
+    pub(crate) fn disabled() -> Self {
+        Self { github: None }
+    }
+
     pub fn new(public_url: &str, github: Option<GitHubConfig>) -> crate::Result<Self> {
         let mut callback =
             Url::parse(public_url).map_err(|_| "invalid identity callback origin")?;

@@ -8,6 +8,12 @@ impl State {
         if self.preview {
             return Err("Preview does not start GitHub login or use desktop helpers".into());
         }
+        if self.account == crate::client::account::status::Status::Local {
+            return Err(
+                "本地会话无需 GitHub 登录。使用 /logs 中的 MCP 地址和一次性登录码授权控制端。"
+                    .into(),
+            );
+        }
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
             return Err("This session is signing out or closing".into());
         }
@@ -88,6 +94,22 @@ mod tests {
             assert!(state.chat_command(command).is_err(), "{command}");
             assert!(state.conversation.login_task.is_none());
             assert_eq!(state.chat_input_stamp().as_ref(), Some(&stamp));
+            assert!(state.actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn local_login_explains_connection_authorization_without_starting_account_login() {
+        let mut state = super::super::super::preview_state(24, 100, &Ui::default());
+        state.preview = false;
+        state.account = crate::client::account::status::Status::Local;
+        state.conversation.composer.set_text("保留本地草稿");
+        let before = state.chat_input_stamp().unwrap();
+        for command in ["/login", "/login copy", "/login link"] {
+            let error = state.chat_command(command).unwrap_err();
+            assert!(error.contains("/logs"), "{error}");
+            assert!(state.conversation.login_task.is_none());
+            assert_eq!(state.chat_input_stamp().as_ref(), Some(&before));
             assert!(state.actions.is_empty());
         }
     }
