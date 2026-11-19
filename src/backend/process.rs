@@ -186,6 +186,7 @@ mod guardian {
     };
 
     const ENTRY: &str = "__process_guardian";
+    const BOOTSTRAP_SECONDS: libc::c_uint = 10;
     static EXECUTABLE: OnceLock<OwnedFd> = OnceLock::new();
 
     pub(super) struct Bootstrap {
@@ -284,22 +285,45 @@ mod guardian {
             }
             let mut blocked: libc::sigset_t = std::mem::zeroed();
             libc::sigfillset(&mut blocked);
-            if libc::sigprocmask(libc::SIG_SETMASK, &blocked, std::ptr::null_mut()) != 0 {
+            if !stop_bootstrap_timer(&blocked) {
                 return Some(125);
             }
-            release_command(4, command);
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGCONT, 0, 0, 0) != 0 {
+                return Some(125);
+            }
+            release_command(4, command, parent);
             // A parent may have died during exec; the original loop must then
             // reap the complete owned tree, rather than rejecting the entry.
             supervise(command, parent, &blocked)
         }
     }
 
-    unsafe fn release_command(fd: RawFd, command: libc::pid_t) {
+    unsafe fn stop_bootstrap_timer(blocked: &libc::sigset_t) -> bool {
+        unsafe {
+            if libc::sigprocmask(libc::SIG_SETMASK, blocked, std::ptr::null_mut()) != 0 {
+                return false;
+            }
+            libc::alarm(0);
+            // A timer racing the mask change must not later be forwarded to
+            // the real command by the normal signal supervision loop.
+            let mut alarm: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut alarm);
+            libc::sigaddset(&mut alarm, libc::SIGALRM);
+            let zero = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            while libc::sigtimedwait(&alarm, std::ptr::null_mut(), &zero) >= 0 {}
+            true
+        }
+    }
+
+    unsafe fn release_command(fd: RawFd, command: libc::pid_t, parent: libc::pid_t) {
         // A loader/entry failure must never allow the real command to fork
         // descendants before this guardian is ready to supervise them.
         unsafe {
             let mut ready = false;
-            loop {
+            while libc::getppid() == parent {
                 let written = libc::write(fd, b"R".as_ptr().cast(), 1);
                 if written == 1 {
                     ready = true;
@@ -351,7 +375,12 @@ mod guardian {
         }
     }
 
-    unsafe fn exec_guardian(fd: RawFd, command: libc::pid_t, parent: libc::pid_t) {
+    unsafe fn exec_guardian(
+        fd: RawFd,
+        command: libc::pid_t,
+        parent: libc::pid_t,
+        blocked: &libc::sigset_t,
+    ) {
         let mut command_bytes = [0_u8; 24];
         let mut parent_bytes = [0_u8; 24];
         let argv = [
@@ -369,6 +398,21 @@ mod guardian {
         // Preserve the original loader environment; no Rust allocation or lock
         // is permitted between fork and this syscall. Errors use the old loop.
         unsafe {
+            // Command::spawn is still waiting for its exec-error pipe. Bound
+            // even a stuck loader/constructor before the ready acknowledgment;
+            // its command remains blocked and has not created descendants.
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut action.sa_mask);
+            let mut alarm: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut alarm);
+            libc::sigaddset(&mut alarm, libc::SIGALRM);
+            if libc::sigaction(libc::SIGALRM, &action, std::ptr::null_mut()) != 0
+                || libc::sigprocmask(libc::SIG_UNBLOCK, &alarm, std::ptr::null_mut()) != 0
+            {
+                return;
+            }
+            libc::alarm(BOOTSTRAP_SECONDS);
             libc::syscall(
                 libc::SYS_execveat,
                 fd,
@@ -377,6 +421,9 @@ mod guardian {
                 environ,
                 libc::AT_EMPTY_PATH,
             );
+            if !stop_bootstrap_timer(blocked) {
+                libc::_exit(125);
+            }
         }
     }
 
@@ -469,7 +516,7 @@ mod guardian {
                 let copied = libc::dup3(launch.executable, 3, libc::O_CLOEXEC) == 3
                     && libc::dup3(launch.write, 4, 0) == 4;
                 if !copied {
-                    release_command(launch.write, child as libc::pid_t);
+                    release_command(launch.write, child as libc::pid_t, parent);
                 }
                 copied
             });
@@ -483,9 +530,9 @@ mod guardian {
             }
             libc::close(libc::STDIN_FILENO);
             if helper {
-                exec_guardian(3, child as libc::pid_t, parent);
+                exec_guardian(3, child as libc::pid_t, parent, &blocked);
                 libc::close(3);
-                release_command(4, child as libc::pid_t);
+                release_command(4, child as libc::pid_t, parent);
             }
             supervise(child as libc::pid_t, parent, &blocked)
         }
