@@ -2,7 +2,7 @@
 """Verify native image pixels in an owned Xvfb/ztty and a real ssmcp PTY.
 
 Requires already-built candidate ssmcp/ssmcpd/vt_snapshot, ztty with static Kitty
-graphics, Xvfb, Pillow and python-Xlib. Reuses only the isolated SSH/OAuth fixture;
+graphics, Xvfb, Pillow and python-Xlib. Reuses only the isolated WSS/OAuth fixture;
 no model, shared terminal, host display, or production endpoint is used.
 """
 import argparse
@@ -103,11 +103,7 @@ class Window:
         config = directory / "ztty.conf"
         config.write_text("window-padding = 12\nbackground = #ffffff\n"
                           "background-opacity = 100\ncursor-blink-interval = 150\n")
-        command = [
-            str(harness.binary_dir / "ssmcp"), "--ssh", "-F",
-            str(harness.directory / "ssh_config"), "--name", "native-image-fixture",
-            "--shell", "/bin/sh", f"{harness.user}@ssmcp-e2e",
-        ]
+        command = harness.client_command(name="native-image-fixture")
         launcher = directory / "run-client.py"
         launcher.write_text(
             "import json,os,signal,subprocess,time\n"
@@ -308,7 +304,7 @@ def run(harness, binary, temporary, output):
     try:
         credentials = native.connection()
         harness.client_id = credentials["client_id"]
-        harness.sensitive.append(credentials["login_code"])
+        harness.validate_connection_record(credentials)
         harness.oauth_login(credentials)
         native.wait(lambda: harness.ui("/display/rows") == 32, "live candidate UI")
         ready = True
@@ -534,7 +530,7 @@ def run(harness, binary, temporary, output):
         harness.call("ssmcp.client.reload", {})
         credentials = native.connection(previous)
         harness.client_id = credentials["client_id"]
-        harness.sensitive.append(credentials["login_code"])
+        harness.validate_connection_record(credentials)
         harness.oauth_login(credentials)
         native.wait(lambda: harness.ui("/display/active"), "reloaded candidate UI", 20)
         absent("actual client reload leaves no old image placement")
@@ -602,3 +598,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

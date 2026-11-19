@@ -25,17 +25,44 @@ test: test-code-mode
 	$(CARGO) test --locked --test workspace_bridge -- --ignored --test-threads=1
 	$(CARGO) test --locked --test context_helpers -- --ignored --test-threads=1
 	$(CARGO) build --locked --bins --example vt_snapshot
+	@set -eu; ssmcp_fixture="$${SSMCP_E2E_FIXTURE_BINARY:-}"; \
+	if test -z "$$ssmcp_fixture"; then \
+	  ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
+	fi; \
+	SSMCP_E2E_FIXTURE_BINARY="$$ssmcp_fixture" $(MAKE) test-account-acceptance
+
+.PHONY: test-account-acceptance
+test-account-acceptance:
 	python3 scripts/e2e_account_relay.py --binary $(CARGO_TARGET_DIR)/debug/ssmcp
+	python3 scripts/e2e.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_session_features.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/e2e_agents.py --bin-dir $(CARGO_TARGET_DIR)/debug
+	python3 scripts/test_e2e_unified.py
+	python3 scripts/e2e_unified.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/unified.json
+	python3 scripts/e2e_dashboard.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/dashboard.json
 	$(MAKE) test-client-ui
 
 # Linux acceptance: the router fixture uses a private synthetic identity provider.
 .PHONY: test-client-ui
 test-client-ui:
 	$(CARGO) build --locked --bins --example vt_snapshot
+	@set -eu; ssmcp_fixture="$${SSMCP_E2E_FIXTURE_BINARY:-}"; \
+	if test -z "$$ssmcp_fixture"; then \
+	  ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
+	fi; \
+	SSMCP_E2E_FIXTURE_BINARY="$$ssmcp_fixture" $(MAKE) test-client-ui-ready
+
+.PHONY: test-client-ui-ready
+test-client-ui-ready:
 	python3 scripts/e2e_client_ui.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/client-ui
 	python3 scripts/e2e_canvas_logs.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/canvas-logs --report $(CARGO_TARGET_DIR)/acceptance/canvas-logs/report.json
-	@set -eu; ssmcp_fixture="$$($(CARGO) test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"; \
-	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$ssmcp_fixture" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
+	python3 scripts/e2e_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/composer.json
+	python3 scripts/e2e_questions.py --bin-dir $(CARGO_TARGET_DIR)/debug --report $(CARGO_TARGET_DIR)/acceptance/questions.json --out $(CARGO_TARGET_DIR)/acceptance/questions
+	python3 scripts/e2e_input_history.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/input-history
+	python3 scripts/e2e_presentations.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/presentations --report $(CARGO_TARGET_DIR)/acceptance/presentations.json
+	python3 scripts/e2e_context_memory.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/context-memory --report $(CARGO_TARGET_DIR)/acceptance/context-memory.json
+	python3 scripts/e2e_file_paste.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/file-paste --report $(CARGO_TARGET_DIR)/acceptance/file-paste.json
+	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8
@@ -65,3 +92,4 @@ install-portal:
 	install -d $(DESTDIR)$(PREFIX)/libexec/ssmcp $(DESTDIR)$(SYSTEMD_DIR) $(DESTDIR)$(PREFIX)/share/doc/ssmcp/examples
 	sed 's|/usr/local/bin/|$(PREFIX)/bin/|g; s|/etc/ssmcpd/|$(SYSCONFDIR)/ssmcpd/|g' packaging/ssmcp-portal.service > $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service
 	chmod 0644 $(DESTDIR)$(SYSTEMD_DIR)/ssmcp-portal.service
+

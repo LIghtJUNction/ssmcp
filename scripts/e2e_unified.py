@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate the unified client through real local SSH, OAuth and MCP.
+"""Validate the unified client through real local WSS, OAuth and MCP.
 
-Reuses e2e.py's isolated public-key sshd/PKCE harness and the session helper's
+Reuses e2e.py's isolated account WebSocket/PKCE harness and the session helper's
 reload reader and output pagination checks. No installed Harness is exposed to
 the client PATH, no model is invoked, and no package or runtime is installed.
 Only generated fixtures and the test's own output artifacts are changed.
@@ -432,7 +432,7 @@ class Unified(SessionFeatures):
     def utf8_transport(self):
         expected = ("a" * 51 + chr(0x3001) + "exit=0").encode("utf-8")
         # Keep the argv ASCII: only the owned command emits the UTF-8 boundary
-        # fixture through the real executor, audit, events and SSH result path.
+        # fixture through the real executor, audit, events and WSS result path.
         program = ("import sys; value = ('a' * 51 + chr(0x3001) + 'exit=0').encode('utf-8'); "
                    "sys.stdout.buffer.write(value); sys.stderr.buffer.write(value)")
         job = self.call("ssmcp.exec.start", {
@@ -703,16 +703,19 @@ class Unified(SessionFeatures):
         old_id, token, pid = self.client_id, self.secret, self.client.pid
         accepted = self.code("return await reload(%s);" % json.dumps(old_id))
         self.check(accepted["accepted"] and accepted["client_id"] == old_id,
-                   "reload acknowledgement arrives over SSH before the connection is replaced")
+                   "reload acknowledgement arrives over WSS before the connection is replaced")
         replacement = self.reader.read(timeout=30)
-        self.sensitive.append(replacement.get("login_code", ""))
+        self.validate_connection_record(replacement)
         self.check(self.client.pid == pid and self.client.poll() is None and replacement["client_id"] != old_id
                    and all(replacement[field] == self.original[field] for field in ("title", "name", "cwd")),
                    "reload reconnects the same client process with a new connection ID and preserved metadata")
         self.stopped(identities, "reload")
-        wait_for(lambda: self.request(body={}, secret=token)[0] == 401, description="old grant revoked after reload")
-        self.oauth_login(replacement)
+        self.check(self.rpc("ping", modern=True, secret=token)[0] == 200,
+                   "the independent account grant remains valid after the device reloads")
         self.client_id = replacement["client_id"]
+        listed = self.public_call("list")["clients"]
+        self.check(all(item["id"] != old_id for item in listed),
+                   "the disconnected client ID cannot survive as a live route")
         stale = self.rejected("ssmcp.exec.status", {"job_id": job["job_id"]})
         self.check(not self.call("ssmcp.exec.list")["jobs"], "reload starts with no inherited background job handles")
         tools = self.tool_catalog(through_code=True)
@@ -725,20 +728,21 @@ class Unified(SessionFeatures):
         self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         self.save("reload.json", {"acknowledgement": accepted, "old_client_id": old_id,
                   "new_client_id": self.client_id, "process_pid": pid, "stopped_processes": identities,
-                  "old_job_rejected": stale, "retained_output": preserved, "old_oauth_status": 401})
+                  "old_job_rejected": stale, "retained_output": preserved, "old_oauth_status": 200})
 
     def disconnect(self):
         job, identities = self.tree("disconnect")
         token = self.secret
         self.stop(self.client)
         self.stopped(identities, "connection shutdown")
-        wait_for(lambda: self.request(body={}, secret=token)[0] == 401, description="grant revoked after disconnect")
+        self.check(self.rpc("ping", modern=True, secret=token)[0] == 200,
+                   "account authorization survives one device disconnect")
         self.check(self.call("terminal.status", client_id=self.sibling_id, secret=self.sibling_token)["running"],
                    "disconnect cleanup leaves the independently authorized sibling client usable")
-        self.save("disconnect.json", {"job": job, "stopped_processes": identities, "old_oauth_status": 401})
+        self.save("disconnect.json", {"job": job, "stopped_processes": identities, "old_oauth_status": 200})
 
     def run(self):
-        stages = [("ssh_oauth", self.bootstrap), ("catalog_no_harness", self.catalog),
+        stages = [("account_oauth", self.bootstrap), ("catalog_no_harness", self.catalog),
                   ("concurrent_execution", self.concurrent_commands), ("utf8_transport", self.utf8_transport),
                   ("output_storage", self.outputs),
                   ("file_skill_audit", self.workspace_audit), ("client_isolation", self.client_isolation),
@@ -768,13 +772,13 @@ def main():
     parser.add_argument("--revision", default="unspecified", help="immutable revision used to build these binaries")
     args = parser.parse_args()
     if not sys.platform.startswith("linux") or args.timeout <= 0:
-        parser.error("this real sshd/process-identity acceptance suite requires Linux and a positive timeout")
+        parser.error("this real account/process-identity acceptance suite requires Linux and a positive timeout")
     args.report = args.report.resolve()
     evidence = (args.evidence_dir or args.report.with_name(args.report.stem + "-evidence")).resolve()
     started = time.monotonic()
     failure = None
     report = {"schema": "ssmcp.unified-acceptance.v1", "status": "running", "revision": args.revision,
-              "transport": "real local OpenSSH public-key + OAuth PKCE + HTTP MCP + independent processes + PTY",
+              "transport": "real local account WebSocket + OAuth PKCE + HTTP MCP + independent processes + PTY",
               "model_calls_attempted": 0, "installed_harnesses_exposed": [],
               "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs"}
     def expired(_signum, _frame):
@@ -801,7 +805,7 @@ def main():
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             cleanup_errors = []
-            for label, action in (("stop clients and sshd", harness.cleanup),
+            for label, action in (("stop clients and owned account router", harness.cleanup),
                                   ("save redacted terminal evidence", harness.save_logs),
                                   ("remove identified test artifacts", harness.remove_test_artifacts)):
                 try:
@@ -848,3 +852,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

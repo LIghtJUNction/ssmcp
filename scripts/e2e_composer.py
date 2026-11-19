@@ -249,9 +249,7 @@ class Composer(Dashboard):
             line, _, remainder = front.stdout.partition(b"\n")
             front.stdout = bytearray(remainder)
             credentials = json.loads(line)
-            if not credentials.get("client_id") or not credentials.get("login_code"):
-                raise AssertionError("reexec did not emit a new private connection record")
-            self.sensitive.append(credentials["login_code"])
+            self.validate_connection_record(credentials)
             return credentials
         raise AssertionError("local /reload did not reconnect within twenty seconds")
 
@@ -506,11 +504,15 @@ class Composer(Dashboard):
         front.credentials = credentials
         front.client_id = self.client_id = credentials["client_id"]
         front.until(lambda shot: parked in input_text(shot), "the parked draft restored in the restarted client")
-        # Login-code sessions intentionally revoke the old grant. Use the new
-        # stdout credentials rather than assuming the previous OAuth token lives.
+        # A device reconnect replaces its client ID, while the user's independent
+        # account authorization remains valid for the newly registered device.
         status, _, _ = self.rpc("ping", modern=True, secret=old_token)
-        self.check(status == 401, "reexec invalidates the previous login-code OAuth grant")
-        self.oauth_login(credentials)
+        self.check(status == 200 and self.secret == old_token,
+                   "reexec preserves the independently authorized account OAuth grant")
+        listed = self.public_call("list", secret=old_token)["clients"]
+        self.check(any(item["id"] == self.client_id for item in listed)
+                   and all(item["id"] != old_id for item in listed),
+                   "the same account grant sees the replacement without the disconnected client ID")
         restored = self.queue()
         self.check(restored["draft"]["text"] == parked and restored["draft"]["cursor"] == parked_cursor
                    and restored["draft_context"]["parked"] is None,
@@ -605,3 +607,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
