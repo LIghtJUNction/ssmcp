@@ -105,3 +105,7 @@ Only call `messages.ack({target,ids})` after deciding to handle those exact deli
 Candidate payloads are removed on explicit acknowledgement, expiry or Runtime shutdown. Expiry uses one task while an inbox contains candidates; an unused inbox has no periodic timer. Relay receipts contain bounded source, destination and acknowledgement metadata, not copies of conversation history or output files. This API provides live coordination, not durable conversation history.
 
 The direct MCP tool uses the same fields with an additional `action` key: `key`, `list`, `send`, `read`, `receive`, `wait`, `ack`, or `status`. There is no model invocation or automatic command replay in either layer.
+
+## Validation
+
+The [29-case validation record](reports/session-messages-20261119/validation.json) binds the native core, relay routing and code-mode composition to the tested source. Tests used private HTTP and Unix connections, including one real isolated JavaScript run; they did not send messages to existing user sessions. The typed inbox facade is ready for a separate frontend presentation.
