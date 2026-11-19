@@ -2,6 +2,7 @@
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
+use steering::receipt::Receipt;
 mod access;
 mod canvas;
 mod hints;
@@ -10,6 +11,7 @@ mod login;
 pub(super) mod logout;
 mod questions;
 mod queue;
+mod receipts;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
 mod tasks;
@@ -860,10 +862,7 @@ impl State {
             }
             View::Queue => {
                 if let Some(message) = self.chat_selected() {
-                    if edit
-                        && matches!(field(&message, "status"), "queued" | "editing")
-                        && !self.preview
-                    {
+                    if edit && Receipt::from_entry(&message).editable() && !self.preview {
                         match steering::take_back(message_id(&message)) {
                             Ok(()) => self.chat_recall_started(message_id(&message).into()),
                             Err(error) => self.notice = Some(error),
@@ -2430,7 +2429,7 @@ impl State {
         let queue = items(&data, "queue");
         let pending = queue
             .iter()
-            .filter(|item| matches!(field(item, "status"), "queued" | "sending" | "editing"))
+            .filter(|item| Receipt::from_entry(item).pending())
             .count();
         let top = body_top(g.rows);
         let height = g.log_rows;
@@ -2616,10 +2615,8 @@ impl State {
                     label.clone()
                 } else if self.conversation.target.is_some() {
                     format!("To {label}")
-                } else if pending > 0 {
-                    format!("{pending} queued · /queue")
                 } else {
-                    String::new()
+                    self.chat_receipt_context(&queue).unwrap_or_default()
                 };
                 let title = if context.is_empty() {
                     mode.to_owned()

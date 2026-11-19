@@ -1,4 +1,6 @@
 //! Client-owned requests. Broker revisions decide whether an edit won against delivery.
+pub(super) mod receipt;
+
 use crate::wire::{
     MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringMessage,
     SteeringSnapshot, SteeringState,
@@ -2733,5 +2735,158 @@ mod tests {
         let pending = &manager.outbox.records[manager.index(&pending_id).unwrap()];
         assert!(!pending.uncertain);
         assert_eq!(pending.status(true), "sending");
+    }
+    #[cfg(target_os = "linux")]
+    fn receipt_for(manager: &Manager, id: &str) -> receipt::Receipt {
+        let snapshot = manager.snapshot();
+        receipt::Receipt::from_entry(
+            snapshot["queue"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_changes_only_after_claim_and_confirmed_delivery_survives_a_late_ack() {
+        use receipt::Receipt;
+        let queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+
+        let message_id = manager.submit("只在真实响应送达后变实心", None).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Sending);
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        let queued = queue.command("room_one", vec![], request).unwrap();
+        manager.reply(publish_id, Ok(queued.clone())).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Waiting);
+        manager.events.clear();
+
+        let claimed = queue.claim("room_one", "run_receipt", None, 1, 64 * 1024);
+        assert_eq!(claimed[0]["message_id"], message_id);
+        assert_eq!(claimed[0]["text"], "只在真实响应送达后变实心");
+        assert_eq!(
+            receipt_for(&manager, &message_id),
+            Receipt::Waiting,
+            "server claim alone cannot update a client that has not observed the receipt"
+        );
+        manager.request_snapshot().unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        assert!(manager.take_back(&message_id).is_err());
+        manager.reply(publish_id, Ok(queued.clone())).unwrap();
+        manager.merge(&queued).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        manager.disconnect();
+        assert_eq!(
+            receipt_for(&manager, &message_id),
+            Receipt::Read,
+            "a known receipt remains true after transport loss"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_takeback_delivery_race_uses_the_broker_winner_without_optimistic_read() {
+        use receipt::Receipt;
+        for takeback_wins in [false, true] {
+            let queue = crate::steering::Queue::default();
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", 7);
+            let (id, request) = command(&mut manager, &mut receiver);
+            manager
+                .reply(id, queue.command("room_one", vec![], request))
+                .unwrap();
+            let message_id = manager.submit("one request", None).unwrap();
+            let (id, request) = command(&mut manager, &mut receiver);
+            manager
+                .reply(id, queue.command("room_one", vec![], request))
+                .unwrap();
+            manager.events.clear();
+            manager.take_back(&message_id).unwrap();
+            assert_eq!(receipt_for(&manager, &message_id), Receipt::Recalling);
+            assert!(manager.events.is_empty());
+            let (takeback_id, request) = command(&mut manager, &mut receiver);
+            if takeback_wins {
+                let snapshot = queue.command("room_one", vec![], request).unwrap();
+                assert!(
+                    queue
+                        .claim("room_one", "run_race", None, 1, 64 * 1024)
+                        .is_empty()
+                );
+                manager.reply(takeback_id, Ok(snapshot)).unwrap();
+                assert_eq!(receipt_for(&manager, &message_id), Receipt::Editing);
+                assert!(
+                    matches!(manager.events.pop_front(), Some(UiEvent::Editable { id, .. }) if id == message_id)
+                );
+            } else {
+                assert_eq!(
+                    queue
+                        .claim("room_one", "run_race", None, 1, 64 * 1024)
+                        .len(),
+                    1
+                );
+                let response = queue.command("room_one", vec![], request);
+                assert!(response.is_err());
+                manager.reply(takeback_id, response).unwrap();
+                assert_ne!(receipt_for(&manager, &message_id), Receipt::Read);
+                assert!(
+                    !manager
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, UiEvent::Editable { .. }))
+                );
+                let (id, request) = command(&mut manager, &mut receiver);
+                manager
+                    .reply(id, queue.command("room_one", vec![], request))
+                    .unwrap();
+                assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+                assert!(!receipt_for(&manager, &message_id).editable());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_disconnect_and_late_publish_ack_remain_unconfirmed_until_reconciled() {
+        use receipt::Receipt;
+        let queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        let message_id = manager.submit("retain me", None).unwrap();
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        let ack = queue.command("room_one", vec![], request).unwrap();
+        manager.disconnect();
+        manager.reply(publish_id, Ok(ack)).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Review);
+        assert!(!receipt_for(&manager, &message_id).editable());
+        assert!(manager.events.is_empty());
+        let claimed = queue.claim("room_one", "run_disconnected", None, 1, 64 * 1024);
+        assert_eq!(claimed[0]["text"], "retain me");
+        assert_ne!(receipt_for(&manager, &message_id), Receipt::Read);
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        assert!(
+            manager.events.is_empty(),
+            "a late ACK must not create a second send"
+        );
     }
 }

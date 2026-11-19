@@ -11,6 +11,7 @@ enum Hint {
     Conversation,
     Audit,
     Queue,
+    QueueInspect,
 }
 
 impl State {
@@ -36,7 +37,17 @@ impl State {
             match self.conversation.view {
                 View::Activity => Hint::Conversation,
                 View::Audit => Hint::Audit,
-                View::Queue => Hint::Queue,
+                View::Queue => {
+                    if self.chat_data()["queue"]
+                        .as_array()
+                        .and_then(|entries| entries.get(self.conversation.selected))
+                        .is_some_and(|entry| Receipt::from_entry(entry).editable())
+                    {
+                        Hint::Queue
+                    } else {
+                        Hint::QueueInspect
+                    }
+                }
                 _ => return None,
             }
         };
@@ -77,9 +88,14 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
             "F7 copy · Enter details · Tab input",
         ],
         Hint::Queue => [
-            "F7 copy · ↑↓ select · Enter take back · i inspect · Delete cancel · Tab input",
-            "F7 copy · Enter take back · i inspect · Tab input",
-            "F7 copy · Enter take back · Tab input",
+            "F7 copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
+            "F7 copy · Enter edit · i inspect · Tab input",
+            "F7 copy · Enter edit · Tab input",
+        ],
+        Hint::QueueInspect => [
+            "F7 copy · ↑↓ select · Enter inspect · i inspect · Tab input",
+            "F7 copy · Enter inspect · Tab input",
+            "Enter inspect · Tab input",
         ],
     };
     let available = usize::from(width.saturating_sub(1));
@@ -113,6 +129,9 @@ mod tests {
         assert!(empty.contains("Alt+↑/↓ input height") && empty.contains("F7 copy"));
         let queue = shortcuts(Hint::Queue, 100, "connected");
         assert!(queue.contains("i inspect") && queue.contains("Delete cancel"));
+        let delivered = shortcuts(Hint::QueueInspect, 100, "connected");
+        assert!(delivered.contains("Enter inspect"));
+        assert!(!delivered.contains("edit") && !delivered.contains("cancel"));
     }
 
     #[test]
@@ -126,6 +145,7 @@ mod tests {
                 Hint::Conversation,
                 Hint::Audit,
                 Hint::Queue,
+                Hint::QueueInspect,
             ] {
                 let text = shortcuts(hint, width, "server update required for queue");
                 assert!(
