@@ -109,7 +109,7 @@ Usage: ssmcp username@server [options]
        ssmcp attach [NAME|list] [--read-only]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
-       ssmcp 007 <install|run|start|stop|status|uninstall|sessions> [options]
+       ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
 
   --server URL         Relay for this command; overrides config and last login
   --username NAME      Named account on the selected server
