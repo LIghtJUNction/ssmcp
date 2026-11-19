@@ -120,7 +120,7 @@ impl State {
         match result {
             Ok(outcome) => {
                 let message = outcome.map(|outcome| outcome.message()).unwrap_or_else(||
-                    "Disconnected this SSH or temporary session. No saved account login was revoked.".into());
+                    "Disconnected this temporary session. No saved account login was revoked.".into());
                 self.conversation.exit_message = Some(message.clone());
                 self.conversation.exit_requested = true;
                 self.notice = Some(message);
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn ssh_or_temporary_logout_closes_only_that_connection() {
+    fn temporary_logout_closes_only_that_connection() {
         let mut state = state();
         state.preview = false;
         assert!(state.logout_target.is_none());
