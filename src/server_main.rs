@@ -63,7 +63,8 @@ Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
   TOML: [oauth] client_registry = "/var/lib/ssmcpd/oauth-clients.toml".
   Installed systemd service defaults to its StateDirectory automatically.
   Parent directory must exist, be daemon-owned and mode 0700; files use 0600.
-  Registrations survive restart; tokens and unfinished logins still require reauthorization.
+  Registrations and account grants survive restart with their original expiry and revocations.
+  Only hashes are stored; unfinished logins and legacy connection-bound grants do not survive.
   Login codes and authorization forms last 30 minutes.
 
 Run serve in the foreground under systemd.
@@ -591,7 +592,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         ssmcp::observability::log(
             "info",
             "persistence",
-            &[("event", "durable_client_registry_enabled".into())],
+            &[("event", "durable_oauth_state_enabled".into())],
         );
     } else {
         ssmcp::observability::log(
