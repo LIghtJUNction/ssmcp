@@ -256,9 +256,12 @@ impl Fixture {
         let catalog_calls = Arc::new(AtomicUsize::new(0));
         let recorded = catalog_calls.clone();
         let worker = tokio::spawn(async move {
-            while let Ok(Some(Frame::Call { id, operation, .. })) =
-                wire::read_frame(&mut reader).await
-            {
+            while let Ok(Some(frame)) = wire::read_frame(&mut reader).await {
+                let (id, operation) = match frame {
+                    Frame::Call { id, operation, .. } => (id, operation),
+                    Frame::CodeModeFinished { .. } => continue,
+                    _ => panic!("unexpected fixture frame"),
+                };
                 let result = match operation {
                     Operation::ListTools { cursor: None } => {
                         recorded.fetch_add(1, Ordering::SeqCst);
@@ -368,12 +371,16 @@ impl Fixture {
         assert!(html.contains("<meta http-equiv=refresh"));
         assert!(!html.contains(GITHUB_SECRET));
         let href = html
-            .split_once("<a href=\"")
-            .unwrap()
-            .1
-            .split('"')
-            .next()
-            .unwrap()
+            .split("<a ")
+            .skip(1)
+            .filter_map(|link| link.split_once('>').map(|(attributes, _)| attributes))
+            .filter_map(|attributes| {
+                attributes
+                    .split_whitespace()
+                    .find_map(|attribute| attribute.strip_prefix("href=\"")?.strip_suffix('"'))
+            })
+            .find(|href| href.starts_with(&self.upstream))
+            .expect("identity provider continuation link")
             .replace("&amp;", "&");
         let target = Url::parse(&href).unwrap();
         assert_eq!(target.origin().ascii_serialization(), self.upstream);
@@ -530,14 +537,13 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         query(&target, "code_challenge")
     );
     assert_ne!(verifier, VERIFIER);
-    assert_eq!(
-        fixture
-            .callback(&state, Some(&flow.cookie), "alice-code")
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
-    );
+    let retry = fixture
+        .callback(&state, Some(&flow.cookie), "alice-code")
+        .await;
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert!(retry.text().await.unwrap().contains("Alice@github"));
     assert_eq!(fixture.github.exchanges.load(Ordering::SeqCst), 1);
+    assert!(fixture.broker.oauth.state.lock().unwrap().codes.is_empty());
     // A stale consent page cannot have its already-verified identity replaced by another login.
     assert_eq!(
         fixture.action(&flow, "provider", "github").await.status(),

@@ -1,0 +1,45 @@
+{
+  "status": "installed",
+  "version": "0.8.0",
+  "source_commit": "7867cb8fd42f2f62aae61b38f87baf92c9b6846b",
+  "package_sha256": "cc74de563471a2f98e2413ad06555cd343ff08231194f30e22d703f179f1f4df",
+  "before": {
+    "cargo-ssmcp": {
+      "sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+      "bytes": 7174992
+    },
+    "cargo-ssmcpd": {
+      "sha256": "6a84390c10d753f510e887845d0e9035b8f9b85a56c78b632d383d498d667d28",
+      "bytes": 7546624
+    },
+    "system-ssmcp": {
+      "sha256": "55bd46871719525117623aad8ad10c1057899cdd27b7a0db9a419c4ef56461eb",
+      "bytes": 9178168
+    },
+    "system-ssmcpd": {
+      "sha256": "e614752e4c259c0af542b7e2419bf83301d1f5f649310488441bc913f0988080",
+      "bytes": 6191608
+    }
+  },
+  "after": {
+    "ssmcp": {
+      "version": "ssmcp 0.8.0",
+      "sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f",
+      "target": "/usr/bin/ssmcp"
+    },
+    "ssmcpd": {
+      "version": "ssmcpd 0.8.0",
+      "sha256": "ce4e69b9dca14610bc16a4f53fa8c271b510dc6369f3d4552d3259d2c4cb5f13",
+      "target": "/usr/bin/ssmcpd"
+    }
+  },
+  "ui_config_valid": true,
+  "default_path": "~/.cargo/bin/ssmcp",
+  "system_package": "ssmcp-git 0.8.0.r266.g7867cb8-1",
+  "backup_verified": true,
+  "other_sessions_restarted": false,
+  "verified_utc": "2026-11-18T05:41:43.679811+00:00",
+  "current_task_client_reloaded": true,
+  "running_client_matches_package": true,
+  "running_client_sha256": "e5570542b24ebb298b67c609c807d014be93fac3f2b8291e9b6451dc7733b33f"
+}

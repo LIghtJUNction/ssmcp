@@ -1,0 +1,52 @@
+{
+  "source_commit": "0efb04bfbd7f7b0f616f03a6123608cbffc3643e",
+  "profile": "release",
+  "scope": "isolated make install prefix; existing live services unchanged",
+  "binaries": {
+    "ssmcp": {
+      "sha256": "732c1b4873d31887390ba06b3d2bc890dc231a1f440526df728eb12164b2d1ae",
+      "bytes": 11980032,
+      "version": "ssmcp 0.8.0"
+    },
+    "ssmcpd": {
+      "sha256": "711aebe278162c7f5633c863dcbda8bceb17c925eb3531b51ba349bfab420e87",
+      "bytes": 8384592,
+      "version": "ssmcpd 0.8.0"
+    },
+    "vt_snapshot": {
+      "sha256": "ec6372dc5a077b457944be0b64b5bcb5fdf411c099454e02a58cf9f38d61364b",
+      "bytes": 563688
+    }
+  },
+  "runner_sha256": "0a4902726c7098036db84186c1e3aeb84d7ab335571f87def891632cc28bca99",
+  "router_fixture": {
+    "binary": "${BUILD_ROOT}/debug/build/ssmcp/d5e38e70f94c9cb7/out/ssmcp-d5e38e70f94c9cb7",
+    "sha256": "d4ee3f9cc023567cc4c0b283da031cd9cdee5a1cf544f50b34784c616c948518",
+    "source_commit": "8d8172765644bfecdf881a5a62262bde93415e53"
+  },
+  "prefix": "${INSTALL_PREFIX}",
+  "results": [
+    {
+      "suite": "composer",
+      "exit_code": 0,
+      "seconds": 14.5,
+      "report": "${EVIDENCE_TMP}/ssmcp-composer-installed-080.json",
+      "checks": 88
+    },
+    {
+      "suite": "relay-composer",
+      "exit_code": 0,
+      "seconds": 6.68,
+      "report": "${EVIDENCE_TMP}/ssmcp-relay-composer-installed-080.json",
+      "checks": 45
+    },
+    {
+      "suite": "observer",
+      "exit_code": 0,
+      "seconds": 12.79,
+      "report": "${EVIDENCE_TMP}/ssmcp-observer-installed-080.json",
+      "checks": 7
+    }
+  ],
+  "status": "passed"
+}

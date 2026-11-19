@@ -139,9 +139,21 @@ pub struct OutputStore {
     directory: PathBuf,
     directory_fd: Directory,
     policy: Policy,
+    observer: std::sync::Mutex<Option<std::sync::Weak<crate::observer::Pool>>>,
 }
 
 impl OutputStore {
+    pub(crate) fn set_observer(&self, observer: &Arc<crate::observer::Pool>) {
+        *self.observer.lock().unwrap() = Some(Arc::downgrade(observer));
+    }
+    pub(crate) fn observer(&self) -> Option<Arc<crate::observer::Pool>> {
+        self.observer
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     /// Compatibility accessor for a single foreground connection.
     pub fn global() -> Result<Arc<Self>, String> {
         static STORE: OnceLock<Result<Arc<OutputStore>, String>> = OnceLock::new();
@@ -201,6 +213,11 @@ impl OutputStore {
         Self::at_restoring(directory, policy, None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn at_for_test(directory: PathBuf) -> Result<Arc<Self>, String> {
+        Self::at(directory, Policy::default())
+    }
+
     fn at_restoring(
         directory: PathBuf,
         policy: Policy,
@@ -233,6 +250,7 @@ impl OutputStore {
             directory,
             directory_fd,
             policy,
+            observer: std::sync::Mutex::new(None),
         };
         if let Some(token) = reload
             && let Some(owner) = store
@@ -372,12 +390,13 @@ impl OutputStore {
                 Access::CreateNewReadWrite => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
             };
             let name = CString::new(name).map_err(io::Error::other)?;
+            // A replaced FIFO must reach validation without waiting for a writer.
             // SAFETY: the directory fd is live; names are single, checked components.
             let fd = unsafe {
                 libc::openat(
                     self.directory_fd.as_raw_fd(),
                     name.as_ptr(),
-                    flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                    flags | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
                     0o600,
                 )
             };
@@ -675,10 +694,23 @@ impl OutputStore {
         }))
     }
 
+    fn check_snapshot_size(&self, metadata: &ArtifactMetadata, size: u64) -> Result<(), String> {
+        if size < metadata.bytes {
+            return Err("output artifact is shorter than its recorded length".into());
+        }
+        if metadata.complete && size != metadata.bytes {
+            return Err("completed output artifact differs from its recorded length".into());
+        }
+        if size > self.policy.artifact_bytes {
+            return Err("output artifact exceeds its configured size limit".into());
+        }
+        Ok(())
+    }
+
     pub fn tools() -> Vec<Value> {
         vec![
             json!({"name":"ssmcp.output.read","description":"Read a bounded raw chunk of an owned output artifact by ID. Use next_offset for more; binary data is preserved in data_base64. Artifacts expire automatically.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"},"offset":{"type":"integer","minimum":0,"default":0},"max_bytes":{"type":"integer","minimum":1,"maximum":READ_BYTES,"default":16384}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
-            json!({"name":"ssmcp.output.stat","description":"Inspect an owned output artifact and compute the SHA-256 of its current byte snapshot. A running capture can grow after this snapshot.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+            json!({"name":"ssmcp.output.stat","description":"Inspect an owned output artifact and hash its current byte snapshot. Completed captures must match their recorded length and SHA-256; running captures may grow after this snapshot.","inputSchema":{"type":"object","properties":{"id":{"type":"string","pattern":"^[a-f0-9]{32}$"}},"required":["id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
             json!({"name":"ssmcp.output.cleanup","description":"Run the same automatic retention cleanup now: remove expired artifacts and oldest completed logs above quota. Active captures and unrelated files are preserved.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true}}),
         ]
     }
@@ -721,6 +753,7 @@ impl OutputStore {
                     .map_err(error)?;
                 let file_metadata = file.metadata().map_err(error)?;
                 let size = file_metadata.len();
+                self.check_snapshot_size(&metadata, size)?;
                 if args.offset > size {
                     return Err("offset is beyond the output artifact".into());
                 }
@@ -728,13 +761,14 @@ impl OutputStore {
                 let mut read = 0;
                 while read < data.len() {
                     match read_at(&file, &mut data[read..], args.offset + read as u64) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            return Err("output artifact ended before its snapshot length".into());
+                        }
                         Ok(n) => read += n,
                         Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Err(e) => return Err(error(e)),
                     }
                 }
-                data.truncate(read);
                 let next = args.offset + read as u64;
                 Ok(
                     json!({"id":args.id,"path":self.directory.join(artifact_name(&args.id)),"offset":args.offset,
@@ -752,9 +786,7 @@ impl OutputStore {
                     .map_err(error)?;
                 let file_metadata = file.metadata().map_err(error)?;
                 let size = file_metadata.len();
-                if size > self.policy.artifact_bytes {
-                    return Err("output artifact exceeds its configured size limit".into());
-                }
+                self.check_snapshot_size(&metadata, size)?;
                 let mut reader = file.take(size);
                 let mut data = [0u8; 64 * 1024];
                 let mut digest = Sha256::new();
@@ -771,10 +803,19 @@ impl OutputStore {
                     newlines += data[..n].iter().filter(|byte| **byte == b'\n').count() as u64;
                     last = data.get(n - 1).copied();
                 }
+                if bytes != size {
+                    return Err("output artifact ended before its snapshot length".into());
+                }
+                let sha256 = format!("{:x}", digest.finalize());
+                if metadata.complete && sha256 != metadata.sha256 {
+                    return Err(
+                        "completed output artifact does not match its recorded SHA-256".into(),
+                    );
+                }
                 metadata.bytes = bytes;
                 metadata.observed_bytes = metadata.observed_bytes.max(bytes);
                 metadata.lines = newlines + u64::from(last.is_some_and(|byte| byte != b'\n'));
-                metadata.sha256 = format!("{:x}", digest.finalize());
+                metadata.sha256 = sha256;
                 metadata.path = self
                     .directory
                     .join(artifact_name(&args.id))
@@ -848,15 +889,35 @@ impl OutputStore {
     }
 }
 
-/// Validate bounded standard-base64 PNG/JPEG blocks before forwarding binary content.
+/// Identify supported raster headers; this does not decode the image.
+pub(crate) fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// Validate bounded canonical base64 and matching raster headers before forwarding.
 pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
     if value["type"] != "image" {
         return Err("image content must have type=image".into());
     }
     let mime = value["mimeType"]
         .as_str()
-        .filter(|mime| matches!(*mime, "image/png" | "image/jpeg"))
-        .ok_or("image MIME type must be image/png or image/jpeg")?;
+        .filter(|mime| {
+            matches!(
+                *mime,
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            )
+        })
+        .ok_or("image MIME type must be image/png, image/jpeg, image/gif or image/webp")?;
     let data = value["data"].as_str().ok_or("image data must be base64")?;
     if data.is_empty() || data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
         return Err("image data exceeds 400 KiB or is empty".into());
@@ -867,13 +928,8 @@ pub(crate) fn validate_image_content(value: &Value) -> Result<usize, String> {
     if decoded.len() > MAX_IMAGE_BYTES || STANDARD.encode(&decoded) != data {
         return Err("image data must be canonical base64 within 400 KiB".into());
     }
-    let matches = match mime {
-        "image/png" => decoded.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => decoded.starts_with(&[0xff, 0xd8, 0xff]),
-        _ => false,
-    };
-    if !matches {
-        return Err("image bytes do not match the declared PNG or JPEG MIME type".into());
+    if image_mime_type(&decoded) != Some(mime) {
+        return Err("image bytes do not match the declared raster MIME type".into());
     }
     Ok(decoded.len())
 }
@@ -939,6 +995,48 @@ impl Capture {
     }
     pub fn inline_bytes(&self) -> &[u8] {
         &self.inline
+    }
+    /// Read an exact bounded range without retaining a second copy of a capture.
+    /// Completed artifacts still follow the store's normal TTL and quota policy;
+    /// an unavailable or shortened archive is an error, never a successful EOF.
+    pub(crate) fn read_range(&self, offset: u64, limit: usize) -> Result<Vec<u8>, String> {
+        if !(1..=READ_BYTES).contains(&limit) {
+            return Err(format!("max_bytes must be 1..={READ_BYTES}"));
+        }
+        if offset > self.bytes {
+            return Err("output cursor is ahead of the captured stream".into());
+        }
+        let length = limit.min((self.bytes - offset) as usize);
+        let Some(artifact) = &self.artifact else {
+            let start = offset as usize;
+            return self
+                .inline
+                .get(start..start + length)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "captured output is shorter than its recorded length".into());
+        };
+        let file = self
+            .store
+            .open(&artifact_name(&artifact.id), Access::Read)
+            .map_err(|error| format!("captured output archive is unavailable: {error}"))?;
+        if file.metadata().map_err(error)?.len() < self.bytes {
+            return Err("captured output archive is shorter than its recorded length".into());
+        }
+        let mut data = vec![0; length];
+        let mut read = 0;
+        while read < data.len() {
+            match read_at(&file, &mut data[read..], offset + read as u64) {
+                Ok(0) => {
+                    return Err("captured output archive ended before its recorded length".into());
+                }
+                Ok(count) => read += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(format!("could not read captured output archive: {error}"));
+                }
+            }
+        }
+        Ok(data)
     }
     pub fn error(&self) -> Option<&str> {
         self.failure.as_deref()
@@ -1089,6 +1187,7 @@ impl Capture {
         {
             self.fail(format!("could not finalize output artifact: {e}"));
         }
+        self.inline.shrink_to_fit();
         self.modified = now();
         self.finished = true;
         if let Some(metadata) = self.metadata()
@@ -1749,6 +1848,21 @@ mod tests {
         );
         assert!(!metadata.complete);
         assert!(metadata.error.unwrap().contains("limit"));
+
+        let read = fixture
+            .store
+            .perform_sync("ssmcp.output.read", json!({"id":metadata.id}))
+            .unwrap();
+        assert_eq!(read["complete"], false);
+        assert_eq!(read["text"], "1234567890");
+        let stat = fixture
+            .store
+            .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
+            .unwrap();
+        assert_eq!(stat["bytes"], 10);
+        assert_eq!(stat["observed_bytes"], 16);
+        assert_eq!(stat["complete"], false);
+        assert!(stat["error"].as_str().unwrap().contains("limit"));
     }
 
     #[test]
@@ -1847,6 +1961,164 @@ mod tests {
     }
 
     #[test]
+    fn completed_artifacts_reject_changed_lengths() {
+        for length in [0, 2, 8] {
+            let fixture = Fixture::new(Policy {
+                inline_bytes: 1,
+                ..Policy::default()
+            });
+            let mut capture = fixture.store.capture("changed-length");
+            capture.push(b"abcdef").unwrap();
+            capture.finish().unwrap();
+            let metadata = capture.metadata().unwrap();
+            File::options()
+                .write(true)
+                .open(&metadata.path)
+                .unwrap()
+                .set_len(length)
+                .unwrap();
+            for operation in ["ssmcp.output.read", "ssmcp.output.stat"] {
+                let error = fixture
+                    .store
+                    .perform_sync(operation, json!({"id":metadata.id}))
+                    .unwrap_err();
+                assert!(error.contains("recorded length"), "{operation}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn completed_artifact_stat_rejects_changed_contents() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 1,
+            ..Policy::default()
+        });
+        let mut capture = fixture.store.capture("changed-contents");
+        capture.push(b"abcdef").unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        File::options()
+            .write(true)
+            .open(&metadata.path)
+            .unwrap()
+            .write_all(b"ABCDEF")
+            .unwrap();
+        let error = fixture
+            .store
+            .perform_sync("ssmcp.output.stat", json!({"id":metadata.id}))
+            .unwrap_err();
+        assert!(error.contains("SHA-256"), "{error}");
+    }
+
+    #[test]
+    fn live_artifact_snapshots_allow_growth_before_completion() {
+        let fixture = Fixture::new(Policy {
+            inline_bytes: 1,
+            ..Policy::default()
+        });
+        let mut capture = fixture.store.capture("growing-output");
+        capture.push(b"first\n").unwrap();
+        let id = capture.metadata().unwrap().id;
+        for bytes in [b"first\n".as_slice(), b"first\nsecond\n".as_slice()] {
+            let read = fixture
+                .store
+                .perform_sync("ssmcp.output.read", json!({"id":id}))
+                .unwrap();
+            let stat = fixture
+                .store
+                .perform_sync("ssmcp.output.stat", json!({"id":id}))
+                .unwrap();
+            assert_eq!(
+                STANDARD
+                    .decode(read["data_base64"].as_str().unwrap())
+                    .unwrap(),
+                bytes
+            );
+            assert_eq!(read["complete"], false);
+            assert_eq!(stat["complete"], false);
+            assert_eq!(stat["bytes"], bytes.len());
+            assert_eq!(stat["sha256"], format!("{:x}", Sha256::digest(bytes)));
+            if bytes == b"first\n" {
+                capture.push(b"second\n").unwrap();
+            }
+        }
+        capture.finish().unwrap();
+        let stat = fixture
+            .store
+            .perform_sync("ssmcp.output.stat", json!({"id":id}))
+            .unwrap();
+        assert_eq!(stat["complete"], true);
+        assert_eq!(stat["bytes"], 13);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_artifacts_are_rejected_without_blocking() {
+        const CHILD_DIRECTORY: &str = "SSMCP_TEST_FIFO_ARTIFACT_DIRECTORY";
+        if let Some(directory) = std::env::var_os(CHILD_DIRECTORY) {
+            let store = OutputStore::at(
+                PathBuf::from(directory),
+                Policy {
+                    inline_bytes: 1,
+                    ..Policy::default()
+                },
+            )
+            .unwrap();
+            let mut capture = store.capture("fifo-replacement");
+            capture.push(b"completed output").unwrap();
+            capture.finish().unwrap();
+            let metadata = capture.metadata().unwrap();
+            std::fs::remove_file(&metadata.path).unwrap();
+            let path = CString::new(metadata.path.as_bytes()).unwrap();
+            // SAFETY: the fixture owns this absent path and the C string is live.
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+            for operation in ["ssmcp.output.read", "ssmcp.output.stat"] {
+                let error = store
+                    .perform_sync(operation, json!({"id":metadata.id}))
+                    .unwrap_err();
+                assert!(error.contains("regular file"), "{operation}: {error}");
+            }
+            let error = capture.read_range(0, 32).unwrap_err();
+            assert!(error.contains("regular file"), "{error}");
+            return;
+        }
+
+        // A process deadline also bounds a blocking open in the old implementation.
+        let fixture = Fixture::new(Policy::default());
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Child(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::tests::fifo_artifacts_are_rejected_without_blocking",
+                    "--nocapture",
+                ])
+                .env(CHILD_DIRECTORY, &fixture.path)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success(), "FIFO validation child failed: {status}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "FIFO validation blocked before rejecting a non-regular artifact"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
     fn output_artifacts_reject_additional_hard_links() {
         let fixture = Fixture::new(Policy {
             inline_bytes: 1,
@@ -1916,9 +2188,36 @@ mod tests {
     }
 
     #[test]
+    fn gif_and_webp_images_remain_inline_above_the_text_budget() {
+        let fixture = Fixture::new(Policy::default());
+        // Header fixtures exercise the envelope, not complete codec decoding.
+        for (mime, header) in [
+            ("image/gif", b"GIF87a".as_slice()),
+            ("image/webp", b"RIFF\0\0\0\0WEBP".as_slice()),
+        ] {
+            let mut bytes = vec![0; INLINE_BYTES + 1];
+            bytes[..header.len()].copy_from_slice(header);
+            let native = json!({
+                "isError":false,
+                "content":[{"type":"image","mimeType":mime,"data":STANDARD.encode(&bytes)}],
+                "structuredContent":{"size":bytes.len(),"mime_type":mime}
+            });
+            assert_eq!(
+                validate_image_content(&native["content"][0]).unwrap(),
+                bytes.len()
+            );
+            assert_eq!(fixture.store.guard_result(native.clone()), native);
+        }
+    }
+
+    #[test]
     fn image_payload_validation_bounds_decode_and_rejects_mismatched_types() {
         for image in [
             json!({"type":"image","mimeType":"image/png","data":"not base64"}),
+            json!({"type":"image","mimeType":"image/gif","data":STANDARD.encode(b"GIF88a")}),
+            json!({"type":"image","mimeType":"image/webp","data":STANDARD.encode(b"RIFF\0\0\0\0WAVE")}),
+            json!({"type":"image","mimeType":"image/webp","data":STANDARD.encode(b"RIFF\0\0\0\0WEB")}),
+            json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(b"GIF89a")}),
             json!({"type":"image","mimeType":"image/jpeg","data":"YWJj"}),
             json!({"type":"image","mimeType":"image/svg+xml","data":"PHN2Zy8+"}),
             json!({"type":"image","mimeType":"image/png","data":""}),

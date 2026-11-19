@@ -1,0 +1,109 @@
+{
+  "schema": "ssmcp.client-memory.provenance.v1",
+  "assembled_at_utc": "2026-11-17T21:13:06.274455+00:00",
+  "source_commit": "d1f1071dc47f746d057225a2f240cbf640172a46",
+  "source_compare_base": "811bf371d652e7a279677a7addde8d4f0ea3f727",
+  "source_compare_url": "https://github.com/LIghtJUNction/ssmcp/compare/811bf371d652e7a279677a7addde8d4f0ea3f727...d1f1071dc47f746d057225a2f240cbf640172a46",
+  "optimized_binary": {
+    "sha256": "2f40a5c2d61586171d3243f8fd453c48af403255ab4238b6ed731cd1f7818436",
+    "bytes": 7034096,
+    "mtime_ns": 1794949539357463106,
+    "ctime_ns": 1794949540227499431,
+    "device": 68,
+    "inode": 180660155,
+    "path": "/home/lightjunction/.cache/ssmcp-memory/ssmcp-memory-candidate-v7",
+    "version": "0.7.4"
+  },
+  "baseline_binary": {
+    "sha256": "f685725b975ad4cc46f1eb28833b1a74c876e87dda18f3ce898fbc5195191cca",
+    "bytes": 10384520,
+    "mtime_ns": 1794935129754886212,
+    "ctime_ns": 1794935129754913278,
+    "device": 68,
+    "inode": 180092569,
+    "measured_path": "/home/lightjunction/.cargo/bin/ssmcp",
+    "retained_path": "/home/lightjunction/Backups/ssmcp/client-memory-2026-11-18/ssmcp-baseline-f685725b975a",
+    "source_commit": null
+  },
+  "pre_install_backup": {
+    "installed_sha256": "8271d106f45af1c23cef9873f675e210741ecd4ecda83d7ea5c2f67d29e5a0c5",
+    "backup": "/home/lightjunction/Backups/ssmcp/client-memory-2026-11-18/ssmcp-before-8271d106f45a",
+    "baseline_binary": "/home/lightjunction/Backups/ssmcp/client-memory-2026-11-18/ssmcp-baseline-f685725b975a"
+  },
+  "measurement": "Linux client process RSS + swap; child runtimes and disk spool size excluded",
+  "display_units": "decimal MB",
+  "conversion": "MB = KiB * 1024 / 1000000",
+  "strict_budget_bytes": 10000000,
+  "optimized_reports_verified_against_sha256": "2f40a5c2d61586171d3243f8fd453c48af403255ab4238b6ed731cd1f7818436",
+  "test_summary": {
+    "passed": 146,
+    "failed": 0,
+    "ignored": 2,
+    "groups": 16
+  },
+  "reports": {
+    "baseline-installed.json": {
+      "source_path": "/tmp/ssmcp-memory-baseline-final.json",
+      "sha256": "b0d222e2ecc426886737f651dcc80d8dc2d5a2764636088004c96dcda5331811",
+      "bytes": 19498
+    },
+    "baseline-minimal.json": {
+      "source_path": "/tmp/ssmcp-memory-baseline-minimal-final.json",
+      "sha256": "579be7a833ece2756fa6e0c7227032fa4c055a35f44b84e4bc396d20c55f511a",
+      "bytes": 14339
+    },
+    "optimized-installed.json": {
+      "source_path": "/tmp/ssmcp-memory-optimized-installed-final.json",
+      "sha256": "0a5fbd1184ac19283158fcc627298ddb448b942648d60253177fc19bcb00ce11",
+      "bytes": 15482
+    },
+    "optimized-minimal.json": {
+      "source_path": "/tmp/ssmcp-memory-optimized-minimal-final.json",
+      "sha256": "abdcffe7309fe9a02a48667e1a20b70178c55b45c94c915c17b5aaa2136dc529",
+      "bytes": 14584
+    },
+    "optimized-synthetic.json": {
+      "source_path": "/tmp/ssmcp-memory-optimized-synthetic-final.json",
+      "sha256": "5453a7b883fb2432720f3a44a62e398c795976b9ec0a22a3359f79122df41ab8",
+      "bytes": 14870
+    },
+    "tests.json": {
+      "source_path": "/tmp/ssmcp-memory-integrated-tests.json",
+      "sha256": "60e13d6e1c2351594d688e9bf6b820e91ea0aa3833f761cf5f840d1e2a05e8f1",
+      "bytes": 3063
+    },
+    "source.json": {
+      "source_path": "/tmp/ssmcp-memory-source.json",
+      "sha256": "b1770ed20c30ef3801d67de4aa5d769c198487e6a4018946df75a06b718c66c1",
+      "bytes": 65
+    },
+    "backup.json": {
+      "source_path": "/tmp/ssmcp-memory-backup.json",
+      "sha256": "740a63a8763b394fa1bd9dc403b13b922e4c3badbd7dac48efaf2a14b346cdf4",
+      "bytes": 303
+    },
+    "live-validation.json": {
+      "source_path": "/tmp/ssmcp-memory-live-validation.json",
+      "sha256": "d8e8f449a28b6b4ca85291caa0a58d1ae2c51cb1f1af69b328f33ab00a881457",
+      "bytes": 860
+    },
+    "live-call-results.json": {
+      "source_path": "/tmp/ssmcp-memory-live-call-results.json",
+      "sha256": "0fec830d9b9fbe4647e30367de2c9c244747c47359c39fe687e11034c7d48fde",
+      "bytes": 806
+    },
+    "installation.json": {
+      "source_path": "/tmp/ssmcp-memory-installation.json",
+      "sha256": "7d9bdba25bf1f019175e88d421caf5d392ba86c965902c97212f2af3c1f98675",
+      "bytes": 588
+    }
+  },
+  "scope_notes": [
+    "Baseline source revision is unknown; this is not a same-source-commit A/B comparison.",
+    "Controlled benchmark uses the real client and a 120x38 TUI behind a local fake SSH relay.",
+    "No external --tty observer windows and no model turns are used.",
+    "Installed: 40 retained commands, two 35-second idle windows. Minimal: 40 commands, two 4-second idle windows. Synthetic: 10 commands, two 4-second idle windows.",
+    "50 ms sampling may miss shorter transients; background refresh during idle is included in the post-discovery budget.",
+    "Independent 75-second real HTTPS/WebSocket validation uses JSONL without TUI; its numbers are not combined with controlled benchmark tables."
+  ]
+}

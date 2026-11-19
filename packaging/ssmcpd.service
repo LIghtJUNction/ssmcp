@@ -1,5 +1,5 @@
 [Unit]
-Description=HTTPS account and MCP gateway
+Description=SSH terminal MCP gateway
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=10
@@ -12,6 +12,7 @@ Group=ssmcp
 StateDirectory=ssmcpd
 StateDirectoryMode=0700
 EnvironmentFile=-/etc/ssmcpd/ssmcpd.env
+ExecStartPre=/usr/local/bin/ssmcpd check-runtime
 ExecStart=/usr/local/bin/ssmcpd serve
 RuntimeDirectory=ssmcpd
 RuntimeDirectoryMode=0750

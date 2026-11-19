@@ -15,6 +15,8 @@ ssmcpd \- GitHub-authorized HTTPS and SSH gateway for local tools
 .PP
 .B ssmcpd attach
 .RB [ \-\-socket " path" ]
+.PP
+.B ssmcpd check-runtime
 .SH DESCRIPTION
 The serve command listens for MCP HTTP requests and authenticated local bridge
 connections. A reverse proxy supplies public HTTPS. GitHub client accounts can
@@ -29,6 +31,15 @@ The attach command is run by OpenSSH as a ForceCommand. It forwards standard inp
 and output to the daemon's Unix socket. The daemon obtains the account identity
 from kernel peer credentials. Client names, hostnames, working directories and
 backend types are discovery metadata, not authentication fields.
+.PP
+The check-runtime command executes a fixed JavaScript program through the
+mandatory Node.js and bubblewrap sandbox. It reads no gateway configuration,
+connects no clients, and rejects all native tool calls. Success prints
+{"code_mode":"ok"} and exits zero. Missing dependencies, an unavailable runner,
+sandbox failures, and unexpected execution results produce a diagnostic on
+standard error and a nonzero exit status. The command accepts no options.
+The packaged systemd service runs this check before starting the gateway,
+under the same service user, environment, and runtime restrictions.
 .PP
 The external MCP tool catalog contains exactly list and code_mode. The native
 capability names for shell, codex, cc, pi and opencode remain accessible inside
@@ -264,3 +275,15 @@ Set oauth.client_registry in TOML, SSMCP_CLIENT_REGISTRY, or
 to select another private file. Save failures reject registration with HTTP 503.
 Corrupt files, unsafe permissions, issuer mismatch and lock conflicts fail startup.
 Access tokens, refresh tokens and pending authorization remain process-local.
+
+.SH ACCOUNT ADMINISTRATION
+Clients connect with ssmcp username@server and complete GitHub authorization automatically.
+The portal.admin_usernames array grants administrator access to already registered
+ssmcp usernames. Unknown or banned usernames prevent startup. Administrators can
+view users and connections, disconnect sessions, ban or unban users and set relay
+bandwidth at /account/admin. Banning revokes existing credentials and connections.
+.PP
+portal.default_rate_limit_bps defaults to 8388608 bytes per second in each direction
+per account. Connections share that account budget. Per-user overrides are durable
+and take effect on existing connections. Valid rates are 1 through 1073741824.
+The budget counts application messages; TLS overhead and other host traffic are excluded.

@@ -1,0 +1,30 @@
+{
+  "checks": [
+    "real PTY, ANSI, literal Unicode/spaced argv, combined output and exact exit 7",
+    "sequential commands reuse one live viewer",
+    "overlapping jobs allocate two real viewers and survive tool return",
+    "pipe stdin and EOF retain execution semantics",
+    "cancellation reaps the command and owned child",
+    "manually closed viewer reopens while its command continues",
+    "existing interactive PTY commands appear in observer windows"
+  ],
+  "passed": 7,
+  "output_mode": "pty",
+  "first_slot": 1,
+  "parallel_slots": [
+    1,
+    2
+  ],
+  "viewer_pids": [
+    2352784,
+    2354704
+  ],
+  "recorded_viewers": 3,
+  "terminal": "recording launcher with real ssmcp viewer",
+  "_publication": {
+    "private_paths_normalized": true,
+    "source_object_sha256": "c5071a101a8ea29a95e094da296048e47c187a2b6cf5cf02415d3e8bb70c9735",
+    "source_object_digest_algorithm": "SHA-256 of UTF-8 json.dumps(original, ensure_ascii=False, sort_keys=True, separators=(',', ':'))",
+    "note": "Nested report_sha256 fields identify the original private files, before publication path normalization."
+  }
+}

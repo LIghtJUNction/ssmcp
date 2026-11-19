@@ -5,9 +5,7 @@
 [server]
 listen = "127.0.0.1:8080"
 public_url = "https://ssmcp.example.com"
-# Public SPKI PEM extracted from the reverse proxy TLS certificate.
-# Keep the TLS private key on certificate renewal so existing client pins remain valid.
-identity_public_key = "/var/lib/ssmcp/server-key.pem"
+socket = "/run/ssmcpd/control.sock"
 # Optional: let an invited device download a temporary client from this server.
 # Serve /client/* from this daemon; missing platform binaries return HTTP 503.
 # Use an absolute directory, owned by root or the service user, without symlinks
@@ -37,16 +35,47 @@ client_registration_ttl = 31536000
 # client_id = "YOUR_GITHUB_OAUTH_CLIENT_ID"
 # client_secret = "YOUR_GITHUB_OAUTH_CLIENT_SECRET"
 
-# Account portal; reuse auth.github and the same OAuth callback.
-# Login, /api/client/*, /mcp and the GitHub callback share this gateway.
+# Optional browser portal; reuse auth.github above and the SAME callback.
+# Client login needs the account portal. Route /setup, /api/client/*, /mcp and
+# the GitHub callback to the SAME Broker, including its account portal routes.
 # Forward WebSocket Upgrade for /api/client/connect. An independent portal-only
 # process does not share the gateway's in-memory login or session state.
 # [portal]
 # state_dir = "/var/lib/ssmcpd/portal"
+# Legacy SSH deployments can use a separate portal service: omit state_dir
+# here and use --portal-only with --portal-state-dir in that service.
+# Client account endpoints and connected sessions must still share one Broker.
 # See docs/portal-console.md and docs/client-accounts.md.
 # gateway_socket = "/run/ssmcpd/management.sock"
 # audit_dir = "/var/lib/ssmcpd/audit"
+# Register this ssmcp username first, then grant administration locally.
+# Unknown or banned usernames prevent startup.
+# admin_usernames = ["maintainer"]
+# Per-account bytes/second in EACH direction, shared across connections.
+# default_rate_limit_bps = 8388608
+# Legacy GitHub ID/login administrator configuration remains supported:
 # admin_github_ids = []
 # admin_github_users = []
 # audit_retention_days = 7
 # audit_max_events = 20000
+# owner_mappings = { legacy_ssh_user = "123456" }
+
+# Monthly traffic purchases. Disabled until real merchant configuration and capacity exist.
+# CNY 100 minor units = RMB 1 per decimal GB; unused purchased traffic expires at month end.
+[commerce]
+enabled = false
+gateway = "waffo_pancake"
+environment = "test"
+api_base_url = "https://api.waffo.ai"
+checkout_origin = ""
+merchant_id = ""
+store_id = ""
+product_id = ""
+currency = "CNY"
+currency_decimals = 2
+price_per_gb_minor = 100
+monthly_sellable_gb = 0
+max_gb_per_order = 100
+utc_offset_minutes = 480
+# private_key_file = "/absolute/private/pancake-merchant.pem"
+# webhook_public_key_file = "/absolute/private/pancake-webhook-test.pem"

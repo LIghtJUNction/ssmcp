@@ -48,6 +48,10 @@ struct CallObservation {
 pub(crate) struct HarnessCall(Arc<CallObservation>);
 
 impl HarnessCall {
+    pub(crate) fn current_id() -> Option<u64> {
+        HARNESS_CALL.try_with(|call| call.0.id).ok()
+    }
+
     pub(crate) fn new(id: u64) -> Self {
         Self(Arc::new(CallObservation {
             id,
@@ -568,7 +572,7 @@ impl Peer {
         Ok(json!({"sent":true,"id":id}))
     }
 
-    fn receive(&self, message: Value) -> Result<(), String> {
+    fn receive(&self, mut message: Value) -> Result<(), String> {
         if !message.is_object() {
             return Err("native message must be an object".into());
         }
@@ -609,7 +613,7 @@ impl Peer {
                 } else if let Some(error) = message.get("error") {
                     Err(format!("native RPC error: {error}"))
                 } else {
-                    Ok(message["result"].clone())
+                    Ok(message["result"].take())
                 };
                 let _ = waiting.reply.send(result);
             } else {

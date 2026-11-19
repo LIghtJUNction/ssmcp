@@ -1,11 +1,16 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
+mod assets;
+mod commerce;
 mod dashboard;
 mod dashboard_view;
+mod guide;
+mod sessions;
 mod setup;
 pub(crate) mod store;
 #[cfg(test)]
 mod tests;
+mod traffic;
 mod view;
 
 use crate::{
@@ -37,7 +42,7 @@ use subtle::ConstantTimeEq;
 
 const COOKIE: &str = "__Host-ssmcp-portal";
 const LOGIN_TTL: Duration = Duration::from_secs(600);
-const SESSION_TTL: Duration = Duration::from_secs(8 * 3600);
+const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 const MAX_SESSIONS: usize = 4096;
 type DigestKey = [u8; 32];
 
@@ -48,10 +53,12 @@ pub struct Portal {
     store: Option<Arc<Mutex<Store>>>,
     credentials: Option<Arc<Mutex<crate::device::Credentials>>>,
     management: Option<ManagementClient>,
+    commerce: Option<Arc<crate::commerce::Commerce>>,
 }
 
 #[derive(Default)]
 struct BrowserState {
+    persisted: Option<sessions::Sessions>,
     sessions: HashMap<DigestKey, Session>,
     pending: HashMap<DigestKey, Pending>,
     rates: HashMap<String, Rate>,
@@ -74,6 +81,14 @@ struct Rate {
 }
 
 impl BrowserState {
+    fn remove_session(&mut self, key: DigestKey) -> Result<Option<Session>, Problem> {
+        if let Some(persisted) = &mut self.persisted {
+            persisted.remove(key)?;
+        }
+        self.pending.retain(|_, pending| pending.browser != key);
+        Ok(self.sessions.remove(&key))
+    }
+
     fn prune(&mut self) {
         let now = Instant::now();
         self.sessions.retain(|_, s| s.expires > now);
@@ -132,21 +147,34 @@ pub(crate) enum Problem {
     AuditUnavailable,
     SessionNotFound,
     ManagementInvalid,
+    UsernameInvalid,
+    UsernameTaken,
+    UsernameBound,
+    Banned,
+    TrafficQuotaExceeded,
+    TrafficPeriodMismatch,
+    TrafficGrantConflict,
 }
 impl Problem {
     pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Csrf | Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Csrf | Self::Forbidden | Self::Banned => StatusCode::FORBIDDEN,
             Self::Busy => StatusCode::TOO_MANY_REQUESTS,
+            Self::TrafficQuotaExceeded => StatusCode::PAYMENT_REQUIRED,
+            Self::TrafficPeriodMismatch | Self::TrafficGrantConflict => StatusCode::CONFLICT,
             Self::Storage
             | Self::ManagementDisabled
             | Self::ManagementUnavailable
             | Self::AuditUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Limit | Self::Duplicate => StatusCode::CONFLICT,
+            Self::Limit | Self::Duplicate | Self::UsernameTaken | Self::UsernameBound => {
+                StatusCode::CONFLICT
+            }
             Self::NotFound | Self::SessionNotFound => StatusCode::NOT_FOUND,
             Self::Disabled => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Invalid | Self::ManagementInvalid => StatusCode::BAD_REQUEST,
+            Self::Invalid | Self::ManagementInvalid | Self::UsernameInvalid => {
+                StatusCode::BAD_REQUEST
+            }
         }
     }
     fn message(self) -> &'static str {
@@ -170,6 +198,21 @@ impl Problem {
             }
             Self::SessionNotFound => "该会话已断开或不属于你的账户，请刷新列表后重试。",
             Self::ManagementInvalid => "管理请求参数无效，请返回会话列表后重试。",
+            Self::UsernameInvalid => {
+                "用户名须为 3–32 个英文字母、数字、下划线或连字符，以字母开头、字母或数字结尾，且不能使用保留名称。"
+            }
+            Self::UsernameTaken => {
+                "该用户名已绑定其他 GitHub 账户，请换一个名称，或使用原绑定账户登录。"
+            }
+            Self::UsernameBound => "此 GitHub 账户已有用户名，请使用已绑定的名称连接。",
+            Self::Banned => "此账户已被服务器管理员封禁。",
+            Self::TrafficQuotaExceeded => {
+                "本月流量额度不足。服务器流量有限，经常使用请购买流量包。"
+            }
+            Self::TrafficPeriodMismatch => {
+                "订单所属月份已经结束，无法将旧订单流量计入新月份，请联系管理员处理。"
+            }
+            Self::TrafficGrantConflict => "订单到账记录与本次请求不一致，请联系管理员核对。",
         }
     }
 }
@@ -230,19 +273,60 @@ fn set_cookie(response: &mut Response, value: &str, ttl: u64) {
 impl Portal {
     /// Opt-in durable portal storage. Startup fails if permissions, format or locking are unsafe.
     pub fn open(path: &Path) -> crate::Result<Self> {
+        let store = Store::open(path)?;
+        let persisted = sessions::Sessions::open(path)?;
+        let active = persisted.restore(crate::management::now());
         Ok(Self {
-            browser: Mutex::default(),
+            browser: Mutex::new(BrowserState {
+                sessions: active,
+                persisted: Some(persisted),
+                ..BrowserState::default()
+            }),
             setup: Mutex::default(),
-            store: Some(Arc::new(Mutex::new(Store::open(path)?))),
+            store: Some(Arc::new(Mutex::new(store))),
             credentials: Some(Arc::new(Mutex::new(crate::device::Credentials::open(
                 path,
             )?))),
             management: None,
+            commerce: None,
         })
     }
     /// The private socket carries only requests authenticated by this portal's sessions.
     pub fn configure_management(&mut self, socket: PathBuf) {
         self.management = Some(ManagementClient::new(socket));
+    }
+
+    /// Resolve names from existing local registrations, never from a future claimant.
+    pub async fn resolve_admin_usernames(&self, names: &[String]) -> crate::Result<Vec<String>> {
+        let mut subjects = Vec::with_capacity(names.len());
+        for name in names {
+            let handle = crate::username::normalize(name)?;
+            let account = self.storage(move |store| store.account_by_handle(&handle))
+                .await
+                .map_err(|_| "could not read registered administrator usernames")?
+                .ok_or("administrator username is not registered; register it before configuring admin_users")?;
+            if account.banned {
+                return Err("a banned account cannot be configured as an administrator".into());
+            }
+            subjects.push(account.subject);
+        }
+        Ok(subjects)
+    }
+
+    /// Invalidate browser sessions after a durable ban; account guards also cover races.
+    pub(crate) fn revoke_browser_sessions(&self, subject: &str) -> Result<(), Problem> {
+        let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        if let Some(persisted) = &mut browser.persisted {
+            persisted.revoke(subject)?;
+        }
+        browser
+            .sessions
+            .retain(|_, session| session.subject.as_deref() != Some(subject));
+        let active: HashSet<_> = browser.sessions.keys().copied().collect();
+        browser
+            .pending
+            .retain(|_, pending| active.contains(&pending.browser));
+        Ok(())
     }
 
     pub(crate) async fn identity_for_subject(&self, subject: String) -> Result<Identity, Problem> {
@@ -305,6 +389,10 @@ impl Portal {
         result.map_err(|_| Problem::AuditUnavailable)
     }
 
+    pub(crate) fn has_storage(&self) -> bool {
+        self.store.is_some()
+    }
+
     pub(crate) fn enabled(&self, broker: &Broker) -> bool {
         self.store.is_some() && broker.identities.enabled("github")
     }
@@ -336,10 +424,45 @@ impl Portal {
         let raw = browser_cookie(headers).ok_or(Problem::Unauthorized)?;
         let key = digest(raw);
         let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        if let Some(persisted) = &browser.persisted {
+            persisted.healthy()?;
+        }
         browser.prune();
         let session = browser.sessions.get(&key).ok_or(Problem::Unauthorized)?;
         Ok((key, session.csrf.clone(), session.subject.clone()))
     }
+    async fn renew_session(&self, raw: &str) -> Result<Option<u64>, Problem> {
+        let key = digest(raw);
+        let subject = {
+            let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+            browser.prune();
+            browser
+                .sessions
+                .get(&key)
+                .and_then(|session| session.subject.clone())
+        };
+        let Some(subject) = subject else {
+            return Ok(None);
+        };
+        // Every renewal checks the durable account policy, including after restart.
+        self.storage(move |store| store.account(&subject)).await?;
+        let mut browser = self.browser.lock().map_err(|_| Problem::Storage)?;
+        browser.prune();
+        if !browser.sessions.contains_key(&key) {
+            return Ok(None);
+        }
+        let Some(persisted) = &mut browser.persisted else {
+            return Ok(None);
+        };
+        let ttl = persisted.renew(key, crate::management::now())?;
+        if let Some(ttl) = ttl
+            && let Some(session) = browser.sessions.get_mut(&key)
+        {
+            session.expires = Instant::now() + Duration::from_secs(ttl);
+        }
+        Ok(ttl)
+    }
+
     fn verify(
         &self,
         headers: &HeaderMap,
@@ -369,22 +492,42 @@ impl Portal {
 pub fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .route("/", get(home))
-        .route(
-            "/portal.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    view::CSS,
-                )
-            }),
-        )
+        .merge(assets::routes())
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
+        .route("/account/username", post(register_username))
         .route("/account/keys", post(add_key))
         .route("/account/keys/delete", post(delete_key))
+        .merge(guide::routes())
         .merge(setup::routes())
         .merge(dashboard::routes())
+        .merge(commerce::routes())
         .layer(middleware::map_response(security_headers))
+}
+
+/// Refresh authenticated browser pages after their handler succeeds. Static
+/// assets, failed requests, login rotation and logout never renew an old cookie.
+pub(crate) async fn renew_browser_session(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let raw = browser_cookie(request.headers()).map(str::to_owned);
+    let mut response = next.run(request).await;
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if html
+        && response.status().is_success()
+        && !response.headers().contains_key(header::SET_COOKIE)
+        && let Some(raw) = raw
+        && let Ok(Some(ttl)) = broker.portal.renew_session(&raw).await
+    {
+        set_cookie(&mut response, &raw, ttl);
+    }
+    response
 }
 
 async fn security_headers(mut response: Response) -> Response {
@@ -397,7 +540,7 @@ async fn security_headers(mut response: Response) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
+    h.insert("content-security-policy", HeaderValue::from_static("default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'"));
     h.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
@@ -407,7 +550,15 @@ async fn security_headers(mut response: Response) -> Response {
 
 async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<Response, Problem> {
     if !broker.portal.enabled(&broker) {
-        return Ok(Html(view::home(None, None, false, false)).into_response());
+        return Ok(Html(view::home(
+            None,
+            None,
+            false,
+            false,
+            &broker.public_url,
+            None,
+        ))
+        .into_response());
     }
     let mut new_cookie = None;
     let (_, csrf, subject) = match broker.portal.session(&headers) {
@@ -435,11 +586,31 @@ async fn home(State(broker): State<Arc<Broker>>, headers: HeaderMap) -> Result<R
         Some(subject) => Some(broker.portal.storage(move |s| s.account(&subject)).await?),
         None => None,
     };
+    let traffic = if let Some(account) = &account {
+        if let Some(management) = &broker.portal.management {
+            let identity = Identity {
+                provider: "github".into(),
+                subject: account.subject.clone(),
+                login: account.github_login.clone(),
+            };
+            management
+                .snapshot(&identity, crate::management::Scope::Own)
+                .await
+                .map_err(|_| Problem::ManagementUnavailable)?
+                .traffic
+        } else {
+            Some(broker.traffic_quota(&account.subject).await?)
+        }
+    } else {
+        None
+    };
     let mut response = Html(view::home(
         account.as_ref(),
         Some(&csrf),
         true,
         broker.portal.management.is_some(),
+        &broker.public_url,
+        traffic.as_ref(),
     ))
     .into_response();
     if let Some(raw) = new_cookie {
@@ -693,7 +864,24 @@ async fn finish_callback(
         .exchange("github", code, &pending.verifier)
         .await
         .map_err(|_| Problem::Unauthorized)?;
-    let mut response = finish_identity(&broker.portal, browser_key, identity).await?;
+    // Rotate the browser session under the same lock as account revocation.
+    let result = {
+        let _policy_update = broker.user_policy_updates.lock().await;
+        finish_identity(&broker.portal, browser_key, identity).await
+    };
+    let mut response = match result {
+        Ok(response) => response,
+        Err(problem) => {
+            // Release the policy lock before taking the grant lock: polling
+            // holds the grant lock while serializing credential issuance.
+            if problem == Problem::Banned
+                && let Some(return_to) = &pending.return_to
+            {
+                return_to.fail(&broker.portal, problem).await?;
+            }
+            return Err(problem);
+        }
+    };
     if let Some(return_to) = pending.return_to {
         let location = return_to.location(&broker.portal)?;
         response.headers_mut().insert(
@@ -730,7 +918,7 @@ async fn finish_identity(
         let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
         browser.prune();
         // A logout/expired session during the upstream exchange must not recreate a login.
-        if browser.sessions.remove(&previous).is_none() {
+        if browser.remove_session(previous)?.is_none() {
             return Err(Problem::Unauthorized);
         }
         browser.pending.retain(|_, p| p.browser != previous);
@@ -760,6 +948,22 @@ async fn finish_identity(
             .remove(&digest(&raw));
         return Err(error);
     }
+    {
+        let mut browser = portal.browser.lock().map_err(|_| Problem::Storage)?;
+        let session = browser
+            .sessions
+            .get(&digest(&raw))
+            .ok_or(Problem::Unauthorized)?;
+        let subject = session.subject.clone().ok_or(Problem::Unauthorized)?;
+        let csrf = session.csrf.clone();
+        if let Some(persisted) = &mut browser.persisted
+            && let Err(error) =
+                persisted.issue(digest(&raw), subject, csrf, crate::management::now())
+        {
+            browser.sessions.remove(&digest(&raw));
+            return Err(error);
+        }
+    }
     let mut response = Redirect::to("/#account").into_response();
     set_cookie(&mut response, &raw, SESSION_TTL.as_secs());
     Ok(response)
@@ -781,12 +985,35 @@ async fn logout_inner(
         .record_audit(Some(&identity), AuditAction::Logout, AuditOutcome::Pending)
         .await?;
     let mut browser = broker.portal.browser.lock().map_err(|_| Problem::Storage)?;
-    browser.sessions.remove(&key);
-    browser.pending.retain(|_, p| p.browser != key);
+    browser.remove_session(key)?;
     let mut response = Redirect::to("/").into_response();
     set_cookie(&mut response, "", 0);
     Ok(response)
 }
+async fn register_username(
+    State(broker): State<Arc<Broker>>,
+    request: Request,
+) -> Result<Response, Problem> {
+    let (headers, values) = form(request).await?;
+    only(&values, &["csrf", "username"])?;
+    let (_, subject) = broker
+        .portal
+        .verify(&headers, &values, &broker.public_url)?;
+    let subject = subject.ok_or(Problem::Unauthorized)?;
+    broker
+        .portal
+        .browser
+        .lock()
+        .map_err(|_| Problem::Storage)?
+        .charge(format!("username:{subject}"), 20)?;
+    let username = values["username"].clone();
+    broker
+        .portal
+        .storage(move |store| store.claim_handle(&subject, &username))
+        .await?;
+    Ok(Redirect::to("/#account").into_response())
+}
+
 async fn key_action(
     broker: &Broker,
     headers: &HeaderMap,

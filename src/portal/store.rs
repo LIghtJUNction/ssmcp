@@ -3,7 +3,7 @@ use super::{Problem, parse_key};
 use crate::identity::Identity;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::{
@@ -32,6 +32,14 @@ pub(crate) struct Account {
     pub username: String,
     pub github_login: String,
     pub keys: Vec<PublicKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    #[serde(default)]
+    pub banned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_bps: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_recharged: bool,
 }
 
 /// Account directory data deliberately excludes public keys and their fingerprints.
@@ -41,6 +49,10 @@ pub(crate) struct AccountSummary {
     pub username: String,
     pub github_login: String,
     pub key_count: usize,
+    pub handle: Option<String>,
+    pub banned: bool,
+    pub rate_limit_bps: Option<u64>,
+    pub has_recharged: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -54,6 +66,7 @@ pub(crate) struct Store {
     _lock: File,
     database: Database,
     failed: bool,
+    traffic: super::traffic::TrafficLedger,
 }
 
 impl Drop for Store {
@@ -69,7 +82,7 @@ impl Drop for Store {
     }
 }
 
-fn private_file(file: &File) -> crate::Result<()> {
+pub(super) fn private_file(file: &File) -> crate::Result<()> {
     let m = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
     if !m.is_file()
@@ -154,15 +167,30 @@ impl Store {
             Err(e) => return Err(e.into()),
         };
         validate(&database)?;
+        let traffic = super::traffic::TrafficLedger::open(&directory)?;
         Ok(Self {
             directory,
             _lock: lock,
             database,
             failed: false,
+            traffic,
         })
     }
 
+    /// Authentication rejects a ban even when an existing token remains valid.
     pub fn account(&self, subject: &str) -> Result<Account, Problem> {
+        let account = self.account_record(subject)?;
+        if account.banned {
+            return Err(Problem::Banned);
+        }
+        Ok(account)
+    }
+
+    /// Administrative reads include banned accounts so access can be restored.
+    pub fn account_record(&self, subject: &str) -> Result<Account, Problem> {
+        if self.failed {
+            return Err(Problem::Storage);
+        }
         self.database
             .accounts
             .get(subject)
@@ -183,6 +211,10 @@ impl Store {
                 username: account.username.clone(),
                 github_login: account.github_login.clone(),
                 key_count: account.keys.len(),
+                handle: account.handle.clone(),
+                banned: account.banned,
+                rate_limit_bps: account.rate_limit_bps,
+                has_recharged: account.has_recharged,
             })
             .collect())
     }
@@ -194,6 +226,17 @@ impl Store {
                 .is_err()
         {
             return Err(Problem::Unauthorized);
+        }
+        if self.failed {
+            return Err(Problem::Storage);
+        }
+        if self
+            .database
+            .accounts
+            .get(&identity.subject)
+            .is_some_and(|account| account.banned)
+        {
+            return Err(Problem::Banned);
         }
         let mut next = self.database.clone();
         if !next.accounts.contains_key(&identity.subject) && next.accounts.len() >= MAX_ACCOUNTS {
@@ -207,6 +250,10 @@ impl Store {
                 username,
                 github_login: identity.login.clone(),
                 keys: Vec::new(),
+                handle: None,
+                banned: false,
+                rate_limit_bps: None,
+                has_recharged: false,
             });
         account.github_login.clone_from(&identity.login);
         let account = account.clone();
@@ -214,7 +261,81 @@ impl Store {
         Ok(account)
     }
 
+    pub fn handle_available(&self, handle: &str) -> Result<bool, Problem> {
+        Ok(self.account_by_handle(handle)?.is_none())
+    }
+
+    pub fn account_by_handle(&self, handle: &str) -> Result<Option<Account>, Problem> {
+        let handle = normalize_handle(handle)?;
+        if self.failed {
+            return Err(Problem::Storage);
+        }
+        Ok(self
+            .database
+            .accounts
+            .values()
+            .find(|account| account.handle.as_deref() == Some(handle.as_str()))
+            .cloned())
+    }
+
+    /// Check and claim share the portal mutex and Store's exclusive writer lease.
+    /// A numeric GitHub subject retains its handle through GitHub login renames.
+    pub fn claim_handle(&mut self, subject: &str, handle: &str) -> Result<Account, Problem> {
+        let handle = normalize_handle(handle)?;
+        let account = self.account(subject)?;
+        if let Some(current) = &account.handle {
+            return if current == &handle {
+                Ok(account)
+            } else {
+                Err(Problem::UsernameBound)
+            };
+        }
+        if !self.handle_available(&handle)? {
+            return Err(Problem::UsernameTaken);
+        }
+        let mut next = self.database.clone();
+        let account = next
+            .accounts
+            .get_mut(subject)
+            .ok_or(Problem::Unauthorized)?;
+        account.handle = Some(handle);
+        let account = account.clone();
+        self.save(next)?;
+        Ok(account)
+    }
+
+    /// Partial updates preserve fields changed by another administrator.
+    pub fn set_policy(
+        &mut self,
+        subject: &str,
+        banned: Option<bool>,
+        rate_limit_bps: Option<Option<u64>>,
+    ) -> Result<Account, Problem> {
+        self.account_record(subject)?;
+        if rate_limit_bps
+            .flatten()
+            .is_some_and(|rate| !(1..=MAX_RATE_LIMIT_BPS).contains(&rate))
+        {
+            return Err(Problem::ManagementInvalid);
+        }
+        let mut next = self.database.clone();
+        let account = next
+            .accounts
+            .get_mut(subject)
+            .ok_or(Problem::Unauthorized)?;
+        if let Some(value) = banned {
+            account.banned = value;
+        }
+        if let Some(value) = rate_limit_bps {
+            account.rate_limit_bps = value;
+        }
+        let account = account.clone();
+        self.save(next)?;
+        Ok(account)
+    }
+
     pub fn add(&mut self, owner: &str, key: PublicKey) -> Result<(), Problem> {
+        self.account(owner)?;
         let mut next = self.database.clone();
         let account = next.accounts.get_mut(owner).ok_or(Problem::Unauthorized)?;
         if account
@@ -232,6 +353,7 @@ impl Store {
     }
 
     pub fn remove(&mut self, owner: &str, fingerprint: &str) -> Result<(), Problem> {
+        self.account(owner)?;
         let mut next = self.database.clone();
         let account = next.accounts.get_mut(owner).ok_or(Problem::Unauthorized)?;
         let index = account
@@ -241,6 +363,73 @@ impl Store {
             .ok_or(Problem::NotFound)?;
         account.keys.remove(index);
         self.save(next)
+    }
+
+    pub(crate) fn traffic_quota(
+        &self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        unlimited: bool,
+    ) -> Result<crate::user_policy::TrafficQuota, Problem> {
+        self.account(subject)?;
+        self.traffic
+            .snapshot(subject, period, utc_offset_minutes, unlimited)
+    }
+
+    pub(crate) fn reserve_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        utc_offset_minutes: i32,
+        bytes: u64,
+        unlimited: bool,
+    ) -> Result<(), Problem> {
+        self.account(subject)?;
+        self.traffic.reserve(
+            &self.directory,
+            subject,
+            period,
+            utc_offset_minutes,
+            bytes,
+            unlimited,
+        )
+    }
+
+    pub(crate) fn grant_paid_traffic(
+        &mut self,
+        subject: &str,
+        period: &str,
+        current_period: &str,
+        order_id: &str,
+        bytes: u64,
+    ) -> Result<bool, Problem> {
+        // An already paid order must remain reconcilable after a later account ban.
+        self.account_record(subject)?;
+        self.traffic.grant(
+            &self.directory,
+            subject,
+            period,
+            current_period,
+            order_id,
+            bytes,
+        )
+    }
+
+    pub(crate) fn record_recharge(&mut self, subject: &str) -> Result<Account, Problem> {
+        let account = self.account_record(subject)?;
+        if account.has_recharged {
+            return Ok(account);
+        }
+        let mut next = self.database.clone();
+        let account = next
+            .accounts
+            .get_mut(subject)
+            .ok_or(Problem::Unauthorized)?;
+        account.has_recharged = true;
+        let account = account.clone();
+        self.save(next)?;
+        Ok(account)
     }
 
     fn save(&mut self, next: Database) -> Result<(), Problem> {
@@ -276,6 +465,12 @@ impl Store {
     }
 }
 
+pub(crate) const MAX_RATE_LIMIT_BPS: u64 = 1024 * 1024 * 1024;
+
+pub(crate) fn normalize_handle(raw: &str) -> Result<String, Problem> {
+    crate::username::normalize(raw).map_err(|_| Problem::UsernameInvalid)
+}
+
 pub(crate) fn stable_username(subject: &str) -> Option<String> {
     let id = subject.parse::<u64>().ok()?;
     (id > 0 && id.to_string() == subject).then(|| format!("gh-{id}"))
@@ -285,6 +480,7 @@ fn validate(database: &Database) -> crate::Result<()> {
     if database.accounts.len() > MAX_ACCOUNTS {
         return Err("too many portal accounts".into());
     }
+    let mut handles = BTreeSet::new();
     for (id, account) in &database.accounts {
         if &account.subject != id
             || stable_username(id).as_deref() != Some(&account.username)
@@ -293,6 +489,19 @@ fn validate(database: &Database) -> crate::Result<()> {
                 .is_err()
         {
             return Err("invalid portal account; refusing to discard account data".into());
+        }
+        if account
+            .rate_limit_bps
+            .is_some_and(|rate| !(1..=MAX_RATE_LIMIT_BPS).contains(&rate))
+        {
+            return Err("invalid account rate limit".into());
+        }
+        if let Some(handle) = &account.handle
+            && (normalize_handle(handle).ok().as_ref() != Some(handle) || !handles.insert(handle))
+        {
+            return Err(
+                "invalid or duplicate account username; refusing to discard account data".into(),
+            );
         }
         let mut seen = std::collections::HashSet::new();
         for key in &account.keys {
@@ -312,6 +521,164 @@ fn validate(database: &Database) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct AccountDirectory(PathBuf);
+    impl AccountDirectory {
+        fn new() -> Self {
+            Self(std::env::temp_dir().join(format!(
+                "ssmcp-account-policy-{}",
+                super::super::random().unwrap()
+            )))
+        }
+    }
+    impl Drop for AccountDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn identity(subject: &str, login: &str) -> Identity {
+        Identity {
+            provider: "github".into(),
+            subject: subject.into(),
+            login: login.into(),
+        }
+    }
+
+    #[test]
+    fn handles_are_unique_stable_canonical_and_durable() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.login(&identity("456", "bob")).unwrap();
+        assert_eq!(
+            store
+                .claim_handle("123", "ALice-home")
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("alice-home")
+        );
+        assert!(matches!(
+            store.claim_handle("456", "Alice-home"),
+            Err(Problem::UsernameTaken)
+        ));
+        assert!(matches!(
+            store.claim_handle("123", "other-name"),
+            Err(Problem::UsernameBound)
+        ));
+        assert_eq!(
+            store.claim_handle("123", "alice-home").unwrap().subject,
+            "123"
+        );
+        assert_eq!(
+            store
+                .login(&identity("123", "renamed"))
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("alice-home")
+        );
+        drop(store);
+        let reopened = Store::open(&directory.0).unwrap();
+        assert_eq!(
+            reopened
+                .account_by_handle("ALICE-home")
+                .unwrap()
+                .unwrap()
+                .subject,
+            "123"
+        );
+        assert!(!reopened.handle_available("alice-home").unwrap());
+        assert!(reopened.handle_available("other-name").unwrap());
+    }
+
+    #[test]
+    fn legacy_accounts_gain_default_policy_without_losing_identity() {
+        let raw = r#"{"accounts":{"123":{"subject":"123","username":"gh-123","github_login":"alice","keys":[]}}}"#;
+        let database: Database = serde_json::from_str(raw).unwrap();
+        validate(&database).unwrap();
+        let account = &database.accounts["123"];
+        assert_eq!(account.username, "gh-123");
+        assert!(account.handle.is_none());
+        assert!(!account.banned);
+        assert!(account.rate_limit_bps.is_none());
+    }
+
+    #[test]
+    fn policy_updates_are_partial_durable_and_block_authentication() {
+        let directory = AccountDirectory::new();
+        let mut store = Store::open(&directory.0).unwrap();
+        store.login(&identity("123", "alice")).unwrap();
+        store.claim_handle("123", "alice-home").unwrap();
+        store
+            .set_policy("123", Some(true), Some(Some(8192)))
+            .unwrap();
+        assert!(matches!(store.account("123"), Err(Problem::Banned)));
+        assert!(matches!(
+            store.login(&identity("123", "renamed")),
+            Err(Problem::Banned)
+        ));
+        assert!(matches!(
+            store.claim_handle("123", "alice-home"),
+            Err(Problem::Banned)
+        ));
+        assert!(
+            store
+                .set_policy("123", None, Some(Some(16384)))
+                .unwrap()
+                .banned
+        );
+        assert!(matches!(
+            store.set_policy("123", None, Some(Some(0))),
+            Err(Problem::ManagementInvalid)
+        ));
+        assert!(matches!(
+            store.set_policy("123", None, Some(Some(MAX_RATE_LIMIT_BPS + 1))),
+            Err(Problem::ManagementInvalid)
+        ));
+        drop(store);
+        let mut store = Store::open(&directory.0).unwrap();
+        let saved = store.account_record("123").unwrap();
+        assert!(saved.banned);
+        assert_eq!(saved.rate_limit_bps, Some(16384));
+        let restored = store.set_policy("123", Some(false), None).unwrap();
+        assert_eq!(restored.rate_limit_bps, Some(16384));
+        assert!(store.account("123").is_ok());
+        assert_eq!(
+            store
+                .set_policy("123", None, Some(None))
+                .unwrap()
+                .rate_limit_bps,
+            None
+        );
+    }
+
+    #[test]
+    fn database_rejects_duplicate_handles_and_invalid_policies() {
+        let mut database = Database::default();
+        for (subject, login) in [("123", "alice"), ("456", "bob")] {
+            database.accounts.insert(
+                subject.into(),
+                Account {
+                    subject: subject.into(),
+                    username: format!("gh-{subject}"),
+                    github_login: login.into(),
+                    keys: Vec::new(),
+                    handle: Some("shared-name".into()),
+                    banned: false,
+                    rate_limit_bps: None,
+                    has_recharged: false,
+                },
+            );
+        }
+        assert!(validate(&database).is_err());
+        database.accounts.get_mut("456").unwrap().handle = Some("Other-name".into());
+        assert!(validate(&database).is_err());
+        database.accounts.get_mut("456").unwrap().handle = Some("other-name".into());
+        validate(&database).unwrap();
+        database.accounts.get_mut("456").unwrap().rate_limit_bps = Some(0);
+        assert!(validate(&database).is_err());
+    }
 
     #[test]
     fn dropping_store_releases_lock_despite_an_inherited_descriptor() {

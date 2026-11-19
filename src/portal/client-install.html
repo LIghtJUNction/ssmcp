@@ -1,0 +1,26 @@
+<section class="workspace-section setup-section" id="install" aria-labelledby="install-title">
+  <div class="section-heading">
+    <p class="eyebrow">第一步</p>
+    <h2 id="install-title">安装客户端</h2>
+    <p class="section-description">选择你的系统。<br>复制命令，在本机终端运行。</p>
+  </div>
+  <div class="section-content install-options">
+    <div class="install-option">
+      <div class="install-heading">
+        <h3>Linux / macOS</h3>
+        <button class="secondary" type="button" data-install-copy="install-unix" aria-label="复制 Linux 或 macOS 安装命令" hidden>复制命令</button>
+        <span class="copy-status" role="status"></span>
+      </div>
+      <pre class="command"><code id="install-unix">curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh</code></pre>
+    </div>
+    <div class="install-option">
+      <div class="install-heading">
+        <h3>Windows PowerShell</h3>
+        <button class="secondary" type="button" data-install-copy="install-windows" aria-label="复制 Windows 安装命令" hidden>复制命令</button>
+        <span class="copy-status" role="status"></span>
+      </div>
+      <pre class="command"><code id="install-windows">irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex</code></pre>
+    </div>
+  </div>
+  <script src="{install_script_url}" defer></script>
+</section>

@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过 SSH 编排该客户端的原生工具。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend/mod.rs)
+ssmcp 对外提供 `list`、`code_mode`、`collab` 和 `invite` 四个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -9,7 +9,7 @@ ssmcp 对外提供 `list` 和 `code_mode` 两个 MCP 工具。`list` 找到当�
 先在 Linux、macOS 或 Windows 进入需要工作的本机目录，再启动一个客户端。它始终提供交互式 shell，并自动发现 `PATH` 中可用的 Codex、Claude Code、Pi、OpenCode 原生接口。把 `octocat@github` 换成允许访问这条连接的 GitHub 用户名；安装方式和平台范围见[版本与安装](releases.md)。
 
 ```sh
-ssmcp --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
+ssmcp --ssh --allow octocat@github --name dev --title "检查当前项目并修复构建" user@host
 ```
 
 | 参数 | 作用 |
@@ -26,14 +26,14 @@ ssmcp --allow octocat@github --name dev --title "检查当前项目并修复构�
 
 ### 从旧的后端选择参数迁移
 
-删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
+删除旧命令中的 `-t TYPE`、`--type TYPE`、`--backend PROGRAM` 和尾随的后端参数，保留 SSH、身份、名称和日志选项。客户端已移除这些选择入口；例如旧的 `ssmcp -t codex --name dev my-server` 改为 `ssmcp --ssh --name dev my-server`。把需要的原生 CLI 安装到 `PATH`，原生账户、插件、MCP 与模型设置继续在各 CLI 中维护。
 
 ```sh
 # 不连接 SSH，先检查这台电脑实际发现了什么。
 ssmcp --list-tools
 
 # 同一连接提供 shell 和成功初始化的原生适配器。
-ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
+ssmcp --ssh --name dev --title "继续项目开发" --allow octocat@github my-server
 ```
 
 | 来源 | 本机原生入口或实现 | 可调用范围 |
@@ -45,7 +45,7 @@ ssmcp --name dev --title "继续项目开发" --allow octocat@github my-server
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
 
-发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend/mod.rs)
+发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend.rs)
 
 各提供者在后台独立探测和刷新；Shell 的连接与目录不等待可选 Harness。版本、握手或目录读取超时只使该提供者不可用，断线会取消仍挂起的发现。时间、页数和工具数量有界，具体限制由对应适配器定义。[启动回归测试](../tests/client_startup.rs)
 
@@ -75,7 +75,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST"}}
 ```
 
-这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。无游标的请求读取当前注册表，并为这次扫描保存合并后的目录快照；存在 `nextCursor` 时，将它传入下一次请求。后续页面读取同一快照，因此扫描途中原生目录变化不会改变已开始的分页。后台刷新后，重新发送无游标请求可读取最新注册表。[分页实现](../src/backend/mod.rs) · [合并目录快照](../src/runtime.rs)
+这个结果包含 `client` 和 `tools`；每个能力提供名称、描述及 `inputSchema`。目录按最多 64 项分页，也可能因 schema 大小提前分页。无游标的请求读取当前注册表，并为这次扫描保存合并后的目录快照；存在 `nextCursor` 时，将它传入下一次请求。后续页面读取同一快照，因此扫描途中原生目录变化不会改变已开始的分页。后台刷新后，重新发送无游标请求可读取最新注册表。[分页实现](../src/backend.rs) · [合并目录快照](../src/runtime.rs)
 
 `list` 与 `tools` 共享同一注册表。注册项保留提供者、原生名称、完整 Schema、可用状态与代号；不同来源使用独立命名空间。目录中的工具不因名称相同而互相覆盖；调用时仍验证当前提供者和代号，陈旧快照不会授予已失效工具的调用权。
 
@@ -85,7 +85,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有后续页。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等名称供代码模式内部调用，不能直接作为外部 `tools/call` 的工具名。
+MCP 协议本身的 `tools/list` 返回 `list`、`code_mode`、`collab` 和 `invite`，没有后续页。`invite` 依据当前已验证的 OAuth 授权生成一次性安装接入命令，详见[控制者邀请](client-accounts.md#已在-mcp-应用授权的控制者)。`collab` 的 `action` 选择加入、成员发现、发送、收取或确认等协作操作。上述 `list` 工具返回的 `terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 
@@ -107,6 +107,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 | `fs.readText/writeText/editText(clientId, options)` | 工作区内的原生 UTF-8 文件操作；成功写入产生本机 diff 记录 |
 | `skills.list/view/read(clientId, options)` | 索引、摘要视图和原文读取；不会提交模型任务 |
 | `agents.list/resolve/read(clientId, options)` | 查看指令来源、根到目标的优先级和原文 |
+| `collab.join/list/update/send/receive/ack/leave(clientId, options)` | 会话内成员发现与消息交换；收件等待最多 1 秒，长等待使用公开 `collab` 工具 |
 | `context.roots(clientId)` | 查看工作区与额外只读上下文根 |
 | `await reload(clientId)` | 重启已安装的客户端入口，随后用 `list` 获取新连接 ID |
 | `outputs.read/stat(clientId, options)` | 按转储 ID 读取长输出或查看元数据 |
@@ -116,7 +117,7 @@ MCP 协议本身的 `tools/list` 始终只返回 `list` 和 `code_mode`，没有
 
 代码模式结果的 `structuredContent` 为 `{ "result": ..., "logs": [...] }`。其中 `result` 是显式返回值，`logs` 为字符串数组。`call` 保留原生结果中的 `content`、`structuredContent`、`isError` 等字段；原生工具可以正常返回 `isError: true`，调用方需检查这个字段。连接或转发错误会使对应调用失败，可用 JavaScript `try/catch` 处理。
 
-`fs`、`skills`、`agents`、`exec`、`reload` 和 `outputs` 的便捷原语返回解包后的结构化结果，原生工具返回错误时会抛出异常；`exec.parallel` 把各项失败保留为 `rejected/reason`。直接 `call` 则返回完整 MCP 结果。更多文件、显式上下文根、rsync、端口与托管同步任务示例见[工作区](workspaces.md)、[上下文](context.md)与[会话控制](session-control.md)。
+`fs`、`skills`、`agents`、`collab`、`exec`、`reload` 和 `outputs` 的便捷原语返回解包后的结构化结果，原生工具返回错误时会抛出异常；`exec.parallel` 把各项失败保留为 `rejected/reason`。直接 `call` 则返回完整 MCP 结果。更多文件、显式上下文根、rsync、端口与托管同步任务示例见[工作区](workspaces.md)、[上下文](context.md)与[会话控制](session-control.md)。
 
 以下代码在一次请求中查看多个 Shell 客户端。此后各小节的 JavaScript 块都应作为 `code_mode` 的 `code` 字符串发送。
 
@@ -133,18 +134,22 @@ return states;
 
 ### 按需查询目录
 
-`tools.search` 在一次代码调用中读取所需的目录页，只把匹配结果返回给模型。`query` 是名称或描述的不区分大小写子串；默认返回 20 项名称、路由命名空间与短说明。`namespace` 来自实际注册名称前缀，不是额外的权威 provider 字段。指定 `include_schemas:true` 时返回整个原生 descriptor，保留 input/output Schema、注解及扩展字段。[worker 实现](../src/code_mode.js)
+`tools.search` 在一次代码调用中读取所需的目录页，只把匹配结果返回给模型。`query` 是名称或描述的不区分大小写子串；默认返回 20 项名称、路由命名空间与短说明。可选的 `name_prefix` 只匹配实际注册名称的前缀，不区分大小写；同时提供 `query` 时，两项条件都必须满足。这样可查询指定工具族，避免其他工具的长说明因提及同一个词而进入结果。`namespace` 来自实际注册名称前缀，不是额外的权威 provider 字段。指定 `include_schemas:true` 时返回整个原生 descriptor，保留 input/output Schema、注解及扩展字段。[worker 实现](../src/code_mode.js)
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
 return await tools.search(id, {
-  query: "playwright",
+  name_prefix: "ssmcp.exec.",
   limit: 10,
   include_schemas: true
 });
 ```
 
-返回 `nextCursor` 表示还可继续。下一次传入该游标，并保持同一客户端、query、limit 与 schema 模式；这些搜索游标不能直接传给原生 `tools(id,cursor)`。页内续查会重新读取该页并核对 SHA-256，变更时明确要求重新搜索。底层仍保留原有目录快照语义，每页重新经过在线状态与授权校验，没有新增 helper 缓存。
+`name_prefix` 最长 128 字节，只接受注册名称字符 `A–Z`、`a–z`、`0–9`、`_`、`.`、`-`。省略或传空字符串时，搜索结果及 v1 游标保持兼容；非空前缀会规范为小写并返回在结果的 `name_prefix` 中，使用绑定该前缀的 v2 游标。若要只匹配 `ssmcp.exec` 工具族，请保留末尾的 `.`；前缀不支持通配符。
+
+`exec.run` 和 `exec.parallel` 是 JavaScript 便捷函数，不是目录中的原生工具。`exec.run` 组合调用 `ssmcp.exec.start`、`ssmcp.exec.wait` 和 `ssmcp.exec.read`；`wait_ms:0` 时跳过等待。查询参数时可使用上面的工具族前缀，不能将 `ssmcp.exec.run` 当作原生工具名称。
+
+返回 `nextCursor` 表示还可继续。下一次传入该游标，并保持同一客户端、query、name_prefix、limit 与 schema 模式；这些搜索游标不能直接传给原生 `tools(id,cursor)`。页内续查会重新读取该页并核对 SHA-256，变更时明确要求重新搜索。底层仍保留原有目录快照语义，每页重新经过在线状态与授权校验，没有新增 helper 缓存。
 
 一次搜索最多读取 32 页，`max_pages` 可设为 1–32；单条续查链最多经过 128 个不同页和 8,192 个工具。`limit` 为 1–50。结果中的 `complete`、`stopped_reason` 和 `stats` 区分已结束、条数上限、分页预算与输出预算；即使本页没有匹配项，仍应检查 `nextCursor`。
 
@@ -296,7 +301,7 @@ return await call(c.id, "pi.rpc", {type: "get_state", arguments: {}});
 
 `get_state` 用于协议握手，发现不会发送 prompt。扩展对话通过 `ssmcp.pi.requests` 读取，`ssmcp.pi.respond` 保留原始 ID；实际字段和互斥条件以目录 Schema 为准。收到回复确认只表示交给了 Pi，不证明任务完成。
 
-自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend/mod.rs)
+自动发现不启动新的 Pi 进程。操作者需事先初始化原生 JSONL RPC 会话，并通过 `SSMCP_PI_RPC_SOCKET` 显式提供本机私有 Unix socket 入口。ssmcp 核对已安装程序与版本；socket 路径必须为绝对路径，socket 和直接父目录不能是符号链接，必须由当前 UID 拥有且没有 group/other 权限。连接后再次核对 peer UID，并在 5 秒内完成原生 `get_state` 握手。只有 `success: true`、`command: "get_state"` 且 `data` 为对象的响应才被接受。未配置安全的既有入口时保持 unavailable；保留已安装与不可连接的诊断，不禁用用户扩展，也不替代其原生审批。ssmcp 不模拟终端交互来创建这一接口。[连接与发现](../src/backend.rs)
 
 Pi 1.5.0 的原生包解析器在 `PI_OFFLINE=1` 时跳过缺失包安装，但扩展代码仍可执行。RPC 模式在处理第一条 `get_state` 前先绑定扩展，发出 `session_start` 并运行资源发现钩子；仅配置离线模式不能证明启动无安装或模型副作用。[包解析](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/package-manager.ts) · [RPC 启动顺序](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/modes/rpc/rpc-mode.ts) · [扩展绑定](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/src/core/agent-session.ts)
 

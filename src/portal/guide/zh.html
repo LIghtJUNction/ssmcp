@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="把电脑连接到 AI 应用，了解 ssmcp 的请求、文件、工具、浏览器工作流和上下文恢复。">
+  <title>使用指南 · ssmcp</title>
+  <link rel="stylesheet" href="/guide/style.css">
+  <link rel="alternate" hreflang="en" href="/guide/en">
+  <link rel="alternate" hreflang="zh-CN" href="/guide/zh">
+</head>
+<body>
+<a class="skip" href="#content">跳到正文</a>
+<header class="container header">
+  <a class="brand" href="/">ssmcp<span>使用指南</span></a>
+  <nav aria-label="语言"><a href="/guide/en" lang="en">English</a><a href="/guide/zh" lang="zh-CN" aria-current="page">简体中文</a></nav>
+</header>
+<main class="container" id="content">
+  <section class="hero">
+    <p class="eyebrow">你的电脑，你的工具。</p>
+    <h1>把 AI 对话，<br>连接到电脑上的工作。</h1>
+    <p class="lead">ssmcp 把电脑连接到支持 MCP 的应用。MCP 是调用工具的协议：应用提出操作，连接的电脑执行命令，结果返回应用并显示在终端里。</p>
+    <div class="hero-links"><a class="button" href="#start">开始连接</a><a href="#scenarios">查看使用场景 <span aria-hidden="true">↓</span></a></div>
+    <p class="note">二维码只打开公共使用指南，不包含登录码或会话凭据。</p>
+  </section>
+
+  <section id="start" aria-labelledby="start-title">
+    <div class="section-heading"><p class="eyebrow">01 / 开始</p><h2 id="start-title">连接电脑，选择工具。</h2></div>
+    <ol class="steps">
+      <li><h3>安装客户端。</h3><p>从 <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub Releases</a> 获取适合系统的客户端。Windows 安装器会为内置浏览器工具准备 Node.js、Playwright 和 Chromium；安装后在需要处理的项目目录里打开终端。</p></li>
+      <li><h3>连接这台电脑。</h3><p>在<a href="/">网关账户页面</a>选择账户名，再运行下面的命令。出现授权提示时，按流程使用 GitHub 登录。</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">把 <code>yourname</code> 换成你的账户名。之后直接运行 <code>ssmcp</code>，可以复用上次已授权的账户。</p></li>
+      <li><h3>把网关添加到 AI 应用。</h3><p>使用下面的 MCP 地址，并授权同一个 GitHub 账户。让应用列出在线客户端，选定要操作的电脑后再调用工具。</p><pre><code>{{gateway_origin}}/mcp</code></pre><p class="note">AI 运行在你的应用或已安装的 harness 中。连接 ssmcp 本身不会启动模型。</p></li>
+    </ol>
+  </section>
+
+  <section id="devices" aria-labelledby="devices-title">
+    <div class="section-heading"><p class="eyebrow">02 / 设备与桌面</p><h2 id="devices-title">让另一台设备临时接入。</h2></div>
+    <div class="scenarios">
+      <article><h3>生成设备邀请。</h3><p>在已经登录的电脑上运行 <code>ssmcp invite</code>，把生成的完整命令复制到另一台设备。命令从同一网关下载并校验客户端，安装到用户目录后，启动临时连接。</p><pre><code>ssmcp invite
+ssmcp invite --shell powershell</code></pre><p>邀请只能兑换一次，通常在 10 分钟后失效；兑换后的连接最多使用 1 小时，并受原授权剩余期限约束。结束被控设备上的进程即可停止该会话。已安装兼容客户端时，可加上 <code>--no-bootstrap</code>。</p><details><summary>从已授权的 MCP 应用发出邀请</summary><p>让已连接的应用调用公共 <code>invite</code> 工具。它使用应用当前的授权，无需先取得在线客户端 ID。目标是 Windows 时，把 <code>shell</code> 改为 <code>powershell</code>。</p><pre><code>{"ttl_secs": 600, "session_ttl_secs": 3600, "shell": "sh"}</code></pre></details></article>
+      <article><h3>在私有桌面里操作应用。</h3><p>桌面观察和输入默认使用当前连接的私有显示。在 Linux 上，启动已安装的应用时会按需创建这个显示；你正在使用的桌面保留鼠标位置和焦点。</p><pre><code>在私有桌面打开编辑器。
+检查文档，并截图展示结果。</code></pre><p class="note">私有桌面需要 Linux、Xvfb 以及状态工具列出的辅助程序。其他平台会报告缺少的支持；只有调用者明确选择 <code>desktop: "host"</code>，才会操作日常桌面。浏览器页面控制是独立入口。</p></article>
+    </div>
+  </section>
+
+  <section id="basics" aria-labelledby="basics-title">
+    <div class="section-heading"><p class="eyebrow">03 / 日常输入</p><h2 id="basics-title">写下需求，附上上下文。</h2></div>
+    <p>按 Enter 后，请求进入队列，交给选中的成员或下一次符合条件的 Agent 交互。工作继续执行时，你可以接着写下一条草稿。保持 AI 对话在工作，让 Agent 有机会接收排队的输入。</p>
+    <div class="table-wrap"><table><thead><tr><th scope="col">输入</th><th scope="col">作用</th></tr></thead><tbody>
+      <tr><td><code>@src/main.rs</code></td><td>引用工作区文件。路径有空格时使用 <code>@"文档/使用 说明.md"</code>。</td></tr>
+      <tr><td><code>@assets/chart.png</code></td><td>引用图片，供 Agent 实际读取。原生读图支持 PNG、JPEG、GIF、WebP，每张图片上限 400 KiB。</td></tr>
+      <tr><td><code>$skill-name</code></td><td>引用可用的项目或用户技能。输入前缀后用 Tab 或 Enter 接受候选，再按 Enter 发送。</td></tr>
+      <tr><td><code>!git status --short</code></td><td>在当前工作区运行本地 shell 命令，显示输出和退出状态。</td></tr>
+      <tr><td>草稿起点按左方向键</td><td>打开 Agents。上下键选择成员，Enter 或右键确认；Esc 返回并保留草稿。</td></tr>
+      <tr><td><code>/queue</code> · <code>/copy</code></td><td>查看排队请求，或复制最新一条完整的 Agent 回复。</td></tr>
+      <tr><td>F1 · F7</td><td>打开可滚动帮助，或暂停终端鼠标捕获，用终端自己的方式选择文字。</td></tr>
+    </tbody></table></div>
+    <p class="note"><code>@</code> 引用使用已授权的工作区。剪贴板内容可通过 <code>/paste</code> 导入，图片可使用 <code>/attach PATH</code>。超过 8 KiB 的粘贴会保存成文件引用，你仍可在后面补充简短需求。</p>
+  </section>
+
+  <section id="scenarios" aria-labelledby="scenarios-title">
+    <div class="section-heading"><p class="eyebrow">04 / 使用场景</p><h2 id="scenarios-title">从一个明确的结果开始。</h2></div>
+    <div class="scenarios">
+      <article><h3>修改项目</h3><p>提供相关文件和具体目标，让 Agent 检查改动、运行相关验证，并解释结果。</p><pre><code>@src/main.rs 修复已报告的错误。
+运行相关测试，并展示 diff。</code></pre></article>
+      <article><h3>跟进长任务</h3><p>让 Agent 启动构建、测试或报告任务，再持续查看输出。只要客户端保持连接，托管任务可以在一次 code_mode 调用返回后继续执行。</p><pre><code>运行一次测试集。
+跟踪任务 ID，最后报告退出码。</code></pre></article>
+      <article><h3>检查图片或报告</h3><p>把图片和要回答的问题一起发出。Agent 通过原生读图工具获得实际图片内容。支持图片的终端显示真实像素，其他终端显示带尺寸的紧凑附件卡片。</p><pre><code>@assets/chart.png
+解释变化趋势，指出不清楚的标注。</code></pre></article>
+      <article><h3>验证浏览器流程</h3><p>浏览器操作优先使用内置工具。需要特定的已有浏览器会话时，明确选择它的已授权连接；只有该路线需要时，才加载可选的 Playwright harness。</p><pre><code>检查已打开的结账页面。
+测试表单，并截图展示结果。</code></pre></article>
+      <article><h3>协作处理多台设备</h3><p><code>ssmcp list</code> 列出已授权的在线设备；终端中的 Agents 面板选择当前连接里的成员。先确认电脑，再选择本条请求的接收者。</p><pre><code>在已选中的构建机上，
+检查最近一次构建结果。</code></pre></article>
+      <article><h3>带着上下文继续工作</h3><p><code>/resume</code> 打开已保存的对话；<code>/context</code> 和 <code>/memory</code> 查看本地分支记忆；<code>/handoff</code> 生成上下文文件草稿，再由你选择接收者。</p><pre><code>/handoff 继续排查失败的测试。</code></pre><p class="note">恢复对话不会重新执行工具，也不会重发旧请求。</p></article>
+    </div>
+  </section>
+
+  <section id="tools" aria-labelledby="tools-title">
+    <div class="section-heading"><p class="eyebrow">05 / 工具调用</p><h2 id="tools-title">以当前客户端的接口为准。</h2></div>
+    <p>先用 <code>list</code> 获取选中客户端的 ID。在 code_mode 中查询它实际注册的工具，读取返回的 schema，再发起调用。内置工具不依赖其他 harness。可选 harness 默认不加载：<code>ssmcp.harnesses.list</code> 读取缓存状态，<code>ssmcp.harnesses.load</code> 明确加载一项；加载后的原始参数与审批规则保持有效。</p>
+    <pre><code>const clientId = "ID_FROM_LIST";
+return await tools.search(clientId, {
+  name_prefix: "ssmcp.fs.",
+  query: "read",
+  limit: 5,
+  include_schemas: true
+});</code></pre>
+    <details><summary>示例：向应用返回实际图片</summary><p>每次 code_mode 调用都有独立作用域。请在调用里写明选中的客户端 ID，并使用该客户端工作区中的路径。</p><pre><code>const clientId = "ID_FROM_LIST";
+image(await call(clientId, "ssmcp.fs.read_image", {
+  path: "assets/chart.png"
+}));</code></pre></details>
+  </section>
+
+  <section class="help" aria-labelledby="help-title">
+    <h2 id="help-title">遇到问题，先检查这几项。</h2>
+    <dl><div><dt>没有在线客户端？</dt><dd>保持本机客户端运行，确认应用和客户端使用同一个已授权账户与网关。</dd></div><div><dt>找不到某个工具？</dt><dd>刷新客户端列表，再查询选中客户端的实时工具。内置工具默认可用；需要外部 harness 的能力时，先显式加载该项，再查询更新后的工具目录。</dd></div><div><dt>二维码放不下？</dt><dd>侧栏会改为显示可读链接。终端较小时，F1 帮助仍保留完整的指南地址。</dd></div></dl>
+  </section>
+</main>
+<footer class="container footer"><span>ssmcp {{version}}</span><a href="/">网关账户</a><a href="https://github.com/LIghtJUNction/ssmcp">源码与文档</a></footer>
+</body>
+</html>

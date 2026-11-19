@@ -42,18 +42,23 @@ SHELL_TOOLS = frozenset({
 })
 BUILTIN_TOOLS = frozenset({
     "ssmcp.fs.list", "ssmcp.fs.stat", "ssmcp.fs.read", "ssmcp.fs.write", "ssmcp.fs.mkdir",
-    "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
+    "ssmcp.fs.read_image", "ssmcp.fs.read_text", "ssmcp.fs.write_text", "ssmcp.fs.edit_text", "ssmcp.fs.events",
     "ssmcp.context.roots", "ssmcp.skills.list", "ssmcp.skills.read", "ssmcp.skills.view",
+    "ssmcp.context.status", "ssmcp.context.list", "ssmcp.context.read",
+    "ssmcp.context.compact", "ssmcp.context.fork", "ssmcp.context.switch",
     "ssmcp.agents.list", "ssmcp.agents.read", "ssmcp.agents.resolve",
     "ssmcp.net.listen", "ssmcp.net.accept", "ssmcp.net.connect", "ssmcp.net.read",
     "ssmcp.net.write", "ssmcp.net.shutdown", "ssmcp.net.close", "ssmcp.net.list",
     "ssmcp.rsync.start", "ssmcp.rsync.read", "ssmcp.rsync.write",
     "ssmcp.rsync.status", "ssmcp.rsync.close",
-    "ssmcp.client.reload",
+    "ssmcp.client.reload", "ssmcp.client.capabilities",
+    "ssmcp.resources.list", "ssmcp.resources.templates", "ssmcp.resources.read",
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
-    "ssmcp.harnesses.list", "ssmcp.audit.events",
+    "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",
+    "ssmcp.plugins.list", "ssmcp.plugins.load", "ssmcp.plugins.unload",
+    "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.history", "ssmcp.ui.harness",
     "ssmcp.browser.discover",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
@@ -61,16 +66,20 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.browser.tabs",
     "ssmcp.browser.open",
     "ssmcp.browser.navigate",
-    "ssmcp.browser.snapshot",
+    "ssmcp.browser.snapshot", "ssmcp.browser.wait_for",
     "ssmcp.browser.click",
     "ssmcp.browser.fill",
     "ssmcp.browser.key",
+    "ssmcp.browser.act",
+    "ssmcp.browser.wait",
     "ssmcp.browser.scroll",
     "ssmcp.browser.evaluate",
     "ssmcp.browser.screenshot",
     "ssmcp.browser.close",
     "ssmcp.browser.disconnect",
     "ssmcp.computer.status",
+    "ssmcp.computer.desktop_start", "ssmcp.computer.desktop_status",
+    "ssmcp.computer.desktop_stop", "ssmcp.computer.app_launch",
     "ssmcp.computer.monitors",
     "ssmcp.computer.windows",
     "ssmcp.computer.focus",
@@ -353,9 +362,37 @@ class Harness:
                    == ["Parent rule.\n", "Nested rule.\n"]
                    and result["instruction"]["content"] == "Parent rule.\n",
                    f"{label}: AGENTS resolution keeps parent-to-target order and exact text")
+        resource_files = result["ruleResource"]["files"]
+        native_files = result["rules"]["files"]
+        expected_client = client_id or self.client_id
+        self.check(len(resource_files) == len(native_files),
+                   f"{label}: the instruction resource preserves the native chain length")
+        for resource_file, native_file in zip(resource_files, native_files):
+            parsed = urlsplit(resource_file["readUri"])
+            self.check(resource_file["path"] == native_file["path"]
+                       and parsed.scheme == "ssmcp" and parsed.netloc == "clients"
+                       and parsed.path == f"/{expected_client}/agents/read" and not parsed.fragment
+                       and parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                       == {"root": ["workspace"], "path": [native_file["path"]]},
+                       f"{label}: instruction readUri names the exact client, root and file")
+        readback_code = "return await Promise.all(%s.map(uri => resources.read(uri)));" % json.dumps(
+            [row["readUri"] for row in resource_files]
+        )
+        readback = self.public_call("code_mode", {"code": readback_code})["result"]
+        self.check(len(readback) == len(native_files)
+                   and all(value["contents"] == [{
+                       "uri": resource_file["readUri"], "mimeType": "text/markdown",
+                       "text": native_file["content"],
+                   }] for value, resource_file, native_file in zip(readback, resource_files, native_files)),
+                   f"{label}: every instruction readUri returns the exact original text through SSH")
+        undecorated = []
+        for resource_file in resource_files:
+            native_copy = dict(resource_file)
+            del native_copy["readUri"]
+            undecorated.append(native_copy)
         self.check(result["skillResource"]["skills"][0]["name"] == "ssh-skill"
-                   and result["ruleResource"]["files"] == result["rules"]["files"],
-                   f"{label}: dynamic skill and instruction resources route across actual SSH")
+                   and undecorated == native_files,
+                   f"{label}: dynamic resources preserve all native fields beside their verified readUri")
 
     def read_until(self, pattern, *, cursor=0, timeout=5.0, client_id=None):
         deadline = time.monotonic() + timeout
@@ -465,14 +502,31 @@ class Harness:
 
         wait_for(ssh_ready, description="isolated sshd")
 
+    def external_invocations(self, label):
+        """Read only this fixture client's bounded external-program invocation log."""
+        path = self.directory / f"{label}-bin" / "external-invocations.jsonl"
+        if not path.exists():
+            return []
+        if path.stat().st_size > 1024 * 1024:
+            raise AssertionError("external fixture invocation log exceeded its bound")
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        if not all(isinstance(row.get("provider"), str)
+                   and isinstance(row.get("argv"), list)
+                   and all(isinstance(argument, str) for argument in row["argv"])
+                   and isinstance(row.get("pid"), int) for row in rows):
+            raise AssertionError("invalid external fixture invocation record")
+        return rows
+
     def client_environment(self, label, *, harness=None, fixture=None, fixture_args=(), harnesses=()):
         """Expose only shell utilities and the explicitly selected local fixture.
 
-        The production client discovers coding harnesses from PATH. Never inherit
+        Production loads external providers only on explicit request. Never inherit
         installed harnesses here: the tests must not start a real model account.
+        Every fixture invocation is recorded before even handling --version.
         """
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
+        (directory / "client.toml").touch(exist_ok=True)
         for name in ("ssh", "stty", "tty", "sleep", "head", "tr"):
             executable = shutil.which(name)
             if not executable:
@@ -486,34 +540,60 @@ class Harness:
             installed.append((harness, fixture, fixture_args))
         elif fixture is not None or fixture_args:
             raise ValueError("fixture arguments require an explicit harness")
-        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
+        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode",
+                 "playwright": "playwright-mcp"}
         for kind, program, arguments in installed:
             if kind not in names or program is None:
                 raise ValueError("a known harness and local fixture must be supplied together")
             wrapper = directory / names[kind]
             if wrapper.exists():
                 raise ValueError(f"duplicate harness fixture: {kind}")
-            command = shlex.join([sys.executable, str(Path(program).resolve())])
-            extra = shlex.join([str(argument) for argument in arguments])
+            provider = "claude" if kind == "cc" else kind
+            invocation_log = directory / "external-invocations.jsonl"
+            executable = [sys.executable, str(Path(program).resolve())]
+            extra = [str(argument) for argument in arguments]
             wrapper.write_text(
-                f'#!/bin/sh\nif [ "$1" = "--version" ]; then printf "%s\\n" '
-                f'"{names[kind]} fixture 2.3.0"; exit 0; fi\n'
-                f'exec {command} "$@" {extra}\n'
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                f"record = {{'provider': {provider!r}, 'argv': sys.argv[1:], 'pid': os.getpid()}}\n"
+                f"fd = os.open({str(invocation_log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"
+                "try:\n"
+                "    os.write(fd, (json.dumps(record, separators=(',', ':')) + '\\n').encode())\n"
+                "finally:\n"
+                "    os.close(fd)\n"
+                "if sys.argv[1:2] == ['--version']:\n"
+                f"    print({(names[kind] + ' fixture 2.3.0')!r})\n"
+                "    raise SystemExit(0)\n"
+                f"os.execv({sys.executable!r}, {executable!r} + sys.argv[1:] + {extra!r})\n"
             )
             wrapper.chmod(0o700)
+        # Cached account credentials can automatically select GitHub SSH ACLs.
+        # These login-code fixtures must neither consult that account nor reuse
+        # the invoking developer session's lifecycle or reload handoff state.
+        state = self.directory / f"{label}-state"
+        state.mkdir(mode=0o700)
+        (state / "auth").mkdir(mode=0o700)
+        (state / "sessions").mkdir(mode=0o700)
+        config = state / "config.toml"
+        config.write_text("")
         inherited = {key: value for key, value in os.environ.items()
-                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP")}
+                     if key not in ("SSMCP_PI_RPC_SOCKET", "SSMCP_OPENCODE_URL", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "SSMCP_PLAYWRIGHT_MCP",
+                                    "SSMCP_UI_CONFIG", "SSMCP_SESSION_GENERATION", "SSMCP_CLIENT_OUTBOX", "SSMCP_OUTPUT_RELOAD")}
         return {
             **inherited,
             "PATH": str(directory.resolve()),
             "ENV": "/dev/null",
             "BASH_ENV": "/dev/null",
+            "SSMCP_AUTH_HOME": str(state / "auth"),
+            "SSMCP_SESSION_HOME": str(state / "sessions"),
+            "SSMCP_CLIENT_CONFIG": str(config),
+            "SSMCP_UI_CONFIG": str(config),
         }
 
     def start_client(self, label="client", *, name="workstation", cwd=None, harness=None,
                      fixture=None, fixture_args=(), destination=None, harnesses=(), extra_env=None):
         command = [
-            str(self.binary_dir / "ssmcp"), "-F", str(self.directory / "ssh_config"),
+            str(self.binary_dir / "ssmcp"), "--ssh", "-F", str(self.directory / "ssh_config"),
             "--name", name, "--shell", "/bin/sh",
             destination or f"{self.user}@ssmcp-e2e",
         ]
@@ -677,8 +757,8 @@ class Harness:
         status, result, _ = self.rpc("notifications/initialized", notification=True)
         self.check(status == 202 and result is None, "initialized notification returns empty 202")
         status, result, headers = self.rpc("tools/list")
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode"],
-                   "legacy tools/list exposes exactly list and code_mode")
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                   "legacy tools/list exposes list, code_mode, collab and invite")
         inventory = self.public_call("list")
         self.check(len(inventory["clients"]) == 1
                    and inventory["clients"][0]["id"] == self.client_id
@@ -698,10 +778,16 @@ class Harness:
             capabilities = self.public_call("list", {"client_id": self.client_id, "cursor": cursor})
             catalog.extend(capabilities["tools"])
         expected_tools = SHELL_TOOLS | BUILTIN_TOOLS
-        self.check({tool["name"] for tool in catalog} == expected_tools
+        actual_tools = {tool["name"] for tool in catalog}
+        invalid_schemas = [tool["name"] for tool in catalog
+                           if not isinstance(tool.get("inputSchema"), dict)]
+        self.check(actual_tools == expected_tools
                    and len(catalog) == len(expected_tools)
-                   and all(isinstance(tool["inputSchema"], dict) for tool in catalog),
-                   "list discovers exact native capability names and schemas for code_mode")
+                   and not invalid_schemas,
+                   "list discovers exact native capability names and schemas for code_mode: "
+                   f"missing={sorted(expected_tools - actual_tools)}, "
+                   f"extra={sorted(actual_tools - expected_tools)}, "
+                   f"duplicates={len(catalog) - len(actual_tools)}, invalid_schemas={invalid_schemas}")
         self.check(any(key.lower() == "cache-control" and "no-store" in value for key, value in headers.items()),
                    "MCP responses cannot be stored by caches")
         self.check(self.rpc("ping", headers={"Origin": PUBLIC_URL})[0] == 200, "configured Origin is accepted")
@@ -717,8 +803,8 @@ class Harness:
         self.check(status == 200 and result["result"]["resultType"] == "complete"
                    and MODERN in result["result"]["supportedVersions"], "modern server/discover completes")
         status, result, _ = self.rpc("tools/list", modern=True)
-        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode"],
-                   "modern tools/list exposes the same two tools")
+        self.check(status == 200 and [tool["name"] for tool in result["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
+                   "modern tools/list exposes the same public tools")
         self.check(self.rpc("tools/list", modern=True, headers={"Mcp-Method": "ping"})[0] == 400,
                    "modern method header must match body")
         self.check(self.rpc("tools/list", modern=True, headers={"MCP-Protocol-Version": LEGACY})[0] == 400,

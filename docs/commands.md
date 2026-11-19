@@ -1,13 +1,12 @@
 # 客户端命令与独立任务
 
-## 登录、设备列表与临时控制
+## 连接、设备列表与临时控制
 
-先在 A 登录 GitHub，再启动自己的被控会话。随后在另一个终端查看账号下的设备，或生成命令交给 B：
+在 A 的项目目录运行 `ssmcp username@server`；首次连接自动引导 GitHub 授权和用户名绑定，授权完成后继续连接。随后在另一个终端查看设备或邀请 B：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
-ssmcp whoami
-ssmcp --name device-a
+ssmcp alice@ssmcp.example.com --name device-a
+# 无浏览器：ssmcp alice@ssmcp.example.com --no-browser
 
 # 在 A 的另一个终端：
 ssmcp list
@@ -17,14 +16,40 @@ ssmcp invite
 
 | 命令 | 用途 |
 | --- | --- |
-| `ssmcp login` / `whoami` / `logout` | 登录、确认身份、撤销这次客户端登录 |
+| `ssmcp username@server` | 自动登录或注册并连接自己的设备 |
+| `ssmcp whoami` / `logout` | 确认身份、撤销这次客户端授权 |
 | `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
 | `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
-| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认从服务器下载客户端 |
+| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认验证并持久安装同源兼容客户端 |
 | `ssmcp invite --shell powershell` | 生成给 Windows PowerShell 的命令 |
 | `ssmcp sessions list` / `attach NAME` | 当前设备保存的本地后台会话 |
 
-邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或授权到期后不会继续恢复。[完整账号流程与服务器配置](client-accounts.md)
+用户名不区分大小写，采用 3–32 个 ASCII 字母、数字、`_` 或 `-`，首字符为字母、末字符为字母或数字。凭据按服务器隔离，后续可直接运行 `ssmcp`；更换名字或服务器用完整目标。被占名字、账号已绑定其他名字会明确报错。[用户名与服务器管理](named-accounts.md)
+
+邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或临时授权到期后不会继续恢复。具名账号的前台连接会在凭据过期后请求新的 GitHub 授权；后台会话等待你在终端重新授权后手动重启。[完整账号流程与服务器配置](client-accounts.md)
+
+## 更新客户端
+
+`ssmcp update` 将手动安装的客户端更新到官方 GitHub Release 中的最新稳定版。它是独立本地命令，不建立服务器会话，也不加载 harness。
+
+~~~sh
+ssmcp update --check
+ssmcp update
+~~~
+
+`--check` 只读取发布元数据并显示是否有新版本，不下载安装包或修改安装文件。版本按主版本、次版本和修订号比较；已是最新版时直接结束，当前源码版本比发布版新时保留当前程序。
+
+更新复用客户端随包携带的安装器：从官方 GitHub 下载 `SHA256SUMS`，按平台获取发布包，校验 SHA-256，并运行候选程序的 `--version` 确认版本。只有全部成功才替换当前可执行文件。发布包可按既有安装器规则回退至下载镜像，校验清单始终来自官方源。下载失败、校验失败、候选版本不符或目录不可写时返回错误，保留原程序。
+
+Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 Windows PowerShell。更新目标是正在执行的 `ssmcp` 或 `ssmcp.exe` 的安装目录；重命名的程序需用原安装方式更新。Cargo、Homebrew、Scoop、Windows 包管理器、Nix、Snap 和系统目录中的包管理器安装不会被原位覆盖，命令会提示使用对应更新方式；`--check` 仍可使用。不能识别所有第三方安装布局，使用自定义包管理器时应继续由该管理器更新。
+
+更新不重启现有客户端或后台服务。它们继续执行已加载的程序，按需重启后使用新版本；Windows 若正在运行的旧文件暂时无法删除，安装器会保留带唯一名称的备份并说明位置。更新命令不会提升权限，也不会修改 Shell 或系统 PATH。
+
+## 前台观察与终端输入
+
+前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。Enter 提交到队列；`/queue` 管理待交付项，`/agents` 选择接收成员，`/audit` 打开源码审计。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)
+
+输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 
 ## 独立命令接口
 
@@ -44,7 +69,7 @@ return await exec.run(client.id, {
 });
 ```
 
-`run` 先启动，再等待，最后读取一次输出。返回 `job_id`、`running`、`exit_code`、`stdout`、`stderr`、两个字节游标和最新 `snapshot`。`running: false` 才说明任务收尾结束；`exit_code: 0` 表示进程正常成功退出。启动或参数错误会拒绝 JavaScript Promise，进程自身非零退出仍是一个有效结果，应由调用方检查退出码。
+`run` 先启动，再等待，最后读取一次输出。返回 `job_id`、`running`、`exit_code`、`stdout`、`stderr`、两个字节游标和最新 `snapshot`。`status/read/wait` 返回 `running: false` 时，该任务占用的执行槽已释放；观察器收尾可能继续，这一状态不表示所有 UI 资源都已释放。`exit_code: 0` 表示进程正常成功退出。启动或参数错误会拒绝 JavaScript Promise，进程自身非零退出仍是一个有效结果，应由调用方检查退出码。
 
 `command` 是 argv 数组，不经过隐式 Shell 展开。`["echo", "$HOME"]` 不会把 `$HOME` 替换为目录。需要管道、重定向或 Shell 内建命令时，显式选择本机 Shell，例如 Unix 的 `["sh", "-lc", "printf '%s\\n' hello | wc -l"]`，或 Windows 的 `["cmd.exe", "/d", "/s", "/c", "echo hello"]`。
 
@@ -77,9 +102,23 @@ return await exec.wait(clientId, jobId, { wait_ms: 5000 });
 | `exec.status(clientId, jobId)` | 读取一个任务的最新状态 |
 | `exec.wait(clientId, jobId, {wait_ms})` | 等待结束或等待期限到达 |
 | `exec.read(clientId, jobId, options)` | 按字节游标读取两个输出流，可同时短等待 |
+| `exec.write(clientId, jobId, options)` | 向以 `stdin:"pipe"` 启动的任务写入数据或发送 EOF |
 | `exec.cancel(clientId, jobId)` | 请求停止任务及其受管理子进程；重复取消已结束任务可安全返回 |
 | `exec.forget(clientId, jobId)` | 删除已完成的任务记录；运行中任务必须先取消 |
 | `exec.events(clientId, options)` | 读取任务事件；参数以发现的 schema 为准 |
+
+以上六个按任务 ID 操作的接口（`status/wait/read/write/cancel/forget`）也接受与原生 schema 相同的对象参数：
+
+```javascript
+return await exec.read(clientId, {
+  job_id: jobId,
+  stdout_cursor: savedStdoutCursor,
+  stderr_cursor: savedStderrCursor,
+  max_bytes: 16384
+});
+```
+
+对象形式需要含非空字符串 `job_id`，所有选项写在同一个对象中；同时提供第三参数会在调用前报错。原有 `exec.read(clientId, jobId, options)` 继续可用，第三参数中的 `job_id` 仍由第二参数确定的任务 ID 覆盖。参数对象不会被修改，其余字段继续由客户端原生 schema 验证；原生失败保留原错误且不自动重试。对象形式需要更新服务端的 JavaScript 助手，已有原生命令接口的客户端可以直接使用。
 
 任务在当前 `code_mode` 完成后继续存在，但属于这条客户端连接。退出、断开清理或 `reload` 会停止其后台工作；任务 ID 不能迁移到重连后的新客户端。
 
@@ -95,9 +134,30 @@ return await exec.parallel(clientId, [
 
 结果按输入顺序排列，每项为 `{status:"fulfilled", value:...}` 或 `{status:"rejected", reason:...}`。一个启动失败不会抹掉其他项的结果。fulfilled 表示助手正常返回，是否构建成功仍需检查 `value.running` 和 `value.exit_code`。
 
-一次最多提交 32 项，`concurrency` 为 1–8，默认 4。它限制同时进行的“启动 → 等待 → 读取”流程。长命令等待到期后仍会在后台继续，而该流程可以处理下一项，因此后台运行总数可能高于此并行度。客户端另有 32 个同时运行任务的硬上限；容量不足时在创建进程前报错。需要严格限制长期任务数时，按实际完成状态分批调度。
+一次最多提交 32 项，`concurrency` 为 1–8，默认 4，限制这次调用实际运行中的命令数。单次等待到期时，任务继续占用名额，直到明确结束才启动下一项。客户端另有 32 个同时运行任务的硬上限，容量不足时在创建进程前报错。
+
+命令选项类型、`wait_ms` 或 `max_bytes` 在本地校验失败时，该项返回 `rejected` 和 `not_started:true`，同一 worker 继续执行后续合法项；这类错误不会发送原生命令。
+
+进入原生启动阶段后，如果启动回包丢失或后续状态读取失败，该 worker 会保留名额，并返回已经取得的 `job_id`（若有），避免在完成状态未知时继续启动任务。未被其他 worker 执行的项目返回 `not_started:true`；先用 `exec.status/read/list` 检查任务状态，再决定是否重试。
 
 `parallel` 默认每个流只读取 2048 字节，控制汇总大小；单项可用 `max_bytes` 覆盖。长输出按需分页，避免把多份完整构建日志放进一次响应。
+
+## RTK 的异步错误处理
+
+`rtk.start` 和 `rtk.run` 始终返回 Promise，本地参数错误也可由 `.catch(...)` 或混合的 `Promise.allSettled(...)` 处理。例如，下面的第二项用空命令演示本地参数错误：
+
+```javascript
+const results = await Promise.allSettled([
+  rtk.run(clientId, { command: ["git", "status", "--short"] }),
+  rtk.start(clientId, { command: [] }),
+  exec.run(clientId, { command: ["git", "diff", "--stat"] })
+]);
+return results.map(result => result.status === "fulfilled"
+  ? result
+  : { status: result.status, error: result.reason.message });
+```
+
+每项分别返回 fulfilled 或 rejected；已经启动的合法项保留独立结果，不因其他项的参数错误而丢失。助手不自动重试命令。
 
 ## 读取完整输出
 
@@ -114,7 +174,7 @@ return await exec.read(clientId, jobId, {
 
 下次沿用返回的 `stdout_cursor`、`stderr_cursor`。`stdout_base64` / `stderr_base64` 保留精确字节，文本字段便于阅读；UTF-8 字符可能横跨字节页，要求精确还原时拼接 base64 解码后的字节再解码文本。未来游标会报错，避免悄悄跳过尚未产生的内容。
 
-每个流在内存保留最近 64 KiB。游标落后于保留范围时，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。输出超过 32 KiB 或 500 行后同时保存转储文件；从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得 ID，用 `outputs.read` 读取已捕获的完整前缀：
+运行中的每个流在内存保留最近 64 KiB。此时游标落后于保留范围，`stdout_truncated` 或 `stderr_truncated` 为 true，并从可读尾部继续返回。流成功结束且捕获完整后会释放重复尾部；后续 `exec.read` 按游标读取完整 capture，小输出可保留一份内存捕获，较大输出从归档读取。归档缺失或缩短会返回错误，捕获失败仍保留尾部和错误信息。输出超过 32 KiB 或 500 行后保存转储文件；从 `snapshot.stdout.artifact` 或 `snapshot.stderr.artifact` 取得 ID，也可用 `outputs.read` 读取已捕获的完整前缀：
 
 ```javascript
 return await outputs.read(clientId, {
@@ -123,6 +183,8 @@ return await outputs.read(clientId, {
   max_bytes: 16384
 });
 ```
+
+`outputs.read` 和 `outputs.stat` 均拒绝实际长度小于 manifest 记录值的归档；`complete: true` 时，实际长度必须与记录值相等。`outputs.stat` 还会核对完整归档的原始 SHA-256；`outputs.read` 仅校验长度与分页，并返回本页内容的哈希。活动归档可以继续增长，`complete: false` 的部分捕获在满足长度要求时仍可读取。Unix 上，归档路径若被替换成 FIFO，会作为非普通文件及时报错，无需等待管道另一端。
 
 继续沿用 `next_offset`。活动文件的 EOF 只表示当前已经读到文件末尾，仍可能产生后续内容。结束后结合任务状态与转储的 `complete`、`error` 检查捕获完整性。写入失败、单文件超过 256 MiB、收尾读取异常或超时都会明确记录，不应把不完整输出当作完整日志。[输出保留和清理规则](session-control.md)
 

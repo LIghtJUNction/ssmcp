@@ -27,10 +27,10 @@ ssmcp setup --portal https://accounts.example.com \
 正常连接仍使用原来的命令：
 
 ```sh
-ssmcp my-ssmcp
+ssmcp --ssh my-ssmcp
 
 # 保持手工配置方式，关闭首次失败后的自动向导。
-ssmcp --no-setup my-ssmcp
+ssmcp --ssh --no-setup my-ssmcp
 
 # 为单独的配置文件运行向导。
 ssmcp setup -F ~/.ssh/work_config ssh.example.com

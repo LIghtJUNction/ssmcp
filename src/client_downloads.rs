@@ -1,4 +1,4 @@
-//! Public client installation and invitation bootstrap with bounded binary downloads.
+//! Verified persistent bootstrap and bounded downloads from this server only.
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -7,7 +7,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
+    collections::BTreeMap,
     ffi::CString,
     fs::File,
     io,
@@ -21,6 +24,15 @@ use std::{
 use tokio::io::AsyncReadExt;
 
 const MAX_BINARY: u64 = 256 * 1024 * 1024;
+const MAX_RELEASE: u64 = 16 * 1024;
+pub(crate) const TARGETS: &[&str] = &[
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+];
 const INSTALL_SH: &str = include_str!("../scripts/install.sh");
 const INSTALL_POWERSHELL: &str = include_str!("../scripts/install.ps1");
 const SH: &str = include_str!("client_downloads/install.sh");
@@ -32,12 +44,160 @@ struct Downloads {
     install_powershell: Arc<str>,
     shell: Arc<str>,
     powershell: Arc<str>,
-    directory: Option<Arc<File>>,
+    publisher: Option<Publisher>,
+}
+
+/// A single anchored publication shared by the HTTP routes and MCP invite.
+#[derive(Clone)]
+pub struct Publisher {
+    directory: Arc<File>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Release {
+    schema: u32,
+    version: String,
+    wire_version: u32,
+    targets: BTreeMap<String, Asset>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Asset {
+    size: u64,
+    sha256: String,
+}
+
+impl Publisher {
+    fn release(&self) -> io::Result<Release> {
+        let (file, length) = open_binary(&self.directory, "release.json")?;
+        if length > MAX_RELEASE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "client release manifest exceeds 16 KiB",
+            ));
+        }
+        let mut bytes = Vec::with_capacity(length as usize);
+        std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_RELEASE + 1), &mut bytes)?;
+        let invalid = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "client release manifest is invalid or incompatible with this gateway",
+            )
+        };
+        if bytes.len() as u64 != length {
+            return Err(invalid());
+        }
+        let release: Release = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if release.schema != 1
+            || u64::from(release.wire_version) != u64::from(crate::wire::VERSION)
+            || !valid_version(&release.version)
+            || release.targets.is_empty()
+            || release.targets.len() > TARGETS.len()
+        {
+            return Err(invalid());
+        }
+        for (target, asset) in &release.targets {
+            let name = filename(target).ok_or_else(invalid)?;
+            if !(1..=MAX_BINARY).contains(&asset.size)
+                || asset.sha256.len() != 64
+                || !asset
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || open_binary(&self.directory, &name)?.1 != asset.size
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(release)
+    }
+
+    pub(crate) async fn metadata(&self) -> Result<Value, String> {
+        let publisher = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let release = publisher
+                .release()
+                .map_err(|_| publication_error().to_owned())?;
+            serde_json::to_value(release).map_err(|_| publication_error().to_owned())
+        })
+        .await
+        .map_err(|_| publication_error().to_owned())?
+    }
+
+    async fn asset(&self, target: String) -> Result<(File, Asset, String, u32), String> {
+        let publisher = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let release = publisher
+                .release()
+                .map_err(|_| publication_error().to_owned())?;
+            let asset = release
+                .targets
+                .get(&target)
+                .ok_or_else(|| publication_error().to_owned())?
+                .clone();
+            let name = filename(&target).ok_or_else(|| publication_error().to_owned())?;
+            let (file, length) = open_binary(&publisher.directory, &name)
+                .map_err(|_| publication_error().to_owned())?;
+            if length != asset.size {
+                return Err(publication_error().to_owned());
+            }
+            Ok((file, asset, release.version, release.wire_version))
+        })
+        .await
+        .map_err(|_| publication_error().to_owned())?
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_fixture(directory: &Path) -> Self {
+        Self {
+            directory: Arc::new(open_directory(directory).unwrap()),
+        }
+    }
+}
+
+fn publication_error() -> &'static str {
+    "This gateway has no complete compatible client release. Publish release.json and its matching executables in server.client_download_dir; an already installed compatible client can still join."
+}
+
+fn valid_version(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return false;
+    }
+    let core = value.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<_> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Bind bootstrap content to the configured public URL, never the request Host.
 pub fn router(public_url: &str, directory: Option<&Path>) -> crate::Result<Router> {
+    configured(public_url, directory).map(|(router, _)| router)
+}
+
+/// Share the exact same opened directory with invitation metadata. Optional
+/// configuration keeps ordinary installed-client connections independent.
+pub fn configured(
+    public_url: &str,
+    directory: Option<&Path>,
+) -> crate::Result<(Router, Option<Publisher>)> {
     let origin = trusted_origin(public_url)?;
+    let publisher = match directory.map(open_directory) {
+        Some(Ok(file)) => Some(Publisher {
+            directory: Arc::new(file),
+        }),
+        Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => None,
+        Some(Err(error)) => return Err(error.into()),
+        None => None,
+    };
     let state = Downloads {
         install_shell: INSTALL_SH
             .replace("'https://ssmcp.lmm.best'", &shell_quote(&origin))
@@ -45,24 +205,26 @@ pub fn router(public_url: &str, directory: Option<&Path>) -> crate::Result<Route
         install_powershell: INSTALL_POWERSHELL
             .replace("'https://ssmcp.lmm.best'", &powershell_quote(&origin))
             .into(),
-        shell: SH.replace("@@ORIGIN@@", &shell_quote(&origin)).into(),
+        shell: SH
+            .replace("@@ORIGIN@@", &shell_quote(&origin))
+            .replace("@@WIRE@@", &crate::wire::VERSION.to_string())
+            .into(),
         powershell: POWERSHELL
             .replace("@@ORIGIN@@", &powershell_quote(&origin))
+            .replace("@@WIRE@@", &crate::wire::VERSION.to_string())
             .into(),
-        directory: match directory.map(open_directory) {
-            Some(Ok(file)) => Some(Arc::new(file)),
-            Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => None,
-            Some(Err(error)) => return Err(error.into()),
-            None => None,
-        },
+        publisher: publisher.clone(),
     };
-    Ok(Router::new()
+    let router = Router::new()
         .route("/install.sh", get(install_shell))
         .route("/install.ps1", get(install_powershell))
         .route("/client/install.sh", get(shell))
         .route("/client/install.ps1", get(powershell))
+        .route("/client/release.json", get(release))
+        .route("/client/release/{target}", get(target_release))
         .route("/client/bin/{target}", get(binary))
-        .with_state(state))
+        .with_state(state);
+    Ok((router, publisher))
 }
 
 fn trusted_origin(raw: &str) -> crate::Result<String> {
@@ -195,20 +357,54 @@ async fn powershell(State(state): State<Downloads>) -> Response {
     script(&state.powershell)
 }
 
-async fn binary(State(state): State<Downloads>, RoutePath(target): RoutePath<String>) -> Response {
-    let Some(name) = filename(&target) else {
+async fn release(State(state): State<Downloads>) -> Response {
+    let Some(publisher) = state.publisher else {
+        return (StatusCode::SERVICE_UNAVAILABLE, publication_error()).into_response();
+    };
+    match publisher.metadata().await {
+        Ok(value) => (
+            [
+                (header::CACHE_CONTROL, "no-store"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            axum::Json(value),
+        )
+            .into_response(),
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    }
+}
+
+async fn target_release(
+    State(state): State<Downloads>,
+    RoutePath(target): RoutePath<String>,
+) -> Response {
+    if filename(&target).is_none() {
         return (StatusCode::NOT_FOUND, "Unsupported ssmcp client platform.").into_response();
+    }
+    let Some(publisher) = state.publisher else {
+        return (StatusCode::SERVICE_UNAVAILABLE, publication_error()).into_response();
     };
-    let unavailable = || {
-        (StatusCode::SERVICE_UNAVAILABLE,
-        "This server has no client binary for this platform. Configure server.client_download_dir and place the matching ssmcp release executable there.").into_response()
+    match publisher.asset(target).await {
+        Ok((_, asset, version, wire_version)) => script(&format!(
+            "ssmcp-release-v1\n{version}\n{wire_version}\n{}\n{}\n",
+            asset.size, asset.sha256
+        )),
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
+    }
+}
+
+async fn binary(State(state): State<Downloads>, RoutePath(target): RoutePath<String>) -> Response {
+    if filename(&target).is_none() {
+        return (StatusCode::NOT_FOUND, "Unsupported ssmcp client platform.").into_response();
+    }
+    let Some(publisher) = state.publisher else {
+        return (StatusCode::SERVICE_UNAVAILABLE, publication_error()).into_response();
     };
-    let Some(directory) = state.directory else {
-        return unavailable();
+    let (file, asset, _, _) = match publisher.asset(target).await {
+        Ok(asset) => asset,
+        Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, error).into_response(),
     };
-    let Ok((file, length)) = open_binary(&directory, &name) else {
-        return unavailable();
-    };
+    let length = asset.size;
     let stream = futures_util::stream::try_unfold(
         (tokio::fs::File::from_std(file), length),
         |(mut file, remaining)| async move {
@@ -263,6 +459,71 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+
+    fn publish(root: &Path, target: &str, bytes: &[u8]) {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        std::fs::write(
+            root.join("release.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema":1,"version":"0.9.0","wire_version":crate::wire::VERSION,
+                "targets":{target:{"size":bytes.len(),"sha256":digest}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn release_manifest_is_bounded_compatible_and_anchored() {
+        let root = temporary();
+        let target = "x86_64-unknown-linux-gnu";
+        let name = filename(target).unwrap();
+        std::fs::write(root.join(&name), b"fixture").unwrap();
+        publish(&root, target, b"fixture");
+        let publisher = Publisher::test_fixture(&root);
+        assert_eq!(publisher.release().unwrap().version, "0.9.0");
+        let valid = std::fs::read(root.join("release.json")).unwrap();
+        for patch in [
+            serde_json::json!({"wire_version":6}),
+            serde_json::json!({"schema":2}),
+            serde_json::json!({"version":"0.9.0\nsh -c unsafe"}),
+            serde_json::json!({"targets":{"../private":{"size":7,"sha256":"0".repeat(64)}}}),
+        ] {
+            let mut manifest: Value = serde_json::from_slice(&valid).unwrap();
+            for (key, value) in patch.as_object().unwrap() {
+                manifest[key] = value.clone();
+            }
+            std::fs::write(
+                root.join("release.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            assert!(publisher.release().is_err());
+        }
+        std::fs::write(root.join("release.json"), &valid).unwrap();
+        std::fs::write(root.join(&name), b"changed fixture").unwrap();
+        assert!(
+            publisher.release().is_err(),
+            "metadata and binary sizes must agree"
+        );
+        std::fs::write(root.join(&name), b"fixture").unwrap();
+        std::fs::write(
+            root.join("release.json"),
+            vec![b' '; (MAX_RELEASE + 1) as usize],
+        )
+        .unwrap();
+        assert!(publisher.release().is_err());
+        std::fs::remove_file(root.join("release.json")).unwrap();
+        std::fs::write(root.join("actual.json"), valid).unwrap();
+        symlink(root.join("actual.json"), root.join("release.json")).unwrap();
+        assert!(publisher.release().is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn platform_names_are_fixed_and_cannot_traverse() {
         assert_eq!(
@@ -308,12 +569,13 @@ mod tests {
         let name = filename("x86_64-unknown-linux-gnu").unwrap();
         let bytes = b"binary bytes\0\0test";
         std::fs::write(root.join(&name), bytes).unwrap();
+        publish(&root, "x86_64-unknown-linux-gnu", bytes);
         let state = Downloads {
             install_shell: "".into(),
             install_powershell: "".into(),
             shell: "".into(),
             powershell: "".into(),
-            directory: Some(Arc::new(open_directory(&root).unwrap())),
+            publisher: Some(Publisher::test_fixture(&root)),
         };
         let response = binary(
             State(state.clone()),
@@ -351,11 +613,42 @@ mod tests {
         let name = filename("x86_64-unknown-linux-gnu").unwrap();
         let bytes = b"test executable bytes";
         std::fs::write(root.join(&name), bytes).unwrap();
+        publish(&root, "x86_64-unknown-linux-gnu", bytes);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = router("https://configured.example", Some(&root)).unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = reqwest::Client::new();
+        let manifest: Value = client
+            .get(format!("http://{address}/client/release.json"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(manifest["version"], "0.9.0");
+        assert_eq!(manifest["wire_version"], crate::wire::VERSION);
+        let selected = client
+            .get(format!(
+                "http://{address}/client/release/x86_64-unknown-linux-gnu"
+            ))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let fields: Vec<_> = selected.lines().collect();
+        assert_eq!(fields.len(), 5);
+        assert_eq!(fields[0], "ssmcp-release-v1");
+        assert_eq!(fields[1], "0.9.0");
+        assert_eq!(
+            fields[4],
+            manifest["targets"]["x86_64-unknown-linux-gnu"]["sha256"]
+                .as_str()
+                .unwrap()
+        );
         for path in [
             "install.sh",
             "install.ps1",
@@ -374,6 +667,10 @@ mod tests {
             assert!(source.contains("https://configured.example"));
             assert!(!source.contains("injected.example"));
             assert!(!source.contains("@@ORIGIN@@"));
+            if !path.starts_with("client/") {
+                assert!(source.contains("Sign in: ssmcp login --server"));
+                assert!(!source.contains("'https://ssmcp.lmm.best'"));
+            }
         }
         let response = client
             .get(format!(

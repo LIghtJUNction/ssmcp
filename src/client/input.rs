@@ -1,5 +1,5 @@
-//! Local human input belongs to the interactive PTY, never the command executor.
-//! Keep the outer terminal's interrupt handling: Ctrl-C disconnects the client.
+//! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
+//! Ctrl-C disconnects outside bracketed paste; pasted binary bytes remain intact.
 use crate::{
     pty::Terminal,
     terminals::Terminals,
@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
+
+pub(crate) mod paste;
 
 pub(crate) struct Input {
     task: Option<JoinHandle<()>>,
@@ -102,9 +104,17 @@ async fn forward_keys(terminals: &Terminals, events: Vec<InputEvent>) -> Result<
         match event {
             InputEvent::Text(text) => {
                 let text = super::terminal::keyboard(&text);
+                apply_display_changes(terminals).await?;
                 forward_local(terminals, &text).await;
             }
-            InputEvent::NextTerminal => terminals.cycle()?,
+            InputEvent::NextTerminal => {
+                if super::terminal::active() {
+                    let _ = super::terminal::keyboard("\x1b[18~");
+                    apply_display_changes(terminals).await?;
+                } else {
+                    terminals.cycle()?;
+                }
+            }
         }
     }
     Ok(())
@@ -121,6 +131,7 @@ async fn forward_human(
 async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Result<(), String> {
     forward_keys(terminals, keys.feed("", Instant::now(), true)).await?;
     let keyboard = super::terminal::take_keyboard();
+    apply_display_changes(terminals).await?;
     if !keyboard.is_empty() {
         forward_local(terminals, &keyboard).await;
     }
@@ -137,11 +148,22 @@ async fn forward_display(terminals: &Terminals, keys: &mut SessionKeys) -> Resul
     Ok(())
 }
 
+async fn apply_display_changes(terminals: &Terminals) -> Result<(), String> {
+    if super::interface::apply_pending()?.is_some() {
+        super::interface::sync_terminal_sizes(terminals).await?;
+    }
+    Ok(())
+}
+
 async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), String> {
     // Some terminals report 0 while being created or minimized.
     if rows > 0 && cols > 0 {
         let (rows, cols) = super::terminal::physical_resize(rows, cols);
-        terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        if super::terminal::active() {
+            super::interface::sync_terminal_sizes(terminals).await?;
+        } else {
+            terminals.resize_all(rows.min(1000), cols.min(1000)).await?;
+        }
     }
     Ok(())
 }
@@ -153,7 +175,7 @@ pub(crate) enum InputEvent {
 }
 
 /// Preserve ordering around F7 even when one stdin read contains input for two
-/// terminals. Paste markers stay in the stream for the existing F6 handler.
+/// terminals in fallback mode. Dashboard and paste input remain in their original order.
 #[derive(Default)]
 pub(crate) struct SessionKeys {
     pending: Vec<u8>,
@@ -324,14 +346,21 @@ mod platform {
     }
 
     impl Mode {
-        fn enable(fd: OwnedFd) -> Result<Arc<Self>, String> {
+        fn enable(fd: OwnedFd, dashboard: bool) -> Result<Arc<Self>, String> {
             // SAFETY: OwnedFd keeps this nonblocking descriptor stable until deregistration.
             let fd = unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE) }
                 .map_err(|e| format!("register local terminal input: {e}"))?;
             let saved = attributes(fd.get_ref().as_raw_fd()).map_err(|e| e.to_string())?;
             let mut local = saved;
             local.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ECHONL | libc::IEXTEN);
-            local.c_lflag |= libc::ISIG;
+            // The line discipline must not interpret an image's 0x03 as Ctrl-C
+            // before the bracketed-paste decoder sees it. The dashboard handles
+            // an unpasted Ctrl-C through the existing interrupt signal instead.
+            if dashboard {
+                local.c_lflag &= !libc::ISIG;
+            } else {
+                local.c_lflag |= libc::ISIG;
+            }
             local.c_iflag &= !(libc::IXON
                 | libc::IXOFF
                 | libc::ICRNL
@@ -392,7 +421,7 @@ mod platform {
         };
         // Register before changing the mode so every error path leaves it unchanged.
         let resized = signal(SignalKind::window_change()).map_err(|e| e.to_string())?;
-        let mode = Mode::enable(fd)?;
+        let mode = Mode::enable(fd, super::super::terminal::active())?;
         let task_mode = mode.clone();
         let task = tokio::spawn(async move {
             let _restore = RestoreOnExit(task_mode.clone());
@@ -504,8 +533,8 @@ mod platform {
                         if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
                     });
                     match read {
-                        Ok(Ok(0)) => { forward_human(terminals, &mut keys, &utf8.push(&[], true)).await?; break; }
-                        Ok(Ok(n)) => forward_human(terminals, &mut keys, &utf8.push(&buffer[..n], false)).await?,
+                        Ok(Ok(0)) => { forward_input(terminals, &mut keys, &mut utf8, &[], true).await?; break; }
+                        Ok(Ok(n)) => forward_input(terminals, &mut keys, &mut utf8, &buffer[..n], false).await?,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -514,6 +543,27 @@ mod platform {
             }
         }
         Ok(())
+    }
+
+    /// The dashboard owns raw paste bytes. Decode only the fallback PTY path,
+    /// after the byte-oriented compositor has had a chance to consume input.
+    async fn forward_input(
+        terminals: &Terminals,
+        keys: &mut SessionKeys,
+        utf8: &mut Utf8Input,
+        bytes: &[u8],
+        eof: bool,
+    ) -> Result<(), String> {
+        if let Some(output) = super::super::terminal::keyboard_bytes(bytes) {
+            apply_display_changes(terminals).await?;
+            let text = utf8.push(&output, eof);
+            if !text.is_empty() {
+                forward_local(terminals, &text).await;
+            }
+            Ok(())
+        } else {
+            forward_human(terminals, keys, &utf8.push(bytes, eof)).await
+        }
     }
 
     #[derive(Default)]
@@ -684,7 +734,8 @@ mod platform {
             let saved = attributes(source.as_raw_fd()).unwrap();
             // SAFETY: F_GETFL only reads the open descriptor's flags.
             let flags = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_GETFL) };
-            let mode = Mode::enable(reopen_tty(source.as_raw_fd()).unwrap().unwrap()).unwrap();
+            let mode =
+                Mode::enable(reopen_tty(source.as_raw_fd()).unwrap().unwrap(), false).unwrap();
             let attached = attributes(source.as_raw_fd()).unwrap();
             assert_eq!(attached.c_lflag & (libc::ICANON | libc::ECHO), 0);
             assert_ne!(attached.c_lflag & libc::ISIG, 0);
@@ -694,6 +745,48 @@ mod platform {
                 unsafe { libc::fcntl(source.as_raw_fd(), libc::F_GETFL) },
                 flags
             );
+            drop(mode);
+            same_mode(saved, attributes(source.as_raw_fd()).unwrap());
+        }
+
+        #[tokio::test]
+        async fn dashboard_input_keeps_binary_control_bytes_and_restores_termios() {
+            let (keyboard, source) = pair();
+            let saved = attributes(source.as_raw_fd()).unwrap();
+            let mode =
+                Mode::enable(reopen_tty(source.as_raw_fd()).unwrap().unwrap(), true).unwrap();
+            let attached = attributes(source.as_raw_fd()).unwrap();
+            assert_eq!(attached.c_lflag & libc::ISIG, 0);
+            let png = b"\x1b[200~\x89PNG\r\n\x1a\n\x00\x03\x11\x13\xff\x1b[201~";
+            write(&keyboard, png);
+            let mut received = Vec::new();
+            timeout(Duration::from_secs(2), async {
+                while received.len() < png.len() {
+                    let mut ready = mode.fd.readable().await.unwrap();
+                    let mut buffer = [0; 128];
+                    let read = ready.try_io(|fd| {
+                        // SAFETY: fd is open and buffer is writable.
+                        let count = unsafe {
+                            libc::read(
+                                fd.get_ref().as_raw_fd(),
+                                buffer.as_mut_ptr().cast(),
+                                buffer.len(),
+                            )
+                        };
+                        if count < 0 {
+                            Err(io::Error::last_os_error())
+                        } else {
+                            Ok(count as usize)
+                        }
+                    });
+                    if let Ok(Ok(count)) = read {
+                        received.extend_from_slice(&buffer[..count]);
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(received, png);
             drop(mode);
             same_mode(saved, attributes(source.as_raw_fd()).unwrap());
         }
@@ -843,8 +936,8 @@ mod platform {
             ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_WINDOW_INPUT, GetConsoleMode,
             GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
             KEY_EVENT, KEY_EVENT_RECORD, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED,
-            RIGHT_CTRL_PRESSED, ReadConsoleInputW, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
-            SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
+            RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED, STD_ERROR_HANDLE,
+            STD_OUTPUT_HANDLE, SetConsoleMode, WINDOW_BUFFER_SIZE_EVENT,
         },
     };
 
@@ -1026,8 +1119,18 @@ mod platform {
             let unit = unsafe { key.uChar.UnicodeChar };
             let ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
             let alt = key.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0 && !ctrl;
+            let shift = key.dwControlKeyState & SHIFT_PRESSED != 0;
             let mut text = String::new();
-            if unit != 0 {
+            if shift && matches!(key.wVirtualKeyCode, 0x09 | 0x0d) {
+                let sequence = if key.wVirtualKeyCode == 0x09 {
+                    "\x1b[Z"
+                } else {
+                    "\x1b[13;2u"
+                };
+                for _ in 0..key.wRepeatCount.max(1) {
+                    text.push_str(sequence);
+                }
+            } else if unit != 0 {
                 for _ in 0..key.wRepeatCount.max(1) {
                     if let Some(high) = self.high.take() {
                         if (0xdc00..=0xdfff).contains(&unit) {
@@ -1058,8 +1161,15 @@ mod platform {
                     0x26 if application_cursor => "\x1bOA",
                     0x27 if application_cursor => "\x1bOC",
                     0x28 if application_cursor => "\x1bOB",
+                    0x70 => "\x1bOP",
+                    0x71 => "\x1bOQ",
+                    0x72 => "\x1bOR",
+                    0x73 => "\x1bOS",
+                    0x74 => "\x1b[15~",
                     0x75 => "\x1b[17~",
                     0x76 => "\x1b[18~",
+                    0x77 => "\x1b[19~",
+                    0x78 => "\x1b[20~",
                     0x21 => "\x1b[5~",
                     0x22 => "\x1b[6~",
                     0x23 => "\x1b[F",

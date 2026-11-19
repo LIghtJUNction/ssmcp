@@ -1,4 +1,8 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
+mod capabilities;
+pub mod hooks;
+mod plugins;
+use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -7,7 +11,7 @@ use crate::{
     context::Context,
     omarchy::Omarchy,
     output::OutputStore,
-    registry::{Provider, Registry},
+    registry::{Provider, RegisteredTool, Registry},
     wire::Operation,
     workspace::Workspace,
 };
@@ -26,10 +30,154 @@ pub(crate) const CATALOG_SNAPSHOT_SECONDS: u64 = 120;
 pub(crate) const CATALOG_SNAPSHOT_MAX_SECONDS: u64 = 15 * 60;
 pub(crate) const MAX_CATALOG_SNAPSHOTS: usize = 4;
 pub(crate) const MAX_CATALOG_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CODE_AUDIT_RUNS: usize = 256;
+
+/// Source is recorded once per run, alongside native-call outcomes. The run's
+/// final result is supplied separately by the orchestration server.
+struct CodeAudit {
+    log: Arc<EventLog>,
+    runs: Mutex<VecDeque<(String, bool)>>,
+}
+
+impl CodeAudit {
+    fn new(log: Arc<EventLog>) -> Self {
+        Self {
+            log,
+            runs: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn begin(
+        &self,
+        operation: &Operation,
+        request_id: u64,
+        controller: Option<&crate::wire::Controller>,
+        context: Option<crate::wire::CodeContext>,
+    ) -> Result<Option<CodeCall>, String> {
+        let Some(context) = context else {
+            return Ok(None);
+        };
+        context.validate()?;
+        let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+        if !runs.iter().any(|(id, _)| id == &context.run_id) {
+            if runs.len() >= MAX_CODE_AUDIT_RUNS {
+                runs.pop_front();
+            }
+            runs.push_back((context.run_id.clone(), false));
+            self.log
+                .push(json!({"type":"ssmcp.code_mode","phase":"started",
+                "run_id":context.run_id,"code":context.code,
+                "timestamp_ms":context.timestamp_ms,"controller":controller}));
+        }
+        drop(runs);
+        let tool = match operation {
+            Operation::CallTool { name, .. } => name.as_str(),
+            Operation::ListTools { .. } => "tools/list",
+            Operation::Read { .. } => "terminal.read",
+            Operation::Write { .. } => "terminal.write",
+            Operation::Resize { .. } => "terminal.resize",
+            Operation::Status {} => "terminal.status",
+        }
+        .to_owned();
+        self.log
+            .push(json!({"type":"ssmcp.code_mode","phase":"call-started",
+            "scope":"native-call","run_id":context.run_id,"request_id":request_id,"tool":tool}));
+        Ok(Some(CodeCall {
+            log: self.log.clone(),
+            run_id: context.run_id,
+            request_id,
+            tool,
+            started: Instant::now(),
+            finished: false,
+        }))
+    }
+
+    fn finish(&self, completion: crate::wire::CodeCompletion) -> Result<(), String> {
+        completion.validate()?;
+        let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+        let Some((_, finished)) = runs.iter_mut().find(|(id, _)| id == &completion.run_id) else {
+            return Ok(());
+        };
+        if *finished {
+            return Ok(());
+        }
+        *finished = true;
+        self.log
+            .push(json!({"type":"ssmcp.code_mode","phase":"finished",
+            "run_id":completion.run_id,"success":completion.success,"status":completion.status,
+            "duration_ms":completion.duration_ms,"error":completion.error}));
+        Ok(())
+    }
+}
+
+pub(crate) struct CodeCall {
+    log: Arc<EventLog>,
+    run_id: String,
+    request_id: u64,
+    tool: String,
+    started: Instant,
+    finished: bool,
+}
+
+impl CodeCall {
+    pub(crate) fn finish(&mut self, result: &Result<Value, String>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let success = result.as_ref().is_ok_and(|value| value["isError"] != true);
+        let mut event = json!({"type":"ssmcp.code_mode","phase":"call-finished",
+            "scope":"native-call","run_id":self.run_id,"request_id":self.request_id,"tool":self.tool,
+            "success":success,"duration_ms":self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64});
+        let error = match result {
+            Err(error) => Some(error.as_str()),
+            Ok(value) if !success => value["content"].as_array().and_then(|content| {
+                content.iter().find_map(|item| {
+                    (item["type"] == "text")
+                        .then(|| item["text"].as_str())
+                        .flatten()
+                })
+            }),
+            _ => None,
+        };
+        if let Some(error) = error {
+            let mut end = error.len().min(4096);
+            while !error.is_char_boundary(end) {
+                end -= 1;
+            }
+            event["error"] = json!(&error[..end]);
+        }
+        if let Ok(value) = result {
+            let native = &value["structuredContent"];
+            for field in ["exit_code", "job_id", "state", "running"] {
+                let value = native.get(field).or_else(|| native["snapshot"].get(field));
+                if let Some(value) = value.filter(|value| {
+                    !value.is_null()
+                        && (value.is_number()
+                            || value.is_boolean()
+                            || value.as_str().is_some_and(|text| text.len() <= 256))
+                }) {
+                    event[field] = value.clone();
+                }
+            }
+        }
+        self.log.push(event);
+    }
+}
+
+impl Drop for CodeCall {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.finish(&Err(
+                "native request cancelled before its outcome was received".into(),
+            ));
+        }
+    }
+}
 
 struct CatalogSnapshot {
     fingerprint: String,
-    tools: Arc<Vec<Value>>,
+    tools: Arc<Vec<ToolDescriptor>>,
     bytes: usize,
     created: Instant,
     accessed: Instant,
@@ -50,17 +198,18 @@ struct Catalog {
 }
 
 impl Catalog {
-    fn first(&self, tools: Vec<Value>) -> Result<Value, String> {
+    fn first(&self, tools: Vec<ToolDescriptor>) -> Result<Value, String> {
         self.first_at(tools, Instant::now())
     }
 
-    fn first_at(&self, tools: Vec<Value>, now: Instant) -> Result<Value, String> {
-        let page = backend::page(&tools, None)?;
+    fn first_at(&self, tools: Vec<ToolDescriptor>, now: Instant) -> Result<Value, String> {
+        let fingerprint = catalog::fingerprint(&tools);
+        let page = catalog::page(&tools, None, &fingerprint)?;
         let Some(cursor) = page["nextCursor"].as_str() else {
             return Ok(page);
         };
         let fingerprint = cursor.split_once(':').unwrap().0.to_owned();
-        let bytes = serde_json::to_vec(&tools).map_err(|e| e.to_string())?.len();
+        let bytes = catalog::encoded_len(&tools);
         if bytes > MAX_CATALOG_SNAPSHOT_BYTES {
             return Err("tool catalog exceeds the 64 MiB pagination snapshot limit".into());
         }
@@ -111,11 +260,7 @@ impl Catalog {
         // read must not expire at its creation time, while malformed cursors
         // must not pin cache entries. The absolute age and byte/count limits
         // still bound retained snapshots, independently of current call routing.
-        let page = backend::page_with_fingerprint(
-            snapshots[index].tools.as_ref(),
-            Some(cursor),
-            fingerprint,
-        )?;
+        let page = catalog::page(snapshots[index].tools.as_ref(), Some(cursor), fingerprint)?;
         let mut snapshot = snapshots.remove(index).unwrap();
         snapshot.accessed = now;
         snapshots.push_back(snapshot);
@@ -132,9 +277,12 @@ pub struct Runtime {
     omarchy: Omarchy,
     context: Context,
     rsync: Rsync,
+    plugins: plugins::Plugins,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
+    code_audit: CodeAudit,
     next_call: AtomicU64,
+    tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
 }
@@ -162,13 +310,16 @@ impl Runtime {
         let browser = Browser::new(root.clone())?;
         let computer = Computer::new(root.clone())?;
         let omarchy = Omarchy::new(root.clone())?;
+        let plugins = plugins::Plugins::new(root.clone(), registry.clone());
         let rsync = Rsync::new(root)?;
+        registry.replace(Provider::Client, capabilities::tools())?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
         registry.replace(Provider::Browser, Browser::tools())?;
         registry.replace(Provider::Computer, Computer::tools())?;
         registry.replace(Provider::Omarchy, Omarchy::tools())?;
         registry.replace(Provider::Context, Context::tools())?;
         registry.replace(Provider::Rsync, Rsync::tools())?;
+        registry.replace(Provider::Plugins, plugins::Plugins::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
         if sessions.is_some() {
@@ -179,11 +330,12 @@ impl Runtime {
         }
         registry.replace(Provider::Audit,vec![json!({
             "name":"ssmcp.audit.events",
-            "description":"Read observed tool and skill events for this connection. File operations performed by external harnesses have unknown audit coverage unless their native protocol reports them.",
+            "description":"Read observed tool and skill events for this connection after audit redaction. Wire v6 also includes code_mode source and run/native-call lifecycle outcomes. File operations performed by external harnesses have unknown audit coverage unless their native protocol reports them.",
             "inputSchema":crate::backend::events::schema(),
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         })])?;
-        Ok(Arc::new(Self {
+        let audit = EventLog::with_output("audit", output.clone());
+        let runtime = Arc::new(Self {
             backend,
             registry,
             workspace,
@@ -192,13 +344,48 @@ impl Runtime {
             omarchy,
             context,
             rsync,
-            audit: EventLog::with_output("audit", output.clone()),
+            plugins,
+            code_audit: CodeAudit::new(audit.clone()),
+            audit,
             output,
             next_call: AtomicU64::new(1),
+            tool_call_hook: Mutex::new(None),
             catalog: Catalog::default(),
             sessions,
-        }))
+        });
+        crate::client::interface::harness::bind(&runtime);
+        crate::client::completion::bind(&runtime);
+        Ok(runtime)
     }
+
+    /// Production startup opts in to exact installed skill sources and builtins.
+    /// Runtime constructors themselves never inspect the caller's home directory.
+    pub fn enable_default_skill_sources(&self) -> Result<(), String> {
+        self.context.enable_default_skill_sources()
+    }
+    /// Install an optional in-process call hook. The default is None.
+    /// Each call keeps one snapshot; replacement affects subsequent calls.
+    pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {
+        *self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = hook;
+    }
+
+    pub(crate) fn local_registry(&self) -> Arc<Registry> {
+        self.registry.clone()
+    }
+    /// Local frontend methods, deliberately absent from the remote tool registry.
+    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
+        self.computer.handoff_host_input_local(seconds)
+    }
+    pub(crate) fn revoke_host_input(&self) -> bool {
+        self.computer.revoke_host_input()
+    }
+    pub(crate) fn host_input_status(&self) -> Value {
+        self.computer.host_input_status()
+    }
+
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
@@ -221,6 +408,40 @@ impl Runtime {
     pub async fn tools(&self) -> Result<Vec<Value>, String> {
         self.registry.catalog()
     }
+    pub(crate) fn begin_code_call(
+        &self,
+        operation: &Operation,
+        request_id: u64,
+        controller: Option<&crate::wire::Controller>,
+        context: Option<crate::wire::CodeContext>,
+    ) -> Result<Option<CodeCall>, String> {
+        self.code_audit
+            .begin(operation, request_id, controller, context)
+    }
+    pub(crate) fn code_mode_finished(
+        &self,
+        completion: crate::wire::CodeCompletion,
+    ) -> Result<(), String> {
+        self.code_audit.finish(completion)
+    }
+    pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
+        crate::client::references::expand(text, &self.workspace, &self.context).await
+    }
+
+    pub(crate) async fn reference_completions(
+        &self,
+        key: &crate::client::completion::Key,
+    ) -> Result<crate::client::completion::Listing, String> {
+        crate::client::completion::enumerate(&self.workspace, &self.context, key).await
+    }
+
+    pub(crate) async fn import_input(
+        &self,
+        source: crate::client::attachments::Source,
+    ) -> Result<crate::client::attachments::Loaded, String> {
+        crate::client::attachments::load(source, &self.workspace).await
+    }
+
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         self.registry.ensure_open()?;
@@ -228,7 +449,7 @@ impl Runtime {
             // Continuations retain an immutable view of the one registry. Calls
             // still validate the current provider and registration generation.
             Operation::ListTools { cursor: None } => {
-                return self.catalog.first(self.registry.catalog()?);
+                return self.catalog.first(self.registry.snapshot()?);
             }
             Operation::ListTools {
                 cursor: Some(cursor),
@@ -253,6 +474,60 @@ impl Runtime {
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
         let call_id = self.next_call.fetch_add(1, Ordering::Relaxed);
+        let hook = self
+            .tool_call_hook
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let Some(hook) = hook else {
+            return self
+                .perform_registered(name, arguments, tool, call_id)
+                .await;
+        };
+        let call = hooks::ToolCall {
+            id: call_id,
+            name: name.clone(),
+            native_name: tool.native_name.clone(),
+            provider: tool.provider,
+            generation: tool.generation,
+            arguments: arguments.clone(),
+        };
+        let decision =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook.before_call(&call)));
+        let result = match decision {
+            Ok(Ok(())) => match self.registry.validate(&tool) {
+                Ok(()) => {
+                    self.perform_registered(name, arguments, tool, call_id)
+                        .await
+                }
+                Err(error) => Err(error),
+            },
+            Ok(Err(reason)) => Err(format!("client tool hook denied {}: {reason}", call.name)),
+            Err(_) => Err(format!(
+                "client tool hook panicked before dispatch; {} rejected",
+                call.name
+            )),
+        };
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hook.after_call(&call, &result)
+        }))
+        .is_err()
+        {
+            self.audit.push(json!({
+                "type":"ssmcp.status","level":"Warning","call_id":call_id,"tool":call.name,
+                "message":format!("Client tool hook panicked after {}; native result was preserved", call.name),
+            }));
+        }
+        result
+    }
+
+    async fn perform_registered(
+        &self,
+        name: String,
+        arguments: Value,
+        tool: RegisteredTool,
+        call_id: u64,
+    ) -> Result<Value, String> {
         let started = std::time::Instant::now();
         let harness_call = tool
             .provider
@@ -287,14 +562,38 @@ impl Runtime {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let outcome = match tool.provider {
-            Provider::Browser => self.browser.perform(&tool.native_name, arguments).await,
+            Provider::Client => self
+                .client_resource_call(&tool.native_name, arguments)
+                .await
+                .map(backend::result),
+            Provider::Browser => self
+                .browser
+                .perform(&tool.native_name, arguments)
+                .await
+                .and_then(|mut value| {
+                    if tool.native_name != "ssmcp.browser.discover" {
+                        return Ok(value);
+                    }
+                    let mut metadata = value
+                        .get_mut("structuredContent")
+                        .ok_or("browser discovery returned no metadata")?
+                        .take();
+                    metadata["routing"] = crate::browser::control_routes(&self.registry)?;
+                    Ok(backend::result(metadata))
+                }),
             Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
             Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
             Provider::Workspace => self
                 .workspace
                 .perform(&tool.native_name, arguments)
                 .await
-                .map(backend::result),
+                .map(|value| {
+                    if tool.native_name == "ssmcp.fs.read_image" {
+                        value
+                    } else {
+                        backend::result(value)
+                    }
+                }),
             Provider::Context => self
                 .context
                 .perform(&tool.native_name, arguments)
@@ -319,6 +618,7 @@ impl Runtime {
                 None => Err("session management was not granted with --session-control".into()),
             },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+            Provider::Plugins => self.plugins.perform(&tool, arguments).await,
             _ => {
                 let dispatch = self.backend.dispatch(&tool, arguments);
                 if let Some(call) = &harness_call {
@@ -357,7 +657,7 @@ impl Runtime {
                     for skill in skills {
                         self.audit
                             .push(json!({"type":"ssmcp.skill.discovered","tool":name,
-                            "root":native["root"],"path":skill["path"],"name":skill["name"],
+                            "root":skill.get("root").unwrap_or(&native["root"]),"path":skill["path"],"name":skill["name"],
                             "scope":"ssmcp context operation","invoked":false}));
                     }
                 }
@@ -386,16 +686,45 @@ impl Runtime {
                 }
             }
         };
+        if crate::client::terminal::active()
+            && let Some(content) = value.get("content").and_then(Value::as_array)
+        {
+            let images: Vec<Value> = content
+                .iter()
+                .filter(|block| block["type"] == "image")
+                .take(4)
+                .cloned()
+                .collect();
+            if !images.is_empty() {
+                let _ = tokio::task::spawn_blocking(move || {
+                    for image in images {
+                        crate::client::terminal::image(&image);
+                    }
+                })
+                .await;
+            }
+        }
         // Retrieval pages already point to the original complete capture. Guarding
         // them again would recursively archive the artifact-read response itself.
-        if matches!(
-            name.as_str(),
-            "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
-        ) {
-            Ok(value)
+        // Context already enforces a 1 MiB response and 256 KiB full-document limit.
+        // Keep structured contents available to resources/read instead of spilling them.
+        let value = if matches!(tool.provider, Provider::Context | Provider::Client)
+            || matches!(
+                name.as_str(),
+                "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
+            ) {
+            value
         } else {
-            Ok(self.output.guard_result(value))
-        }
+            self.output.guard_result(value)
+        };
+        // Only an actually dispatched, authorized operation reaches this boundary.
+        // Add local history after spill handling so the metadata stays available
+        // even when the original native output is an artifact reference.
+        let context = tokio::task::spawn_blocking(crate::client::context_memory::snapshot_for_tool)
+            .await
+            .ok()
+            .flatten();
+        Ok(attach_context_metadata(value, context))
     }
     pub async fn shutdown(&self) {
         self.registry.close();
@@ -404,13 +733,14 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let (_, _, computer, _, _, _) = tokio::join!(
+        let (_, _, computer, _, _, _, plugins) = tokio::join!(
             self.workspace.shutdown(),
             self.browser.shutdown(),
             self.computer.shutdown(),
             self.omarchy.shutdown(),
             self.rsync.shutdown(),
-            self.backend.shutdown()
+            self.backend.shutdown(),
+            self.plugins.shutdown()
         );
         if let Err(error) = computer {
             // EventLog redacts, renders and retains the failure before closing.
@@ -421,8 +751,59 @@ impl Runtime {
                 "error":error
             }));
         }
+        if let Err(error) = plugins {
+            self.audit.push(json!({
+                "type":"ssmcp.control.cleanup_failed", "provider":"plugins",
+                "cleanup_complete":false, "error":error
+            }));
+        }
         self.audit.close();
     }
+}
+
+/// Preserve every native field, including opaque provider metadata. Memory is
+/// reference data in its own namespace, never a user requirement or tool output.
+fn attach_context_metadata(mut result: Value, context: Option<Value>) -> Value {
+    let Some(mut context) = context else {
+        return result;
+    };
+    if !result.is_object()
+        || result
+            .get("_meta")
+            .is_some_and(|meta| !meta.is_object() || meta.get("ssmcp.context").is_some())
+    {
+        return result;
+    }
+    let base = result.to_string().len();
+    let limit = crate::wire::MAX_FRAME.saturating_sub(8192);
+    if context.to_string().len() > crate::wire::MAX_CONTEXT_ENTRY_BYTES
+        || base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+    {
+        context = json!({
+            "workspace":{"id":context["workspace"]["id"]},
+            "revision":context["revision"],
+            "snapshot":{"context_omitted":true,"full_read":"ssmcp.context.read"},
+            "provenance":"Saved local workspace history; omitted at the native result budget. Read ssmcp.context.read for the complete context."
+        });
+        if base
+            .saturating_add(context.to_string().len())
+            .saturating_add(64)
+            > limit
+        {
+            return result;
+        }
+    }
+    let object = result.as_object_mut().expect("object checked");
+    object
+        .entry("_meta")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("metadata checked")
+        .insert("ssmcp.context".into(), context);
+    result
 }
 
 #[cfg(test)]
@@ -430,9 +811,157 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tools(generation: usize) -> Vec<Value> {
+    #[test]
+    fn memory_metadata_preserves_native_output_errors_and_vendor_metadata() {
+        let context =
+            json!({"workspace":{"id":"a".repeat(64)},"revision":4,"summary":"earlier work"});
+        for failed in [false, true] {
+            let original = json!({
+                "content":[{"type":"text","text":"stdout"},{"type":"image","mimeType":"image/png","data":"opaque-image"}],
+                "structuredContent":{"exit_code":7},"isError":failed,
+                "_meta":{"vendor/result":{"unchanged":true}}
+            });
+            let mut result = attach_context_metadata(original.clone(), Some(context.clone()));
+            assert_eq!(result["_meta"]["ssmcp.context"], context);
+            result["_meta"]
+                .as_object_mut()
+                .unwrap()
+                .remove("ssmcp.context");
+            assert_eq!(result, original);
+        }
+        for original in [
+            json!({"content":[],"_meta":"opaque"}),
+            json!({"content":[],"_meta":{"ssmcp.context":{"provider":"reserved"}}}),
+            json!(["native-array"]),
+        ] {
+            assert_eq!(
+                attach_context_metadata(original.clone(), Some(context.clone())),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn native_memory_budget_returns_an_explicit_read_reference_without_changing_output() {
+        let original = json!({"content":[{"type":"text","text":"original"}],"isError":false});
+        let result = attach_context_metadata(
+            original.clone(),
+            Some(json!({
+                "workspace":{"id":"b".repeat(64)},"revision":5,
+                "summary":"x".repeat(crate::wire::MAX_CONTEXT_ENTRY_BYTES)
+            })),
+        );
+        assert_eq!(result["content"], original["content"]);
+        assert_eq!(result["isError"], original["isError"]);
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["context_omitted"],
+            true
+        );
+        assert_eq!(
+            result["_meta"]["ssmcp.context"]["snapshot"]["full_read"],
+            "ssmcp.context.read"
+        );
+        assert_eq!(result["_meta"]["ssmcp.context"]["revision"], 5);
+    }
+
+    fn code_context(code: &str) -> crate::wire::CodeContext {
+        crate::wire::CodeContext {
+            run_id: "a".repeat(32),
+            code: code.into(),
+            timestamp_ms: 1234,
+        }
+    }
+
+    #[tokio::test]
+    async fn code_audit_preserves_full_source_and_keeps_job_call_and_run_outcomes_separate() {
+        let log = EventLog::new("code-audit-test");
+        let audit = CodeAudit::new(log.clone());
+        let source = format!(
+            "// {}\nconst job = await exec.start('one', {{command:['true']}});\nreturn job;\n",
+            "source line ".repeat(5000)
+        );
+        let context = code_context(&source);
+        let operation = Operation::CallTool {
+            name: "ssmcp.exec.start".into(),
+            arguments: json!({"command":["true"]}),
+        };
+        let mut first = audit
+            .begin(&operation, 1, None, Some(context.clone()))
+            .unwrap()
+            .unwrap();
+        first.finish(&Ok(backend::result(
+            json!({"job_id":"job-a","state":"running","running":true}),
+        )));
+        let mut second = audit
+            .begin(&operation, 2, None, Some(context))
+            .unwrap()
+            .unwrap();
+        second.finish(&Ok(backend::result(
+            json!({"job_id":"job-a","state":"completed","running":false,"exit_code":7}),
+        )));
+        let completion = crate::wire::CodeCompletion {
+            run_id: "a".repeat(32),
+            success: false,
+            status: "failed".into(),
+            duration_ms: 20,
+            error: Some("script failed after native completion".into()),
+        };
+        audit.finish(completion.clone()).unwrap();
+        audit.finish(completion).unwrap();
+        let events = log.read(json!({})).await.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["event"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0]["code"], source);
+        assert_eq!(events[0]["timestamp_ms"], 1234);
+        assert_eq!(events[2]["phase"], "call-finished");
+        assert_eq!(events[2]["scope"], "native-call");
+        assert_eq!(events[2]["success"], true);
+        assert_eq!(events[2]["state"], "running");
+        assert!(events[2].get("exit_code").is_none());
+        assert_eq!(events[4]["exit_code"], 7);
+        assert_eq!(events[5]["phase"], "finished");
+        assert_eq!(events[5]["success"], false);
+        assert_eq!(events[5]["error"], "script failed after native completion");
+    }
+
+    #[tokio::test]
+    async fn code_audit_redacts_source_secrets_and_reports_cancellation_without_raw_arguments() {
+        let log = EventLog::new("code-audit-redaction-test");
+        let audit = CodeAudit::new(log.clone());
+        let source = "const token = 'sensitive-source-token';\nconst n = 17;\nreturn await call('one','tool.run',{});\n";
+        let operation = Operation::CallTool {
+            name: "tool.run".into(),
+            arguments: json!({"password":"sensitive-native-argument"}),
+        };
+        drop(
+            audit
+                .begin(&operation, 5, None, Some(code_context(source)))
+                .unwrap(),
+        );
+        let page = log.read(json!({})).await.unwrap();
+        let events = page["events"].as_array().unwrap();
+        let clean = events[0]["event"]["code"].as_str().unwrap();
+        assert!(!clean.contains("sensitive-source-token"));
+        assert!(clean.contains("[redacted]"));
+        assert!(clean.contains("const n = 17;\n"));
+        assert!(!page.to_string().contains("sensitive-native-argument"));
+        assert_eq!(events[2]["event"]["success"], false);
+        assert!(
+            events[2]["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("cancelled")
+        );
+        assert!(audit.begin(&operation, 6, None, None).unwrap().is_none());
+    }
+
+    fn tools(generation: usize) -> Vec<ToolDescriptor> {
         (0..150)
-            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":generation}))
+            .map(|n| ToolDescriptor::from_value(json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":generation})).unwrap())
             .collect()
     }
 
@@ -495,7 +1024,7 @@ mod tests {
         let catalog = Catalog::default();
         let created = Instant::now();
         let definitions: Vec<_> = (0..1342)
-            .map(|n| json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":1}))
+            .map(|n| ToolDescriptor::from_value(json!({"name":format!("tool{n}"),"inputSchema":{"type":"object"},"generation":1})).unwrap())
             .collect();
         let mut page = catalog.first_at(definitions, created).unwrap();
         let mut seen = page["tools"].as_array().unwrap().len();

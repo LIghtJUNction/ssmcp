@@ -1,0 +1,14 @@
+{
+  "status": "installed_versioned_candidate",
+  "version": "0.8.0",
+  "source_commit": "555307f8ceb70c729762bc11ea099360e87e5dee",
+  "binary_sha256": "eddf5b9b988a37bc397ee0a0ae84022a8a3d519cddc06a5391e1cc10af9797a0",
+  "package_sha256": "6193aad06a98cd8b0103bfe4030793e34d7106ab865693946ad28a741d65de54",
+  "entrypoint": "${HOME}/.local/bin/ssmcp-0.8.0",
+  "candidate_prefix": "${HOME}/.local/share/ssmcp/candidates/0.8.0-555307f",
+  "default_entrypoint_replaced": false,
+  "observed_default_sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+  "live_connections_reloaded": false,
+  "services_restarted": false,
+  "verified_utc": "2026-11-17T22:09:46Z"
+}

@@ -4,9 +4,8 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const VERSION: u32 = 5;
-/// Version 4 clients remain usable, but cannot receive controller metadata.
-pub const LEGACY_VERSION: u32 = 4;
+/// The sole supported wire protocol, including controller, source audit and steering.
+pub const VERSION: u32 = 7;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 pub const MAX_READ: usize = 32 * 1024;
 pub const MAX_WRITE: usize = 16 * 1024;
@@ -15,6 +14,138 @@ pub const MAX_INFLIGHT: usize = 16;
 pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 pub const MAX_TITLE_BYTES: usize = 512;
+pub const MAX_CODE_BYTES: usize = 64 * 1024;
+/// Shared per-client context budget for native and orchestrated results.
+pub(crate) const MAX_CONTEXT_ENTRY_BYTES: usize = 12 * 1024;
+pub const MAX_USER_MESSAGE_BYTES: usize = 16 * 1024;
+pub const MAX_USER_MESSAGES: usize = 64;
+
+/// Local operator commands act only on the connection that carries the frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SteeringCommand {
+    Snapshot {},
+    Publish {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+        text: String,
+        /// `next` or an exact registered collaboration agent ID.
+        target: String,
+    },
+    Takeback {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+    },
+    Cancel {
+        command_id: String,
+        message_id: String,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringAgent {
+    pub agent_id: String,
+    pub name: String,
+    pub role: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SteeringState {
+    Queued,
+    Editing,
+    Delivered,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringDelivery {
+    pub run_id: String,
+    pub agent_id: Option<String>,
+    /// Inclusion in an HTTP response, not proof of reading or execution.
+    pub included_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringMessage {
+    pub id: String,
+    pub revision: u64,
+    pub text: String,
+    pub target: String,
+    pub state: SteeringState,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub delivery: Option<SteeringDelivery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SteeringSnapshot {
+    pub schema_version: u32,
+    pub client_id: String,
+    pub revision: u64,
+    pub agents: Vec<SteeringAgent>,
+    pub messages: Vec<SteeringMessage>,
+}
+
+/// Immutable source of the orchestration that dispatched this native operation.
+/// This is display metadata, never a tool argument or an authorization grant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodeContext {
+    pub run_id: String,
+    pub code: String,
+    pub timestamp_ms: u64,
+}
+
+impl CodeContext {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_run_id(&self.run_id)?;
+        if self.code.trim().is_empty() || self.code.len() > MAX_CODE_BYTES {
+            return Err("code audit source must contain 1..=65536 UTF-8 bytes".into());
+        }
+        Ok(())
+    }
+}
+
+/// Run completion is distinct from any individual native call or command job.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodeCompletion {
+    pub run_id: String,
+    pub success: bool,
+    pub status: String,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl CodeCompletion {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_run_id(&self.run_id)?;
+        if !matches!(self.status.as_str(), "completed" | "failed" | "timeout")
+            || self.success != (self.status == "completed")
+            || self.error.as_ref().is_some_and(|error| error.len() > 4096)
+        {
+            return Err("invalid code audit completion".into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_run_id(run_id: &str) -> Result<(), String> {
+    if run_id.len() != 32 || !run_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("invalid code audit run ID".into());
+    }
+    Ok(())
+}
 
 /// Metadata and requested access policy supplied by the authenticated local client.
 /// These fields never select or replace the server-authenticated account.
@@ -303,13 +434,27 @@ pub enum Frame {
         login_expires_in: u64,
         client_id: String,
     },
+    Steering {
+        id: u64,
+        command: SteeringCommand,
+    },
+    SteeringReply {
+        id: u64,
+        result: Result<SteeringSnapshot, String>,
+    },
     Call {
         id: u64,
         operation: Operation,
-        /// Absent on the version 4 wire. Per-call attribution avoids one caller
-        /// overwriting another caller's identity during concurrent execution.
+        /// Optional per-call attribution prevents concurrent callers from
+        /// overwriting one another's displayed identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controller: Option<Controller>,
+        /// Present only when this call belongs to an audited code-mode run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code_context: Option<CodeContext>,
+    },
+    CodeModeFinished {
+        completion: CodeCompletion,
     },
     Reply {
         id: u64,
@@ -403,11 +548,12 @@ mod tests {
     }
 
     #[test]
-    fn absent_controller_retains_the_strict_version_four_frame_shape() {
+    fn call_metadata_is_optional_and_keeps_per_call_attribution() {
         let frame = Frame::Call {
             id: 7,
             operation: Operation::Status {},
             controller: None,
+            code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(
@@ -426,6 +572,7 @@ mod tests {
                 model: Some("model-a".into()),
                 source: ControllerSource::CallerReported,
             }),
+            code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(value["controller"]["source"], "caller-reported");
@@ -445,6 +592,72 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert!(read_frame(&mut &b""[..]).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn code_source_metadata_is_bounded_exact_and_separate_from_tool_arguments() {
+        let code = format!("//{}\n", "x".repeat(MAX_CODE_BYTES - 3));
+        let context = CodeContext {
+            run_id: "a".repeat(32),
+            code: code.clone(),
+            timestamp_ms: 42,
+        };
+        assert!(context.validate().is_ok());
+        let frame = Frame::Call {
+            id: 1,
+            operation: Operation::CallTool {
+                name: "tool.run".into(),
+                arguments: serde_json::json!({"value":3}),
+            },
+            controller: None,
+            code_context: Some(context.clone()),
+        };
+        let value = serde_json::to_value(frame).unwrap();
+        assert_eq!(value["code_context"]["code"], code);
+        assert_eq!(
+            value["operation"]["arguments"],
+            serde_json::json!({"value":3})
+        );
+        let Frame::Call {
+            code_context: Some(decoded),
+            ..
+        } = serde_json::from_value(value).unwrap()
+        else {
+            panic!("missing code context");
+        };
+        assert_eq!(decoded, context);
+        assert!(
+            CodeContext {
+                code: "x".repeat(MAX_CODE_BYTES + 1),
+                ..context.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            CodeContext {
+                run_id: "bad".into(),
+                ..context
+            }
+            .validate()
+            .is_err()
+        );
+        let completion = CodeCompletion {
+            run_id: "a".repeat(32),
+            success: false,
+            status: "timeout".into(),
+            duration_ms: 30_000,
+            error: None,
+        };
+        assert!(completion.validate().is_ok());
+        assert!(
+            CodeCompletion {
+                success: true,
+                ..completion
+            }
+            .validate()
+            .is_err()
+        );
     }
     #[tokio::test]
     async fn frames_round_trip() {

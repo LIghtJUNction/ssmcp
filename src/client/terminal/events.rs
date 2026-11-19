@@ -1,0 +1,3038 @@
+//! Bounded local event previews. Expanding reveals retained display text, not a
+//! reread of tools or an unbounded replacement for their original output archive.
+use super::{super::ui::Ui, images};
+use serde_json::{Value, json};
+use std::collections::VecDeque;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod correlation;
+mod diff;
+use correlation::{Kind, Meta, Status};
+pub(crate) use diff::DiffMode;
+
+/// Both panes share retained events; this changes only which rows are visible.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum EventScope {
+    Conversation,
+    #[default]
+    All,
+}
+
+impl EventScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::All => "all",
+        }
+    }
+}
+
+const MAX_EVENTS: usize = 128;
+const MAX_BYTES: usize = 2 * 1024 * 1024;
+const MAX_DETAIL: usize = 128 * 1024;
+
+struct Event {
+    id: u64,
+    text: String,
+    summary: String,
+    lines: usize,
+    expanded: bool,
+    chat_expanded: bool,
+    truncated: bool,
+    tone: &'static str,
+    cache: Option<(usize, String, Vec<String>)>,
+    meta: Meta,
+    image: Option<images::Preview>,
+    diagnostic: Option<(u64, u64)>,
+}
+
+impl Event {
+    fn expanded(&self, scope: EventScope) -> bool {
+        match scope {
+            EventScope::Conversation => self.meta.kind == Kind::Conversation || self.chat_expanded,
+            EventScope::All => self.expanded,
+        }
+    }
+
+    fn chat_heading(&self) -> String {
+        if self.meta.kind == Kind::Conversation {
+            return if self.meta.user {
+                "You".into()
+            } else if self.meta.author.is_empty() {
+                "Assistant".into()
+            } else {
+                self.meta.author.clone()
+            };
+        }
+        // Work only on the already-redacted renderer summary. Native command
+        // metadata can contain secrets that the human transcript has removed.
+        let plain = unstyled(&self.summary);
+        let heading = heading(&plain);
+        let (tag, mut title) = heading
+            .strip_prefix('[')
+            .and_then(|text| text.split_once(']'))
+            .map_or(("", heading), |(tag, text)| (tag.trim(), text.trim()));
+        if self.meta.command && matches!(tag, "RUN" | "OK" | "ERR" | "WARN") {
+            for key in &self.meta.keys {
+                let mut parts = key.split('\0');
+                let (Some(provider), Some("job"), Some(id)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    continue;
+                };
+                let source = if provider.is_empty() {
+                    None
+                } else {
+                    title
+                        .strip_prefix(provider)
+                        .and_then(|text| text.strip_prefix(' '))
+                };
+                let provider_prefix = source.is_some();
+                let Some((shown_id, command)) = source.unwrap_or(title).split_once(' ') else {
+                    continue;
+                };
+                let compact_id = shown_id.strip_prefix('#').is_some_and(|shown| {
+                    shown == id
+                        || id.rsplit_once('-').is_some_and(|(nonce, suffix)| {
+                            nonce.len() == 32
+                                && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                && suffix == shown
+                                && !shown.is_empty()
+                                && shown.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                });
+                // Without a provider, strip only the exact known job ID or
+                // its display abbreviation, never an arbitrary command #arg.
+                if shown_id == id
+                    || compact_id
+                    || (provider_prefix
+                        && shown_id.strip_prefix('#').is_some_and(|id| !id.is_empty()))
+                    || shown_id.strip_prefix('…').is_some_and(|tail| {
+                        tail.chars().count() == 12 && id.chars().count() > 18 && id.ends_with(tail)
+                    })
+                {
+                    title = command.trim_start();
+                    if tag == "RUN" {
+                        title = title.strip_suffix(" started").unwrap_or(title);
+                    } else if let Some((_, command)) = title.split_once(" · ") {
+                        title = command;
+                    }
+                    break;
+                }
+            }
+        } else if !self.meta.command
+            && tag == "REQ"
+            && let Some((tool, call)) = title.rsplit_once(" call=")
+            && call.ends_with(" started")
+        {
+            title = tool;
+        }
+        title.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn chat_title(&self) -> String {
+        let heading = self.chat_heading();
+        match self.meta.status {
+            Some(Status::Done | Status::Exit(0)) => format!("{heading} · done"),
+            Some(status) => format!("{heading} · {}", status.label()),
+            None => heading,
+        }
+    }
+
+    fn chat_tone(&self, selected: bool) -> &'static str {
+        match self.meta.status {
+            Some(status) if status.failed() => status.tone(),
+            _ if matches!(self.tone, "error" | "warning") => self.tone,
+            Some(Status::Running) => "accent",
+            _ if selected => "accent",
+            _ => "muted",
+        }
+    }
+
+    /// At most two result lines, drawn from the retained redacted transcript.
+    /// The existing render cache keeps scanning out of idle repaint frames.
+    fn chat_preview(&self, width: usize) -> Vec<String> {
+        let plain = unstyled(&self.text);
+        let summary = unstyled(&self.summary);
+        let mut first = Vec::new();
+        let mut last = VecDeque::new();
+        let mut errors = VecDeque::new();
+        let mut error_section = false;
+        let mut source = false;
+        let mut result = false;
+        let mut count = 0;
+        for line in plain.lines() {
+            let mut text = heading(line);
+            if self.meta.diff && (text.starts_with("[DIFF]") || text.starts_with("@@ ")) {
+                continue;
+            }
+            if let Some((tag, detail)) =
+                text.strip_prefix('[').and_then(|text| text.split_once(']'))
+            {
+                match tag.trim() {
+                    "STDOUT" | "STDERR" | "RES" | "OUT" | "RESULT" => {
+                        error_section = tag.trim() == "STDERR";
+                        source = false;
+                        result = true;
+                        continue;
+                    }
+                    "RUN" | "REQ" | "OK" | "SAVE" | "READ" | "WRITE" | "EDIT" => continue,
+                    "ERR" | "WARN" => {
+                        error_section = true;
+                        source = false;
+                        result = true;
+                        let detail = detail.trim();
+                        if text == heading(&summary)
+                            || self
+                                .meta
+                                .keys
+                                .iter()
+                                .any(|key| key.split('\0').next() == Some(detail))
+                            || (self.meta.command
+                                && detail.split_whitespace().any(|word| {
+                                    word.starts_with("exit=")
+                                        || word.starts_with("signal=")
+                                        || matches!(word, "completed" | "cancelled" | "timed_out")
+                                }))
+                        {
+                            continue;
+                        }
+                        text = detail;
+                    }
+                    _ => {}
+                }
+            }
+            if text.is_empty() {
+                continue;
+            }
+            if self.meta.command && !result {
+                source |= text.starts_with("script · ");
+                if source || text.starts_with("cwd ") || text.starts_with("cmd=") {
+                    continue;
+                }
+            }
+            result = true;
+            count += 1;
+            if first.len() < 2 {
+                first.push(text);
+            }
+            if last.len() == 2 {
+                last.pop_front();
+            }
+            last.push_back(text);
+            if error_section {
+                if errors.len() == 2 {
+                    errors.pop_front();
+                }
+                errors.push_back(text);
+            }
+        }
+        let selected = if self.meta.status.is_some_and(Status::failed) {
+            if errors.is_empty() {
+                last.into_iter().collect()
+            } else {
+                errors.into_iter().collect()
+            }
+        } else {
+            first
+        };
+        let more = self.truncated
+            || count > selected.len()
+            || selected.iter().any(|line| line.width() > width);
+        let mut rows = selected
+            .into_iter()
+            .map(|line| clip_plain(line, width))
+            .collect::<Vec<_>>();
+        if !rows.is_empty() {
+            rows.push(clip_plain(
+                if more {
+                    "… Click expand"
+                } else {
+                    "Click expand"
+                },
+                width,
+            ));
+        }
+        rows
+    }
+
+    fn append(&mut self, text: String, truncated: bool) {
+        if !text.is_empty() {
+            self.text.push_str(&text);
+            let (retained, trimmed) = retained_text(self.text.as_bytes());
+            self.text = retained;
+            self.truncated |= trimmed;
+            self.lines = unstyled(&self.text).lines().count().max(1);
+        }
+        self.truncated |= truncated;
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.text.len() + self.summary.len() + self.meta.bytes()
+    }
+
+    fn matches(&self, query: &str, level: u8, scope: EventScope) -> bool {
+        (scope == EventScope::All || self.meta.kind != Kind::Log)
+            && (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
+            && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
+            && (query.is_empty()
+                || self.summary.to_lowercase().contains(query)
+                || self.text.to_lowercase().contains(query))
+    }
+
+    fn summary_with_status(&self) -> String {
+        match self.meta.status {
+            Some(status) => format!("{} [{}]", self.summary, status.label()),
+            None => self.summary.clone(),
+        }
+    }
+}
+
+/// A canvas column keeps only its reading position, never another event store.
+#[derive(Clone, Debug)]
+pub(super) struct EventPosition {
+    selected: Option<u64>,
+    scroll: usize,
+    follow: bool,
+    reveal: bool,
+    new_image: Option<u64>,
+    chat_expanded: Vec<u64>,
+}
+
+impl Default for EventPosition {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            scroll: 0,
+            follow: true,
+            reveal: false,
+            new_image: None,
+            chat_expanded: Vec::new(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct EventView {
+    events: VecDeque<Event>,
+    bytes: usize,
+    next_id: u64,
+    selected: Option<u64>,
+    scroll: usize,
+    follow: bool,
+    reveal: bool,
+    dropped: usize,
+    hit_rows: Vec<Option<u64>>,
+    total_rows: usize,
+    page_rows: usize,
+    image_cells: Option<images::CellSize>,
+    placements: Vec<images::Placement>,
+    new_image: Option<u64>,
+    query: String,
+    level: u8,
+    scope: EventScope,
+    diff_mode: DiffMode,
+}
+
+impl EventView {
+    pub(crate) fn new() -> Self {
+        Self {
+            follow: true,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn diff_mode(&self) -> DiffMode {
+        self.diff_mode
+    }
+
+    pub(crate) fn set_diff_mode(&mut self, mode: DiffMode) {
+        if self.diff_mode == mode {
+            return;
+        }
+        self.diff_mode = mode;
+        for event in &mut self.events {
+            if event.meta.diff {
+                event.cache = None;
+            }
+        }
+        self.hit_rows.clear();
+        self.placements.clear();
+        self.reveal = !self.follow;
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        !self
+            .events
+            .iter()
+            .any(|event| event.matches(&self.query, self.level, self.scope))
+    }
+
+    pub(crate) fn set_scope(&mut self, scope: EventScope) {
+        if self.scope == scope {
+            return;
+        }
+        self.scope = scope;
+        self.new_image = None;
+        self.hit_rows.clear();
+        self.placements.clear();
+        self.total_rows = 0;
+        self.page_rows = 0;
+        self.scroll = 0;
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            let mut visible = self
+                .events
+                .iter()
+                .filter(|event| event.matches(&self.query, self.level, self.scope));
+            self.selected = if self.follow {
+                visible.next_back()
+            } else {
+                visible.next()
+            }
+            .map(|event| event.id);
+        }
+        self.reveal = !self.follow;
+    }
+
+    /// Only explicit local conversation producers may use this entry point.
+    /// Plain log text, including a literal "[AGENT]", stays in the log pane.
+    #[cfg(test)]
+    pub(crate) fn ingest_conversation(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        let user = text
+            .lines()
+            .map(unstyled)
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| heading(&line).starts_with("[USER]"));
+        self.ingest_inner(
+            bytes,
+            Meta {
+                kind: Kind::Conversation,
+                user,
+                ..Meta::default()
+            },
+        );
+    }
+
+    pub(super) fn position(&self) -> EventPosition {
+        EventPosition {
+            selected: self.selected,
+            scroll: self.scroll,
+            follow: self.follow,
+            reveal: self.reveal,
+            new_image: self.new_image,
+            chat_expanded: self
+                .events
+                .iter()
+                .filter(|event| event.chat_expanded)
+                .map(|event| event.id)
+                .collect(),
+        }
+    }
+
+    pub(super) fn restore_position(&mut self, position: &EventPosition) {
+        self.selected = position.selected;
+        self.scroll = position.scroll;
+        self.follow = position.follow;
+        self.reveal = position.reveal;
+        for event in &mut self.events {
+            event.chat_expanded = position.chat_expanded.contains(&event.id);
+        }
+        // The deferred first-image anchor belongs to this column's reading
+        // position. Switching columns is not an explicit request for latest.
+        self.new_image = position.new_image.filter(|id| {
+            self.follow
+                && self.events.iter().any(|event| {
+                    event.id == *id
+                        && event.matches(&self.query, self.level, self.scope)
+                        && event
+                            .image
+                            .as_ref()
+                            .is_some_and(|image| image.native.is_some())
+                })
+        });
+        self.hit_rows.clear();
+        self.placements.clear();
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            let mut visible = self
+                .events
+                .iter()
+                .filter(|event| event.matches(&self.query, self.level, self.scope));
+            self.selected = if self.follow {
+                visible.next_back()
+            } else {
+                visible.next()
+            }
+            .map(|event| event.id);
+            self.reveal = !self.follow;
+        }
+    }
+
+    pub(crate) fn ingest(&mut self, bytes: &[u8]) {
+        self.ingest_inner(bytes, Meta::default());
+    }
+
+    /// Keep one bounded warning card per renderer diagnostic. Repeated updates
+    /// preserve its position, expansion and the reader's current viewport.
+    pub(crate) fn ingest_diagnostic(
+        &mut self,
+        update: &super::super::render::DiagnosticUpdate,
+    ) -> bool {
+        let (text, truncated) = retained_text(update.text().as_bytes());
+        let inserted = if let Some(event) = self
+            .events
+            .iter_mut()
+            .find(|event| event.diagnostic.is_some_and(|(id, _)| id == update.id))
+        {
+            event.text = text;
+            event.summary = super::super::panel::fit(&update.heading(), 200);
+            event.lines = unstyled(&event.text).lines().count().max(1);
+            event.truncated = truncated;
+            event.cache = None;
+            event.diagnostic = Some((update.id, update.occurrences));
+            event.meta.kind = Kind::Log;
+            false
+        } else {
+            self.ingest(text.as_bytes());
+            if let Some(event) = self.events.back_mut() {
+                event.summary = super::super::panel::fit(&update.heading(), 200);
+                event.expanded = false;
+                event.truncated |= truncated;
+                event.tone = "warning";
+                event.diagnostic = Some((update.id, update.occurrences));
+                event.meta.kind = Kind::Log;
+            }
+            true
+        };
+        self.prune();
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level, self.scope))
+                .map(|event| event.id);
+            self.reveal = true;
+        }
+        inserted
+    }
+
+    /// Correlate only registered event identities. Text is never an identity.
+    pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
+        let mut meta = Meta::from_event(label, event);
+        if meta.kind == Kind::Conversation
+            && event["presentation"].is_null()
+            && let Some(text) = event["text"].as_str()
+        {
+            // Render ordinary prose from its source at the pane's current width.
+            // Structured presentations keep their already-rendered cards and tables;
+            // their text field is the plain fallback used for copying and history.
+            meta.raw_message = true;
+            // Redact only the display copy; the native message stays intact.
+            let display = crate::audit::event(Value::String(text.to_owned()));
+            self.ingest_inner(display.as_str().unwrap_or_default().as_bytes(), meta);
+        } else {
+            self.ingest_inner(bytes, meta);
+        }
+    }
+
+    fn ingest_inner(&mut self, bytes: &[u8], mut meta: Meta) {
+        if meta.skip {
+            return;
+        }
+        let mut matches = Vec::new();
+        for key in &meta.keys {
+            if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
+                event.meta.keys.contains(key)
+                    && (!meta.started
+                        || event
+                            .meta
+                            .status
+                            .is_none_or(|status| status == Status::Running))
+            }) && !matches.contains(&index)
+            {
+                matches.push(index);
+            }
+        }
+        matches.sort_unstable();
+        let (text, truncated) = retained_text(bytes);
+        let plain = unstyled(&text);
+        let first = plain.lines().map(heading).find(|line| !line.is_empty());
+        if first.is_none() && matches.is_empty() {
+            return; // Empty stream chunks must not become separate UI cards.
+        }
+        let first = first.unwrap_or("");
+        let conversation = meta.kind == Kind::Conversation
+            || [
+                "[USER]",
+                "[AGENT]",
+                "[UPDATE]",
+                "[ANSWER]",
+                "[IMAGE]",
+                "[CONTEXT]",
+            ]
+            .iter()
+            .any(|prefix| first.starts_with(prefix));
+        let error = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[ERR"));
+        let warning = plain
+            .lines()
+            .map(heading)
+            .find(|line| line.starts_with("[WARN") || line.starts_with("[STDERR"));
+        let attention = error.or(warning);
+        meta.diff |= first.starts_with("[DIFF]") || first.starts_with("diff --git ");
+        if meta.language.is_empty() {
+            meta.language = first
+                .split_whitespace()
+                .find_map(|part| {
+                    let language = correlation::language_for_path(part);
+                    (!language.is_empty()).then_some(language)
+                })
+                .unwrap_or("");
+        }
+        let tone = if error.is_some() {
+            "error"
+        } else if attention.is_some() {
+            "warning"
+        } else if first.starts_with("[OK") {
+            "success"
+        } else if first.starts_with("[READ") || first.starts_with("[WRITE") {
+            "blue"
+        } else if first.starts_with("[REQ") || first.starts_with("[RES") {
+            "purple"
+        } else if conversation || first.starts_with("[RUN") {
+            "accent"
+        } else {
+            "foreground"
+        };
+        // Ordinary short log lines keep their original styled body visible.
+        // Compact defaults apply to tool events, whose heading carries meaning.
+        let short_log = meta.keys.is_empty()
+            && !meta.command
+            && !first.starts_with('[')
+            && plain.lines().count() <= 6
+            && text.len() <= 640;
+        let expanded = conversation
+            || short_log
+            || attention.is_some()
+            || meta.diff
+            || meta.status.is_some_and(Status::failed);
+        let follow = self.follow || self.events.is_empty();
+        if let Some(&index) = matches.first() {
+            // A response can join a request row and its native job row. Keep
+            // their earliest position and both retained bodies, once.
+            for &other in matches.iter().skip(1).rev() {
+                if let Some(previous) = self.events.remove(other) {
+                    if self.selected == Some(previous.id) {
+                        self.selected = Some(self.events[index].id);
+                    }
+                    if previous.summary.starts_with("[RUN")
+                        && !self.events[index].summary.starts_with("[RUN")
+                    {
+                        self.events[index].summary = previous.summary;
+                    }
+                    self.events[index].expanded |= previous.expanded;
+                    self.events[index].chat_expanded |= previous.chat_expanded;
+                    self.events[index].append(previous.text, previous.truncated);
+                    self.events[index].meta.merge(previous.meta);
+                }
+            }
+            let event = &mut self.events[index];
+            event.append(text, truncated);
+            event.meta.merge(meta);
+            event.expanded |= expanded;
+            event.cache = None;
+        } else {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            let summary = if meta.raw_message {
+                if meta.user { "[USER]" } else { "[AGENT]" }.to_owned()
+            } else {
+                event_summary(
+                    &plain,
+                    if conversation {
+                        first
+                    } else {
+                        attention.unwrap_or(first)
+                    },
+                )
+            };
+            let lines = plain.lines().count().max(1);
+            self.events.push_back(Event {
+                id,
+                text,
+                summary,
+                lines,
+                expanded,
+                chat_expanded: false,
+                truncated,
+                tone,
+                meta,
+                cache: None,
+                image: None,
+                diagnostic: None,
+            });
+        }
+        self.prune();
+        if follow {
+            self.selected = self
+                .events
+                .iter()
+                .rev()
+                .find(|event| event.matches(&self.query, self.level, self.scope))
+                .map(|event| event.id);
+            self.follow = true;
+        } else if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level, self.scope))
+                .map(|event| event.id);
+            self.reveal = true;
+        }
+        // Updating a correlated row does not move a reader away from their viewport.
+    }
+
+    fn prune(&mut self) {
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
+        while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
+            if let Some(event) = self.events.pop_front() {
+                self.bytes -= event.retained_bytes();
+                self.dropped = self.dropped.saturating_add(1);
+            }
+        }
+    }
+
+    pub(crate) fn filter(&mut self, query: &str, level: u8) {
+        let query = query.to_lowercase();
+        if self.query == query && self.level == level {
+            return;
+        }
+        self.query = query;
+        self.level = level;
+        self.new_image = None;
+        if !self.events.iter().any(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            self.selected = self
+                .events
+                .iter()
+                .find(|event| event.matches(&self.query, self.level, self.scope))
+                .map(|event| event.id);
+        }
+        self.reveal = true;
+    }
+
+    pub(crate) fn rows_below(&self) -> usize {
+        self.total_rows
+            .saturating_sub(self.page_rows)
+            .saturating_sub(self.scroll)
+    }
+
+    pub(crate) fn is_following(&self) -> bool {
+        self.follow
+    }
+
+    /// Attach only a decoded image from the native result path. Text containing
+    /// "[IMAGE]" cannot manufacture a protocol placement.
+    pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        if let Some(event) = self.events.back_mut() {
+            event.image = Some(preview);
+            event.meta.kind = Kind::Tool;
+            if self.follow && event.matches(&self.query, self.level, self.scope) {
+                self.selected = Some(event.id);
+                self.new_image.get_or_insert(event.id);
+            }
+        }
+        let mut bytes = self.image_bytes();
+        for event in &mut self.events {
+            if bytes <= images::CACHE_BYTES {
+                break;
+            }
+            if let Some(image) = event.image.as_mut()
+                && let Some(native) = image.native.take()
+            {
+                bytes -= native.bytes();
+            }
+        }
+    }
+
+    fn image_bytes(&self) -> usize {
+        self.events
+            .iter()
+            .filter_map(|event| event.image.as_ref()?.native.as_ref())
+            .map(|native| native.bytes())
+            .sum()
+    }
+
+    /// A terminal can reject one image while still supporting other images.
+    /// Keep that event's cell preview and release only its native payload.
+    pub(crate) fn reject_image(&mut self, id: u32) {
+        for event in &mut self.events {
+            if let Some(image) = event.image.as_mut()
+                && image
+                    .native
+                    .as_ref()
+                    .is_some_and(|native| native.id() == id)
+            {
+                image.native = None;
+                if self.new_image == Some(event.id) {
+                    self.new_image = None;
+                }
+                if self.selected == Some(event.id) && !self.follow {
+                    self.reveal = true;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn image_cells(&mut self, cells: Option<images::CellSize>) {
+        self.image_cells = cells;
+    }
+
+    pub(crate) fn image_placements(&self, top: u16) -> Vec<images::Placement> {
+        self.placements
+            .iter()
+            .cloned()
+            .map(|mut placement| {
+                placement.offset_row(top);
+                placement
+            })
+            .collect()
+    }
+
+    /// Negative selects an earlier event; positive selects a later event.
+    pub(crate) fn select(&mut self, delta: isize) {
+        self.new_image = None;
+        let visible = self
+            .events
+            .iter()
+            .filter(|event| event.matches(&self.query, self.level, self.scope))
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        if visible.is_empty() {
+            return;
+        }
+        let current = visible
+            .iter()
+            .position(|id| Some(*id) == self.selected)
+            .unwrap_or(visible.len() - 1);
+        let next = current.saturating_add_signed(delta).min(visible.len() - 1);
+        self.selected = Some(visible[next]);
+        self.follow = false;
+        self.reveal = true;
+    }
+
+    /// Scroll within expanded events without changing the selected event.
+    pub(crate) fn scroll_by(&mut self, delta: isize) {
+        self.new_image = None;
+        self.follow = false;
+        self.reveal = false;
+        self.scroll = self
+            .scroll
+            .saturating_add_signed(delta)
+            .min(self.total_rows.saturating_sub(self.page_rows));
+        self.follow = self.scroll == self.total_rows.saturating_sub(self.page_rows);
+    }
+
+    pub(crate) fn latest(&mut self) {
+        self.new_image = None;
+        self.follow = true;
+        self.reveal = false;
+        self.selected = self
+            .events
+            .iter()
+            .rev()
+            .find(|event| event.matches(&self.query, self.level, self.scope))
+            .map(|event| event.id);
+    }
+
+    pub(crate) fn toggle(&mut self) -> bool {
+        self.new_image = None;
+        if let Some(event) = self.events.iter_mut().find(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) {
+            if self.scope == EventScope::Conversation {
+                if event.meta.kind == Kind::Conversation {
+                    return false;
+                }
+                event.chat_expanded = !event.chat_expanded;
+            } else {
+                if event.meta.diff {
+                    return false;
+                }
+                event.expanded = !event.expanded;
+            }
+            self.follow = false;
+            self.reveal = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn open(&mut self) -> bool {
+        self.set_expanded(true)
+    }
+
+    pub(crate) fn back(&mut self) -> bool {
+        self.set_expanded(false)
+    }
+
+    fn set_expanded(&mut self, expanded: bool) -> bool {
+        self.new_image = None;
+        let Some(event) = self.events.iter_mut().find(|event| {
+            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
+        }) else {
+            return false;
+        };
+        let changed = if self.scope == EventScope::Conversation {
+            if event.meta.kind == Kind::Conversation {
+                return false;
+            }
+            let changed = event.chat_expanded != expanded;
+            event.chat_expanded = expanded;
+            changed
+        } else {
+            if event.meta.diff && !expanded {
+                return false;
+            }
+            let changed = event.expanded != expanded;
+            event.expanded = expanded;
+            changed
+        };
+        self.follow = false;
+        self.reveal = true;
+        changed
+    }
+
+    /// Row is relative to the event pane from the most recent render.
+    pub(crate) fn mouse_select(&mut self, row: u16) -> bool {
+        let Some(id) = self.hit_rows.get(usize::from(row)).copied().flatten() else {
+            return false;
+        };
+        if !self
+            .events
+            .iter()
+            .any(|event| event.id == id && event.matches(&self.query, self.level, self.scope))
+        {
+            return false;
+        }
+        self.selected = Some(id);
+        self.new_image = None;
+        self.follow = false;
+        // Preserve the clicked row, even when it belongs to a long body.
+        self.reveal = false;
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.events.clear();
+        self.bytes = 0;
+        self.selected = None;
+        self.scroll = 0;
+        self.follow = true;
+        self.reveal = false;
+        self.dropped = 0;
+        self.hit_rows.clear();
+        self.total_rows = 0;
+        self.page_rows = 0;
+        self.placements.clear();
+        self.new_image = None;
+        self.query.clear();
+        self.level = 0;
+    }
+
+    pub(crate) fn snapshot(&self) -> Value {
+        json!({
+            "schema_version":1, "events":self.events.iter().map(|event| json!({
+                "id":event.id,"summary":event.summary,"lines":event.lines,
+                "bytes":event.text.len(),"expanded":event.expanded(self.scope),"truncated":event.truncated,
+                "selected":Some(event.id)==self.selected,
+                "status":event.meta.status.map(Status::label),"command":event.meta.command,
+                "kind":event.meta.kind.label(),
+                "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
+            })).collect::<Vec<_>>(),
+            "retained_events":self.events.len(),"retained_bytes":self.bytes,
+            "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
+            "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope)).count(),
+            "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
+            "selected":self.selected,"scroll":self.scroll,
+            "rows_below":self.rows_below(),"following":self.follow,
+            "image_cache_bytes":self.image_bytes(),"max_image_cache_bytes":images::CACHE_BYTES,
+            "scope":"retained display preview; original tool output uses its archive"
+        })
+    }
+
+    pub(crate) fn render(
+        &mut self,
+        width: u16,
+        height: u16,
+        ui: &Ui,
+        focused: bool,
+    ) -> Vec<String> {
+        self.hit_rows.clear();
+        self.placements.clear();
+        if width == 0 || height == 0 {
+            self.page_rows = 0;
+            return vec![String::new(); usize::from(height)];
+        }
+        let width = usize::from(width);
+        let height = usize::from(height);
+        let footer = usize::from(height > 1 && self.scope == EventScope::All);
+        let page = height - footer;
+        let indent = 4.min(width.saturating_sub(1));
+        let body_width = width.saturating_sub(indent).max(1);
+        let mut rows: Vec<(u64, String)> = Vec::new();
+        let mut visible_events = 0;
+        let mut selected_row = None;
+        let mut image_spans = Vec::new();
+        let new_image = self.new_image.take();
+        let mut new_images = false;
+        let mut image_anchor = None;
+        let mut previous_compact_tool = false;
+        let palette = format!(
+            "{}:{}:{}",
+            palette_key(ui),
+            self.scope.label(),
+            self.diff_mode.name()
+        );
+        for event in &mut self.events {
+            if !event.matches(&self.query, self.level, self.scope) {
+                continue;
+            }
+            visible_events += 1;
+            new_images |= new_image == Some(event.id);
+            let selected = Some(event.id) == self.selected;
+            let chat = self.scope == EventScope::Conversation;
+            let compact_tool = chat
+                && event.meta.kind == Kind::Tool
+                && event.image.is_none()
+                && !event.expanded(self.scope)
+                && self.query.is_empty();
+            if chat && !rows.is_empty() && !(previous_compact_tool && compact_tool) {
+                rows.push((event.id, String::new()));
+            }
+            previous_compact_tool = compact_tool;
+            if selected {
+                selected_row = Some(rows.len());
+            }
+            let conversation = chat && event.meta.kind == Kind::Conversation;
+            if conversation && event.image.is_none() {
+                let role = event.chat_heading();
+                let tone = if event.meta.user { "accent" } else { "heading" };
+                let marker = if event.meta.user { "❯" } else { "●" };
+                rows.push((
+                    event.id,
+                    paint(
+                        &clip_plain(&format!("  {marker} {role}"), width),
+                        tone,
+                        ui,
+                        true,
+                    ),
+                ));
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != body_width || *cached_palette != palette
+                    })
+                {
+                    let body = if event.meta.raw_message {
+                        &event.text
+                    } else {
+                        conversation_body(&event.text)
+                    };
+                    let lines = if event.meta.raw_message && !event.meta.user {
+                        super::markdown::rows(body, body_width as u16, ui)
+                    } else {
+                        styled_rows(body, body_width, ui.color)
+                    };
+                    event.cache = Some((body_width, palette.clone(), lines));
+                }
+                for row in &event.cache.as_ref().unwrap().2 {
+                    rows.push((event.id, format!("{}{row}", " ".repeat(indent))));
+                }
+                continue;
+            }
+            let expanded = event.expanded(self.scope);
+            let title = if chat {
+                if conversation {
+                    event.chat_heading()
+                } else {
+                    event.chat_title()
+                }
+            } else {
+                event.summary_with_status()
+            };
+            let marker = if expanded { "▾" } else { "▸" };
+            let prefix = format!("{} {marker} ", if selected && focused { "›" } else { " " });
+            let prefix = clip_plain(&prefix, indent);
+            let tone = if chat {
+                event.chat_tone(selected && focused)
+            } else if selected && focused {
+                "accent"
+            } else {
+                event.meta.status.map_or(event.tone, Status::tone)
+            };
+            if expanded || !self.query.is_empty() {
+                if let Some(image) = &event.image {
+                    let image_start = rows.len();
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(&clip_plain(&title, body_width), tone, ui, false)
+                        ),
+                    ));
+                    let inset = 2.min(body_width.saturating_sub(1));
+                    let image_width = body_width.saturating_sub(inset).max(1) as u16;
+                    let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
+                        let native = image.native.as_ref()?;
+                        Some((native.clone(), native.layout_width(image_width, cell)?))
+                    });
+                    let detail = match &native {
+                        Some((native, area)) => {
+                            let dimensions =
+                                if (native.width, native.height) == (image.width, image.height) {
+                                    format!("{} × {}", image.width, image.height)
+                                } else {
+                                    format!(
+                                        "{} × {} preview · {} × {} source",
+                                        native.width, native.height, image.width, image.height
+                                    )
+                                };
+                            if usize::from(area.rows) > page.saturating_sub(2) {
+                                format!("{dimensions} · scroll to inspect")
+                            } else {
+                                dimensions
+                            }
+                        }
+                        None => format!("{} × {} · Image attachment", image.width, image.height),
+                    };
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            " ".repeat(indent + inset),
+                            paint(
+                                &clip_plain(&detail, usize::from(image_width)),
+                                "muted",
+                                ui,
+                                false
+                            )
+                        ),
+                    ));
+                    if let Some((native, area)) = native {
+                        if new_images
+                            && image_anchor.is_none()
+                            && usize::from(area.rows) > page.saturating_sub(2)
+                        {
+                            image_anchor = Some((event.id, image_start));
+                        }
+                        image_spans.push((rows.len(), (indent + inset) as u16, native, area));
+                        rows.extend((0..area.rows).map(|_| (event.id, String::new())));
+                    } else {
+                        if new_images
+                            && self.follow
+                            && ui.color
+                            && self.image_cells.is_none()
+                            && image.native.is_some()
+                        {
+                            // Resize briefly removes cell measurements. Keep
+                            // the first unseen native image pending until its
+                            // real height is known, without pausing text output.
+                            self.new_image.get_or_insert(event.id);
+                        }
+                        rows.push((
+                            event.id,
+                            format!(
+                                "{}{}",
+                                " ".repeat(indent + inset),
+                                paint(
+                                    &clip_plain(
+                                        "Inline preview unavailable. Use a terminal with image support.",
+                                        usize::from(image_width),
+                                    ),
+                                    "muted",
+                                    ui,
+                                    false,
+                                )
+                            ),
+                        ));
+                    }
+                    continue;
+                }
+                let correlated = chat || event.meta.raw_message || !event.meta.keys.is_empty();
+                if correlated {
+                    rows.push((
+                        event.id,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, tone, ui, selected && focused),
+                            paint(&clip_plain(&title, body_width), tone, ui, false)
+                        ),
+                    ));
+                }
+                if event
+                    .cache
+                    .as_ref()
+                    .is_none_or(|(cached_width, cached_palette, _)| {
+                        *cached_width != body_width || *cached_palette != palette
+                    })
+                {
+                    let lines = if event.meta.raw_message {
+                        if event.meta.user {
+                            styled_rows(&event.text, body_width, ui.color)
+                        } else {
+                            super::markdown::rows(&event.text, body_width as u16, ui)
+                        }
+                    } else {
+                        let body = if chat {
+                            conversation_body(&event.text)
+                        } else if correlated {
+                            event.text.split_once('\n').map_or("", |(_, body)| body)
+                        } else {
+                            &event.text
+                        };
+                        if event.meta.diff {
+                            diff::rows(body, body_width, ui, event.meta.language, self.diff_mode)
+                        } else {
+                            styled_rows(
+                                &semantic_text(body, ui, event.meta.language),
+                                body_width,
+                                ui.color,
+                            )
+                        }
+                    };
+                    event.cache = Some((body_width, palette.clone(), lines));
+                }
+                let content = &event.cache.as_ref().unwrap().2;
+                for (index, row) in content.iter().enumerate() {
+                    let prefix = if index == 0 && !correlated {
+                        paint(&prefix, tone, ui, selected && focused)
+                    } else {
+                        " ".repeat(indent)
+                    };
+                    rows.push((event.id, format!("{prefix}{row}")));
+                }
+                if event.truncated {
+                    rows.push((
+                        event.id,
+                        paint(
+                            &clip_plain(
+                                if chat {
+                                    "    More output is available in Logs."
+                                } else {
+                                    "    Preview truncated; inspect the original output archive."
+                                },
+                                width,
+                            ),
+                            "warning",
+                            ui,
+                            false,
+                        ),
+                    ));
+                }
+            } else {
+                let label = if chat {
+                    title
+                } else {
+                    format!(
+                        "{} · {} lines{}",
+                        title,
+                        event.lines,
+                        if event.truncated { " · partial" } else { "" }
+                    )
+                };
+                let label = clip_plain(&label, body_width);
+                rows.push((
+                    event.id,
+                    format!(
+                        "{}{}",
+                        paint(&prefix, tone, ui, selected && focused),
+                        paint(&label, tone, ui, selected && focused)
+                    ),
+                ));
+                if chat && event.meta.kind == Kind::Tool && event.image.is_none() {
+                    let preview_width = body_width.saturating_sub(2).max(1);
+                    let preview_palette = format!("{palette}:preview");
+                    if event
+                        .cache
+                        .as_ref()
+                        .is_none_or(|(cached_width, cached_palette, _)| {
+                            *cached_width != preview_width || *cached_palette != preview_palette
+                        })
+                    {
+                        event.cache = Some((
+                            preview_width,
+                            preview_palette,
+                            event.chat_preview(preview_width),
+                        ));
+                    }
+                    let preview = &event.cache.as_ref().unwrap().2;
+                    if !preview.is_empty() {
+                        previous_compact_tool = false;
+                    }
+                    for (index, line) in preview.iter().enumerate() {
+                        let hint = index + 1 == preview.len();
+                        let tone = if !hint && event.meta.status.is_some_and(Status::failed) {
+                            tone
+                        } else {
+                            "muted"
+                        };
+                        let prefix = if index == 0 { "└ " } else { "  " };
+                        let line = format!("{}{prefix}{line}", " ".repeat(indent));
+                        rows.push((event.id, paint(&clip_plain(&line, width), tone, ui, false)));
+                    }
+                }
+            }
+        }
+        self.total_rows = rows.len();
+        self.page_rows = page;
+        let max_scroll = rows.len().saturating_sub(page);
+        if self.follow
+            && let Some((id, start)) = image_anchor
+        {
+            // A new tall image starts at its heading, rather than silently
+            // showing only its bottom. The existing Ctrl+End action resumes
+            // following; later tool output cannot pull the reader away.
+            self.selected = Some(id);
+            self.scroll = start;
+            self.follow = false;
+            self.reveal = false;
+        } else if self.follow {
+            self.scroll = max_scroll;
+        } else if self.reveal {
+            if let Some(selected_row) = selected_row
+                && (selected_row < self.scroll || selected_row >= self.scroll.saturating_add(page))
+            {
+                self.scroll = selected_row;
+            }
+            self.reveal = false;
+        }
+        self.scroll = self.scroll.min(max_scroll);
+        for (start, col, image, area) in image_spans {
+            let visible_start = start.max(self.scroll);
+            let visible_end = (start + usize::from(area.rows)).min(self.scroll + page);
+            if visible_start < visible_end
+                && let Some(placement) = area.placement(
+                    image,
+                    (visible_start - self.scroll) as u16,
+                    col,
+                    (visible_start - start) as u16,
+                    (visible_end - visible_start) as u16,
+                )
+            {
+                self.placements.push(placement);
+            }
+        }
+        let mut result = rows
+            .into_iter()
+            .skip(self.scroll)
+            .take(page)
+            .map(|(id, row)| {
+                self.hit_rows.push(Some(id));
+                row
+            })
+            .collect::<Vec<_>>();
+        while result.len() < page {
+            result.push(String::new());
+            self.hit_rows.push(None);
+        }
+        if footer != 0 {
+            let hint = if visible_events == 0 {
+                if self.events.is_empty() {
+                    "No events yet."
+                } else {
+                    "No matching events."
+                }
+                .to_owned()
+            } else if width < 60 {
+                "Enter fold/open · retained preview only".to_owned()
+            } else if focused {
+                format!(
+                    "{} events · ↑↓ select · Enter fold/open · full output: archive",
+                    visible_events
+                )
+            } else {
+                format!(
+                    "{} events · focus Activity to fold/open · full output: archive",
+                    visible_events
+                )
+            };
+            result.push(paint(&clip_plain(&hint, width), "muted", ui, false));
+            self.hit_rows.push(None);
+        }
+        result
+    }
+}
+
+/// Remove the renderer's first label only. Message text and tool output below
+/// that boundary are retained verbatim in both the event and the original log.
+fn conversation_body(text: &str) -> &str {
+    let text = text.trim_matches(['\r', '\n']);
+    let Some((first, body)) = text.split_once('\n') else {
+        return text;
+    };
+    let plain = unstyled(first);
+    let first = heading(&plain);
+    if first
+        .strip_prefix('[')
+        .and_then(|text| text.split_once(']'))
+        .is_some_and(|(tag, _)| {
+            matches!(
+                tag.trim(),
+                "USER"
+                    | "AGENT"
+                    | "UPDATE"
+                    | "ANSWER"
+                    | "CONTEXT"
+                    | "HISTORY"
+                    | "REQ"
+                    | "RES"
+                    | "RUN"
+                    | "OUT"
+                    | "STDOUT"
+                    | "STDERR"
+                    | "READ"
+                    | "EDIT"
+                    | "DIFF"
+                    | "ERR"
+                    | "WARN"
+                    | "OK"
+                    | "IMG"
+                    | "IMAGE"
+                    | "SKIL"
+                    | "PROG"
+                    | "SAVE"
+            )
+        })
+    {
+        body.trim_matches(['\r', '\n'])
+    } else {
+        text
+    }
+}
+
+fn heading(line: &str) -> &str {
+    let line = line.trim();
+    if let Some((timestamp, rest)) = line.split_once(' ')
+        && timestamp.len() == 13
+        && timestamp.ends_with('Z')
+        && timestamp
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || b":.Z".contains(&byte))
+    {
+        return rest.trim_start();
+    }
+    line
+}
+
+fn event_summary(plain: &str, first: &str) -> String {
+    let mut summary = first.to_owned();
+    if (first.starts_with("[RES") || first.starts_with("[REQ"))
+        && first.ends_with("audit")
+        && let Some(detail) = plain.lines().map(heading).find(|line| {
+            line.contains('.')
+                && line.len() <= 128
+                && line
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+        })
+    {
+        summary.push_str(" · ");
+        summary.push_str(detail);
+    }
+    super::super::panel::fit(&summary, 200)
+}
+
+/// Reuse the shared lexer, preserving existing renderer SGR and exact text.
+fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
+    if !ui.color {
+        return sanitize(text, false);
+    }
+    let mut output = String::new();
+    let mut lexer = crate::client::highlight::Lexer::for_language(language);
+    let mut code = !language.is_empty();
+    let mut fence: Option<char> = None;
+    for line in text.split_inclusive('\n') {
+        let plain = unstyled(line);
+        let trimmed = plain.trim_start();
+        let marker = trimmed.chars().next();
+        let is_fence = matches!(marker, Some('\u{60}' | '~'))
+            && trimmed.chars().take_while(|ch| Some(*ch) == marker).count() >= 3;
+        if is_fence {
+            if fence == marker {
+                fence = None;
+                code = !language.is_empty();
+                lexer = crate::client::highlight::Lexer::for_language(language);
+            } else if fence.is_none() {
+                fence = marker;
+                code = true;
+                lexer = crate::client::highlight::Lexer::for_language(
+                    trimmed.trim_start_matches(marker.unwrap()).trim(),
+                );
+            }
+            output.push_str(&paint(line, "muted", ui, false));
+            continue;
+        }
+        if line.contains('\x1b') {
+            // Advance language state, but the renderer's established colors win.
+            if code {
+                let _ = lexer.line(&plain);
+            }
+            output.push_str(line);
+        } else if trimmed.starts_with('[') {
+            let tone = if trimmed.starts_with("[ERR") {
+                "error"
+            } else if trimmed.starts_with("[WARN") || trimmed.starts_with("[STDERR") {
+                "warning"
+            } else if trimmed.starts_with("[OK") {
+                "success"
+            } else if trimmed.starts_with("[READ") || trimmed.starts_with("[WRITE") {
+                "blue"
+            } else if trimmed.starts_with("[RES") || trimmed.starts_with("[REQ") {
+                "purple"
+            } else {
+                "accent"
+            };
+            output.push_str(&paint(line, tone, ui, false));
+        } else if code {
+            for token in lexer.line(line) {
+                output.push_str(&paint(token.text, token.tone, ui, token.bold));
+            }
+        } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
+            output.push_str(&paint(line, "success", ui, false));
+        } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
+            output.push_str(&paint(line, "error", ui, false));
+        } else if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            output.push_str(&paint(line, "muted", ui, false));
+        } else {
+            for word in line.split_inclusive(char::is_whitespace) {
+                let token = word.trim_end();
+                let path = token.contains('/')
+                    || token.contains('\\')
+                    || !correlation::language_for_path(token).is_empty();
+                if path {
+                    output.push_str(&paint(word, "blue", ui, false));
+                } else {
+                    output.push_str(word);
+                }
+            }
+        }
+    }
+    output
+}
+
+fn palette_key(ui: &Ui) -> String {
+    if !ui.color {
+        return String::new();
+    }
+    [
+        "foreground",
+        "muted",
+        "accent",
+        "success",
+        "warning",
+        "error",
+        "blue",
+        "purple",
+    ]
+    .iter()
+    .map(|tone| ui.color(tone))
+    .collect::<Vec<_>>()
+    .join(";")
+}
+
+fn paint(text: &str, tone: &str, ui: &Ui, bold: bool) -> String {
+    if ui.color {
+        format!(
+            "\x1b[{}{}m{text}\x1b[0m",
+            if bold { "1;" } else { "" },
+            ui.color(tone)
+        )
+    } else {
+        text.to_owned()
+    }
+}
+
+fn clip_plain(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let cells = ch.width().unwrap_or(0);
+        if used + cells > width.saturating_sub(1) {
+            break;
+        }
+        result.push(ch);
+        used += cells;
+    }
+    if width != 0 {
+        result.push('…');
+    }
+    result
+}
+
+/// Retain SGR colors only. Cursor movement, OSC clipboard/hyperlink commands and
+/// all other control sequences are absent from the independently rendered view.
+fn sanitize(text: &str, keep_color: bool) -> String {
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    let mut sequence = String::new();
+                    for next in chars.by_ref() {
+                        sequence.push(next);
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                        if sequence.len() > 128 {
+                            break;
+                        }
+                    }
+                    if keep_color
+                        && sequence.ends_with('m')
+                        && sequence[..sequence.len() - 1]
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || c == ';')
+                    {
+                        result.push_str("\x1b[");
+                        result.push_str(&sequence);
+                    }
+                }
+                Some(']') => {
+                    while let Some(next) = chars.next() {
+                        if next == '\x07' || (next == '\x1b' && chars.next() == Some('\\')) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else if ch == '\r' {
+            if chars.peek() != Some(&'\n') {
+                result.push('\n');
+            }
+        } else if !ch.is_control() || matches!(ch, '\n' | '\t') {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn unstyled(text: &str) -> String {
+    sanitize(text, false)
+}
+
+fn retained_text(bytes: &[u8]) -> (String, bool) {
+    let raw = String::from_utf8_lossy(bytes);
+    let clean = sanitize(&raw, true);
+    if clean.len() <= MAX_DETAIL {
+        return (clean, false);
+    }
+    let note = "\n… preview truncated; inspect the original output archive …\n";
+    let budget = MAX_DETAIL - note.len();
+    let mut head = budget / 2;
+    while !clean.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = clean.len() - (budget - head);
+    while !clean.is_char_boundary(tail) {
+        tail += 1;
+    }
+    (
+        format!(
+            "{}{note}{}",
+            sanitize(&clean[..head], true),
+            sanitize(&clean[tail..], true)
+        ),
+        true,
+    )
+}
+
+/// Reflow only the retained display text, maintaining SGR across soft wraps.
+fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
+    let text = sanitize(text, color);
+    let text = text.trim_matches('\n');
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    let mut active = String::new();
+    let mut used = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.next() == Some('[') {
+            let mut sequence = String::from("\x1b[");
+            for next in chars.by_ref() {
+                sequence.push(next);
+                if next == 'm' {
+                    break;
+                }
+            }
+            row.push_str(&sequence);
+            if sequence == "\x1b[0m" || sequence == "\x1b[m" {
+                active.clear();
+            } else {
+                if active.len() > 256 {
+                    active.clear();
+                }
+                active.push_str(&sequence);
+            }
+            continue;
+        }
+        if ch == '\n' {
+            if color {
+                row.push_str("\x1b[0m");
+            }
+            rows.push(row);
+            row = active.clone();
+            used = 0;
+            continue;
+        }
+        let expanded = if ch == '\t' {
+            " ".repeat(4 - used % 4)
+        } else {
+            ch.to_string()
+        };
+        for mut ch in expanded.chars() {
+            let mut cells = ch.width().unwrap_or(0);
+            if cells > width {
+                ch = '…';
+                cells = 1;
+            }
+            if used + cells > width && used != 0 {
+                if color {
+                    row.push_str("\x1b[0m");
+                }
+                rows.push(row);
+                row = active.clone();
+                used = 0;
+            }
+            row.push(ch);
+            used += cells;
+        }
+    }
+    if color {
+        row.push_str("\x1b[0m");
+    }
+    rows.push(row);
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diff_modes_reflow_existing_events_without_changing_retained_content() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest_event(
+            "files",
+            &json!({"type":"ssmcp.file.diff","path":"example.rs"}),
+            b"[DIFF] example.rs\n@@ -1 +1 @@\n-old value\n+new value\n",
+        );
+        assert_eq!(view.diff_mode(), DiffMode::Single);
+        let preview = view.render(120, 30, &plain_ui(), false).join("\n");
+        assert!(preview.contains("-old value") && preview.contains("+new value"));
+        assert!(!preview.contains("[DIFF]") && !preview.contains("@@ -1"));
+        assert!(view.open());
+        let retained = (view.events.len(), view.bytes);
+        let single = view.render(120, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert!(
+            !view.mouse_select(0),
+            "old row hit targets must be invalidated"
+        );
+        let split = view.render(120, 30, &plain_ui(), true).join("\n");
+        assert!(split.contains("Old") && split.contains("New"));
+        assert!(
+            split
+                .lines()
+                .any(|row| row.contains("- old value") && row.contains("+ new value"))
+        );
+        assert_eq!(view.snapshot()["diff_mode"], "split");
+        assert_eq!((view.events.len(), view.bytes), retained);
+        view.set_diff_mode(DiffMode::Single);
+        assert_eq!(view.render(120, 30, &plain_ui(), true), single);
+        let narrow_single = view.render(40, 30, &plain_ui(), true);
+        view.set_diff_mode(DiffMode::Split);
+        assert_eq!(view.render(40, 30, &plain_ui(), true), narrow_single);
+        assert_eq!((view.events.len(), view.bytes), retained);
+    }
+
+    #[test]
+    fn native_prose_uses_original_markdown_instead_of_pre_wrapped_log_rows() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        let source = "连续中文正文保持自然换行，段落不被旧终端列宽切碎。";
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","text":source}),
+            "[AGENT] Progress\n连\n续\n中\n文\n".as_bytes(),
+        );
+        assert_eq!(view.events.back().unwrap().text, source);
+        view.render(16, 20, &plain_ui(), false);
+        let wide = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert!(wide.contains(source), "{wide}");
+        assert!(!wide.contains("Progress"));
+        view.ingest_event("user", &json!({"type":"ssmcp.message","role":"user","text":"[AGENT] literal\nKeep this user text."}),
+            b"[USER] #request queued\nold rows\n");
+        let rows = view.render(100, 30, &plain_ui(), false).join("\n");
+        assert!(
+            rows.contains("[AGENT] literal"),
+            "literal message content is preserved"
+        );
+        assert!(rows.contains("Keep this user text."));
+        assert!(!rows.contains("#request") && !rows.contains("old rows"));
+
+        let message = json!({
+            "type":"ssmcp.message",
+            "role":"assistant",
+            "text":"Authorization: Bearer ui-fixture-secret\nA public explanation remains visible."
+        });
+        let original = message.clone();
+        view.ingest_event(
+            "agent",
+            &message,
+            b"[AGENT] Progress\nAuthorization: [redacted]\nA public explanation remains visible.\n",
+        );
+        let rows = view.render(100, 30, &plain_ui(), false).join("\n");
+        assert!(!rows.contains("ui-fixture-secret"), "{rows}");
+        assert!(rows.contains("Authorization:[redacted]"), "{rows}");
+        assert!(
+            rows.contains("A public explanation remains visible."),
+            "{rows}"
+        );
+        assert_eq!(message, original);
+    }
+
+    #[test]
+    fn structured_presentations_keep_the_rendered_document_in_the_conversation() {
+        let ui = plain_ui();
+        let presentation = json!({
+            "title": "Release summary",
+            "blocks": [
+                {"type": "card", "title": "Ready card", "body": "Verified structured content", "tone": "success"},
+                {"type": "table", "columns": ["Check", "Result"], "rows": [["unit", "passed"]]}
+            ]
+        });
+        let document: crate::client::presentation::Presentation =
+            serde_json::from_value(presentation.clone()).unwrap();
+        let rendered = format!("\n[AGENT] Answer\n{}\n", document.render(80, &ui, false));
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest_event(
+            "agent",
+            &json!({
+                "type": "ssmcp.message",
+                "format": "intelligence_ui.v1",
+                "text": "plain fallback only",
+                "presentation": presentation
+            }),
+            rendered.as_bytes(),
+        );
+        let rows = view.render(100, 40, &ui, false).join("\n");
+        for expected in [
+            "Release summary",
+            "Ready card",
+            "Verified structured content",
+            "Check",
+            "Result",
+            "unit",
+            "passed",
+        ] {
+            assert!(rows.contains(expected), "missing {expected}: {rows}");
+        }
+        assert!(!rows.contains("plain fallback only"));
+    }
+
+    #[test]
+    fn conversation_command_updates_replace_lifecycle_chrome_without_changing_logs() {
+        let mut view = EventView::new();
+        let job = "1234567890abcdef1234567890abcdef-1a";
+        let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n       cwd /example\n";
+        let output = b"[STDOUT] shell #1a\nfirst-result\nsecond-result\nthird-result\n";
+        let finished =
+            b"[OK ] shell #1a completed exit=0 0.04s \xc2\xb7 bash -lc \xc2\xb7 2 lines\n";
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":job,"command":["bash","-lc","printf first"]}),
+            started,
+        );
+        view.set_scope(EventScope::Conversation);
+        let running = view.render(100, 12, &plain_ui(), false).join("\n");
+        assert!(
+            running.contains("bash -lc · 2 lines · running"),
+            "{running}"
+        );
+        assert!(!running.contains("shell #1a") && !running.contains("started"));
+        view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":job}), output);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+            finished,
+        );
+        let done = view.render(100, 12, &plain_ui(), false).join("\n");
+        assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
+        assert!(done.contains("first-result") && done.contains("second-result"));
+        assert!(done.contains("Click expand"));
+        for hidden in [
+            "exit=0",
+            "third-result",
+            "cwd /example",
+            "[RUN",
+            "[STDOUT",
+            "[OK",
+        ] {
+            assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
+        }
+        let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        let bytes = view.bytes;
+        view.set_scope(EventScope::All);
+        view.open();
+        let logs = view.render(100, 20, &plain_ui(), false).join("\n");
+        for detail in [
+            "shell #1a",
+            "started",
+            "exit=0",
+            "first-result",
+            "second-result",
+            "third-result",
+            "[STDOUT]",
+        ] {
+            assert!(logs.contains(detail), "missing {detail}: {logs}");
+        }
+        assert_eq!(view.bytes, bytes);
+        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
+
+        for (job, summary, expected) in [
+            (
+                "17",
+                "[RUN] #17 cargo test --lib",
+                "cargo test --lib · done",
+            ),
+            (
+                "1234567890abcdef1234567890abcdef-1a",
+                "[RUN] #1a cargo check",
+                "cargo check · done",
+            ),
+            (
+                "17",
+                "[RUN] printf #17 started",
+                "printf #17 started · done",
+            ),
+            (
+                "17",
+                "[RUN] #other cargo check",
+                "#other cargo check · done",
+            ),
+        ] {
+            let mut preview = EventView::new();
+            preview.ingest_event(
+                "preview",
+                &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+                summary.as_bytes(),
+            );
+            preview.set_scope(EventScope::Conversation);
+            let rendered = preview.render(100, 8, &plain_ui(), false).join("\n");
+            assert!(rendered.contains(expected), "{rendered}");
+            assert!(
+                !rendered.contains("Click expand"),
+                "no output yet: {rendered}"
+            );
+            assert_eq!(preview.events[0].text, summary);
+        }
+    }
+
+    #[test]
+    fn conversation_command_arguments_and_failure_states_remain_visible_when_selected() {
+        for (mut outcome, status, tone) in [
+            (json!({"exit_code":7}), "exit=7", "error"),
+            (json!({"cancelled":true}), "cancelled", "warning"),
+            (json!({"timed_out":true}), "timeout", "warning"),
+            (json!({"exit_signal":9}), "signal=9", "error"),
+        ] {
+            let mut view = EventView::new();
+            let job = "1234567890abcdef1234567890abcdef-abc";
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":job,"command":["printf","#123","started"]}),
+                b"[RUN ] shell #abc printf '#123' started started\n",
+            );
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":job}),
+                b"[STDOUT] shell #abc\nwarming up\nloading inputs\n",
+            );
+            outcome["type"] = json!("exec.exited");
+            outcome["job_id"] = json!(job);
+            view.ingest_event(
+                "shell",
+                &outcome,
+                b"[ERR ] shell exit=7\n[STDERR] shell #abc\nwarning: cache unavailable\nwarning: retry exhausted\nfatal: failed to load configuration\n\n",
+            );
+            view.set_scope(EventScope::Conversation);
+            let ui = Ui::default();
+            let rendered = view.render(100, 8, &ui, true).join("\n");
+            let plain = unstyled(&rendered);
+            assert!(
+                plain.contains(&format!("printf '#123' started · {status}")),
+                "{plain}"
+            );
+            assert!(!plain.contains("shell #abc") && !plain.contains(" · done"));
+            assert!(
+                plain.contains("warning: retry exhausted")
+                    && plain.contains("fatal: failed to load configuration"),
+                "{plain}"
+            );
+            for hidden in [
+                "warming up",
+                "warning: cache unavailable",
+                "[STDERR]",
+                "[ERR",
+            ] {
+                assert!(!plain.contains(hidden), "unexpected {hidden}: {plain}");
+            }
+            assert!(rendered.contains(&ui.color(tone)), "{rendered:?}");
+            view.open();
+            let expanded = view.render(100, 12, &plain_ui(), true).join("\n");
+            assert!(
+                expanded.contains("warning: cache unavailable")
+                    && expanded.contains("warning: retry exhausted")
+                    && expanded.contains("fatal: failed to load configuration"),
+                "{expanded}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_tool_runs_keep_message_spacing_and_exact_mouse_targets() {
+        let mut view = EventView::new();
+        view.ingest_conversation(b"[USER] queued\nPlease check the project.\n");
+        for (id, command) in [("a", "cargo check"), ("b", "cargo test")] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id,"command":["cargo",command]}),
+                format!("[RUN ] shell {id} {command} started\n").as_bytes(),
+            );
+        }
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","author":"Ada","kind":"answer","text":"Both checks are running."}),
+            b"",
+        );
+        view.set_scope(EventScope::Conversation);
+        let rows = view.render(100, 20, &plain_ui(), false);
+        let first = rows
+            .iter()
+            .position(|row| row.contains("cargo check"))
+            .unwrap();
+        let second = rows
+            .iter()
+            .position(|row| row.contains("cargo test"))
+            .unwrap();
+        let answer = rows.iter().position(|row| row.contains("Ada")).unwrap();
+        assert_eq!(second, first + 1, "folded tools share a compact group");
+        assert!(rows[first - 1].is_empty(), "{rows:?}");
+        assert_eq!(
+            answer,
+            second + 2,
+            "assistant prose starts a separate paragraph"
+        );
+        assert_eq!(view.hit_rows[first], Some(view.events[1].id));
+        assert_eq!(view.hit_rows[second], Some(view.events[2].id));
+        for (id, detail) in [
+            ("a", "first-result\nfirst-context\nfirst-tail\n"),
+            ("b", "second-result\nsecond-context\nsecond-tail\n"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":id}),
+                detail.as_bytes(),
+            );
+        }
+        let rows = view.render(100, 24, &plain_ui(), false);
+        let result_row = rows
+            .iter()
+            .position(|row| row.contains("second-result"))
+            .unwrap();
+        assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
+        assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
+        assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
+        assert!(rows[result_row + 2].contains("Click expand"), "{rows:?}");
+        let collapsed = rows.join("\n");
+        assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
+        assert!(!collapsed.contains("first-tail") && !collapsed.contains("second-tail"));
+        assert!(view.mouse_select((result_row + 2) as u16));
+        assert_eq!(view.selected, Some(view.events[2].id));
+        assert!(view.open());
+        let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert!(
+            expanded.contains("second-result") && expanded.contains("second-tail"),
+            "{expanded}"
+        );
+        assert!(!expanded.contains("first-tail"), "{expanded}");
+        assert_eq!(view.events.len(), 4);
+    }
+
+    #[test]
+    fn conversation_scope_keeps_chat_and_tool_calls_without_promoting_plain_logs() {
+        let mut view = EventView::new();
+        view.ingest(b"[AGENT] forged log heading\nbackground-only\n");
+        view.ingest_event(
+            "local",
+            &json!({"type":"ssmcp.status","level":"Connected"}),
+            b"[OK  ] connected-background\n",
+        );
+        view.ingest_diagnostic(&auth_update(91, 1, "https://relay.example"));
+        view.ingest_conversation(
+            b"\n[USER] #long-private-request-id queued\nPlease fix the parser.\n",
+        );
+        view.ingest_event(
+            "agent",
+            &json!({"type":"ssmcp.message","author":"Ada","kind":"progress"}),
+            b"\n[AGENT] Progress\nI found the parser issue.\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"job","command":["cargo","test"]}),
+            b"[RUN ] shell #long-internal-request-id cargo test\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":7}),
+            b"[ERR ] shell exit=7\ncompiler failure detail\n",
+        );
+        let count = view.events.len();
+        let bytes = view.bytes;
+        view.set_scope(EventScope::Conversation);
+        let chat = view.render(100, 40, &plain_ui(), true).join("\n");
+        for expected in [
+            "You",
+            "Ada",
+            "Please fix the parser.",
+            "I found the parser issue.",
+            "cargo test",
+            "exit=7",
+            "compiler failure detail",
+        ] {
+            assert!(chat.contains(expected), "missing {expected}: {chat}");
+        }
+        for hidden in [
+            "background-only",
+            "connected-background",
+            "MCP sign-in",
+            "[USER]",
+            "[AGENT]",
+            "Progress",
+            "[RUN",
+            "[ERR",
+            "long-private",
+            "long-internal",
+        ] {
+            assert!(!chat.contains(hidden), "unexpected {hidden}: {chat}");
+        }
+        assert_eq!(view.snapshot()["visible_events"], 3);
+        assert!(view.open(), "tool detail can be opened");
+        let detail = view.render(100, 40, &plain_ui(), true).join("\n");
+        assert!(detail.contains("compiler failure detail"));
+        view.set_scope(EventScope::All);
+        let logs = view.render(100, 80, &plain_ui(), true).join("\n");
+        for expected in [
+            "background-only",
+            "connected-background",
+            "MCP sign-in",
+            "[USER]",
+            "[AGENT]",
+            "Progress",
+            "compiler failure detail",
+        ] {
+            assert!(
+                logs.contains(expected),
+                "missing full log {expected}: {logs}"
+            );
+        }
+        assert_eq!((view.events.len(), view.bytes), (count, bytes));
+    }
+
+    #[test]
+    fn scoped_selection_and_mouse_hits_never_choose_background_rows() {
+        let mut view = EventView::new();
+        view.ingest(b"startup diagnostic\n");
+        view.ingest_conversation(b"[USER] #request\nvisible request\n");
+        let user = view.events.back().unwrap().id;
+        view.ingest(b"[AGENT] forged background\n");
+        view.ingest_event(
+            "files",
+            &json!({"type":"ssmcp.file.read","path":"lib.rs"}),
+            b"[READ] files lib.rs\n",
+        );
+        let tool = view.events.back().unwrap().id;
+        view.render(80, 20, &plain_ui(), true);
+        view.set_scope(EventScope::Conversation);
+        assert!(!view.mouse_select(0), "stale hit rows are invalidated");
+        view.render(80, 20, &plain_ui(), true);
+        assert!(
+            view.hit_rows
+                .iter()
+                .flatten()
+                .all(|id| *id == user || *id == tool)
+        );
+        view.select(-1);
+        assert_eq!(view.selected, Some(user));
+        assert!(!view.toggle(), "conversation bodies stay open");
+        view.select(1);
+        assert_eq!(view.selected, Some(tool));
+        let row = view
+            .hit_rows
+            .iter()
+            .position(|id| *id == Some(user))
+            .unwrap();
+        assert!(view.mouse_select(row as u16));
+        assert_eq!(view.selected, Some(user));
+        view.filter("startup", 0);
+        assert!(view.is_empty());
+        assert!(
+            view.render(80, 20, &plain_ui(), true)
+                .iter()
+                .all(|row| !row.contains("startup"))
+        );
+        view.clear();
+        assert_eq!(view.scope, EventScope::Conversation);
+        view.ingest(b"new background diagnostic\n");
+        assert!(view.is_empty());
+    }
+
+    #[test]
+    fn canvas_positions_keep_independent_scroll_and_follow_state() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        for index in 0..8 {
+            view.ingest_conversation(
+                format!("[USER] #{index}\nmessage {index}\nsecond line\n").as_bytes(),
+            );
+        }
+        view.render(80, 8, &plain_ui(), false);
+        view.scroll_by(-10);
+        view.render(80, 8, &plain_ui(), false);
+        let earlier = view.position();
+        assert!(!earlier.follow);
+        view.latest();
+        view.render(80, 8, &plain_ui(), false);
+        let latest = view.position();
+        assert!(latest.follow);
+        assert!(latest.scroll > earlier.scroll);
+        view.restore_position(&earlier);
+        view.render(80, 8, &plain_ui(), false);
+        assert_eq!(view.position().scroll, earlier.scroll);
+        assert_eq!(view.position().selected, earlier.selected);
+        assert!(!view.is_following());
+        view.restore_position(&latest);
+        view.render(80, 8, &plain_ui(), false);
+        assert_eq!(view.position().scroll, latest.scroll);
+        assert!(view.is_following());
+        view.clear();
+        view.restore_position(&earlier);
+        assert_eq!(view.selected, None);
+    }
+
+    #[test]
+    fn canvas_positions_keep_tool_expansion_separate_and_ignore_evicted_events() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        for (path, detail) in [
+            ("first.rs", "first retained detail"),
+            ("second.rs", "second retained detail"),
+        ] {
+            view.ingest_event(
+                "files",
+                &json!({"type": "ssmcp.file.read", "path": path}),
+                format!("[READ] {path}\nfirst preview line\nsecond preview line\n{detail}\n")
+                    .as_bytes(),
+            );
+        }
+        let retained = (view.events.len(), view.bytes);
+        let collapsed = view.position();
+        view.select(-1);
+        assert!(view.open());
+        let first_column = view.position();
+        view.restore_position(&collapsed);
+        assert!(view.open());
+        let second_column = view.position();
+
+        view.restore_position(&first_column);
+        let first = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(first.contains("first retained detail"));
+        assert!(!first.contains("second retained detail"));
+        view.restore_position(&second_column);
+        let second = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(second.contains("second retained detail"));
+        assert!(!second.contains("first retained detail"));
+        assert_eq!((view.events.len(), view.bytes), retained);
+
+        view.restore_position(&EventPosition::default());
+        let fresh = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(!fresh.contains("first retained detail"));
+        assert!(!fresh.contains("second retained detail"));
+
+        for index in 0..MAX_EVENTS - 1 {
+            view.ingest(format!("background {index}\n").as_bytes());
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert!(
+            !view
+                .events
+                .iter()
+                .any(|event| Some(event.id) == first_column.selected)
+        );
+        let retained = (view.events.len(), view.bytes);
+        view.restore_position(&first_column);
+        let pruned = view.render(100, 20, &plain_ui(), true).join("\n");
+        assert!(!pruned.contains("first retained detail"));
+        assert!(!pruned.contains("second retained detail"));
+        assert_eq!((view.events.len(), view.bytes), retained);
+    }
+
+    #[test]
+    fn decoded_image_is_a_tool_event_while_a_plain_image_marker_is_only_a_log() {
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.ingest(b"[IMAGE] plain marker\n");
+        assert!(view.is_empty());
+        view.attach_image(image_preview(2, 2, false));
+        assert!(!view.is_empty());
+        assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
+        assert!(view.open());
+        assert!(
+            !view
+                .render(80, 12, &plain_ui(), true)
+                .join("\n")
+                .contains("[IMAGE]")
+        );
+    }
+
+    fn auth_update(
+        id: u64,
+        count: u64,
+        origin: &str,
+    ) -> super::super::super::render::DiagnosticUpdate {
+        super::super::super::render::DiagnosticUpdate {
+            id,
+            source: "codex".into(),
+            summary: format!("MCP sign-in required ({origin})"),
+            message: "Sign in to the backend connector.\nOriginal diagnostics: --raw-events."
+                .into(),
+            preview: format!("AuthRequired {origin}"),
+            occurrences: count,
+        }
+    }
+
+    #[test]
+    fn interleaved_auth_cards_update_in_place_and_preserve_expansion_and_selection() {
+        let mut view = EventView::new();
+        for update in [
+            auth_update(10, 1, "https://api.x.com"),
+            auth_update(11, 1, "https://api.lmm.best"),
+            auth_update(10, 2, "https://api.x.com"),
+            auth_update(11, 2, "https://api.lmm.best"),
+        ] {
+            view.ingest_diagnostic(&update);
+        }
+        assert_eq!(view.events.len(), 2);
+        assert!(view.events.iter().all(|event| !event.expanded));
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        assert_eq!(view.events[1].diagnostic, Some((11, 2)));
+        let rendered = view.render(120, 8, &plain_ui(), true).join("\n");
+        assert_eq!(rendered.matches("[WARN]").count(), 2);
+        assert_eq!(rendered.matches("×2").count(), 2);
+        view.select(-1);
+        let selected = view.selected;
+        view.open();
+        assert!(view.events[0].expanded);
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.selected, selected);
+        assert!(view.events[0].expanded);
+        assert_eq!(view.events[0].diagnostic, Some((10, 3)));
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn auth_card_reappears_after_clear_or_eviction_without_resetting_backend_count() {
+        let mut view = EventView::new();
+        view.ingest_diagnostic(&auth_update(10, 1, "https://api.x.com"));
+        view.clear();
+        view.ingest_diagnostic(&auth_update(10, 2, "https://api.x.com"));
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].diagnostic, Some((10, 2)));
+        for index in 0..MAX_EVENTS {
+            view.ingest(format!("[READ] unrelated {index}\n").as_bytes());
+        }
+        assert!(view.events.iter().all(|event| event.diagnostic.is_none()));
+        view.ingest_diagnostic(&auth_update(10, 3, "https://api.x.com"));
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(view.events.back().unwrap().diagnostic, Some((10, 3)));
+        view.ingest_diagnostic(&auth_update(12, 1, "https://api.x.com"));
+        assert_eq!(
+            view.events.back().unwrap().diagnostic,
+            Some((12, 1)),
+            "a different diagnostic ID remains a separate card"
+        );
+        assert!(view.bytes <= MAX_BYTES);
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+    }
+
+    fn plain_ui() -> Ui {
+        Ui {
+            color: false,
+            ..Ui::default()
+        }
+    }
+
+    fn image_preview(width: u32, height: u32, native: bool) -> images::Preview {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(width, height));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        images::decode(
+            &json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(png.into_inner())}),
+            native,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tall_native_images_keep_readable_width_and_scroll_through_the_source() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        assert!(view.is_following());
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        let rows = view.render(66, 20, &ui, true);
+        assert_eq!(rows.len(), 20);
+        assert!(unstyled(&rows.join("\n")).contains("screenshot.png"));
+        assert!(unstyled(&rows.join("\n")).contains("scroll to inspect"));
+        assert!(
+            !view.is_following(),
+            "start a new tall image at its heading"
+        );
+        assert_eq!(
+            view.total_rows, 122,
+            "retain the full 120-row image, plus its heading"
+        );
+        assert!(view.rows_below() > 0);
+        let mut renderer = images::Renderer::default();
+        let (_, head) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(head.contains("y=0,w=400,h=340"));
+        view.scroll_by(25);
+        view.render(66, 20, &ui, true);
+        let (_, middle) = renderer.update(view.image_placements(0), (19, 0), false);
+        assert!(middle.contains("y=460,w=400,h=380"));
+        assert!(
+            !middle.contains("a=t"),
+            "scrolling reuses the original uploaded pixels"
+        );
+        assert!(
+            !middle.contains(",c="),
+            "a fitting source stays at its natural pixel size"
+        );
+        view.ingest(b"[AGENT] Later progress\n");
+        view.render(66, 20, &ui, true);
+        assert_eq!(
+            view.scroll, 25,
+            "new output must not interrupt image inspection"
+        );
+        view.latest();
+        let latest = view.render(66, 20, &ui, true).join("\n");
+        assert!(view.is_following());
+        assert!(unstyled(&latest).contains("Later progress"));
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn pending_image_position_survives_column_restore_resize_and_progress() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for scope in [EventScope::All, EventScope::Conversation] {
+            for explicit_latest in [false, true] {
+                let mut view = EventView::new();
+                view.set_scope(scope);
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                view.image_cells(None);
+                view.ingest_event(
+                    "image",
+                    &serde_json::json!({"type":"exec.started","job_id":"column-image"}),
+                    b"[IMAGE] column-resize.png\n",
+                );
+                view.open();
+                view.latest();
+                view.attach_image(image_preview(400, 2400, true));
+                let fallback = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&fallback).contains("Image attachment"));
+                let pending = view.position();
+                assert!(pending.new_image.is_some());
+                view.latest();
+                let latest = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&pending);
+                assert_eq!(view.new_image, pending.new_image);
+                if explicit_latest {
+                    view.restore_position(&latest);
+                    assert!(view.new_image.is_none());
+                }
+
+                view.ingest_event(
+                    "assistant",
+                    &serde_json::json!({"type":"ssmcp.message","text":"Later progress"}),
+                    b"[AGENT] Later progress\n",
+                );
+                let waiting = view.render(66, 20, &ui, true).join("\n");
+                assert!(unstyled(&waiting).contains("Later progress"));
+                assert!(view.is_following());
+                assert_eq!(view.new_image.is_some(), !explicit_latest);
+                let after_progress = view.position();
+                view.restore_position(&EventPosition::default());
+                view.restore_position(&after_progress);
+
+                view.image_cells(Some(images::CellSize {
+                    width: 10,
+                    height: 20,
+                }));
+                let measured = view.render(66, 20, &ui, true).join("\n");
+                assert!(view.new_image.is_none());
+                if explicit_latest {
+                    assert!(view.is_following());
+                    assert_eq!(view.rows_below(), 0);
+                    assert!(unstyled(&measured).contains("Later progress"));
+                } else {
+                    assert!(!view.is_following());
+                    assert_eq!(view.scroll, 0);
+                    assert!(view.rows_below() > 0);
+                    assert!(unstyled(&measured).contains("column-resize.png"));
+                    assert!(unstyled(&measured).contains("scroll to inspect"));
+                    assert!(!view.image_placements(0).is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn position_restore_does_not_revive_paused_rejected_or_removed_image_anchors() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] retained.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        let pending = view.position();
+        let native_id = view
+            .events
+            .back()
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .native
+            .as_ref()
+            .unwrap()
+            .id();
+        view.select(0);
+        let paused = view.position();
+        assert!(!paused.follow);
+        view.restore_position(&pending);
+        assert!(view.new_image.is_some());
+        view.restore_position(&paused);
+        assert!(!view.is_following());
+        assert!(view.new_image.is_none());
+
+        view.reject_image(native_id);
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a rejected native payload cannot be anchored"
+        );
+        view.clear();
+        view.restore_position(&pending);
+        assert!(
+            view.new_image.is_none(),
+            "a removed event cannot be anchored"
+        );
+        assert!(view.selected.is_none());
+    }
+
+    #[test]
+    fn native_image_arriving_during_resize_waits_for_cell_measurement() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for explicit_latest in [false, true] {
+            let mut view = EventView::new();
+            view.ingest(b"[IMAGE] during-resize.png\n");
+            view.attach_image(image_preview(400, 2400, true));
+            let fallback = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&fallback).contains("Image attachment"));
+            assert!(view.new_image.is_some());
+            assert!(view.is_following());
+            assert!(view.image_placements(0).is_empty());
+
+            view.ingest(b"[AGENT] Later progress\n");
+            let pending = view.render(66, 20, &ui, true).join("\n");
+            assert!(unstyled(&pending).contains("Later progress"));
+            assert!(view.new_image.is_some());
+            if explicit_latest {
+                view.latest();
+            }
+            view.image_cells(Some(images::CellSize {
+                width: 10,
+                height: 20,
+            }));
+            let native = view.render(66, 20, &ui, true).join("\n");
+            assert!(view.new_image.is_none());
+            if explicit_latest {
+                assert!(view.is_following());
+                assert_eq!(view.rows_below(), 0);
+                assert!(unstyled(&native).contains("Later progress"));
+            } else {
+                assert!(unstyled(&native).contains("during-resize.png"));
+                assert!(unstyled(&native).contains("scroll to inspect"));
+                assert!(!view.is_following());
+                assert_eq!(view.scroll, 0);
+                assert!(view.rows_below() > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_latest_before_the_first_image_frame_keeps_following() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] screenshot.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        view.latest();
+        view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn batched_images_reveal_the_first_tall_image_after_a_small_preview() {
+        let mut view = EventView::new();
+        view.ingest(b"[IMAGE] small.png\n");
+        view.attach_image(image_preview(32, 32, true));
+        view.ingest(b"[IMAGE] tall.png\n");
+        view.attach_image(image_preview(400, 2400, true));
+        view.image_cells(Some(images::CellSize {
+            width: 10,
+            height: 20,
+        }));
+        let rows = view.render(
+            66,
+            20,
+            &Ui {
+                color: true,
+                ..Ui::default()
+            },
+            true,
+        );
+        assert!(unstyled(&rows.join("\n")).contains("tall.png"));
+        assert_eq!(view.scroll, 4);
+        assert!(!view.is_following());
+    }
+
+    #[test]
+    fn unsupported_images_are_compact_cards_without_pixel_art() {
+        for color in [false, true] {
+            let mut view = EventView::new();
+            view.ingest(b"[IMAGE] screenshot.png\n");
+            view.attach_image(image_preview(128, 128, false));
+            let ui = Ui {
+                color,
+                ..Ui::default()
+            };
+            let rows = view.render(134, 80, &ui, true);
+            let text = unstyled(&rows.join("\n"));
+            assert!(text.contains("128 × 128 · Image attachment"));
+            assert!(text.contains("Inline preview unavailable"));
+            assert!(!text.contains('▀') && !text.contains("Low-resolution thumbnail"));
+            assert_eq!(
+                view.total_rows, 3,
+                "fallback occupies a compact attachment card"
+            );
+            assert!(view.image_placements(0).is_empty());
+            assert!(
+                view.is_following(),
+                "a metadata card must not pause following"
+            );
+            for width in [1, 10, 40] {
+                for row in view.render(width, 8, &ui, true) {
+                    assert!(unstyled(&row).width() <= usize::from(width));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_tools_fold_but_user_agent_answer_and_image_messages_open() {
+        let mut view = EventView::new();
+        view.ingest(format!("[STDOUT] task\n{}", "output\n".repeat(30)).as_bytes());
+        assert!(!view.snapshot()["events"][0]["expanded"].as_bool().unwrap());
+        for tag in ["USER", "AGENT", "ANSWER", "IMAGE"] {
+            view.ingest(format!("[{tag}]\n{}", "visible content\n".repeat(20)).as_bytes());
+            assert!(view.events.back().unwrap().expanded, "{tag}");
+        }
+        assert_eq!(view.snapshot()["retained_events"], 5);
+    }
+
+    #[test]
+    fn toggling_and_scrolling_reveal_the_retained_tail_without_rerunning_tools() {
+        let mut view = EventView::new();
+        let text = format!(
+            "[STDOUT] task\n{}",
+            (0..30).map(|i| format!("line-{i}\n")).collect::<String>()
+        );
+        view.ingest(text.as_bytes());
+        let closed = view.render(70, 6, &plain_ui(), true).join("\n");
+        assert!(!closed.contains("line-20"));
+        assert!(view.open());
+        let head = view.render(70, 6, &plain_ui(), true).join("\n");
+        assert!(head.contains("line-0"));
+        view.scroll_by(1000);
+        let tail = view.render(70, 6, &plain_ui(), true).join("\n");
+        assert!(tail.contains("line-29"));
+        assert!(view.back());
+        assert!(!view.back());
+        let closed = view.render(70, 6, &plain_ui(), true).join("\n");
+        assert!(!closed.contains("line-29"));
+        assert_eq!(view.events[0].text, text);
+    }
+
+    #[test]
+    fn retention_has_strict_event_and_byte_budgets_and_marks_partial_events() {
+        let mut view = EventView::new();
+        for id in 0..200 {
+            view.ingest(format!("[READ] file-{id}\nsmall").as_bytes());
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(view.dropped, 200 - MAX_EVENTS);
+        view.select(-127);
+        view.ingest(&vec![b'x'; MAX_BYTES + 1024]);
+        assert!(view.bytes <= MAX_BYTES);
+        assert!(view.events.len() <= MAX_EVENTS);
+        assert!(view.events.back().unwrap().truncated);
+        assert!(
+            view.events
+                .back()
+                .unwrap()
+                .text
+                .contains("preview truncated")
+        );
+        assert!(
+            view.events
+                .iter()
+                .any(|event| Some(event.id) == view.selected)
+        );
+    }
+
+    #[test]
+    fn selection_mouse_hits_and_resize_keep_the_correct_event() {
+        let mut view = EventView::new();
+        for id in 0..10 {
+            view.ingest(format!("[READ] file-{id}").as_bytes());
+        }
+        view.render(70, 4, &plain_ui(), true);
+        assert!(view.mouse_select(0));
+        let selected = view.selected.unwrap();
+        assert_eq!(selected, 7);
+        assert!(!view.mouse_select(3), "the footer is not an event");
+        assert_eq!(view.selected, Some(selected));
+        view.render(12, 8, &plain_ui(), true);
+        assert_eq!(view.selected, Some(selected));
+        view.select(isize::MIN);
+        assert_eq!(view.selected, Some(0));
+        view.select(isize::MAX);
+        assert_eq!(view.selected, Some(9));
+        view.clear();
+        assert!(view.is_empty());
+        assert!(view.hit_rows.is_empty());
+        assert!(!view.toggle());
+    }
+
+    #[test]
+    fn colors_survive_wrapping_but_terminal_control_commands_do_not() {
+        let mut view = EventView::new();
+        view.ingest(b"[AGENT]\n\x1b[31mred\x1b[0m \x1b[2Jstill here \x1b]52;c;c2VjcmV0\x07tail");
+        let ui = Ui::default();
+        let rows = view.render(16, 20, &ui, true);
+        let rendered = rows.join("\n");
+        assert!(rendered.contains("\x1b[31m"));
+        assert!(!rendered.contains("\x1b[2J"));
+        assert!(!rendered.contains("\x1b]52"));
+        assert!(!rendered.contains("c2VjcmV0"));
+        for row in &rows {
+            assert!(unstyled(row).width() <= 16, "{row:?}");
+        }
+        let uncolored = view.render(16, 20, &plain_ui(), true).join("\n");
+        assert!(!uncolored.contains('\x1b'));
+    }
+
+    #[test]
+    fn narrow_unicode_rows_and_empty_geometry_are_safe() {
+        let mut view = EventView::default();
+        view.ingest("[USER]\ne\u{301}界🙂".as_bytes());
+        for width in 1..8 {
+            for row in view.render(width, 10, &plain_ui(), true) {
+                assert!(row.width() <= usize::from(width), "{row:?}");
+            }
+        }
+        assert!(view.render(0, 0, &plain_ui(), true).is_empty());
+        assert_eq!(view.render(0, 2, &plain_ui(), true), vec!["", ""]);
+    }
+    #[test]
+    fn rpc_and_native_output_share_one_command_row_and_preserve_the_final_outcome() {
+        let mut view = EventView::new();
+        view.ingest_event(
+            "shell",
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"name":"ssmcp.exec.start","arguments":{"command":["cargo","test"]}}}}),
+            b"[REQ] exec.start\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"job","command":["cargo","test"]}),
+            b"[RUN] cargo test\n",
+        );
+        assert_eq!(view.events.len(), 2);
+        view.ingest_event(
+            "shell",
+            &json!({"id":1,"result":{"structuredContent":{"job_id":"job","running":true}}}),
+            b"started\n",
+        );
+        for bytes in [
+            b"first line\n".as_slice(),
+            b"\n\n".as_slice(),
+            b"second line\n".as_slice(),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"job"}),
+                bytes,
+            );
+        }
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":7}),
+            b"[ERR] command failed\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"ssmcp.harness.tool.completed",
+            "rpc_correlation":true,"command_rpc_completed":true,"success":true}),
+            b"",
+        );
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].summary, "[RUN] cargo test");
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(7)));
+        assert!(view.events[0].text.contains("first line\n\n\nsecond line"));
+        assert!(view.snapshot()["events"][0]["status"] == "exit=7");
+        view.back();
+        assert!(
+            view.render(90, 8, &plain_ui(), true)
+                .join("\n")
+                .contains("exit=7")
+        );
+    }
+
+    #[test]
+    fn unrelated_jobs_and_reused_rpc_ids_do_not_combine() {
+        let mut view = EventView::new();
+        for provider in ["a", "b"] {
+            view.ingest_event(
+                provider,
+                &json!({"type":"exec.started","job_id":"job"}),
+                b"[RUN] task\n",
+            );
+        }
+        view.ingest_event(
+            "a",
+            &json!({"type":"exec.exited","job_id":"job","exit_code":0}),
+            b"done\n",
+        );
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        assert_eq!(view.events[1].meta.status, Some(Status::Running));
+        let request = json!({"request":{"id":"reused","method":"command/exec","params":{"processId":"same"}}});
+        for code in [7, 0] {
+            view.ingest_event("rpc", &request, b"[RUN] invocation\n");
+            view.ingest_event(
+                "rpc",
+                &json!({"id":"reused","result":{"exitCode":code}}),
+                b"result\n",
+            );
+        }
+        assert_eq!(view.events.len(), 4);
+        assert_eq!(view.events[2].meta.status, Some(Status::Exit(7)));
+        assert_eq!(view.events[3].meta.status, Some(Status::Exit(0)));
+    }
+
+    #[test]
+    fn cancelled_signalled_failed_and_timed_out_snapshots_never_show_done() {
+        let mut view = EventView::new();
+        for (id, snapshot, expected) in [
+            (1, json!({"cancelled":true}), "cancelled"),
+            (2, json!({"exit_signal":15}), "signal=15"),
+            (
+                3,
+                json!({"error":"capture unavailable","state":"failed"}),
+                "failed",
+            ),
+            (4, json!({"timed_out":true}), "timeout"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"id":id,"result":{"structuredContent":snapshot}}),
+                b"[RES] status\n",
+            );
+            assert_eq!(
+                view.events.back().unwrap().meta.status.unwrap().label(),
+                expected
+            );
+        }
+        view.filter("", 2);
+        assert_eq!(
+            view.events
+                .iter()
+                .filter(|event| event.matches("", 2, EventScope::All))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn short_tools_fold_but_diffs_and_attention_remain_open() {
+        let mut view = EventView::new();
+        view.ingest(b"[RES ] audit\n  ssmcp.fs.read_text\n  source.rs\n");
+        assert!(!view.events[0].expanded);
+        assert!(view.events[0].summary.contains("ssmcp.fs.read_text"));
+        view.ingest(b"12:34:56.789Z [UPDATE] progress\nvisible details\n");
+        assert!(view.events[1].expanded);
+        view.ingest(b"[STDOUT] job\npartial\n[ERR] exit=7\n");
+        assert!(view.events[2].expanded);
+        assert_eq!(view.events[2].tone, "error");
+        assert_eq!(view.events[2].summary, "[ERR] exit=7");
+        view.ingest_event("fs", &json!({"type":"ssmcp.file.diff"}), b"-old\n+new\n");
+        assert!(view.events[3].expanded);
+        assert!(!view.back());
+        assert!(!view.toggle());
+        view.ingest(b"\n\n");
+        assert_eq!(view.events.len(), 4);
+    }
+
+    #[test]
+    fn filtered_navigation_and_scroll_to_bottom_restore_live_following() {
+        let mut view = EventView::new();
+        for (id, output) in [
+            ("one", "needle first"),
+            ("two", "unrelated"),
+            ("three", "needle last"),
+        ] {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":id}),
+                format!("[RUN] {output}\n").as_bytes(),
+            );
+        }
+        view.filter("needle", 0);
+        view.select(isize::MIN);
+        view.select(1);
+        assert_eq!(view.selected, Some(2));
+        view.filter("", 0);
+        view.ingest(b"[AGENT]\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+        view.latest();
+        view.render(70, 5, &plain_ui(), true);
+        view.scroll_by(-2);
+        let before = view.scroll;
+        assert!(!view.is_following());
+        assert_eq!(view.rows_below(), 2);
+        view.ingest(b"[READ] latest event\n");
+        view.render(70, 5, &plain_ui(), true);
+        assert_eq!(view.scroll, before);
+        assert!(view.rows_below() > 2);
+        view.scroll_by(isize::MAX);
+        assert!(view.is_following());
+        assert_eq!(view.rows_below(), 0);
+    }
+
+    #[test]
+    fn source_highlighting_semantic_colors_and_no_color_preserve_content() {
+        let ui = Ui::default();
+        let source = "let answer = 42; // comment\nlet path = \"src/lib.rs\";\n";
+        let styled = semantic_text(source, &ui, "rust");
+        assert_eq!(unstyled(&styled), source);
+        for tone in ["accent", "warning", "muted", "success"] {
+            assert!(
+                styled.contains(&ui.color(tone)),
+                "missing {tone}: {styled:?}"
+            );
+        }
+        let existing = "\x1b[31moriginal red\x1b[0m\n";
+        assert_eq!(semantic_text(existing, &ui, ""), existing);
+        assert_eq!(semantic_text(source, &plain_ui(), "rust"), source);
+        assert!(!semantic_text(existing, &plain_ui(), "").contains('\x1b'));
+        let mut view = EventView::new();
+        view.ingest_event(
+            "fs",
+            &json!({"request":{"id":1,"method":"tools/call",
+            "params":{"arguments":{"path":"src/lib.rs"}}}}),
+            format!("[READ] src/lib.rs\n{source}").as_bytes(),
+        );
+        view.open();
+        let rows = view.render(90, 12, &ui, false).join("\n");
+        assert!(rows.contains(&ui.color("accent")));
+        let plain = view.render(90, 12, &plain_ui(), false).join("\n");
+        assert!(!plain.contains('\x1b'));
+        assert!(plain.contains("let answer = 42; // comment"));
+    }
+}

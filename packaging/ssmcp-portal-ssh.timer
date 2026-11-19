@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply ssmcp portal SSH public-key changes
+
+[Timer]
+OnBootSec=15s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=ssmcp-portal-ssh.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,28 @@
+[Unit]
+Description=ssmcp GitHub account portal
+After=network.target
+
+[Service]
+Type=simple
+User=ssmcpd
+Group=ssmcp
+EnvironmentFile=-/etc/ssmcpd/ssmcpd.env
+ExecStart=/usr/local/bin/ssmcpd serve --portal-only --config /etc/ssmcpd/ssmcpd.toml --listen 127.0.0.1:8086 --socket /run/ssmcp-portal/control.sock --portal-state-dir /var/lib/ssmcpd/portal --client-registry /var/lib/ssmcpd/portal-oauth-clients.toml
+StateDirectory=ssmcpd
+StateDirectoryMode=0700
+RuntimeDirectory=ssmcp-portal
+RuntimeDirectoryMode=0750
+UMask=0007
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,18 +1,48 @@
 # computer-use：原生电脑、浏览器与 Omarchy 操作
 
-computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Windows 和 macOS 桌面适配器、直接使用 Chrome DevTools Protocol（CDP）的浏览器适配器，以及 Omarchy 系统原语。操作在连接的开发机执行，结构化结果和截图通过原有 SSH 连接返回；桌面和 CDP 原生接口不调用模型，也不依赖另一个 MCP 控制服务；复用浏览器扩展时，可选的 Playwright 桥会连接已安装的原生 MCP server。
+computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Windows 和 macOS 桌面适配器、直接使用 Chrome DevTools Protocol（CDP）的浏览器适配器，以及 Omarchy 系统原语。操作在连接的开发机执行，结构化结果和截图通过该客户端的现有连接返回；桌面和 CDP 原生接口不调用模型，也不依赖另一个 MCP 控制服务；复用浏览器扩展时，可选的 Playwright 桥会连接已安装的原生 MCP server。
 
 当前名称统一为 `computer-use`，专用客户端与用户服务名称为 `ssmcp-computer-use`。已有调用继续使用 `ssmcp.computer.*` 和 `ssmcp.browser.*`；Omarchy 新增 `ssmcp.omarchy.*`。名称调整不改变客户端 ID 的路由规则。实现入口见 [电脑适配器](../src/computer.rs)、[浏览器适配器](../src/browser.rs)和 [Omarchy 适配器](../src/omarchy.rs)。
+
+## 默认使用私有桌面
+
+`computer` / `cua` 的观察与输入默认选择本连接拥有的私有桌面。没有私有桌面时，`status` 仅返回平台支持、`can_start` 和缺失 helper；显示器、窗口、截图及输入不会读取或操作宿主桌面，也不会因为只读请求而启动桌面。[默认分派](../src/computer/isolated.rs)
+
+Linux 上首次调用 `computer.app_launch(id, {command: [...]})` 会先校验 argv 和可执行文件，再自动创建 **1280 × 800** 私有 Xvfb 桌面。后续启动复用它；需要其他尺寸时先显式调用 `desktop_start`。应用使用独立 DISPLAY、Xauthority、运行目录和 D-Bus 会话。关闭客户端或调用 `desktop_stop` 只清理该连接拥有的私有桌面与应用，不把原本的宿主应用移动进去。[生命周期与环境](../src/computer/isolated.rs)
+
+| 调用 | 尚未创建私有桌面时 |
+| --- | --- |
+| `computer.status` / `desktop_status` | 返回准备状态，不启动应用或显示服务 |
+| `computer.monitors/windows/screenshot` | 返回先启动应用或私有桌面的明确提示 |
+| `computer.move/click/key/type/scroll/drag/focus` | 返回同一提示，不触碰宿主键鼠 |
+| `computer.app_launch` | 校验通过后自动创建私有桌面并启动指定程序 |
+| `computer.desktop_start` | 显式创建指定大小的私有桌面 |
+| `computer.desktop_stop` | 没有私有桌面时返回 `stopped:false` |
+
+私有桌面目前需要 Linux 和 Xvfb 及返回的 helpers。Windows/macOS 默认状态明确报告不支持私有桌面，不自动切换到宿主。只有单次调用明确传入 `desktop: "host"`，才选择下表对应的宿主适配器；该参数不会改变后续默认选择。浏览器页面控制和 Omarchy 是独立接口，桌面显示隔离也不改变应用的本机文件与进程权限。[schema 与只读标记](../src/computer.rs)
+
+## 主桌面输入需要本地短时交接
+
+主桌面观察仍可显式使用 `desktop: "host"`。聚焦、移动、点击、拖拽、按键、文本输入和滚动则默认拒绝；远端工具参数不能开启或续期。优先使用私有桌面或已连接的后台浏览器，避免移动用户正在使用的鼠标和焦点。
+
+确实需要主桌面时，用户在 **ssmcp 本地终端** 输入 `/computer host`，交接默认 15 秒；可使用 `/computer host 30` 指定 1–60 秒。`/computer status` 查看当前状态，`/computer stop` 立即撤销。在 ssmcp 终端再次输入键盘、鼠标或粘贴内容也会撤销；时间到、重新交接或客户端关闭都会使旧调用失效。排队中的旧调用不会因后续交接而恢复执行。
+
+取消会中断正在等待或执行的输入，并运行已有的按键、按钮释放清理；清理完成前，本进程内其他主桌面输入保持排队。若释放清理失败，本进程的后续主桌面输入被锁住，避免继续叠加输入。私有桌面仍按连接隔离，客户端重连不继承交接状态。[本地交接与取消](../src/computer/host_control.rs) · [输入分派](../src/computer.rs)
+
+本轮检测范围是 **ssmcp 本地终端的输入**，不声称能够捕获其他应用中的全部键鼠活动；串行锁也只覆盖同一个客户端进程，不是整个操作系统的全局锁。需要继续在其他应用工作时，保持主桌面输入锁定并使用后台控制。浏览器 CDP、Omarchy、外部 harness 及任意 shell 命令拥有各自能力，这个护栏不把具有本机执行权限的工具变成安全沙箱。
+
+这项交接机制的本地验证在 Linux 上完成，使用假输入、计时和释放任务检查锁定、撤销与清理，没有向真实宿主桌面发送键鼠事件。Windows/macOS 的运行行为仍需对应平台的发布验收，不能由这些测试推定真机通过。
 
 ## 运行条件与平台范围
 
 | 平台或会话 | 原生实现 | 运行条件 |
 | --- | --- | --- |
-| Linux · Hyprland | 显示器、窗口、聚焦、截图和鼠标键盘输入；兼容旧 dispatcher 与新版 Lua dispatcher | 当前图形会话中的 `hyprctl`、`grim`、`wtype`、`ydotool` 及可访问的 `ydotoold` |
-| Linux · X11 | 同组桌面操作 | `xdotool`、`xprop`、ImageMagick；窗口聚焦还依赖窗口管理器 |
-| Linux · 其他 Wayland | 按实际会话协议和已安装工具报告可用操作 | 以 `computer.status.capabilities` 的逐项诊断为准 |
-| Windows | Win32 显示器与窗口 API、`SetForegroundWindow`、`SendInput`、GDI/GDI+ 截图 | 当前已登录且解锁的交互桌面；受 Windows 前台窗口策略和输入权限限制 |
-| macOS | Quartz 显示器、窗口与输入事件；Accessibility 聚焦；系统 `screencapture` 和 `sips` 截图 | 当前图形会话；对应的辅助功能、事件发送和屏幕录制权限 |
+| Linux · 私有 Xvfb | 默认独立桌面与应用；不使用宿主显示与输入 | `Xvfb`、`xdotool`、`magick`、`xprop`、`dbus-run-session`、`dbus-daemon` |
+| Linux · Hyprland（显式 host） | 显示器、窗口、聚焦、截图和鼠标键盘输入；兼容旧 dispatcher 与新版 Lua dispatcher | 当前图形会话中的 `hyprctl`、`grim`、`wtype`、`ydotool` 及可访问的 `ydotoold` |
+| Linux · X11（显式 host） | 同组桌面操作 | `xdotool`、`xprop`、ImageMagick；窗口聚焦还依赖窗口管理器 |
+| Linux · 其他 Wayland（显式 host） | 按实际会话协议和已安装工具报告可用操作 | 显式 `computer.status(id,{desktop:"host"})` 后读取 `structuredContent.capabilities` |
+| Windows（显式 host） | Win32 显示器与窗口 API、`SetForegroundWindow`、`SendInput`、GDI/GDI+ 截图 | 当前已登录且解锁的交互桌面；受 Windows 前台窗口策略和输入权限限制 |
+| macOS（显式 host） | Quartz 显示器、窗口与输入事件；Accessibility 聚焦；系统 `screencapture` 和 `sips` 截图 | 当前图形会话；对应的辅助功能、事件发送和屏幕录制权限 |
 | 三个平台的浏览器 | Rust 直接连接 Chromium CDP；启动、附着、标签页、快照、元素操作和截图 | 系统安装了兼容的 Chromium、Chrome 或 Edge |
 | Linux · Omarchy | 21 个结构化系统原语，调用安装在本机的 Omarchy 命令和 Hyprland 接口 | 可识别的 Omarchy 安装；每项功能所需命令与设备可用 |
 
@@ -28,7 +58,7 @@ Windows 适配器在查询几何信息和移动指针时设置线程级的显示
 
 ### macOS 权限与坐标
 
-先读取 `computer.status.permissions`：`accessibility` 控制窗口聚焦，`event_posting` 控制 Quartz 输入事件，`screen_recording` 控制截图。缺失时按照返回的原因，在“系统设置 → 隐私与安全性”中为 ssmcp 可执行文件或启动它的终端授予相应权限；macOS 要求重启进程时再重启客户端。窗口标题在没有屏幕录制权限时可能被系统隐藏。系统设置入口见 Apple 的[辅助功能权限说明](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac)和[屏幕与系统音频录制说明](https://support.apple.com/guide/mac-help/control-access-screen-system-audio-recording-mchld6aa7d23/mac)。
+需要检查宿主权限时，显式调用 `computer.status(id,{desktop:"host"})` 并读取 `structuredContent.permissions`：`accessibility` 控制窗口聚焦，`event_posting` 控制 Quartz 输入事件，`screen_recording` 控制截图。缺失时按照返回的原因，在“系统设置 → 隐私与安全性”中为 ssmcp 可执行文件或启动它的终端授予相应权限；macOS 要求重启进程时再重启客户端。窗口标题在没有屏幕录制权限时可能被系统隐藏。系统设置入口见 Apple 的[辅助功能权限说明](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac)和[屏幕与系统音频录制说明](https://support.apple.com/guide/mac-help/control-access-screen-system-audio-recording-mchld6aa7d23/mac)。
 
 macOS 输入使用 Quartz 全局桌面点，主显示器左上角为原点，其他显示器可能位于负坐标区域。Retina 和缩放模式下，截图像素不一定与桌面点一一对应；始终使用该张截图返回的 `image_to_desktop`，不要自行假定缩放倍数。Quartz 的显示器与全局坐标接口见 [Apple Display Services](https://developer.apple.com/documentation/CoreGraphics/quartz-display-services)。
 
@@ -59,12 +89,16 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.computer.status", {});
 
 `code_mode` 内置 `cua`，用于直接操作连接开发机的桌面和浏览器。桌面方法与 `computer` 共用实现，`cua.browser` 与 `browser` 是同一组方法；两种写法接收相同参数、返回相同的完整 MCP 结果。截图、点击、移动、拖拽、按键、文字输入和滚动都直接调用客户端原生工具。
 
-先读取能力，再根据返回的截图和坐标映射操作：
+先读取私有桌面准备状态，再启动已安装应用，最后根据返回的截图和坐标映射操作。下面使用已安装的 `xmessage` 作为示例；其他程序需替换为目标机实际存在的可执行文件：
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
 const status = await cua.status(id);
 if (status.isError) return status;
+const started = await cua.app_launch(id, {
+  command: ["xmessage", "ssmcp private desktop"]
+});
+if (started.isError) return started;
 
 const shot = await cua.screenshot(id, { max_width: 1600 });
 image(shot);
@@ -95,7 +129,13 @@ return shot.structuredContent ?? null;
 `image()` 将截图作为真正的 MCP 图片内容块返回。截图元信息独立作为 JSON 返回，图片编码不会重复写入文本日志。
 
 ```javascript
-const shot = await computer.screenshot("CLIENT_ID_FROM_LIST", {
+const id = "CLIENT_ID_FROM_LIST";
+// xmessage must be installed; choose an actual application from the target machine.
+const started = await computer.app_launch(id, {
+  command: ["xmessage", "ssmcp private desktop"]
+});
+if (started.isError) return started;
+const shot = await computer.screenshot(id, {
   max_width: 1600,
   quality: 70
 });
@@ -125,7 +165,11 @@ return shot.structuredContent;
 
 | 方法 | 主要参数 | 返回或效果 |
 | --- | --- | --- |
-| `computer.status` | 无 | 平台、会话、逐项能力、依赖与权限诊断 |
+| `computer.desktop_status` | 无 | 只读检查本连接私有桌面、支持范围与依赖 |
+| `computer.desktop_start` | 可选 `width,height` | 显式创建私有桌面；默认 1280 × 800 |
+| `computer.desktop_stop` | 无 | 结束本连接私有桌面及其应用 |
+| `computer.app_launch` | `command:[program,...args]` | 校验后在私有桌面启动；必要时自动创建桌面 |
+| `computer.status` | 可选 `desktop` | 私有桌面准备状态，或所选适配器的能力与权限诊断 |
 | `computer.monitors` | 无 | 显示器位置、尺寸、像素信息与坐标空间 |
 | `computer.windows` | 无 | 最多 100 个窗口的 `window_id`、标题和几何信息 |
 | `computer.focus` | `window_id` | 请求聚焦当前窗口目录中的目标，读取实际焦点确认 |
@@ -136,6 +180,8 @@ return shot.structuredContent;
 | `computer.key` | `key`；可选 `modifiers` | 命名按键或快捷键；修饰键为 `ctrl/alt/shift/super` |
 | `computer.type` | `text` | 输入原样 Unicode 文字，最多 16 KiB UTF-8 字节 |
 | `computer.scroll` | `direction`；可选 `steps,x,y` | 四方向滚轮，步数 1–100 |
+
+除 `desktop_start`、`desktop_status`、`desktop_stop` 与 `app_launch` 外，表内桌面方法接受可选的 `desktop: "isolated" | "host"`；省略时始终为 `isolated`。`app_launch` 接受 1–128 个 argv 项，每项最多 4096 UTF-8 字节，总计最多 32 KiB，首项必须解析为可执行文件；输入失败不会创建私有桌面。只读标记不包含自动启动行为。
 
 常用按键名包括 `Return`、`Tab`、`Escape`、`BackSpace` 和方向键。macOS 的 `super` 对应 Command，Windows 对应 Windows 键；macOS 字母键按 ANSI 物理键位映射，文字内容使用 `computer.type`。不要用快捷键接口代替任意 Unicode 文本输入。
 
@@ -155,7 +201,7 @@ Hyprland、Windows 和 macOS 的聚焦实现只发送一次焦点请求，随后
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";
-const started = await browser.launch(id, { headless: false });
+const started = await browser.launch(id, { headless: true });
 if (started.isError) throw new Error(JSON.stringify(started));
 const opened = await browser.open(id, { url: "https://example.com" });
 if (opened.isError) throw new Error(JSON.stringify(opened));
@@ -285,3 +331,16 @@ python3 scripts/e2e_computer_use.py --desktop --report target/computer-use-evide
 这条命令会打开并操作当前桌面的测试页、移动指针、输入文字和截图。应在可以操作该测试窗口的会话中运行。端到端脚本检查真实 SSH、OAuth PKCE、HTTP MCP、工具发现、中文输入、元素引用、图片块、进程所有权和审计分页。原语和浏览器调用继续使用客户端既有访问控制；审计记录工具名称、耗时与完成状态。
 
 Windows/macOS 的原生焦点、混合缩放、多屏截图、权限拒绝和取消释放需要对应系统的交互会话验证。完整版本、运行平台、命令与结果记录在 [computer-use 验收记录](validation-computer-use.md)。
+
+## 默认隔离的回归入口
+
+普通库回归通过锁住宿主适配器入口检查默认观察和输入：即使发生错误回退，也只会触发测试超时，不会把事件送到宿主。无效 argv 回归锁住私有桌面创建入口，验证参数与可执行文件在启动前被拒绝；无需真实图形会话。
+
+```sh
+cargo test --lib computer::isolated::tests
+# 下列 ignored 测试只创建本连接拥有的 Xvfb，不连接宿主显示。
+cargo test --lib computer::isolated::tests::app_launch_auto_starts_private_display_and_releases_owned_state -- --ignored --exact
+cargo test --lib computer::isolated::tests::private_display_input_capture_and_cleanup -- --ignored --exact
+```
+
+真实私有桌面回归需要前述 helpers；应用自动启动用 `true`，原有键入与截图回归还需要 `wish`。这两个入口分别检查自动创建/复用/清理，以及私有应用实际接收输入和截图。列出入口不等于已在当前平台执行成功；实测结果应另行记录。[回归实现](../src/computer/isolated.rs)

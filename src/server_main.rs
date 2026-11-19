@@ -33,6 +33,12 @@ const HELP: &str = r#"ssmcpd - SSH-authenticated terminal MCP gateway
 Usage:
   ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--socket PATH] [--portal-only]
   ssmcpd attach [--socket PATH]
+  ssmcpd check-runtime
+
+Runtime check:
+  check-runtime verifies the installed code_mode runner and mandatory OS sandbox.
+  It takes no options and needs no gateway configuration, credentials, or network.
+  Success prints {"code_mode":"ok"}; failure exits nonzero with a diagnostic.
 
 Configuration:
   --config PATH selects a TOML file; SSMCP_CONFIG also selects a file.
@@ -41,7 +47,9 @@ Configuration:
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
   --portal-only runs the account HTTP portal without binding an SSH attachment socket.
   --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
-  Management: [portal] admin_github_ids, admin_github_users, owner_mappings.
+  Management: [portal] admin_usernames = ["your-ssmcp-username"] after registering that name.
+  Relay bandwidth: [portal] default_rate_limit_bps = 8388608 (8 MiB/s in each direction per user).
+  Legacy configuration: admin_github_ids, admin_github_users, owner_mappings.
   Admin IDs are immutable GitHub numeric ID strings; username entries resolve once at startup.
   Audit: [portal] audit_dir, audit_retention_days (default 7), audit_max_events (default 20000).
   The gateway requires audit_dir when gateway_socket is configured. Portal-only is a socket client.
@@ -78,6 +86,7 @@ struct Config {
     client_registry: Option<PathBuf>,
     client_download_dir: Option<PathBuf>,
     portal: PortalConfig,
+    commerce: ssmcp::commerce::CommerceConfig,
     portal_only: bool,
 }
 
@@ -90,6 +99,7 @@ struct FileConfig {
     oauth: TokenConfig,
     auth: AuthConfig,
     portal: PortalConfig,
+    commerce: ssmcp::commerce::CommerceConfig,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +109,8 @@ struct PortalConfig {
     gateway_socket: Option<PathBuf>,
     admin_github_ids: Vec<String>,
     admin_github_users: Vec<String>,
+    admin_usernames: Vec<String>,
+    default_rate_limit_bps: u64,
     owner_mappings: HashMap<String, String>,
     audit_dir: Option<PathBuf>,
     audit_retention_days: u32,
@@ -113,6 +125,8 @@ impl Default for PortalConfig {
             gateway_socket: None,
             admin_github_ids: Vec::new(),
             admin_github_users: Vec::new(),
+            admin_usernames: Vec::new(),
+            default_rate_limit_bps: ssmcp::user_policy::DEFAULT_RATE_LIMIT_BPS,
             owner_mappings: HashMap::new(),
             audit_dir: None,
             audit_retention_days: audit.retention_days,
@@ -224,6 +238,7 @@ fn load_file_config(path: &Path, config: &mut Config) -> ssmcp::Result<()> {
     config.client_registry = file.oauth.client_registry;
     config.client_download_dir = file.server.client_download_dir;
     config.portal = file.portal;
+    config.commerce = file.commerce;
     config.github = file.auth.github;
     Ok(())
 }
@@ -246,10 +261,25 @@ fn run() -> ssmcp::Result<()> {
         println!("ssmcpd {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let remaining: Vec<String> = args.collect();
+    if mode == "check-runtime" {
+        if remaining.len() == 1 && matches!(remaining[0].as_str(), "--help" | "-h") {
+            print!("{HELP}");
+            return Ok(());
+        }
+        if !remaining.is_empty() {
+            return Err("check-runtime takes no options or arguments; see --help".into());
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(ssmcp::code_mode::check_runtime())?;
+        println!(r#"{{"code_mode":"ok"}}"#);
+        return Ok(());
+    }
     if mode != "serve" && mode != "attach" {
         return Err(format!("unknown command {mode}; see --help").into());
     }
-    let remaining: Vec<String> = args.collect();
     if remaining
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
@@ -267,6 +297,7 @@ fn run() -> ssmcp::Result<()> {
         client_registry: None,
         client_download_dir: None,
         portal: PortalConfig::default(),
+        commerce: ssmcp::commerce::CommerceConfig::default(),
         portal_only,
     };
     if mode == "serve" {
@@ -416,6 +447,20 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    config.commerce.validate()?;
+    if config.commerce.enabled && (config.portal_only || portal.state_dir.is_none()) {
+        return Err("commerce requires the gateway process with portal.state_dir; --portal-only cannot own billing".into());
+    }
+    if !ssmcp::user_policy::valid_rate(portal.default_rate_limit_bps) {
+        return Err(
+            "portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into(),
+        );
+    }
+    if !portal.admin_usernames.is_empty() && portal.state_dir.is_none() {
+        return Err(
+            "portal.admin_usernames requires portal.state_dir and registered usernames".into(),
+        );
+    }
     AuditConfig {
         retention_days: portal.audit_retention_days,
         max_events: portal.audit_max_events,
@@ -449,6 +494,7 @@ fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
         None => {
             if !portal.admin_github_ids.is_empty()
                 || !portal.admin_github_users.is_empty()
+                || !portal.admin_usernames.is_empty()
                 || !portal.owner_mappings.is_empty()
                 || portal.audit_dir.is_some()
             {
@@ -635,9 +681,12 @@ async fn bind_socket(path: &Path) -> ssmcp::Result<(UnixListener, SocketFile)> {
 
 async fn serve(config: Config) -> ssmcp::Result<()> {
     use std::future::IntoFuture;
-    let downloads =
-        ssmcp::client_downloads::router(&config.public_url, config.client_download_dir.as_deref())?;
+    let (downloads, publication) = ssmcp::client_downloads::configured(
+        &config.public_url,
+        config.client_download_dir.as_deref(),
+    )?;
     let mut broker = Broker::with_identity_config(config.public_url, config.oauth, config.github)?;
+    broker.client_downloads = publication;
     if let Some(path) = config.client_registry {
         broker.oauth.enable_client_registry(&path)?;
         ssmcp::observability::log(
@@ -662,12 +711,30 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         }
     }
 
+    broker
+        .configure_traffic_timezone(config.commerce.utc_offset_minutes)
+        .map_err(|_| "invalid commerce monthly timezone")?;
+    if let Some(path) = &config.portal.state_dir {
+        broker
+            .portal
+            .configure_commerce(config.commerce.clone(), path)?;
+    }
+    broker
+        .configure_user_policies(config.portal.default_rate_limit_bps)
+        .await?;
+
     // A portal-only process never opens audit storage or binds either gateway socket.
     let mut audit = None;
     let management_server = if !config.portal_only
         && let Some(socket) = &config.portal.gateway_socket
     {
         let mut admins = config.portal.admin_github_ids;
+        admins.extend(
+            broker
+                .portal
+                .resolve_admin_usernames(&config.portal.admin_usernames)
+                .await?,
+        );
         if !config.portal.admin_github_users.is_empty() {
             let principals = config
                 .portal
@@ -698,6 +765,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
     } else {
         None
     };
+    broker.reconcile_commerce().await?;
     let (unix, _socket_file) = if config.portal_only {
         (None, None)
     } else {
@@ -791,6 +859,34 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn commerce_defaults_keep_sales_closed_at_the_requested_rmb_price() {
+        let config =
+            parse_file_config("[commerce]\nenabled = false\nmonthly_sellable_gb = 0\n").unwrap();
+        assert!(!config.commerce.enabled);
+        assert_eq!(config.commerce.currency, "CNY");
+        assert_eq!(config.commerce.price_per_gb_minor, Some(100));
+        assert_eq!(config.commerce.monthly_sellable_gb, 0);
+        assert_eq!(config.commerce.utc_offset_minutes, 480);
+        assert!(parse_file_config("[commerce]\nprice_per_gb_minro = 1\n").is_err());
+    }
+
+    #[test]
+    fn commerce_rejects_a_second_portal_only_billing_writer() {
+        let mut config = portal_config_fixture();
+        config.portal_only = true;
+        config.portal.state_dir = Some("/tmp/accounts".into());
+        config.commerce.enabled = true;
+        config.commerce.merchant_id = "MER_test".into();
+        config.commerce.store_id = "STO_test".into();
+        config.commerce.product_id = "PROD_test".into();
+        config.commerce.checkout_origin = "https://pancake.waffo.ai".into();
+        config.commerce.private_key_file = Some("/tmp/test-private.pem".into());
+        config.commerce.webhook_public_key_file = Some("/tmp/test-public.pem".into());
+        assert!(config.commerce.validate().is_ok());
+        assert!(validate_portal_config(&config).is_err());
+    }
+
     fn portal_config_fixture() -> Config {
         Config {
             listen: "127.0.0.1:8080".parse().unwrap(),
@@ -801,6 +897,7 @@ mod tests {
             client_registry: None,
             client_download_dir: None,
             portal: PortalConfig::default(),
+            commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         }
     }
@@ -941,6 +1038,7 @@ client_secret = "example-test-secret"
             client_registry: None,
             client_download_dir: None,
             portal: PortalConfig::default(),
+            commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         };
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();

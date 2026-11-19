@@ -17,6 +17,7 @@ import json, os, pathlib, shlex, sys, time
 directory = pathlib.Path(os.environ['SSMCP_RELOAD_DIR'])
 scenario = os.environ['SSMCP_RELOAD_SCENARIO']
 generation = 2 if (directory / 'hello-1.json').exists() else 1
+client_id = ('b' if generation == 1 else 'c')*64
 
 def save(name, value):
     path = directory / name
@@ -28,11 +29,26 @@ def save(name, value):
 def send(identifier, operation):
     print(json.dumps({'type':'call', 'id':identifier, 'operation':operation}), flush=True)
 
+def receive_reply():
+    while True:
+        line = sys.stdin.readline()
+        assert line, 'client closed SSH before delivering a reply'
+        reply = json.loads(line)
+        if reply['type'] == 'steering':
+            # Current clients poll presence and reclaim queued input before
+            # reload. This isolated peer has no user requests to reclaim.
+            assert hello['version'] >= 7, hello
+            assert reply['command'] == {'op':'snapshot'}, reply
+            print(json.dumps({'type':'steering_reply', 'id':reply['id'], 'result':{'Ok':{
+                'schema_version':1, 'client_id':client_id, 'revision':0,
+                'agents':[], 'messages':[]}}}), flush=True)
+            continue
+        assert reply['type'] == 'reply', reply
+        return reply
+
 def receive(identifier):
-    line = sys.stdin.readline()
-    assert line, 'client closed SSH before delivering a reply'
-    reply = json.loads(line)
-    assert reply['type'] == 'reply' and reply['id'] == identifier, reply
+    reply = receive_reply()
+    assert reply['id'] == identifier, reply
     return reply
 
 def call(identifier, name, arguments):
@@ -53,7 +69,7 @@ print(json.dumps({'type':'ready',
                   'url':'https://ssmcp.example/mcp' if github else 'https://ssmcp.example/alice',
                   'login_code':'' if github else 'a'*64,
                   'login_expires_in':0 if github else 600,
-                  'client_id':('b' if generation == 1 else 'c')*64}), flush=True)
+                  'client_id':client_id}), flush=True)
 
 # A completed list response establishes that native startup has finished.
 send(1, {'op':'list_tools'})
@@ -79,9 +95,8 @@ if scenario == 'busy':
     send(12, {'op':'call_tool', 'name':'ssmcp.client.reload', 'arguments':{}})
     replies = {}
     for unused in range(2):
-        line = sys.stdin.readline()
-        assert line, 'reload disconnected an in-flight request'
-        reply = json.loads(line)
+        reply = receive_reply()
+        assert reply['id'] in (11, 12) and str(reply['id']) not in replies, reply
         replies[str(reply['id'])] = reply
     save('busy-replies.json', replies)
     value(call(13, 'ssmcp.net.close', {'id':listener['id']}))
@@ -157,6 +172,7 @@ impl Fixture {
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("config.toml"), "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         for (name, source) in [("ssh", SSH), ("replacement", REPLACEMENT)] {
             let file = path.join(name);
@@ -198,6 +214,7 @@ impl Fixture {
             std::fs::copy(executable, &entry).unwrap();
         }
         let mut arguments: Vec<String> = [
+            "--ssh",
             "--no-watchdog",
             "--shell",
             "/bin/sh",
@@ -234,6 +251,15 @@ impl Fixture {
             .current_dir(self.0.join("working directory"))
             // Only fixture tools are visible; never start installed real harnesses.
             .env("PATH", &self.0)
+            .env("SSMCP_AUTH_HOME", self.0.join("auth"))
+            .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
+            .env("SSMCP_SESSION_HOME", self.0.join("sessions"))
+            // Never inherit the invoking developer session or consume its
+            // one-use reload handoffs. The fixture's own re-exec creates new ones.
+            .env_remove("SSMCP_SESSION_GENERATION")
+            .env_remove("SSMCP_CLIENT_OUTBOX")
+            .env_remove("SSMCP_OUTPUT_RELOAD")
+            .env_remove("SSMCP_UI_CONFIG")
             .env("SSMCP_RELOAD_DIR", &self.0)
             .env("SSMCP_RELOAD_SCENARIO", scenario)
             .env("SSMCP_RELOAD_BINARY", executable)

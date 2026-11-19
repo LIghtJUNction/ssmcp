@@ -1,24 +1,29 @@
 # 客户端账号、会话与临时接入
 
-在 A 设备登录一次 GitHub，随后运行 `ssmcp` 就能以自己的身份接入服务器，无须重复填写自己的 `--allow`。已登录的 A 可以列出可控会话、进入远程终端，也可以生成一条命令，让 B 临时成为自己的被控端。
+在 A 的项目目录运行 `ssmcp username@server`，客户端会自动完成所需的 GitHub 登录、用户名绑定和 HTTPS / WSS 连接。随后可以列出可控会话、进入远程终端，或生成一条命令，让 B 临时成为自己的被控端。
 
-以下命令对应 0.7.0 源码实现。本次变更未部署公网服务；使用前须升级 ssmcpd，并在服务器实际放置新版本的目标平台客户端二进制，才能使用默认引导命令。示例域名 `https://ssmcp.example.com` 应替换为你的服务器。
+客户端和服务端均需支持具名账号入口。下文的 MCP `invite` 与校验后持久安装需要新版网关、同源发布清单和对应平台二进制；只升级本机客户端不会改变正在运行的服务器。以网关实际 `tools/list` 和 `/client/release.json` 为准。示例域名 `ssmcp.example.com` 应替换为你的服务器。
 
-## 1. 登录并接入自己的设备
+## 1. 选择用户名并连接
 
 在 A 上安装客户端后运行：
 
 ~~~sh
-ssmcp login --server https://ssmcp.example.com
-ssmcp whoami
 
 # 在需要开放的项目目录中运行，保持这个终端打开。
-ssmcp --name device-a
+ssmcp alice@ssmcp.example.com --name device-a
+
+# 没有本机浏览器时，使用打印的链接和确认码。
+ssmcp alice@ssmcp.example.com --no-browser
 ~~~
 
-`login` 打开浏览器，使用 GitHub 登录并确认终端显示的配对信息。没有图形浏览器时用 `--no-browser`，在另一台设备打开打印的链接即可。`whoami --json` 返回已验证身份、服务器和有效期，不输出登录令牌。
+首次连接自动打开浏览器。使用 GitHub 登录、核对终端配对信息，并确认注册或登录请求后，客户端继续连接。已有有效凭据时直接复用；旧账号尚未绑定用户名时，将本次选择的名字绑定到已认证账号。`whoami --json` 返回 GitHub 身份、服务器用户名和有效期，不输出令牌。
 
-客户端记住最后登录的服务器；后续命令也可以用 `--server URL` 显式选择。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
+用户名大小写不敏感并保存为小写，长度为 3–32，首字符为 ASCII 字母，末字符为字母或数字，中间可用字母、数字、`_` 和 `-`。保留名不能注册；已占名字只允许其绑定的 GitHub 账号登录，每个 GitHub 账号在同一服务器绑定一个名字。GitHub 的数字 ID 始终用来识别账户。详见[用户名与服务器管理](named-accounts.md)。
+
+默认地址按 `--server`、配置文件的 `[client].server`、最后登录的服务器、内置地址依次选择。`ssmcp config set server URL` 保存默认地址，`ssmcp config get server` 显示生效值，`ssmcp config path` 定位可编辑文件。不同服务器各自保存凭据，不会把一个服务器的令牌交给另一个服务器。[配置与优先级](client-server.md#设置默认服务器)
+
+账户连接通过 HTTPS / WSS 建立；A、B 都不需要 SSH 密钥或入站监听端口。服务端在注册时绑定已经验证的 GitHub 数字 ID。[客户端账号实现](../src/client/account.rs) · [服务端授权](../src/device.rs)
 
 启动本机被控会话和查看账号下的远端会话是两个动作。前台 `ssmcp` 负责开放当前设备；在另一个终端执行下一节的列表和交互命令。
 
@@ -56,11 +61,18 @@ ssmcp -i --client SESSION_ID --terminal pty-0001
 ssmcp invite
 ~~~
 
-把输出的完整单行命令复制到 B 的终端。默认命令从所选服务器下载对应平台的临时客户端，然后前台运行 `join`。B 只需要能访问这台服务器；无需安装 SSH、注册 GitHub 账号或取得 A 的长期令牌。下载文件放在私有临时目录，结束后清理，不修改 B 的 PATH 或注册后台服务。
+把输出的完整单行命令复制到 B 的终端。未固定服务器公钥时，脚本选择本机系统和 CPU，从同一网关获取当前发布的兼容版本，核对 wire 版本、字节数、SHA-256 和程序的 `--version`，再原子安装到用户目录，并用安装后的绝对路径前台运行 `join`。校验失败时保留原安装，且不兑换邀请。B 无须预装 SSH、注册 GitHub 账号或取得 A 的长期令牌。[引导与校验实现](../src/client_downloads.rs)
+
+Linux / macOS 默认安装到 `~/.local/bin/ssmcp`；Windows 默认到 `%LOCALAPPDATA%\ssmcp\bin\ssmcp.exe`。`SSMCP_INSTALL_DIR` 可指定绝对安装目录，PowerShell 另接受 `-InstallDir`。临时下载结束后清理，已安装程序保留；脚本不修改 PATH，也不注册后台服务。系统范围是 Linux GNU x86_64 / ARM64（glibc 2.35+）、macOS Intel / Apple Silicon、Windows x64 / ARM64。Linux 的 musl 与其他 CPU 不在此入口支持范围内。[Shell](../src/client_downloads/install.sh) · [PowerShell](../src/client_downloads/install.ps1)
+
+Windows 默认同时准备原生 Node.js、固定 Playwright npm 包和 Chromium；不安装或注册外部 harness。成功前会实际验证浏览器启动，并通过 `SSMCP_NODE` / `SSMCP_BROWSER_EXECUTABLE` 保存当前和后续终端使用的路径。依赖失败不会继续邀请接入；只装基础客户端可明确使用 `-SkipBrowserDependencies`。[安装位置、版本、原生检查和失败处理](windows-browser-setup.md)
 
 默认邀请可在 **10 分钟**内使用一次。B 兑换成功后，临时会话可用 **1 小时**，同时受 A 本次登录的剩余有效期约束。A 在另一终端运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。
 
 ~~~sh
+# 指定另一台已登录的服务器；生成命令中的下载和接入地址一起切换。
+ssmcp invite --server https://other.example.com
+
 # 15 分钟内兑换；B 兑换后最多使用 2 小时。
 ssmcp invite --ttl 900 --session-ttl 7200
 
@@ -74,7 +86,9 @@ ssmcp invite --no-bootstrap
 ssmcp invite --json
 ~~~
 
-`--ttl` 接受 30–3600 秒，`--session-ttl` 接受 60–86400 秒。POSIX 引导命令需要系统 Shell 和 curl 或 wget；Windows 使用 PowerShell / .NET。服务器管理员须准备相应平台的客户端，配置方法见下文。
+`--ttl` 接受 30–3600 秒，`--session-ttl` 接受 60–86400 秒。POSIX 引导需要系统 Shell、curl 或 wget，以及 sha256sum 或 shasum；Windows 使用 PowerShell / .NET。`--json` 包含两种命令、实际期限，以及网关提供的 `release`、`wire_version`、`supported_targets`；未发布时给出 `release_error`。管理员须准备相应平台的兼容发布，配置见第 6 节。[命令实现](../src/client/account.rs)
+
+**对已登记可信公钥的服务器，`invite` 自动生成预安装客户端命令。** B 应先从可信来源安装新版 ssmcp；输出命令把 A 的公钥指纹保存到 B 的 `trusted-servers.toml`，成功后再执行 `join`。该流程适用于 POSIX Shell 和 PowerShell，避免在公钥校验生效前下载执行安装脚本。公开信任记录会留在 B，临时设备令牌仍只驻留进程。[信任文件与邀请](client-server.md#公钥固定后的临时邀请)
 
 手工使用已安装客户端时，命令形式为：
 
@@ -83,6 +97,30 @@ ssmcp join --server https://ssmcp.example.com --token '<一次性邀请令牌>'
 ~~~
 
 B 收到的设备凭据只允许注册自己的被控会话，不能列出 A 的其他设备、调用其他会话或签发新邀请。设备凭据仅保存在运行进程内；网络暂时中断时，在有效期内复用它重连，不再次兑换邀请。退出 B 进程后需要在 A 生成新命令。B 的进程使用运行命令的本机用户权限。[邀请与设备凭据](../src/device.rs) · [客户端传输](../src/client/relay.rs)
+
+
+### 已在 MCP 应用授权的控制者
+
+ChatGPT 等 MCP 应用可以直接调用公开工具 `invite`，使用本次已验证的 GitHub OAuth 身份生成安装命令，不需要在控制者本机额外创建一份 CLI 登录。参数只有期限与 Shell 类型：
+
+~~~json
+{
+  "name": "invite",
+  "arguments": {
+    "ttl_secs": 600,
+    "session_ttl_secs": 3600,
+    "shell": "sh"
+  }
+}
+~~~
+
+B 使用 Windows 时把 `shell` 改为 `powershell`。返回值同时含 `command_sh`、`command_powershell`、选中的 `command`、当前发布的精确版本及平台、实际可用期限。该工具是 MCP `tools/call` 入口，不是本机原生工具；不需要先找到在线客户端。[公开工具与参数校验](../src/http.rs)
+
+授权只来自当前 OAuth：接受身份入口 `/mcp` 或该身份自己的稳定账号资源；拒绝借用其他资源、登录码授权，以及调用方提供的 `owner`、`subject`、`token`。命令只包含短期、一次使用的 `ci_` 邀请，不包含 GitHub 令牌、OAuth access token 或 CLI 长期凭据。服务端把设备 ACL 绑定到已验证的 GitHub 数字 ID，B 不再进行 GitHub 登录。[授权与账本](../src/device.rs)
+
+MCP 邀请默认 600 秒内兑换、会话最多 3600 秒；API 接受的上限分别为 3600 和 86400 秒。二者还受**签发时原始 OAuth access grant 的剩余期限**约束。刷新 OAuth 不会延长已有邀请或设备；原 family 被撤销、原 access grant 过期、账号被封禁，或网关重启丢失该授权时，后续兑换和连接被拒绝，已连接设备每秒复核后结束。CLI `logout` 撤销的是其对应 CLI 登录；独立 MCP 授权不受这次 CLI 注销替代管理。[原授权引用与固定期限](../src/oauth.rs) · [存活检查](../src/device.rs)
+
+网关未配置账户存储或兼容发布时，MCP `invite` 在签发邀请前返回明确错误。安装后的设备仍以 B 运行命令的本机用户身份工作，原生权限和审批继续生效。
 
 ## 4. 停止、退出和看门狗
 
@@ -106,18 +144,18 @@ ssmcp --no-watchdog
 
 ## 5. 凭据与原有 SSH 用法
 
-客户端登录默认有效 30 天，到期后重新运行 `ssmcp login`。Linux / macOS 默认在 `$XDG_CONFIG_HOME/ssmcp/auth` 或 `~/.config/ssmcp/auth` 保存凭据；Windows 使用 `%LOCALAPPDATA%\ssmcp\auth`。`SSMCP_AUTH_HOME` 可指定独立的绝对目录。Unix 目录与文件权限分别为 0700 和 0600；Windows 使用当前用户的私有访问权限。
+客户端凭据默认有效 30 天。使用具名账号的前台连接时，过期或被撤销的凭据会触发新的 GitHub 授权；同一运行进程最多自动重新授权一次，以免失败时循环打开浏览器。403 封禁、网络故障及服务端错误不会触发重新登录，也不会删除凭据。后台会话不会打开浏览器；在终端重新运行 `ssmcp alice@server` 授权后，再用 `ssmcp sessions restart NAME` 恢复。Linux / macOS 默认在 `$XDG_CONFIG_HOME/ssmcp/auth` 或 `~/.config/ssmcp/auth` 保存凭据；Windows 使用 `%LOCALAPPDATA%\ssmcp\auth`。`SSMCP_AUTH_HOME` 可指定独立的绝对目录。Unix 目录与文件权限分别为 0700 和 0600；Windows 使用当前用户的私有访问权限。
 
 服务器保存令牌摘要，并按已验证的 GitHub 数字 ID 判断身份。CLI 长期登录令牌不写入邀请命令。邀请本身允许一次受限接入，应只交给需要控制的设备操作者。
 
 已有 SSH 别名、公钥和本地后台会话继续可用：
 
 ~~~sh
-ssmcp --name workstation my-ssmcp
+ssmcp --ssh --name workstation my-ssmcp
 ssmcp --identity ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example.com
 
 # 显式共享给指定 GitHub 用户时继续使用 SSH --allow。
-ssmcp --allow alice@github,bob@github my-ssmcp
+ssmcp --ssh --allow alice@github,bob@github my-ssmcp
 
 ssmcp sessions list
 ssmcp sessions status workstation
@@ -150,7 +188,28 @@ client_download_dir = "/var/lib/ssmcpd/clients"
 | Windows x86_64 | `ssmcp-x86_64-pc-windows-msvc.exe` |
 | Windows ARM64 | `ssmcp-aarch64-pc-windows-msvc.exe` |
 
-引导脚本通过 `/client/install.sh`、`/client/install.ps1` 获取，二进制通过 `/client/bin/{target}` 获取；下载源固定为配置的服务器地址。未配置下载目录或缺少目标平台文件时返回 503，并提示管理员配置 `client_download_dir`。已安装兼容客户端的 B 可使用 `invite --no-bootstrap`。[下载服务实现](../src/client_downloads.rs)
+
+同一目录还需要 `release.json`。它是此网关发布的客户端版本声明；`version` 必须与可执行文件一致，`wire_version` 必须为当前 wire 7，`targets` 只列出已准备的六种固定平台中的子集。每个条目提供原始可执行文件的 `size` 和 `sha256`。例如：
+
+~~~json
+{
+  "schema": 1,
+  "version": "0.9.0",
+  "wire_version": 7,
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "size": 12345678,
+      "sha256": "<替换为该原始可执行文件的64位小写SHA-256>"
+    }
+  }
+}
+~~~
+
+示例大小和摘要必须替换为真实值。复用[现有 Release 流程](../.github/workflows/release.yml)生成的目标归档，先按同次发布的 `SHA256SUMS` 核验归档，再提取客户端并计算原始文件摘要；不另建编译或发布流水线。选择已经验证与当前 wire 7 兼容的发布，公共 GitHub `latest` 的版本不会被这个引导入口自动采用。先原子替换准备好的平台文件，最后原子替换发布清单；发布切换中的不一致会在客户端下载校验时停止，B 可在更新完成后重新使用尚未兑换、未过期的命令。[发布说明](releases.md) · [下载校验](../src/client_downloads/install.sh)
+
+清单上限 16 KiB，每个可执行文件上限 256 MiB。清单和可执行文件均须是 root 或服务用户拥有、不可被组或其他用户写入的普通文件，不接受符号链接；所有已列出的平台文件必须存在且大小一致。网关异步工作通过有界磁盘读取取得发布信息，MCP 与下载路由共享同一个已打开目录，不根据请求 Host 或另一个配置源选择下载。
+
+引导脚本为 `/client/install.sh`、`/client/install.ps1`；`/client/release.json` 提供发布元数据，`/client/release/{target}` 提供脚本读取的固定五行投影，`/client/bin/{target}` 提供原始二进制。下载固定使用配置的 HTTPS origin，拒绝跳转。清单、版本、平台或文件不完整时返回 503；已安装兼容客户端的 B 仍可使用 `invite --no-bootstrap`，普通账号连接不依赖下载目录。[下载服务实现](../src/client_downloads.rs)
 
 反向代理须把 `/setup`、`/api/client/*`、`/mcp` 与 GitHub 回调交给同一个 Broker 实例；同一浏览器授权还会使用账号门户路由。`/api/client/connect` 需要转发 WebSocket Upgrade，`/client/*` 需要转发到提供下载的新版服务。把新登录页与旧 API 分到两个独立进程，会使配对状态或会话列表不一致。以完成登录、B 接入、A 列表与交互的完整链路验收部署。
 
@@ -159,11 +218,22 @@ client_download_dir = "/var/lib/ssmcpd/clients"
 | 现象 | 检查 |
 | --- | --- |
 | 登录接口 404 | 服务端尚未提供客户端账号 API，更新实际运行的 ssmcpd 和代理路由 |
-| B 引导下载返回 503 | 配置 `client_download_dir`，放入 B 对应平台的二进制 |
+| B 引导下载返回 503 | 核对 `client_download_dir`、`release.json` 的 wire 7 和版本、列出的文件与大小；已安装兼容客户端可使用 `--no-bootstrap` |
+| 已设置默认服务器但仍提示未登录 | 运行 `ssmcp config get server`，然后在该服务器执行 `ssmcp login` |
+| 公钥不匹配，HTTPS / WSS 连接失败 | 通过可信管理员渠道核对 HTTPS 入口是否换钥，再更新 `trusted-servers.toml` |
+| 固定公钥后邀请不再下载安装程序 | B 先安装新版 ssmcp，随后执行生成的信任登记与接入命令 |
 | A 列表为空 | 核对 `whoami` 的账号与服务器，确认 B 的前台进程仍在线 |
 | 邀请已使用或过期 | 在 A 重新执行 `invite`，复制新命令 |
 | 临时会话结束后没有恢复 | 检查到期、注销或手动停止；这些操作会结束恢复权限 |
 | 想查看本机后台服务 | 使用 `ssmcp sessions list`，账号列表使用 `ssmcp list` |
 | 非交互脚本需要列表 | 使用 `ssmcp list --json`；`-i` 需要真实终端 |
+| 名字无效或命中保留词 | 按上述 3–32 字符规则换一个名字 |
+| 名字已被占用 | 使用原绑定 GitHub 账号登录，或选择未注册名字 |
+| 当前账号已绑定其他名字 | 使用原名字连接；需要切换 GitHub 账号时先 `ssmcp logout` |
+| 账号已封禁 | 联系该服务器的管理员；反复登录不会解除封禁 |
 
-验收入口：`cargo test --lib client::account::tests`、`cargo test --lib device::tests`、`python3 scripts/e2e_account_interactive.py --bin-dir target/debug`。测试运行范围和本次结果见[客户端账号验收记录](validation-client-accounts.md)。
+引导离线验收：`python3 scripts/test_client_bootstrap.py -v` 使用临时 HOME / PATH 与假下载器，覆盖平台选择、同源校验、旧安装保留和绝对路径接入。模拟平台名不等于在 macOS / Windows 实机完成验收；PowerShell 和跨平台原生结果应按实际运行环境另行记录。
+
+授权与目录验收入口：`cargo test --lib oauth::tests::delegation`、`cargo test --lib device::tests::oauth_`、`cargo test --lib client_downloads::tests`。它们覆盖原授权期限、resource、refresh replay、一次兑换、HTTP / WebSocket 撤销和清单边界；部署仍需检查实际网关工具目录与发布状态。
+
+其他验收入口：`cargo test --lib client::account::named_tests`、`cargo test --lib client::named_entry_tests`、`cargo test --lib client::account::tests`、`cargo test --lib device::tests`、`python3 scripts/e2e_account_interactive.py --bin-dir target/debug`。测试运行范围和本次结果见[客户端账号验收记录](validation-client-accounts.md)。

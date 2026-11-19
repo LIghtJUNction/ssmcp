@@ -298,7 +298,7 @@ class Daemon(Harness):
         return found[0] if found else None
 
     def create(self, name, *, watchdog, executable=None, environment=None):
-        arguments = ["--daemon", "--name", name, "--title", "daemon lifecycle validation",
+        arguments = ["--daemon", "--ssh", "--name", name, "--title", "daemon lifecycle validation",
                      "-F", str(self.directory / "ssh_config"), "-i", str(self.directory / "client"),
                      "--shell", "/bin/sh"]
         if watchdog:
@@ -562,7 +562,7 @@ class Daemon(Harness):
         self.check(process_identity(original_runner[0]) == original_runner,
                    "the daemon keeps running after its owned disposable source image is removed")
         before = sha256(Path(first["state_directory"]) / "manifest.json")
-        self.command(["--daemon", "--name", primary, "-F", str(self.directory / "ssh_config"),
+        self.command(["--daemon", "--ssh", "--name", primary, "-F", str(self.directory / "ssh_config"),
                       "--shell", "/bin/sh", f"{self.user}@ssmcp-e2e"], expected="failure")
         self.check(sha256(Path(first["state_directory"]) / "manifest.json") == before,
                    "duplicate daemon creation cannot overwrite a saved session definition")
@@ -719,7 +719,7 @@ class Daemon(Harness):
         }
         missing_name = self.names[0] + "-unavailable"
         self.managed.add(missing_name)
-        self.command(["--daemon", "--name", missing_name, "-F", str(self.directory / "ssh_config"),
+        self.command(["--daemon", "--ssh", "--name", missing_name, "-F", str(self.directory / "ssh_config"),
                       "--shell", "/bin/sh", f"{self.user}@ssmcp-e2e"],
                      environment=missing_bus, expected="failure")
         self.check({entry["name"] for entry in self.cli("list")} == set(self.names),

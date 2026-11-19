@@ -57,6 +57,10 @@ impl ManagementPolicy {
         valid_identity(identity) && self.admin_subjects.contains(&identity.subject)
     }
 
+    pub(crate) fn is_admin_subject(&self, subject: &str) -> bool {
+        valid_subject(subject) && self.admin_subjects.contains(subject)
+    }
+
     /// Only the peer-credential-backed SSH username establishes ownership.
     /// An MCP --allow entry grants tool access, never ownership.
     pub fn owner_subject(&self, ssh_user: &str) -> Option<String> {
@@ -118,6 +122,10 @@ pub struct DashboardSnapshot {
     pub audit: Vec<AuditEvent>,
     pub audit_next_before: Option<u64>,
     pub retention_days: u32,
+    #[serde(default = "crate::user_policy::default_rate_limit")]
+    pub default_rate_limit_bps: u64,
+    #[serde(default)]
+    pub traffic: Option<crate::user_policy::TrafficQuota>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -200,6 +208,13 @@ enum Request {
         actor: Actor,
         session_id: String,
     },
+    SetUserPolicy {
+        actor: Actor,
+        subject: String,
+        banned: Option<bool>,
+        update_rate: bool,
+        rate_limit_bps: Option<u64>,
+    },
     Audit {
         actor: Actor,
         scope: Scope,
@@ -280,6 +295,28 @@ impl ManagementClient {
             .request(Request::Disconnect {
                 actor: actor.into(),
                 session_id: session_id.into(),
+            })
+            .await?
+        {
+            Response::Done => Ok(()),
+            _ => Err(ManagementError::Unavailable),
+        }
+    }
+
+    pub async fn set_user_policy(
+        &self,
+        actor: &Identity,
+        subject: &str,
+        banned: Option<bool>,
+        rate_limit_bps: Option<Option<u64>>,
+    ) -> Result<(), ManagementError> {
+        match self
+            .request(Request::SetUserPolicy {
+                actor: actor.into(),
+                subject: subject.into(),
+                banned,
+                update_rate: rate_limit_bps.is_some(),
+                rate_limit_bps: rate_limit_bps.flatten(),
             })
             .await?
         {
@@ -484,6 +521,21 @@ async fn serve_one(mut stream: UnixStream, broker: Arc<Broker>) -> io::Result<()
             .map(|snapshot| Response::Snapshot { snapshot }),
         Request::Disconnect { actor, session_id } => broker
             .management_disconnect(&actor.into(), &session_id)
+            .await
+            .map(|()| Response::Done),
+        Request::SetUserPolicy {
+            actor,
+            subject,
+            banned,
+            update_rate,
+            rate_limit_bps,
+        } => broker
+            .management_set_user_policy(
+                &actor.into(),
+                &subject,
+                banned,
+                update_rate.then_some(rate_limit_bps),
+            )
             .await
             .map(|()| Response::Done),
         Request::Audit {

@@ -1,0 +1,5316 @@
+{
+  "schema": "ssmcp.007.benchmark.v1",
+  "measured_at_utc": "2026-11-17T21:42:55.981169+00:00",
+  "pid": 1073481,
+  "process_start_ticks": 4315719,
+  "scope": "requested PID only; observed child PIDs are reported separately",
+  "elapsed_seconds": 300.000768,
+  "sample_interval_seconds": 1.0,
+  "sample_count": 277,
+  "clock_ticks_per_second": 100,
+  "cpu_seconds": 0.01,
+  "cpu_percent_one_core": 0.003333,
+  "rss_kib": {
+    "min": 3116,
+    "mean": 4196.823,
+    "max": 5896
+  },
+  "pss_kib": {
+    "min": 311,
+    "mean": 1419.993,
+    "max": 3082
+  },
+  "threads": {
+    "min": 1,
+    "mean": 1,
+    "max": 1
+  },
+  "file_descriptors": {
+    "min": 11,
+    "mean": 11,
+    "max": 11
+  },
+  "observed_child_pids": [],
+  "network": {
+    "available": true,
+    "scope": "TCP payload counters, including TLS and WebSocket framing; excluding IP/TCP/link headers and pure ACKs",
+    "source": "ss -tinpeH state established",
+    "initial_socket_count": 1,
+    "final_socket_count": 1,
+    "created_socket_count": 0,
+    "disappeared_socket_count": 0,
+    "closed_socket_tail_unobserved": false,
+    "errors": [],
+    "delta": {
+      "bytes_sent": 336,
+      "bytes_received": 288,
+      "bytes_retrans": 0
+    },
+    "payload_bytes_per_second": 2.08
+  },
+  "samples": [
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3060,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3060,
+        "private_clean_kib": 2700,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 0.0
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3061,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3061,
+        "private_clean_kib": 2700,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 1.664585
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3062,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3062,
+        "private_clean_kib": 2700,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 2.872191
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3062,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3062,
+        "private_clean_kib": 2700,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 4.113403
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3062,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3062,
+        "private_clean_kib": 2700,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 5.226634
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3058,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3058,
+        "private_clean_kib": 2696,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 6.391292
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3058,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3058,
+        "private_clean_kib": 2696,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 7.560616
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3059,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3059,
+        "private_clean_kib": 2696,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 8.747338
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5880,
+      "pss_kib": 3059,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5880,
+        "pss_kib": 3059,
+        "private_clean_kib": 2696,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 9.940731
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3073,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3073,
+        "private_clean_kib": 2712,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 12.270465
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3077,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3077,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 14.680085
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3079,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3079,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 16.205788
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3081,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3081,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 17.288142
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 18.342128
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 19.400097
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3081,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3081,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 20.460748
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 21.53133
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 22.586939
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 23.652043
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 24.823359
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 25.871164
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 26.916679
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3082,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3082,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 27.965053
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5896,
+      "pss_kib": 3078,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5896,
+        "pss_kib": 3078,
+        "private_clean_kib": 2712,
+        "private_dirty_kib": 332,
+        "swap_kib": 412,
+        "swappss_kib": 412
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 29.065965
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5872,
+      "pss_kib": 3060,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5872,
+        "pss_kib": 3060,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 30.255145
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5872,
+      "pss_kib": 3058,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5872,
+        "pss_kib": 3058,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 31.3111
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5872,
+      "pss_kib": 3059,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5872,
+        "pss_kib": 3059,
+        "private_clean_kib": 2716,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 32.353419
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5296,
+      "pss_kib": 2484,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5296,
+        "pss_kib": 2484,
+        "private_clean_kib": 2140,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 33.409421
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5296,
+      "pss_kib": 2483,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5296,
+        "pss_kib": 2483,
+        "private_clean_kib": 2140,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 34.457373
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5292,
+      "pss_kib": 2478,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5292,
+        "pss_kib": 2478,
+        "private_clean_kib": 2136,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 35.498109
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5292,
+      "pss_kib": 2477,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5292,
+        "pss_kib": 2477,
+        "private_clean_kib": 2136,
+        "private_dirty_kib": 308,
+        "swap_kib": 436,
+        "swappss_kib": 436
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 36.536802
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5240,
+      "pss_kib": 2421,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5240,
+        "pss_kib": 2421,
+        "private_clean_kib": 2132,
+        "private_dirty_kib": 256,
+        "swap_kib": 488,
+        "swappss_kib": 488
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 37.619042
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4520,
+      "pss_kib": 1701,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4520,
+        "pss_kib": 1701,
+        "private_clean_kib": 1468,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 38.688599
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4372,
+      "pss_kib": 1553,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4372,
+        "pss_kib": 1553,
+        "private_clean_kib": 1320,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 39.747924
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4100,
+      "pss_kib": 1285,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4100,
+        "pss_kib": 1285,
+        "private_clean_kib": 1052,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 40.805272
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4068,
+      "pss_kib": 1254,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4068,
+        "pss_kib": 1254,
+        "private_clean_kib": 1020,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 41.862226
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3912,
+      "pss_kib": 1097,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3912,
+        "pss_kib": 1097,
+        "private_clean_kib": 864,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 42.906789
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3904,
+      "pss_kib": 1090,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3904,
+        "pss_kib": 1090,
+        "private_clean_kib": 856,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 43.978469
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3904,
+      "pss_kib": 1088,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3904,
+        "pss_kib": 1088,
+        "private_clean_kib": 856,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 45.040811
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3144,
+      "pss_kib": 329,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3144,
+        "pss_kib": 329,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 46.142968
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3136,
+      "pss_kib": 327,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3136,
+        "pss_kib": 327,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 47.211071
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 320,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 320,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 48.280972
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 320,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 320,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 49.343192
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 318,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 318,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 50.398948
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 316,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 316,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 51.505047
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 316,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 316,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 52.650874
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 317,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 317,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 53.752941
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 318,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 318,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 54.821385
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 318,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 318,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 55.878911
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 319,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 319,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 56.925164
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3124,
+      "pss_kib": 320,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3124,
+        "pss_kib": 320,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 192,
+        "swap_kib": 552,
+        "swappss_kib": 552
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 57.969072
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3116,
+      "pss_kib": 311,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3116,
+        "pss_kib": 311,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 184,
+        "swap_kib": 560,
+        "swappss_kib": 560
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 59.012777
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3116,
+      "pss_kib": 311,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3116,
+        "pss_kib": 311,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 184,
+        "swap_kib": 560,
+        "swappss_kib": 560
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 60.070387
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3116,
+      "pss_kib": 312,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3116,
+        "pss_kib": 312,
+        "private_clean_kib": 96,
+        "private_dirty_kib": 184,
+        "swap_kib": 560,
+        "swappss_kib": 560
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 61.119945
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2328,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2328,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 62.15448
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5128,
+      "pss_kib": 2324,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5128,
+        "pss_kib": 2324,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 196,
+        "swap_kib": 548,
+        "swappss_kib": 548
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 63.216718
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5128,
+      "pss_kib": 2325,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5128,
+        "pss_kib": 2325,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 196,
+        "swap_kib": 548,
+        "swappss_kib": 548
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 64.280512
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5128,
+      "pss_kib": 2324,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5128,
+        "pss_kib": 2324,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 196,
+        "swap_kib": 548,
+        "swappss_kib": 548
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 65.478299
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2329,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2329,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 66.537703
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2326,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2326,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 67.58911
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2329,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2329,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 68.667645
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2329,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2329,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 69.709404
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 5132,
+      "pss_kib": 2328,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 5132,
+        "pss_kib": 2328,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 70.751692
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4940,
+      "pss_kib": 2137,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4940,
+        "pss_kib": 2137,
+        "private_clean_kib": 2096,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 71.802464
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2104,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2104,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 72.845363
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2104,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2104,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 73.898213
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2105,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 74.956425
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2103,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2103,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 76.001243
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2103,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2103,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 77.056909
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4908,
+      "pss_kib": 2103,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4908,
+        "pss_kib": 2103,
+        "private_clean_kib": 2064,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 78.100783
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4464,
+      "pss_kib": 1659,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4464,
+        "pss_kib": 1659,
+        "private_clean_kib": 1620,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 79.148946
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4160,
+      "pss_kib": 1355,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4160,
+        "pss_kib": 1355,
+        "private_clean_kib": 1316,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 80.216735
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4140,
+      "pss_kib": 1335,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4140,
+        "pss_kib": 1335,
+        "private_clean_kib": 1296,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 81.273091
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4080,
+      "pss_kib": 1275,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4080,
+        "pss_kib": 1275,
+        "private_clean_kib": 1236,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 82.345588
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 4060,
+      "pss_kib": 1254,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4060,
+        "pss_kib": 1254,
+        "private_clean_kib": 1216,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 83.397672
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3424,
+      "pss_kib": 618,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3424,
+        "pss_kib": 618,
+        "private_clean_kib": 580,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 84.519897
+    },
+    {
+      "cpu_ticks": 1,
+      "rss_kib": 3400,
+      "pss_kib": 594,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 594,
+        "private_clean_kib": 556,
+        "private_dirty_kib": 8,
+        "swap_kib": 736,
+        "swappss_kib": 736
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 85.594554
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2067,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2067,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 86.63946
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2066,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2066,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 87.688645
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2064,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2064,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 88.753514
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2065,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2065,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 89.85745
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2064,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2064,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 90.96771
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2065,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2065,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 92.068621
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2066,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2066,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 93.13034
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2066,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2066,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 94.171782
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2068,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2068,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 95.222202
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2069,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2069,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 96.278132
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2067,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2067,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 97.320858
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2068,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2068,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 98.367267
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2067,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2067,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 99.431208
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2069,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2069,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 100.484223
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2069,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2069,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 101.53128
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2069,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2069,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 102.589586
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4872,
+      "pss_kib": 2068,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4872,
+        "pss_kib": 2068,
+        "private_clean_kib": 1836,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 103.649489
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 104.713414
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 105.760315
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2053,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2053,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 106.820232
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2051,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2051,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 107.866911
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 108.92341
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2053,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2053,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 110.00715
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2053,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2053,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 111.055242
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2128,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2128,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 112.096866
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2129,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 113.153619
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2129,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 114.209163
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2129,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 115.248152
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2128,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2128,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 116.291643
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2128,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2128,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 117.356282
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2129,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 118.407652
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2127,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2127,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 119.455046
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2127,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2127,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 120.600872
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2126,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2126,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 121.677134
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4932,
+      "pss_kib": 2129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4932,
+        "pss_kib": 2129,
+        "private_clean_kib": 1896,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 122.76104
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 123.818366
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2050,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2050,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 124.923307
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2049,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2049,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 126.016339
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2049,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2049,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 127.177827
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2049,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2049,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 128.351481
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2050,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2050,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 129.466012
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2051,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2051,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 130.541844
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 131.620259
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 132.668153
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 133.728246
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2053,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2053,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 134.777995
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4856,
+      "pss_kib": 2052,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4856,
+        "pss_kib": 2052,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 135.832531
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4800,
+      "pss_kib": 2049,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4800,
+        "pss_kib": 2049,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 136.93218
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4800,
+      "pss_kib": 2049,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4800,
+        "pss_kib": 2049,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 137.997862
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4800,
+      "pss_kib": 2047,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4800,
+        "pss_kib": 2047,
+        "private_clean_kib": 1820,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 139.06137
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4612,
+      "pss_kib": 1860,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4612,
+        "pss_kib": 1860,
+        "private_clean_kib": 1632,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 140.154215
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4140,
+      "pss_kib": 1388,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4140,
+        "pss_kib": 1388,
+        "private_clean_kib": 1160,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 141.23492
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4100,
+      "pss_kib": 1349,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4100,
+        "pss_kib": 1349,
+        "private_clean_kib": 1120,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 142.318222
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3864,
+      "pss_kib": 1112,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3864,
+        "pss_kib": 1112,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 143.380496
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3864,
+      "pss_kib": 1113,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3864,
+        "pss_kib": 1113,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 144.459543
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1097,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1097,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 145.508855
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1096,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1096,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 146.559457
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1097,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1097,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 147.615652
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1096,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1096,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 148.653998
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1095,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1095,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 149.709961
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1096,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1096,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 150.813586
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1096,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1096,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 151.879906
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3848,
+      "pss_kib": 1096,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3848,
+        "pss_kib": 1096,
+        "private_clean_kib": 868,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 152.939192
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3716,
+      "pss_kib": 963,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3716,
+        "pss_kib": 963,
+        "private_clean_kib": 736,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 154.00253
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3536,
+      "pss_kib": 784,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3536,
+        "pss_kib": 784,
+        "private_clean_kib": 556,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 155.089183
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3536,
+      "pss_kib": 783,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3536,
+        "pss_kib": 783,
+        "private_clean_kib": 556,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 156.139965
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3536,
+      "pss_kib": 782,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3536,
+        "pss_kib": 782,
+        "private_clean_kib": 556,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 157.217972
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3476,
+      "pss_kib": 723,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3476,
+        "pss_kib": 723,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 158.330934
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3476,
+      "pss_kib": 723,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3476,
+        "pss_kib": 723,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 159.425236
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3476,
+      "pss_kib": 723,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3476,
+        "pss_kib": 723,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 160.508212
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3476,
+      "pss_kib": 724,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3476,
+        "pss_kib": 724,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 161.581475
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3448,
+      "pss_kib": 694,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3448,
+        "pss_kib": 694,
+        "private_clean_kib": 468,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 162.672548
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3432,
+      "pss_kib": 677,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3432,
+        "pss_kib": 677,
+        "private_clean_kib": 452,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 163.791364
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3432,
+      "pss_kib": 677,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3432,
+        "pss_kib": 677,
+        "private_clean_kib": 452,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 164.892254
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 662,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 662,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 166.018729
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 663,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 663,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 167.108117
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 663,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 663,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 168.165348
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 169.221644
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 665,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 665,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 170.271252
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 652,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 652,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 171.308793
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 653,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 653,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 172.369902
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 653,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 653,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 173.416051
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 652,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 652,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 174.461129
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 652,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 652,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 175.510201
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3404,
+      "pss_kib": 653,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3404,
+        "pss_kib": 653,
+        "private_clean_kib": 424,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 176.568557
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 177.609821
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 178.657211
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 648,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 648,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 179.699424
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 180.758732
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 648,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 648,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 181.795341
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 182.861195
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 183.905925
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 184.951707
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3400,
+      "pss_kib": 649,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3400,
+        "pss_kib": 649,
+        "private_clean_kib": 420,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 185.993827
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 665,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 665,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 187.05023
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 188.100356
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 663,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 663,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 189.157183
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 665,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 665,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 190.229256
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 191.269172
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 192.322
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 193.376666
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 194.429595
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 663,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 663,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 195.481154
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 196.531624
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 664,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 664,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 197.593821
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 662,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 662,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 198.639568
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 660,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 660,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 199.715313
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 661,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 661,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 200.7887
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 661,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 661,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 201.888182
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 660,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 660,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 202.956554
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 662,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 662,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 204.012682
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3416,
+      "pss_kib": 662,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3416,
+        "pss_kib": 662,
+        "private_clean_kib": 436,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 205.067403
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3340,
+      "pss_kib": 590,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3340,
+        "pss_kib": 590,
+        "private_clean_kib": 368,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 206.128047
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3340,
+      "pss_kib": 590,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3340,
+        "pss_kib": 590,
+        "private_clean_kib": 368,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 207.21904
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3340,
+      "pss_kib": 591,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3340,
+        "pss_kib": 591,
+        "private_clean_kib": 368,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 208.313857
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3272,
+      "pss_kib": 522,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3272,
+        "pss_kib": 522,
+        "private_clean_kib": 300,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 209.383229
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3256,
+      "pss_kib": 506,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3256,
+        "pss_kib": 506,
+        "private_clean_kib": 284,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 210.441187
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3252,
+      "pss_kib": 501,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3252,
+        "pss_kib": 501,
+        "private_clean_kib": 280,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 211.494349
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1426,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1426,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 212.612408
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1427,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1427,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 213.724398
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1428,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1428,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 214.790776
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1428,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1428,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 215.837559
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1427,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1427,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 216.891021
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1426,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1426,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 217.952801
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4176,
+      "pss_kib": 1426,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4176,
+        "pss_kib": 1426,
+        "private_clean_kib": 1204,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 219.03323
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1413,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1413,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 220.136026
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1415,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1415,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 221.209584
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1414,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1414,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 222.283327
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1415,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1415,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 223.329857
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1415,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1415,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 224.381719
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1415,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1415,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 225.444447
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1414,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1414,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 226.49069
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 4164,
+      "pss_kib": 1414,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 4164,
+        "pss_kib": 1414,
+        "private_clean_kib": 1192,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 227.540755
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3908,
+      "pss_kib": 1159,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3908,
+        "pss_kib": 1159,
+        "private_clean_kib": 936,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 228.592393
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3908,
+      "pss_kib": 1158,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3908,
+        "pss_kib": 1158,
+        "private_clean_kib": 936,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 229.653121
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1137,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1137,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 230.72978
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1137,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1137,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 231.785701
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1138,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1138,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 232.88606
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1138,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1138,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 233.939045
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1137,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1137,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 235.017749
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3880,
+      "pss_kib": 1129,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3880,
+        "pss_kib": 1129,
+        "private_clean_kib": 912,
+        "private_dirty_kib": 196,
+        "swap_kib": 548,
+        "swappss_kib": 548
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 236.217016
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3896,
+      "pss_kib": 1144,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3896,
+        "pss_kib": 1144,
+        "private_clean_kib": 924,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 237.356033
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3896,
+      "pss_kib": 1144,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3896,
+        "pss_kib": 1144,
+        "private_clean_kib": 924,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 238.58163
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3896,
+      "pss_kib": 1145,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3896,
+        "pss_kib": 1145,
+        "private_clean_kib": 924,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 239.730584
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3896,
+      "pss_kib": 1146,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3896,
+        "pss_kib": 1146,
+        "private_clean_kib": 924,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 240.838578
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3896,
+      "pss_kib": 1145,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3896,
+        "pss_kib": 1145,
+        "private_clean_kib": 924,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 241.899086
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1138,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1138,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 243.002087
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1138,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1138,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 244.080654
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3888,
+      "pss_kib": 1137,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3888,
+        "pss_kib": 1137,
+        "private_clean_kib": 916,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 245.164289
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 246.260809
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 247.370614
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 248.451072
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 249.51753
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1106,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1106,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 250.612205
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1106,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1106,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 251.666663
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1107,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1107,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 252.753998
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 253.818389
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 254.859842
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 255.916789
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 256.975633
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 258.029091
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1107,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1107,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 259.075063
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1106,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1106,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 260.130152
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 261.229513
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1108,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1108,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 262.276752
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 263.346833
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1105,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1105,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 264.465084
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3856,
+      "pss_kib": 1104,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3856,
+        "pss_kib": 1104,
+        "private_clean_kib": 884,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 265.537758
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3468,
+      "pss_kib": 715,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3468,
+        "pss_kib": 715,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 266.66735
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3468,
+      "pss_kib": 715,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3468,
+        "pss_kib": 715,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 267.791577
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3468,
+      "pss_kib": 715,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3468,
+        "pss_kib": 715,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 268.952655
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3468,
+      "pss_kib": 714,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3468,
+        "pss_kib": 714,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 270.024573
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3468,
+      "pss_kib": 716,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3468,
+        "pss_kib": 716,
+        "private_clean_kib": 496,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 271.174457
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3444,
+      "pss_kib": 693,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3444,
+        "pss_kib": 693,
+        "private_clean_kib": 472,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 272.257599
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 625,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 625,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 273.333949
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 624,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 624,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 274.431747
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 623,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 623,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 275.552873
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 622,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 622,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 276.715646
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 622,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 622,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 277.86295
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 621,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 621,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 278.965238
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 623,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 623,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 280.082799
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 623,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 623,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 281.156112
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3376,
+      "pss_kib": 623,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3376,
+        "pss_kib": 623,
+        "private_clean_kib": 404,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 282.216275
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3368,
+      "pss_kib": 615,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3368,
+        "pss_kib": 615,
+        "private_clean_kib": 396,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 283.287011
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3360,
+      "pss_kib": 608,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3360,
+        "pss_kib": 608,
+        "private_clean_kib": 388,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 284.344095
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3320,
+      "pss_kib": 567,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3320,
+        "pss_kib": 567,
+        "private_clean_kib": 348,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 285.4028
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3320,
+      "pss_kib": 569,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3320,
+        "pss_kib": 569,
+        "private_clean_kib": 348,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 286.460766
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 947,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 947,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 287.531708
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 946,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 946,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 288.610399
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 945,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 945,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 289.668685
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 947,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 947,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 290.733215
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 948,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 948,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 291.867577
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 948,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 948,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 292.956439
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 948,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 948,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 294.033063
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3696,
+      "pss_kib": 948,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3696,
+        "pss_kib": 948,
+        "private_clean_kib": 724,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 295.096337
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3592,
+      "pss_kib": 844,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3592,
+        "pss_kib": 844,
+        "private_clean_kib": 620,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 296.148091
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3592,
+      "pss_kib": 843,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3592,
+        "pss_kib": 843,
+        "private_clean_kib": 620,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 297.205026
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3592,
+      "pss_kib": 844,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3592,
+        "pss_kib": 844,
+        "private_clean_kib": 620,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 298.265393
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3592,
+      "pss_kib": 844,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3592,
+        "pss_kib": 844,
+        "private_clean_kib": 620,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 299.313552
+    },
+    {
+      "cpu_ticks": 2,
+      "rss_kib": 3592,
+      "pss_kib": 844,
+      "peak_rss_kib": 8076,
+      "threads": 1,
+      "file_descriptors": 11,
+      "child_pids": [],
+      "memory": {
+        "rss_kib": 3592,
+        "pss_kib": 844,
+        "private_clean_kib": 620,
+        "private_dirty_kib": 200,
+        "swap_kib": 544,
+        "swappss_kib": 544
+      },
+      "smaps_error": null,
+      "elapsed_seconds": 300.000768
+    }
+  ]
+}

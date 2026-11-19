@@ -51,7 +51,11 @@ class Portable:
         # The supervisor creates its state root with the platform-private ACL.
         self.artifacts = artifacts
         self.environment = dict(os.environ)
-        self.environment.update(SSMCP_SESSION_HOME=str(self.home), NO_COLOR="1")
+        self.environment.update(SSMCP_SESSION_HOME=str(self.home), NO_COLOR="1",
+                                SSMCP_AUTH_HOME=str((root / "auth").resolve()),
+                                SSMCP_CLIENT_CONFIG=str((root / "client.toml").resolve()))
+        (root / "client.toml").touch(exist_ok=True)
+        self.environment.pop("SSMCP_UI_CONFIG", None)
         self.environment.pop("SSH_AUTH_SOCK", None)
         self.environment.pop("SSH_AGENT_PID", None)
         self.manager = None
@@ -210,7 +214,7 @@ class Portable:
 
     def create_args(self, name):
         return [
-            "sessions", "create", name, "--json", "--watchdog",
+            "sessions", "create", name, "--json", "--ssh", "--watchdog",
             "--reconnect-delay", "1", "--no-setup", "--title",
             "portable lifecycle fixture; closed loopback SSH",
             "--cwd", str(self.workspace), "-F", str(self.config),

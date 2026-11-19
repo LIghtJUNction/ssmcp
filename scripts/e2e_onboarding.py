@@ -406,6 +406,10 @@ class Sandbox:
         self.env["HOME"] = str(self.home)
         self.env["USERPROFILE"] = str(self.home)
         self.env["PATH"] = str(self.bin)
+        self.env["SSMCP_AUTH_HOME"] = str((root / "auth").resolve())
+        self.env["SSMCP_CLIENT_CONFIG"] = str((root / "client.toml").resolve())
+        (root / "client.toml").touch(exist_ok=True)
+        self.env.pop("SSMCP_UI_CONFIG", None)
         self.env["TERM"] = "xterm-256color"
         self.env["NO_PROXY"] = "127.0.0.1,::1,localhost"
         self.env["no_proxy"] = self.env["NO_PROXY"]
@@ -475,7 +479,7 @@ while True: time.sleep(1)
             )
         self.original_config = self.config.read_bytes()
         self.command = [
-            str(binary), "--no-color", "--no-watchdog", "--name", "onboarding-fixture",
+            str(binary), "--ssh", "--no-color", "--no-watchdog", "--name", "onboarding-fixture",
             "-F", str(self.config), "-p", str(closed_port),
             "--portal", portal.base, "127.0.0.1",
         ]

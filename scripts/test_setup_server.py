@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import json
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 import setup_server as setup
 
@@ -32,15 +34,15 @@ class SetupTests(unittest.TestCase):
             root = Path(directory)
             config, proxy = root/'config', root/'proxy'
             config.write_text(CONFIG)
-            template = Path(__file__).resolve().parents[1]/'packaging/nginx-ssmcp.conf.example'
-            proxy.write_text('location / { proxy_pass http://127.0.0.1:8086; }')
-            changes, state, base = setup.configuration(config, None, proxy, template, extract_key=lambda _: 'public key fixture')
+            template = Path(__file__).resolve().parents[1]/'packaging/nginx-ssmcp-portal.conf.example'
+            proxy.write_text(template.read_text())
+            changes, state, base = setup.configuration(config, None, proxy, template)
             self.assertNotIn('8086', changes[proxy])
             self.assertEqual(base, 'http://127.0.0.1:8080')
             self.assertEqual(state, Path('/var/lib/ssmcpd/portal'))
             proxy.write_text('location / { proxy_pass http://custom-upstream; }')
             with self.assertRaises(ValueError):
-                setup.configuration(config, None, proxy, template, extract_key=lambda _: 'public key fixture')
+                setup.configuration(config, None, proxy, template)
 
     def test_new_site_uses_origin_and_loopback_port(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -48,22 +50,37 @@ class SetupTests(unittest.TestCase):
             config, proxy = root/'config', root/'proxy'
             config.write_text(CONFIG)
             template = Path(__file__).resolve().parents[1]/'packaging/nginx-ssmcp.conf.example'
-            changes, _, _ = setup.configuration(config, None, proxy, template, extract_key=lambda _: 'public key fixture')
+            changes, _, _ = setup.configuration(config, None, proxy, template)
             self.assertIn('server_name relay.example.com;', changes[proxy])
-            self.assertEqual(changes[Path('/var/lib/ssmcp/server-key.pem')], 'public key fixture')
-            self.assertEqual(setup.tomllib.loads(changes[config])['server']['identity_public_key'], '/var/lib/ssmcp/server-key.pem')
             self.assertNotIn('ssmcp.example.com', changes[proxy])
 
-    def test_public_identity_is_exported_from_certificate_without_reading_private_key(self):
-        calls = []
-        def runner(argv):
-            calls.append(argv)
-            return '-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----'
-        key = setup.certificate_public_key('ssl_certificate /cert/fullchain.pem;\nssl_certificate_key /cert/private.pem;', runner)
-        self.assertIn('BEGIN PUBLIC KEY', key)
-        self.assertEqual(calls, [['openssl', 'x509', '-in', '/cert/fullchain.pem', '-pubkey', '-noout']])
-        with self.assertRaises(ValueError):
-            setup.certificate_public_key('ssl_certificate /a;\nssl_certificate /b;', runner)
+    def test_health_probe_cancels_its_client_login_on_success_and_failure(self):
+        for unauthorized in (True, False):
+            with self.subTest(unauthorized=unauthorized):
+                connection = Mock()
+                replies = [
+                    (200, b"ok"),
+                    (200, json.dumps({"device_code":"health-check-fixture"}).encode()),
+                    (401 if unauthorized else 200, b"{}"),
+                ]
+                if unauthorized:
+                    replies.append((401, b"{}"))
+                replies.append((200, b"{}"))
+                connection.getresponse.side_effect = [
+                    Mock(status=status, read=Mock(return_value=body)) for status, body in replies
+                ]
+                with patch.object(setup.http.client, "HTTPConnection", return_value=connection):
+                    if unauthorized:
+                        setup.probe("http://127.0.0.1:8080")
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            setup.probe("http://127.0.0.1:8080")
+                calls = connection.request.call_args_list
+                self.assertEqual(calls[1].args[:2], ("POST", "/api/client/login/start"))
+                self.assertEqual(calls[-1].args[:2], ("POST", "/api/client/login/cancel"))
+                self.assertEqual(json.loads(calls[-1].kwargs["body"]),
+                                 {"device_code":"health-check-fixture"})
+                self.assertEqual(connection.close.call_count, len(calls))
 
     def transaction(self, fail=False, unchanged=False, portal=True):
         with tempfile.TemporaryDirectory() as directory:
@@ -97,9 +114,7 @@ class SetupTests(unittest.TestCase):
                     self.assertFalse(any('restart' in call for call in calls))
                 else:
                     self.assertIn(['systemctl', 'stop', 'ssmcp-portal.service'], calls)
-                self.assertIn(['systemctl', 'disable', '--now', 'ssmcp-portal.service'], calls)
-                self.assertIn(['systemctl', 'disable', '--now', 'ssmcp-portal-ssh.timer'], calls)
-                self.assertFalse(any(call[:3] == ['systemctl', 'enable', '--now'] and any('ssh' in part for part in call) for call in calls))
+                self.assertIn(['systemctl', 'disable', 'ssmcp-portal.service'], calls)
 
     def test_migration_stops_legacy_service_and_enables_gateway(self):
         self.transaction()
@@ -112,6 +127,32 @@ class SetupTests(unittest.TestCase):
 
 
 class StageIsolationTests(unittest.TestCase):
+    def test_stage_checks_runtime_as_service_user_before_starting_gateway(self):
+        import deploy_server
+        binary = Path('/opt/ssmcp/releases') / ('a' * 40) / 'usr/bin/ssmcpd'
+        command = deploy_server.stage_service_command(
+            'ssmcp-stage-test', 'ssmcp-stage-test', binary, Path('/private/config.toml'))
+        self.assertIn('--uid=ssmcpd', command)
+        self.assertIn('--gid=ssmcp', command)
+        self.assertIn('--setenv=PATH=/usr/bin:/bin', command)
+        self.assertIn('--property=ExecStartPre='+str(binary)+' check-runtime', command)
+        self.assertEqual(command[command.index(str(binary))+1], 'serve')
+        self.assertIn('/run/ssmcp-stage-test/control.sock', command)
+        self.assertIn('/var/lib/ssmcp-stage-test/oauth-clients.toml', command)
+
+    def test_stage_preserves_packaged_service_runtime_restrictions(self):
+        import deploy_server
+        service = Path(__file__).resolve().parents[1] / 'packaging/ssmcpd.service'
+        restrictions = {'NoNewPrivileges', 'PrivateTmp', 'PrivateDevices', 'ProtectSystem',
+                        'ProtectHome', 'ProtectKernelTunables', 'ProtectControlGroups',
+                        'RestrictAddressFamilies', 'ReadWritePaths', 'UMask'}
+        command = deploy_server.stage_service_command(
+            'ssmcp-stage-test', 'ssmcp-stage-test', Path('/usr/bin/ssmcpd'), Path('/config'))
+        for line in service.read_text().splitlines():
+            if line.partition('=')[0] in restrictions:
+                self.assertIn('--property='+line, command)
+        self.assertIn('ExecStartPre=/usr/local/bin/ssmcpd check-runtime', service.read_text())
+
     def test_staging_moves_accounts_audit_and_management_into_its_own_lease(self):
         import deploy_server
         text = CONFIG + 'state_dir = "/production/accounts"\naudit_dir = "/production/audit"\n'
