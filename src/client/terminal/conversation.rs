@@ -1431,7 +1431,10 @@ impl State {
                 if button & 64 != 0 {
                     let delta = if button & 1 == 0 { -3 } else { 3 };
                     if y >= body_top(self.geometry.rows) && y < prompt_top(self.geometry) {
-                        let inside_panel = self.conversation.view == View::Activity
+                        // Keep the right half available for the conversation even
+                        // when a command window occupies the entire visible body.
+                        let inside_panel = x < self.geometry.left / 2
+                            && self.conversation.view == View::Activity
                             && !self.raw_logs
                             && self
                                 .events
@@ -3158,6 +3161,63 @@ mod tests {
             );
             state.chat_key(Key::Escape);
             assert!(!state.selection);
+        }
+    }
+
+    #[test]
+    fn command_panels_use_left_half_for_output_and_right_half_for_conversation() {
+        for cols in [120, 49, 48] {
+            let mut state = command_panel_fixture(28, cols);
+            for index in 0..12 {
+                state.log_message("user", &format!("Later message {index}"), b"");
+            }
+            display(&mut state);
+            state.events.scroll_by(isize::MIN);
+            let screen = display(&mut state).screen().contents();
+            let output_y = screen
+                .lines()
+                .position(|row| row.contains("build step 37"))
+                .unwrap() as u16;
+            let split = state.geometry.left / 2;
+            assert!(split > 0);
+            let draft = state.conversation.snapshot()["draft"].clone();
+            let before = state.events.snapshot();
+
+            state.chat_key(Key::Mouse {
+                button: 64,
+                x: split - 1,
+                y: output_y,
+                release: false,
+            });
+            display(&mut state);
+            let left = state.events.snapshot();
+            assert_eq!(left["scroll"], before["scroll"]);
+            assert_eq!(left["events"][1]["panel"]["scroll"], 34);
+            assert_eq!(left["events"][2]["panel"]["scroll"], 37);
+            save_command_panel_preview(&mut state, "scroll-zones-left");
+
+            state.chat_key(Key::Mouse {
+                button: 65,
+                x: split,
+                y: output_y,
+                release: false,
+            });
+            display(&mut state);
+            let right = state.events.snapshot();
+            assert!(
+                right["scroll"].as_u64().unwrap() > left["scroll"].as_u64().unwrap(),
+                "the first column of the right half scrolls the conversation"
+            );
+            assert_eq!(
+                right["events"][1]["panel"]["scroll"],
+                left["events"][1]["panel"]["scroll"]
+            );
+            assert_eq!(
+                right["events"][2]["panel"]["scroll"],
+                left["events"][2]["panel"]["scroll"]
+            );
+            assert_eq!(state.conversation.snapshot()["draft"], draft);
+            save_command_panel_preview(&mut state, "scroll-zones-page");
         }
     }
 
