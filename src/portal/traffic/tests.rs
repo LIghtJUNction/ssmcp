@@ -351,6 +351,7 @@ fn snapshots_with_unbacked_paid_balance_or_unknown_version_fail_closed() {
         Usage {
             used_bytes: 0,
             paid_bytes: 100,
+            directional: None,
             adjusted_limit_bytes: None,
         },
     );
@@ -360,7 +361,7 @@ fn snapshots_with_unbacked_paid_balance_or_unknown_version_fail_closed() {
             state: unbacked,
         },
         Record::Snapshot {
-            version: 2,
+            version: 3,
             state: LedgerState::default(),
         },
     ] {
@@ -408,7 +409,7 @@ fn compaction_replaces_the_file_and_replays_snapshot_plus_next_reservation() {
     assert_eq!(records.len(), 2);
     assert!(matches!(
         serde_json::from_slice::<Record>(records[0]).unwrap(),
-        Record::Snapshot { version: 1, .. }
+        Record::Snapshot { version: 2, .. }
     ));
     assert!(ledger.appended < COMPACT_AFTER);
     assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
@@ -596,4 +597,349 @@ fn failed_sync_does_not_charge_or_acknowledge_a_reservation() {
     drop(ledger);
     let reopened = TrafficLedger::open(&directory).unwrap();
     assert_eq!(quota(&reopened, PERIOD), expected);
+}
+
+#[test]
+fn directional_max_uses_period_totals_and_preserves_them_across_compaction() {
+    let temp = Temp::new();
+    let directory = temp.directory();
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    for (uploaded, bytes, expected) in [
+        (true, 100, 100),
+        (false, 80, 100),
+        (true, 20, 120),
+        (false, 70, 150),
+    ] {
+        ledger
+            .reserve_frame(
+                &directory,
+                SUBJECT,
+                PERIOD,
+                OFFSET,
+                TrafficFrame { uploaded, bytes },
+                false,
+            )
+            .unwrap();
+        assert_eq!(quota(&ledger, PERIOD).used_bytes, expected);
+    }
+    let current = quota(&ledger, PERIOD);
+    assert_eq!(
+        (
+            current.uploaded_bytes,
+            current.downloaded_bytes,
+            current.legacy_used_bytes
+        ),
+        (120, 150, 0)
+    );
+    ledger
+        .reserve_frame(
+            &directory,
+            "456",
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: true,
+                bytes: 900,
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(quota(&ledger, PERIOD), current);
+    drop(ledger);
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    assert_eq!(quota(&ledger, PERIOD), current);
+    ledger.appended = COMPACT_AFTER;
+    ledger
+        .reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: true,
+                bytes: 60,
+            },
+            false,
+        )
+        .unwrap();
+    let compacted = quota(&ledger, PERIOD);
+    assert_eq!(
+        (
+            compacted.uploaded_bytes,
+            compacted.downloaded_bytes,
+            compacted.used_bytes
+        ),
+        (180, 150, 180)
+    );
+    drop(ledger);
+    let ledger = TrafficLedger::open(&directory).unwrap();
+    assert_eq!(quota(&ledger, PERIOD), compacted);
+    let next = quota(&ledger, NEXT_PERIOD);
+    assert_eq!(
+        (
+            next.uploaded_bytes,
+            next.downloaded_bytes,
+            next.legacy_used_bytes,
+            next.used_bytes
+        ),
+        (0, 0, 0, 0)
+    );
+}
+
+#[test]
+fn directional_quota_accepts_the_other_direction_up_to_the_same_limit() {
+    let temp = Temp::new();
+    let directory = temp.directory();
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    ledger
+        .set_remaining(&directory, SUBJECT, PERIOD, OFFSET, 100)
+        .unwrap();
+    for uploaded in [true, false] {
+        ledger
+            .reserve_frame(
+                &directory,
+                SUBJECT,
+                PERIOD,
+                OFFSET,
+                TrafficFrame {
+                    uploaded,
+                    bytes: 100,
+                },
+                false,
+            )
+            .unwrap();
+        assert_eq!(quota(&ledger, PERIOD).remaining_bytes, Some(0));
+    }
+    let expected = quota(&ledger, PERIOD);
+    let before = fs::read(temp.journal()).unwrap();
+    for uploaded in [true, false] {
+        assert_eq!(
+            ledger.reserve_frame(
+                &directory,
+                SUBJECT,
+                PERIOD,
+                OFFSET,
+                TrafficFrame { uploaded, bytes: 1 },
+                false
+            ),
+            Err(Problem::TrafficQuotaExceeded)
+        );
+    }
+    assert_eq!(quota(&ledger, PERIOD), expected);
+    assert_eq!(fs::read(temp.journal()).unwrap(), before);
+    ledger
+        .grant(&directory, SUBJECT, PERIOD, PERIOD, "more", 25)
+        .unwrap();
+    ledger
+        .reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: false,
+                bytes: 25,
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(quota(&ledger, PERIOD).used_bytes, 125);
+}
+
+#[test]
+fn directional_migration_keeps_legacy_charges_without_inventing_directions() {
+    let temp = Temp::new();
+    let directory = temp.directory();
+    let mut state = LedgerState::default();
+    state.periods.entry(PERIOD.into()).or_default().insert(
+        SUBJECT.into(),
+        Usage {
+            used_bytes: 41,
+            ..Usage::default()
+        },
+    );
+    let mut old = line(&Record::Snapshot { version: 1, state });
+    old.extend(line(&Record::Used {
+        subject: SUBJECT.into(),
+        period: PERIOD.into(),
+        used_bytes: 45,
+    }));
+    temp.create_journal(&old);
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    assert_eq!(
+        fs::read(temp.journal()).unwrap(),
+        old,
+        "a read must not rewrite the legacy journal"
+    );
+    assert_eq!(
+        (
+            quota(&ledger, PERIOD).used_bytes,
+            quota(&ledger, PERIOD).legacy_used_bytes
+        ),
+        (45, 45)
+    );
+    ledger
+        .reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: true,
+                bytes: 7,
+            },
+            false,
+        )
+        .unwrap();
+    ledger
+        .reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: false,
+                bytes: 9,
+            },
+            false,
+        )
+        .unwrap();
+    let expected = quota(&ledger, PERIOD);
+    assert_eq!(
+        (
+            expected.legacy_used_bytes,
+            expected.uploaded_bytes,
+            expected.downloaded_bytes,
+            expected.used_bytes
+        ),
+        (45, 7, 9, 54)
+    );
+    let bytes = fs::read(temp.journal()).unwrap();
+    let first = bytes.split(|b| *b == b'\n').next().unwrap();
+    assert!(matches!(
+        serde_json::from_slice::<Record>(first).unwrap(),
+        Record::Snapshot { version: 2, .. }
+    ));
+    drop(ledger);
+    let ledger = TrafficLedger::open(&directory).unwrap();
+    assert_eq!(quota(&ledger, PERIOD), expected);
+}
+
+#[test]
+fn directional_replay_rejects_regression_and_mismatched_snapshot_totals() {
+    for (uploaded_bytes, downloaded_bytes) in [(9, 20), (10, 19)] {
+        let temp = Temp::new();
+        let directory = temp.directory();
+        let mut ledger = TrafficLedger::open(&directory).unwrap();
+        for (uploaded, bytes) in [(true, 10), (false, 20)] {
+            ledger
+                .reserve_frame(
+                    &directory,
+                    SUBJECT,
+                    PERIOD,
+                    OFFSET,
+                    TrafficFrame { uploaded, bytes },
+                    false,
+                )
+                .unwrap();
+        }
+        drop(ledger);
+        temp.append(&line(&Record::DirectionalUsed {
+            subject: SUBJECT.into(),
+            period: PERIOD.into(),
+            uploaded_bytes,
+            downloaded_bytes,
+        }));
+        assert!(TrafficLedger::open(&directory).is_err());
+    }
+    for version in [1, 2] {
+        let temp = Temp::new();
+        let mut state = LedgerState::default();
+        state.periods.entry(PERIOD.into()).or_default().insert(
+            SUBJECT.into(),
+            Usage {
+                used_bytes: 21,
+                directional: Some(DirectionalUsage {
+                    legacy_used_bytes: 0,
+                    uploaded_bytes: 10,
+                    downloaded_bytes: 20,
+                }),
+                ..Usage::default()
+            },
+        );
+        temp.create_journal(&line(&Record::Snapshot { version, state }));
+        assert!(TrafficLedger::open(&temp.directory()).is_err());
+    }
+}
+
+#[test]
+fn directional_overflow_and_failed_append_never_advance_the_counters() {
+    let temp = Temp::new();
+    let directory = temp.directory();
+    let mut ledger = TrafficLedger::open(&directory).unwrap();
+    ledger
+        .reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: true,
+                bytes: u64::MAX,
+            },
+            true,
+        )
+        .unwrap();
+    let before = fs::read(temp.journal()).unwrap();
+    assert_eq!(
+        ledger.reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: true,
+                bytes: 1
+            },
+            true
+        ),
+        Err(Problem::Limit)
+    );
+    assert_eq!(fs::read(temp.journal()).unwrap(), before);
+    ledger.file = File::open(temp.journal()).unwrap();
+    assert_eq!(
+        ledger.reserve_frame(
+            &directory,
+            SUBJECT,
+            PERIOD,
+            OFFSET,
+            TrafficFrame {
+                uploaded: false,
+                bytes: 1
+            },
+            true
+        ),
+        Err(Problem::Storage)
+    );
+    assert!(ledger.failed);
+    assert_eq!(
+        ledger
+            .state
+            .usage(SUBJECT, PERIOD)
+            .directional
+            .unwrap()
+            .downloaded_bytes,
+        0
+    );
+    drop(ledger);
+    let ledger = TrafficLedger::open(&directory).unwrap();
+    let persisted = ledger.snapshot(SUBJECT, PERIOD, OFFSET, true).unwrap();
+    assert_eq!(
+        (
+            persisted.used_bytes,
+            persisted.uploaded_bytes,
+            persisted.downloaded_bytes
+        ),
+        (u64::MAX, u64::MAX, 0)
+    );
 }
