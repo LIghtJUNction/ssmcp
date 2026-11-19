@@ -1834,7 +1834,7 @@ async fn connect(
                 None
             }
         };
-    terminal::set_logout_target(if options.temporary || options.username.is_none() {
+    terminal::set_logout_target(if options.temporary {
         None
     } else {
         options
