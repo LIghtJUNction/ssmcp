@@ -53,7 +53,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
 
 // Use decimal units and truncate rather than round: a positive balance remains
 // visible and a balance just below 1 GB is never presented as a full 1 GB.
-fn traffic_bytes(bytes: u64) -> String {
+pub(super) fn traffic_bytes(bytes: u64) -> String {
     for (scale, unit) in [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
         if bytes >= scale {
             let whole = bytes / scale;

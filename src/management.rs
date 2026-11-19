@@ -198,6 +198,13 @@ impl From<Actor> for Identity {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TrafficBalances {
+    pub period: String,
+    pub remaining: std::collections::BTreeMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     Snapshot {
@@ -207,6 +214,15 @@ enum Request {
     Disconnect {
         actor: Actor,
         session_id: String,
+    },
+    TrafficBalances {
+        actor: Actor,
+    },
+    SetTrafficRemaining {
+        actor: Actor,
+        subject: String,
+        period: String,
+        remaining_bytes: u64,
     },
     SetUserPolicy {
         actor: Actor,
@@ -232,6 +248,7 @@ enum Request {
 enum Response {
     Snapshot { snapshot: DashboardSnapshot },
     Audit { page: AuditPage },
+    TrafficBalances { balances: TrafficBalances },
     Done,
     Error { error: ManagementError },
 }
@@ -295,6 +312,42 @@ impl ManagementClient {
             .request(Request::Disconnect {
                 actor: actor.into(),
                 session_id: session_id.into(),
+            })
+            .await?
+        {
+            Response::Done => Ok(()),
+            _ => Err(ManagementError::Unavailable),
+        }
+    }
+
+    pub(crate) async fn traffic_balances(
+        &self,
+        actor: &Identity,
+    ) -> Result<TrafficBalances, ManagementError> {
+        match self
+            .request(Request::TrafficBalances {
+                actor: actor.into(),
+            })
+            .await?
+        {
+            Response::TrafficBalances { balances } => Ok(balances),
+            _ => Err(ManagementError::Unavailable),
+        }
+    }
+
+    pub async fn set_traffic_remaining(
+        &self,
+        actor: &Identity,
+        subject: &str,
+        period: &str,
+        remaining_bytes: u64,
+    ) -> Result<(), ManagementError> {
+        match self
+            .request(Request::SetTrafficRemaining {
+                actor: actor.into(),
+                subject: subject.into(),
+                period: period.into(),
+                remaining_bytes,
             })
             .await?
         {
@@ -521,6 +574,19 @@ async fn serve_one(mut stream: UnixStream, broker: Arc<Broker>) -> io::Result<()
             .map(|snapshot| Response::Snapshot { snapshot }),
         Request::Disconnect { actor, session_id } => broker
             .management_disconnect(&actor.into(), &session_id)
+            .await
+            .map(|()| Response::Done),
+        Request::TrafficBalances { actor } => broker
+            .management_traffic_balances(&actor.into())
+            .await
+            .map(|balances| Response::TrafficBalances { balances }),
+        Request::SetTrafficRemaining {
+            actor,
+            subject,
+            period,
+            remaining_bytes,
+        } => broker
+            .management_set_traffic_remaining(&actor.into(), &subject, &period, remaining_bytes)
             .await
             .map(|()| Response::Done),
         Request::SetUserPolicy {

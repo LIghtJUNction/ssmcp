@@ -268,6 +268,63 @@ async fn user_policy_requires_admin_and_csrf_and_keeps_ban_when_saving_rate() {
     )
     .await
     .unwrap();
+    let period = broker.traffic_period();
+    let form = |csrf: &str, subject: &str, period: &str, bytes: u64| {
+        format!(
+            "csrf={csrf}&subject={subject}&action=traffic&period={period}&remaining_bytes={bytes}"
+        )
+    };
+    for (cookie, fields, expected) in [
+        (
+            &user_cookie,
+            form(&user_csrf, "456", &period, 0),
+            Problem::Forbidden,
+        ),
+        (
+            &admin_cookie,
+            form("wrong", "456", &period, 0),
+            Problem::Csrf,
+        ),
+        (
+            &admin_cookie,
+            form(&admin_csrf, "999", &period, 0),
+            Problem::Forbidden,
+        ),
+        (
+            &admin_cookie,
+            form(&admin_csrf, "456", "2000-01", 0),
+            Problem::ManagementInvalid,
+        ),
+    ] {
+        assert!(
+            matches!(submit(broker.clone(), cookie, "https://ssmcp.test", fields).await, Err(error) if error == expected)
+        );
+    }
+    let response = submit(
+        broker.clone(),
+        &admin_cookie,
+        "https://ssmcp.test",
+        form(&admin_csrf, "456", &period, 250_000_000),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+    let quota = broker.traffic_quota("456").await.unwrap();
+    assert_eq!(quota.remaining_bytes, Some(250_000_000));
+    assert_eq!(quota.paid_bytes, 0);
+    let balances = management(&broker.portal)
+        .unwrap()
+        .traffic_balances(&Identity {
+            provider: "github".into(),
+            subject: "999".into(),
+            login: "owner".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(balances.period, period);
+    assert_eq!(balances.remaining.get("456"), Some(&250_000_000));
+    assert!(!balances.remaining.contains_key("999"));
+
     let bob = broker.portal.storage(|s| s.account("456")).await.unwrap();
     assert!(!bob.banned);
     assert_eq!(bob.rate_limit_bps, Some(524_288));

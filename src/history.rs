@@ -63,6 +63,7 @@ pub enum AuditAction {
     ToolCall,
     AdminViewed,
     UserPolicyChanged,
+    TrafficBalanceChanged,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
