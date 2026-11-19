@@ -3,6 +3,8 @@ use super::render::LogFormat;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub(crate) mod pet;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Theme {
@@ -240,6 +242,7 @@ pub(crate) struct Ui {
     pub log_format: LogFormat,
     pub theme: Theme,
     pub colors: Colors,
+    pub pet: pet::Pet,
     pub layout: Layout,
     pub log_height_percent: u16,
     pub sidebar: bool,
@@ -262,9 +265,10 @@ impl Default for Ui {
             log_format: LogFormat::Pretty,
             theme: Theme::default(),
             colors: Colors::default(),
+            pet: pet::Pet::default(),
             layout: Layout::default(),
             log_height_percent: 60,
-            sidebar: true,
+            sidebar: false,
             sidebar_width: 37,
             panels: vec![
                 Panel::Agents,
@@ -305,6 +309,7 @@ impl Ui {
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.pet.validate()?;
         if !(1..=10000).contains(&self.max_inline_output) {
             return Err("ui.max_inline_output must be in 1..=10000".into());
         }
@@ -372,6 +377,22 @@ impl Ui {
         } else {
             color_code(&self.colors.background, true).unwrap_or_else(|| "49".into())
         }
+    }
+
+    /// A quiet input surface; explicit background overrides remain authoritative.
+    pub(crate) fn input_background(&self) -> String {
+        if !self.colors.background.is_empty() {
+            return self.background();
+        }
+        match self.theme {
+            Theme::Dark => "48;2;44;46;50",
+            Theme::CodexDark => "48;2;41;44;50",
+            Theme::Nord => "48;2;59;66;82",
+            Theme::Solarized => "48;2;7;54;66",
+            Theme::Light => "48;2;241;243;244",
+            Theme::Minimal => return self.background(),
+        }
+        .into()
     }
 
     pub(crate) fn to_toml(&self) -> Result<String, String> {
@@ -442,6 +463,34 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn pet_configuration_roundtrips_and_partial_updates_preserve_custom_text() {
+        use super::pet::Preset;
+        assert_eq!(Ui::parse("").unwrap().pet.preset, Preset::Cat);
+        let custom =
+            Ui::parse("[ui.pet]\npreset = 'custom'\ntext = '''\n /\\_/\\\n( o.o )\n > ^ <\n'''\n")
+                .unwrap();
+        assert_eq!(custom.pet.preset, Preset::Custom);
+        assert_eq!(custom.pet.lines(), [" /\\_/\\", "( o.o )", " > ^ <"]);
+        assert_eq!(Ui::parse(&custom.to_toml().unwrap()).unwrap(), custom);
+        let off = custom.merge_json(json!({"pet":{"preset":"off"}})).unwrap();
+        assert_eq!(off.pet.preset, Preset::Off);
+        assert_eq!(off.pet.text, custom.pet.text);
+        let robot = custom
+            .merge_json(json!({"pet":{"preset":"robot"}}))
+            .unwrap();
+        assert_eq!(robot.pet.preset, Preset::Robot);
+        for patch in [
+            json!({"pet":null}),
+            json!({"pet":{"preset":"unknown"}}),
+            json!({"pet":{"preset":"custom","text":""}}),
+            json!({"pet":{"preset":"custom","text":"\u{1b}[2J"}}),
+            json!({"pet":{"command":"run something"}}),
+        ] {
+            assert!(custom.merge_json(patch).is_err());
+        }
+    }
+
+    #[test]
     fn validated_ui_config_and_themes() {
         let u=Ui::parse("[ui]\ncolor=false\nlog_format='pretty-verbose'\ntheme='nord'\nmax_inline_output=5\ntimestamps=true").unwrap();
         assert!(!u.color);
@@ -498,7 +547,7 @@ mod tests {
     #[test]
     fn partial_patch_preserves_other_colors_and_rejects_invalid_data() {
         let old = Ui::default()
-            .merge_json(json!({"colors":{"accent":"#123456"}}))
+            .merge_json(json!({"colors":{"accent":"#123456"},"sidebar":true}))
             .unwrap();
         let new = old
             .merge_json(json!({"colors":{"background":"black"},"sidebar":false}))

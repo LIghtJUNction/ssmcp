@@ -28,7 +28,7 @@
   <section id="start" aria-labelledby="start-title">
     <div class="section-heading"><p class="eyebrow">01 / 开始</p><h2 id="start-title">连接电脑，选择工具。</h2></div>
     <ol class="steps">
-      <li><h3>安装客户端。</h3><p>从 <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub Releases</a> 获取适合系统的客户端，然后在需要处理的项目目录里打开终端。</p></li>
+      <li><h3>安装客户端。</h3><p>从 <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub Releases</a> 获取适合系统的客户端。Windows 安装器会为内置浏览器工具准备 Node.js、Playwright 和 Chromium；安装后在需要处理的项目目录里打开终端。</p></li>
       <li><h3>连接这台电脑。</h3><p>在<a href="/">网关账户页面</a>选择账户名，再运行下面的命令。出现授权提示时，按流程使用 GitHub 登录。</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">把 <code>yourname</code> 换成你的账户名。之后直接运行 <code>ssmcp</code>，可以复用上次已授权的账户。</p></li>
       <li><h3>把网关添加到 AI 应用。</h3><p>使用下面的 MCP 地址，并授权同一个 GitHub 账户。让应用列出在线客户端，选定要操作的电脑后再调用工具。</p><pre><code>{{gateway_origin}}/mcp</code></pre><p class="note">AI 运行在你的应用或已安装的 harness 中。连接 ssmcp 本身不会启动模型。</p></li>
     </ol>
@@ -66,9 +66,9 @@ ssmcp invite --shell powershell</code></pre><p>邀请只能兑换一次，通常
 运行相关测试，并展示 diff。</code></pre></article>
       <article><h3>跟进长任务</h3><p>让 Agent 启动构建、测试或报告任务，再持续查看输出。只要客户端保持连接，托管任务可以在一次 code_mode 调用返回后继续执行。</p><pre><code>运行一次测试集。
 跟踪任务 ID，最后报告退出码。</code></pre></article>
-      <article><h3>检查图片或报告</h3><p>把图片和要回答的问题一起发出。Agent 通过原生读图工具获得实际图片内容。</p><pre><code>@assets/chart.png
+      <article><h3>检查图片或报告</h3><p>把图片和要回答的问题一起发出。Agent 通过原生读图工具获得实际图片内容。支持图片的终端显示真实像素，其他终端显示带尺寸的紧凑附件卡片。</p><pre><code>@assets/chart.png
 解释变化趋势，指出不清楚的标注。</code></pre></article>
-      <article><h3>验证浏览器流程</h3><p>应用已提供授权的 ChatGPT Browser 插件时，优先使用它。否则查询已注册的 Playwright 工具，或选择已观察到的 CDP 连接。浏览器会话由选定的提供方控制。</p><pre><code>检查已打开的结账页面。
+      <article><h3>验证浏览器流程</h3><p>浏览器操作优先使用内置工具。需要特定的已有浏览器会话时，明确选择它的已授权连接；只有该路线需要时，才加载可选的 Playwright harness。</p><pre><code>检查已打开的结账页面。
 测试表单，并截图展示结果。</code></pre></article>
       <article><h3>协作处理多台设备</h3><p><code>ssmcp list</code> 列出已授权的在线设备；终端中的 Agents 面板选择当前连接里的成员。先确认电脑，再选择本条请求的接收者。</p><pre><code>在已选中的构建机上，
 检查最近一次构建结果。</code></pre></article>
@@ -78,7 +78,7 @@ ssmcp invite --shell powershell</code></pre><p>邀请只能兑换一次，通常
 
   <section id="tools" aria-labelledby="tools-title">
     <div class="section-heading"><p class="eyebrow">05 / 工具调用</p><h2 id="tools-title">以当前客户端的接口为准。</h2></div>
-    <p>先用 <code>list</code> 获取选中客户端的 ID。在 code_mode 中查询它实际注册的工具，读取返回的 schema，再发起调用。已安装 harness 的原始参数与审批规则保持有效。</p>
+    <p>先用 <code>list</code> 获取选中客户端的 ID。在 code_mode 中查询它实际注册的工具，读取返回的 schema，再发起调用。内置工具不依赖其他 harness。可选 harness 默认不加载：<code>ssmcp.harnesses.list</code> 读取缓存状态，<code>ssmcp.harnesses.load</code> 明确加载一项；加载后的原始参数与审批规则保持有效。</p>
     <pre><code>const clientId = "ID_FROM_LIST";
 return await tools.search(clientId, {
   name_prefix: "ssmcp.fs.",
@@ -94,7 +94,7 @@ image(await call(clientId, "ssmcp.fs.read_image", {
 
   <section class="help" aria-labelledby="help-title">
     <h2 id="help-title">遇到问题，先检查这几项。</h2>
-    <dl><div><dt>没有在线客户端？</dt><dd>保持本机客户端运行，确认应用和客户端使用同一个已授权账户与网关。</dd></div><div><dt>找不到某个工具？</dt><dd>刷新客户端列表，再查询选中客户端的实时工具。可用能力取决于那台电脑实际安装的工具和 harness。</dd></div><div><dt>二维码放不下？</dt><dd>侧栏会改为显示可读链接。终端较小时，F1 帮助仍保留完整的指南地址。</dd></div></dl>
+    <dl><div><dt>没有在线客户端？</dt><dd>保持本机客户端运行，确认应用和客户端使用同一个已授权账户与网关。</dd></div><div><dt>找不到某个工具？</dt><dd>刷新客户端列表，再查询选中客户端的实时工具。内置工具默认可用；需要外部 harness 的能力时，先显式加载该项，再查询更新后的工具目录。</dd></div><div><dt>二维码放不下？</dt><dd>侧栏会改为显示可读链接。终端较小时，F1 帮助仍保留完整的指南地址。</dd></div></dl>
   </section>
 </main>
 <footer class="container footer"><span>ssmcp {{version}}</span><a href="/">网关账户</a><a href="https://github.com/LIghtJUNction/ssmcp">源码与文档</a></footer>

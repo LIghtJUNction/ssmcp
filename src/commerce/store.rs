@@ -568,6 +568,16 @@ impl OrderStore {
         order.gateway_order_id = Some(proof.remote_id);
         self.persist(next)
     }
+    pub(crate) fn recharged_subjects(&self) -> Result<std::collections::BTreeSet<String>, Error> {
+        self.ensure()?;
+        Ok(self
+            .database
+            .orders
+            .values()
+            .filter(|order| order.state == OrderState::Granted)
+            .map(|order| order.subject.clone())
+            .collect())
+    }
     pub(crate) fn pending_grants(&self) -> Result<Vec<Order>, Error> {
         self.ensure()?;
         Ok(self

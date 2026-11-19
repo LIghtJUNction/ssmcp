@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Component, Path, PathBuf},
+    sync::{Arc, OnceLock},
 };
+mod skill_sources;
+pub(crate) use skill_sources::BUILTIN_SSMCP_SKILL;
 
 const MAX_PATH: usize = 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024;
@@ -25,12 +28,26 @@ const INSTRUCTIONS: [&str; 3] = ["AGENTS.override.md", "AGENTS.md", "agents.md"]
 
 struct ContextRoot {
     id: String,
-    workspace: Workspace,
+    workspace: Option<Workspace>,
+    kind: &'static str,
+    scope: &'static str,
+    skill_only: bool,
+    aliases: Vec<PathBuf>,
+}
+
+impl ContextRoot {
+    fn workspace(&self) -> Result<&Workspace, String> {
+        self.workspace
+            .as_ref()
+            .ok_or_else(|| "This skill is embedded in ssmcp".into())
+    }
 }
 
 /// Extra roots are explicitly granted at client startup; they do not extend ordinary fs tools.
 pub struct Context {
     roots: Vec<ContextRoot>,
+    skill_sources: OnceLock<skill_sources::Sources>,
+    output: Arc<crate::output::OutputStore>,
 }
 
 impl Context {
@@ -48,23 +65,68 @@ impl Context {
         }
         let mut roots = vec![ContextRoot {
             id: "workspace".into(),
-            workspace: Workspace::with_output(root, output.clone())?,
+            workspace: Some(Workspace::with_output(root, output.clone())?),
+            kind: "workspace",
+            scope: "project",
+            skill_only: false,
+            aliases: Vec::new(),
         }];
         for (index, path) in extra_roots.into_iter().enumerate() {
             roots.push(ContextRoot {
                 id: format!("context-{}", index + 1),
-                workspace: Workspace::with_output(path, output.clone())?,
+                workspace: Some(Workspace::with_output(path, output.clone())?),
+                kind: "explicit",
+                scope: "global",
+                skill_only: false,
+                aliases: Vec::new(),
             });
         }
-        Ok(Self { roots })
+        Ok(Self {
+            roots,
+            skill_sources: OnceLock::new(),
+            output,
+        })
+    }
+
+    /// Opt in only from real client startup. Explicit constructors remain hermetic.
+    pub fn enable_default_skill_sources(&self) -> Result<(), String> {
+        if self.skill_sources.get().is_some() {
+            return Ok(());
+        }
+        let (paths, home) = skill_sources::default_paths();
+        self.enable_skill_sources(paths, home)
+    }
+
+    pub(crate) fn enable_skill_sources(
+        &self,
+        paths: Vec<PathBuf>,
+        home: Option<PathBuf>,
+    ) -> Result<(), String> {
+        if self.skill_sources.get().is_none() {
+            let sources = skill_sources::Sources::discover(paths, home, self.output.clone())?;
+            let _ = self.skill_sources.set(sources);
+        }
+        Ok(())
+    }
+
+    fn all_roots(&self) -> Vec<&ContextRoot> {
+        self.roots
+            .iter()
+            .chain(
+                self.skill_sources
+                    .get()
+                    .into_iter()
+                    .flat_map(|sources| sources.roots.iter()),
+            )
+            .collect()
     }
 
     pub fn tools() -> Vec<Value> {
-        let root = json!({"type":"string","maxLength":64,"default":"workspace","description":"Explicit context root ID from context.roots; additional roots are never scanned automatically."});
+        let root = json!({"type":"string","maxLength":64,"default":"workspace","description":"Source ID from context.roots: project, explicitly configured roots, exact installed global skill directories or packages, and embedded skills."});
         let path = json!({"type":"string","maxLength":MAX_PATH,"description":"Path relative to the selected root. Parent traversal and symlinks are rejected."});
         let scan = json!({
             "root":root,
-            "scope":{"type":"string","enum":["root","effective"],"description":"root scans one granted root; effective overlays workspace skills over explicit context roots in configuration order. view defaults to effective when neither root nor scope is supplied; list defaults to root."},
+            "scope":{"type":"string","enum":["root","effective"],"description":"root scans one granted root; effective overlays project, explicit context roots in configuration order, installed global skill sources, then builtins. view defaults to effective when neither root nor scope is supplied; list defaults to root."},
             "paths":{"type":"array","minItems":1,"maxItems":16,"items":path,"default":DEFAULT_PATHS},
             "max_depth":{"type":"integer","minimum":0,"maximum":8,"default":4},
             "max_nodes":{"type":"integer","minimum":1,"maximum":4096,"default":2048},
@@ -76,7 +138,7 @@ impl Context {
         let mut tools = vec![
             tool(
                 "ssmcp.context.roots",
-                "List explicitly granted read-only context roots; this is not a view of all context loaded by a native agent.",
+                "List read-only context and skill sources with their exact scope, canonical paths and aliases. Skill-only sources do not extend ordinary file or instruction access.",
                 json!({}),
                 &[],
             ),
@@ -88,13 +150,13 @@ impl Context {
             ),
             tool(
                 "ssmcp.skills.view",
-                "Generate a live Markdown skill index. Defaults to the effective project-over-global view across explicitly granted roots; root selects a single root. Same-name project skills win and origins remain visible. Bodies are read separately.",
+                "Generate a live Markdown skill index. Project skills take precedence over configured roots, installed global skills and builtins; root selects one source. Duplicate origins remain visible in shadowed. Bodies are read separately.",
                 scan,
                 &[],
             ),
             tool(
                 "ssmcp.skills.read",
-                "Read exact UTF-8 content of one workspace-relative SKILL.md. Oversized files fail explicitly instead of returning incomplete instructions.",
+                "Read exact UTF-8 content of one SKILL.md from its granted source or the embedded registry. Oversized files fail explicitly instead of returning incomplete instructions.",
                 read.clone(),
                 &["path"],
             ),
@@ -138,10 +200,8 @@ impl Context {
             }
             "ssmcp.context.roots" => {
                 let _: Empty = parse(args)?;
-                json!({"roots":self.roots.iter().map(|root| json!({
-                    "id":root.id,"path":root.workspace.root(),"read_only":true,
-                    "kind":if root.id=="workspace" {"workspace"} else {"explicit"}
-                })).collect::<Vec<_>>(),"boundary":boundary()})
+                json!({"roots":self.all_roots().into_iter().map(origin).collect::<Vec<_>>(),
+                    "diagnostics":self.skill_sources.get().map(|sources| &sources.diagnostics),"boundary":boundary()})
             }
             "ssmcp.skills.list" | "ssmcp.skills.view" => {
                 let view = name.ends_with(".view");
@@ -158,7 +218,7 @@ impl Context {
                     if args.root != "workspace" {
                         return Err("effective skills use workspace as the project root; omit root or select scope: root".into());
                     }
-                    effective_skills(&self.roots, &args).await?
+                    effective_skills(&self.all_roots(), &args, self.skill_sources.get()).await?
                 } else {
                     scan_skills(self.root(&args.root)?, &args).await?
                 };
@@ -170,6 +230,12 @@ impl Context {
                 let path = normalize(&args.path)?;
                 let filename = path.rsplit('/').next().unwrap_or("");
                 let skill = name == "ssmcp.skills.read";
+                if !skill && root.skill_only {
+                    return Err(
+                        "This root grants skills only; it is not an instruction or filesystem root"
+                            .into(),
+                    );
+                }
                 if (skill && filename != "SKILL.md")
                     || (!skill && !INSTRUCTIONS.contains(&filename))
                 {
@@ -178,8 +244,12 @@ impl Context {
                             .into(),
                     );
                 }
-                let content = read_document(&root.workspace, &path, args.max_bytes).await?;
-                let mut result = json!({"root":origin(root),"path":path,"bytes":content.len(),"sha256":digest(content.as_bytes()),"content":content,"boundary":boundary()});
+                let content = if root.kind == "builtin" {
+                    skill_sources::read_builtin(&path, args.max_bytes)?
+                } else {
+                    read_document(root.workspace()?, &path, args.max_bytes).await?
+                };
+                let mut result = json!({"root":origin(root),"scope":root.scope,"source":document_source(root,&path),"path":path,"bytes":content.len(),"sha256":digest(content.as_bytes()),"content":content,"boundary":boundary()});
                 if skill {
                     let mut diagnostics = Vec::new();
                     let metadata = metadata(&content, true, &path, &mut diagnostics);
@@ -190,6 +260,12 @@ impl Context {
             }
             "ssmcp.agents.list" | "ssmcp.agents.resolve" => {
                 let args: TargetArgs = parse(args)?;
+                if self.root(&args.root)?.skill_only {
+                    return Err(
+                        "This root grants skills only; it is not an instruction or filesystem root"
+                            .into(),
+                    );
+                }
                 agents(
                     self.root(&args.root)?,
                     &args.path,
@@ -212,9 +288,12 @@ impl Context {
     }
 
     fn root(&self, id: &str) -> Result<&ContextRoot, String> {
-        self.roots.iter().find(|root| root.id == id).ok_or_else(|| {
-            "unknown context root ID; use context.roots to discover explicitly granted roots".into()
-        })
+        self.all_roots()
+            .into_iter()
+            .find(|root| root.id == id)
+            .ok_or_else(|| {
+                "unknown context root ID; use context.roots to discover the granted sources".into()
+            })
     }
 }
 
@@ -284,10 +363,17 @@ fn parse<T: DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|error| format!("invalid context arguments: {error}"))
 }
 fn boundary() -> &'static str {
-    "Only the selected explicitly granted root is inspected. Outside parents, other roots, and native agent-loaded context are not implicitly included."
+    "Reads stay inside the selected granted root. Automatic global roots and linked packages grant SKILL.md access only; the ordinary filesystem workspace and instruction roots are unchanged."
 }
 fn origin(root: &ContextRoot) -> Value {
-    json!({"id":root.id,"path":root.workspace.root()})
+    json!({"id":root.id,"path":root.workspace.as_ref().map(|workspace| workspace.root().to_string_lossy().into_owned()).unwrap_or_else(|| "ssmcp-client://skill".into()),
+        "kind":root.kind,"scope":root.scope,"read_only":true,"skills_only":root.skill_only,"aliases":root.aliases})
+}
+fn document_source(root: &ContextRoot, path: &str) -> String {
+    root.workspace
+        .as_ref()
+        .map(|workspace| workspace.root().join(path).to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("ssmcp-client://skill#{path}"))
 }
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}})
@@ -375,6 +461,53 @@ async fn read_document(
     String::from_utf8(data).map_err(|_| format!("{path} is not valid UTF-8 text"))
 }
 
+async fn metadata_bytes(
+    workspace: &Workspace,
+    path: &str,
+    budget: usize,
+) -> Result<(Vec<u8>, u64, bool, usize, bool), String> {
+    let mut limit = 512.min(budget).min(MAX_METADATA_BYTES);
+    let mut spent = 0;
+    loop {
+        let (data, size, eof) = bytes(workspace, path, limit).await?;
+        spent += data.len();
+        let complete = eof || metadata_prefix_complete(&data);
+        if complete || limit == MAX_METADATA_BYTES {
+            return Ok((data, size, eof, spent, false));
+        }
+        let next = limit
+            .saturating_mul(4)
+            .min(MAX_METADATA_BYTES)
+            .min(budget.saturating_sub(spent));
+        if next <= limit {
+            return Ok((data, size, eof, spent, true));
+        }
+        limit = next;
+    }
+}
+
+fn metadata_prefix_complete(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    let text = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(error) if error.error_len().is_none() => {
+            std::str::from_utf8(&data[..error.valid_up_to()]).unwrap_or("")
+        }
+        Err(_) => return true,
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut lines = text.split_inclusive('\n');
+    let first = lines.next().unwrap_or("").trim_end_matches(['\r', '\n']);
+    if first != "---" {
+        return true;
+    }
+    lines.any(|line| {
+        line.ends_with('\n') && matches!(line.trim_end_matches(['\r', '\n']), "---" | "...")
+    })
+}
+
 async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>, Value), String> {
     if args.max_depth > 8
         || args.max_nodes == 0
@@ -384,10 +517,17 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
     {
         return Err("max_depth must be 0..=8, max_nodes 1..=4096, and limit 1..=64".into());
     }
-    let requested = args
-        .paths
-        .clone()
-        .unwrap_or_else(|| DEFAULT_PATHS.iter().map(|path| (*path).into()).collect());
+    if root.kind == "builtin" {
+        return skill_sources::scan_builtin(root, args);
+    }
+    let workspace = root.workspace()?;
+    let requested = args.paths.clone().unwrap_or_else(|| {
+        if root.skill_only {
+            vec![".".into()]
+        } else {
+            DEFAULT_PATHS.iter().map(|path| (*path).into()).collect()
+        }
+    });
     if requested.is_empty() || requested.len() > 16 {
         return Err("paths must contain 1..=16 relative directories".into());
     }
@@ -406,8 +546,7 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
     let mut read_bytes = 0;
     let mut truncated = false;
     for source in &paths {
-        let stat = root
-            .workspace
+        let stat = workspace
             .perform("ssmcp.fs.stat", json!({"path":source}))
             .await;
         match stat {
@@ -469,7 +608,7 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                 if let Some(cursor) = &cursor {
                     request["cursor"] = json!(cursor);
                 }
-                match root.workspace.perform("ssmcp.fs.list", request).await {
+                match workspace.perform("ssmcp.fs.list", request).await {
                     Ok(page) => {
                         let page_entries = page["entries"]
                             .as_array()
@@ -489,6 +628,11 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                 }
             }
             entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+            // A skill package owns its assets and scripts. Their descendants
+            // are not additional skills and must not consume discovery budgets.
+            let package = entries
+                .iter()
+                .any(|entry| entry["name"] == "SKILL.md" && entry["kind"] == "file");
             let mut children = Vec::new();
             for entry in entries {
                 let name = entry["name"].as_str().ok_or("invalid directory entry")?;
@@ -504,6 +648,9 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                     continue;
                 }
                 if entry["kind"] == "directory" {
+                    if package {
+                        continue;
+                    }
                     if depth < args.max_depth {
                         children.push((path, depth + 1));
                     } else {
@@ -536,15 +683,18 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                         );
                         continue;
                     }
-                    match bytes(
-                        &root.workspace,
-                        &path,
-                        MAX_METADATA_BYTES.min(MAX_SCAN_BYTES - read_bytes),
-                    )
-                    .await
-                    {
-                        Ok((data, size, eof)) => {
-                            read_bytes += data.len();
+                    match metadata_bytes(workspace, &path, MAX_SCAN_BYTES - read_bytes).await {
+                        Ok((data, size, eof, spent, limited)) => {
+                            read_bytes += spent;
+                            if limited {
+                                truncated = true;
+                                diagnostic(
+                                    &mut diagnostics,
+                                    &path,
+                                    "metadata_byte_limit",
+                                    "The metadata scan budget ended before this frontmatter was complete",
+                                );
+                            }
                             let text = match std::str::from_utf8(&data) {
                                 Ok(text) => Some(text),
                                 Err(error) if error.error_len().is_none() && !eof => {
@@ -563,7 +713,7 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                                 );
                                 json!({"name":null,"description":null,"status":"invalid","parser":"yaml-frontmatter-subset"})
                             };
-                            found.insert(path.clone(), json!({"root":origin(root),"path":path,"directory":directory,"source":source,"name":meta["name"],"description":meta["description"],"metadata_status":meta["status"],"size":size,"metadata_sha256":digest(&data)}));
+                            found.insert(path.clone(), json!({"root":origin(root),"scope":root.scope,"origin_path":document_source(root,&path),"path":path,"directory":directory,"source":source,"name":meta["name"],"description":meta["description"],"metadata_status":meta["status"],"size":size,"metadata_sha256":digest(&data)}));
                         }
                         Err(error) => {
                             truncated = true;
@@ -596,8 +746,9 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
 
 /// Scan each authorized root once per read. No file contents or metadata are cached.
 async fn effective_skills(
-    roots: &[ContextRoot],
+    roots: &[&ContextRoot],
     args: &ScanArgs,
+    defaults: Option<&skill_sources::Sources>,
 ) -> Result<(Vec<Value>, Value), String> {
     let paths = args
         .paths
@@ -605,10 +756,13 @@ async fn effective_skills(
         .unwrap_or_else(|| DEFAULT_PATHS.iter().map(|path| (*path).into()).collect());
     let mut effective = Vec::<Value>::new();
     let mut names = BTreeMap::<String, usize>::new();
+    let mut documents = BTreeMap::<String, usize>::new();
     let mut snapshots = Vec::new();
     let mut sources = Vec::new();
-    let mut diagnostics = Vec::new();
-    let mut truncated = false;
+    let mut diagnostics = defaults
+        .map(|sources| sources.diagnostics.clone())
+        .unwrap_or_default();
+    let mut truncated = defaults.is_some_and(|sources| sources.truncated);
     let mut visited_nodes = 0;
     let mut metadata_bytes = 0;
     for root in roots {
@@ -645,23 +799,28 @@ async fn effective_skills(
                 .then(|| candidate["name"].as_str())
                 .flatten()
                 .map(str::to_owned);
-            if let Some(index) = name.as_ref().and_then(|name| names.get(name)).copied() {
+            let document = candidate["origin_path"].as_str().unwrap_or("").to_owned();
+            if let Some(index) = name
+                .as_ref()
+                .and_then(|name| names.get(name))
+                .or_else(|| documents.get(&document))
+                .copied()
+            {
+                let same_document = effective[index]["origin_path"] == candidate["origin_path"];
                 effective[index]["shadowed"]
                     .as_array_mut()
                     .unwrap()
                     .push(json!({
                         "root":candidate["root"],"path":candidate["path"],
-                        "source":candidate["source"]
+                        "source":candidate["source"],"scope":candidate["scope"],"origin_path":candidate["origin_path"],
+                        "same_document":same_document
                     }));
             } else {
                 if let Some(name) = name {
                     names.insert(name, effective.len());
                 }
-                candidate["scope"] = json!(if root.id == "workspace" {
-                    "project"
-                } else {
-                    "global"
-                });
+                documents.insert(document, effective.len());
+                candidate["scope"] = json!(root.scope);
                 candidate["shadowed"] = json!([]);
                 effective.push(candidate);
             }
@@ -681,11 +840,11 @@ async fn effective_skills(
         .map_err(|error| error.to_string())?,
     );
     let result = json!({
-        "root":origin(&roots[0]),"roots":roots.iter().map(origin).collect::<Vec<_>>(),
+        "root":origin(roots[0]),"roots":roots.iter().map(|root| origin(root)).collect::<Vec<_>>(),
         "scope":"effective","sources":sources,"diagnostics":diagnostics,
         "total":effective.len(),"truncated":truncated,"snapshot":fingerprint,
-        "boundary":"Only workspace and explicitly granted context roots are inspected. No implicit home or native agent context is included.",
-        "precedence":"workspace, then context roots in configuration order; within a root, requested paths in order, then lexical file path. Valid same-name skills shadow later entries.",
+        "boundary":boundary(),
+        "precedence":"project workspace, explicit context roots in configuration order, global skill directories and their exact linked packages in source order, then embedded ssmcp skills. Same names and physical documents are deduplicated; every later origin is retained in shadowed.",
         "limits":{"max_depth":args.max_depth,"max_nodes_per_root":args.max_nodes,
             "visited_nodes":visited_nodes,"metadata_bytes":metadata_bytes,
             "max_metadata_bytes_per_file":MAX_METADATA_BYTES,
@@ -740,6 +899,7 @@ fn skill_page(
 }
 
 async fn agents(root: &ContextRoot, target: &str, resolve: bool) -> Result<Value, String> {
+    let workspace = root.workspace()?;
     let target = normalize(target)?;
     let parts: Vec<_> = if target == "." {
         vec![]
@@ -753,8 +913,7 @@ async fn agents(root: &ContextRoot, target: &str, resolve: bool) -> Result<Value
     let mut target_exists = true;
     for index in 0..parts.len() {
         let path = parts[..=index].join("/");
-        match root
-            .workspace
+        match workspace
             .perform("ssmcp.fs.stat", json!({"path":path}))
             .await
         {
@@ -778,8 +937,7 @@ async fn agents(root: &ContextRoot, target: &str, resolve: bool) -> Result<Value
     for (depth, directory) in directories.into_iter().enumerate() {
         for filename in INSTRUCTIONS {
             let path = normalize(&join(&directory, filename))?;
-            let stat = match root
-                .workspace
+            let stat = match workspace
                 .perform("ssmcp.fs.stat", json!({"path":path}))
                 .await
             {
@@ -812,7 +970,7 @@ async fn agents(root: &ContextRoot, target: &str, resolve: bool) -> Result<Value
                     ));
                 }
                 let content =
-                    read_document(&root.workspace, &path, MAX_DOCUMENT_BYTES - total_bytes).await?;
+                    read_document(workspace, &path, MAX_DOCUMENT_BYTES - total_bytes).await?;
                 total_bytes += content.len();
                 file["sha256"] = json!(digest(content.as_bytes()));
                 file["content"] = json!(content);
@@ -1104,7 +1262,7 @@ fn block_scalar(header: &str, lines: &[&str]) -> Result<String, String> {
 }
 fn markdown(skills: &[Value], effective: bool) -> String {
     let mut output = if effective {
-        "# Available skills\n\nProject skills overlay explicitly configured global roots. Metadata only; read SKILL.md for the complete content.\n\n| Skill | Description | Root | Path | Shadowed |\n| --- | --- | --- | --- | --- |\n"
+        "# Available skills\n\nProject skills overlay configured roots, installed global skill sources and builtins. Metadata only; read SKILL.md from the listed source for the complete content.\n\n| Skill | Description | Root | Path | Shadowed |\n| --- | --- | --- | --- | --- |\n"
     } else {
         "# Available skills\n\nGenerated from name and description frontmatter only.\n\n| Skill | Description | Root | Path | Shadowed |\n| --- | --- | --- | --- | --- |\n"
     }.to_string();

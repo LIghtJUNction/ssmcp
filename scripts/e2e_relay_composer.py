@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from e2e_account_relay import IDENTITY, wait_for
 from e2e_composer import Composer, ENTER, LEFT, UP, input_text, visible_record
+from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import Decoder, Frontend, sha256, text
 
 
@@ -309,7 +310,7 @@ class RelayComposer(Composer):
                        cwd=self.workspace, env={**os.environ, **self.safe_git_env},
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5)
         front = self.frontend("relay-composer", self.config("relay-composer"))
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the named-account chat composer over a real WebSocket relay")
         whoami = self.account("/api/client/whoami")["identity"]
         self.check(whoami == self.identity, "the client relay belongs to the isolated named account")

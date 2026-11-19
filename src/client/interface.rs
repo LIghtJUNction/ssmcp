@@ -12,6 +12,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+pub(crate) mod computer;
 pub(crate) mod harness;
 pub(crate) mod history;
 pub(crate) mod messages;
@@ -495,6 +496,13 @@ pub(crate) async fn call(
         .await
         .map_err(|_| "message storage worker stopped".to_owned())?;
     }
+    if name == "ssmcp.ui.history" {
+        // Search may inspect retained files; it must not hold the display lock
+        // or block the async runtime while doing disk I/O.
+        return tokio::task::spawn_blocking(move || history::call(arguments))
+            .await
+            .map_err(|_| "history storage worker stopped".to_owned())?;
+    }
     // Memory reads are a projection of the same document, not a second cache.
     // Finish every disk read before taking the UI configuration/update mutex.
     if name == "ssmcp.ui.get" {
@@ -519,7 +527,6 @@ pub(crate) async fn call(
         let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
         match name {
             "ssmcp.ui.harness" => return harness::call(arguments),
-            "ssmcp.ui.history" => return history::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
             "ssmcp.ui.questions" => return questions::read(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
@@ -557,6 +564,7 @@ pub(crate) async fn sync_terminal_sizes(
 pub(crate) fn tools() -> Vec<Value> {
     let color = json!({"type":"string","description":"#RRGGBB, ANSI color name, default (terminal color), or empty (inherit theme)."});
     let properties = json!({
+        "pet":super::ui::pet::Pet::schema(),
         "theme":{"type":"string","enum":["dark","minimal","codex-dark","nord","solarized","light"]},
         "layout":{"type":"string","enum":["chat","split","audit","logs"]},
         "log_height_percent":{"type":"integer","minimum":10,"maximum":80},
@@ -851,6 +859,56 @@ mod tests {
         assert_eq!(text["value"], "🦀".repeat(1000));
         assert_eq!(text["next_offset"], 1000);
         assert!(serde_json::to_vec(&text).unwrap().len() <= MAX_PROJECTION_BYTES);
+    }
+
+    #[test]
+    fn pet_schema_set_and_saved_configuration_use_the_same_validated_object() {
+        use super::super::ui::pet::{Pet, Preset};
+        let schema = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "ssmcp.ui.set")
+            .unwrap();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["patch"]["properties"]["pet"],
+            Pet::schema()
+        );
+        let drawing = " /\\_/\\\n( o.o )\n > ^ <";
+        let (updated, persist) = parse_set(
+            &Ui::default(),
+            json!({"patch":{"pet":{"preset":"custom","text":drawing}},"persist":true}),
+        )
+        .unwrap();
+        assert!(persist);
+        assert_eq!(updated.pet.preset, Preset::Custom);
+        assert_eq!(
+            serde_json::to_value(&updated).unwrap()["pet"]["text"],
+            drawing
+        );
+        let saved = document_with_ui(
+            &updated,
+            Some("[client]\nserver = 'https://relay.example'\n"),
+        )
+        .unwrap();
+        assert!(saved.contains("https://relay.example"));
+        assert_eq!(Ui::parse(&saved).unwrap().pet, updated.pet);
+
+        let path = std::env::temp_dir().join(format!(
+            "ssmcp-pet-config-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, &saved).unwrap();
+        let loaded = Ui::load(Some(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(loaded.unwrap().pet, updated.pet);
+        let (disabled, _) = parse_set(&updated, json!({"patch":{"pet":{"preset":"off"}}})).unwrap();
+        assert_eq!(disabled.pet.preset, Preset::Off);
+        assert_eq!(disabled.pet.text, drawing);
+        assert!(parse_set(&updated, json!({"patch":{"pet":{"text":"\u{1b}[2J"}}}),).is_err());
+        assert_eq!(updated.pet.text, drawing);
     }
 
     #[test]

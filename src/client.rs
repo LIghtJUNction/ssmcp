@@ -34,6 +34,7 @@ pub(crate) mod terminal;
 mod trust;
 pub(crate) mod ui;
 mod ui_command;
+mod update;
 #[cfg(target_os = "linux")]
 mod zero;
 
@@ -75,6 +76,7 @@ Start
 
 Manage
   config · whoami · logout      Account and server settings
+  update [--check]              Update the installed client
   invite · join                Share a temporary session
   sessions · attach · service  Saved and background sessions
   setup · ui · 007             Setup, appearance and recovery
@@ -96,6 +98,7 @@ Usage: ssmcp username@server [options]
        ssmcp -i [--server URL] [--client ID]
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
+       ssmcp update [--check]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp invite [--server URL] [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
                     [--no-bootstrap] [--json]
@@ -141,11 +144,12 @@ Usage: ssmcp username@server [options]
   --theme NAME         dark, codex-dark, nord, solarized, light, or minimal
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
-  --list-tools         Discover native and workspace tools as JSON, then exit without SSH
+  --list-tools         List native and workspace tools as JSON, then exit without SSH
 
-The client always connects as shell. Installed Codex, Claude Code, Pi and OpenCode
-harnesses are discovered automatically and their native tools are registered in
-one code_mode. Tools keep their native schemas and permission/approval behavior.
+The client provides native tools without another harness. Optional Codex, Claude
+Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
+Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
+Tools keep their native schemas and permission/approval behavior.
 
 Examples:
   ssmcp alice@ssmcp.lmm.best
@@ -443,14 +447,14 @@ impl Options {
                     return Ok(None);
                 }
                 Some("-t" | "--type" | "--backend") => {
-                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; optional harnesses load only when explicitly requested".into());
                 }
                 Some(value)
                     if value.starts_with("--type=")
                         || value.starts_with("--backend=")
                         || value.starts_with("-t=") =>
                 {
-                    return Err("harness selection was removed; remove -t/--type/--backend; installed harnesses are discovered automatically".into());
+                    return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
                 }
                 Some("--ssh") => ssh = true,
                 Some("--no-browser") => no_browser = true,
@@ -1240,6 +1244,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "update") {
+        return update::run(args.into_iter().skip(1).collect()).await;
+    }
     if args.first().is_some_and(|arg| arg == "ui") {
         return ui_command::run(args.into_iter().skip(1).collect()).await;
     }
@@ -1419,7 +1426,11 @@ pub async fn run() -> crate::Result<()> {
             std::env::current_dir()?,
             options.context_roots.clone(),
             management,
-        ) {
+        )
+        .and_then(|runtime| {
+            runtime.enable_default_skill_sources()?;
+            Ok(runtime)
+        }) {
             Ok(runtime) => runtime,
             Err(error) => {
                 backend.shutdown().await;
@@ -1948,7 +1959,7 @@ async fn connect(
     render::status(
         "shell",
         "Progress",
-        "Starting shell and discovering installed harness tools",
+        "Starting native tools; optional harnesses stay unloaded",
     );
     let backend = tokio::select! {
         biased;
@@ -1967,7 +1978,11 @@ async fn connect(
         PathBuf::from(&metadata.cwd),
         options.context_roots.clone(),
         management,
-    ) {
+    )
+    .and_then(|runtime| {
+        runtime.enable_default_skill_sources()?;
+        Ok(runtime)
+    }) {
         Ok(runtime) => runtime,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -1990,7 +2005,7 @@ async fn connect(
             return Err(error);
         }
     };
-    // Core tools are ready immediately; optional providers continue discovery independently.
+    // Native tools are ready immediately; optional providers stay unloaded until requested.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -2122,6 +2137,10 @@ async fn connect(
                 }
             },
             _ = ui_updates.tick(), if git_status.is_some() => {
+                if terminal::exit_requested() {
+                    intentionally_stopped = true;
+                    break Ok(());
+                }
                 if let Some(observer) = &git_status {
                     render::set_git_status(observer.snapshot());
                 }

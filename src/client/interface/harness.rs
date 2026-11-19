@@ -30,10 +30,17 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn bind(runtime: &Arc<Runtime>) {
-    *BINDING
+    let mut binding = BINDING
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(Binding {
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(previous) = binding
+        .as_ref()
+        .and_then(|binding| binding.runtime.upgrade())
+    {
+        previous.revoke_host_input();
+    }
+    *binding = Some(Binding {
         runtime: Arc::downgrade(runtime),
         handle: tokio::runtime::Handle::try_current().ok(),
     });
@@ -388,7 +395,7 @@ fn tool_list_message(provider: Provider, page: &Value) -> String {
     let mut text = format!("## /{shortcut} · registered tools\n\n");
     let tools = page["tools"].as_array().cloned().unwrap_or_default();
     if tools.is_empty() {
-        text.push_str("No tools from this harness are currently registered. Inspect ssmcp.harnesses.list for the actual discovery status. No harness or extension was installed or launched by this command.\n");
+        text.push_str("No tools from this harness are currently registered. Inspect ssmcp.harnesses.list for its cached status. This explicit command loaded only the selected optional harness; it did not install software or request a model turn.\n");
     }
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or("");
@@ -416,6 +423,14 @@ async fn execute(
     action: Action,
     call_id: u64,
 ) -> Result<(), String> {
+    // A local slash command explicitly opts into one optional harness. Use the
+    // same registered native entry point so hooks, auditing and failure caching apply.
+    runtime
+        .perform(Operation::CallTool {
+            name: "ssmcp.harnesses.load".into(),
+            arguments: json!({"provider":provider.label()}),
+        })
+        .await?;
     let registry = runtime.local_registry();
     match action {
         Action::Tools(offset) => {
@@ -729,7 +744,7 @@ pub(super) fn tool() -> Value {
     let provider = json!({"type":"string","enum":["cc","claude","codex","pi"]});
     json!({
         "name":"ssmcp.ui.harness",
-        "description":"Inspect only the current live registry for one harness. tools returns a bounded page of actual names and description previews; inspect returns one unchanged registered descriptor, including its original inputSchema. cc is the local alias for Claude's canonical registry namespace. Pi RPC is a control protocol and does not enumerate internal LSP/model/plugin tools. This tool does not invoke a harness, install an extension, or start a model turn. The local user may explicitly call a discovered primitive with /cc TOOL {...}, /codex TOOL {...} or /pi TOOL {...}; those calls run asynchronously and retain native approvals. Empty slash commands show a tools page.",
+        "description":"Inspect only the current live registry for one harness. tools returns a bounded page of actual names and description previews; inspect returns one unchanged registered descriptor, including its original inputSchema. cc is the local alias for Claude's canonical registry namespace. Pi RPC is a control protocol and does not enumerate internal LSP/model/plugin tools. This observation never loads a harness, installs an extension, or starts a model turn. Optional harnesses begin not_loaded; explicitly call ssmcp.harnesses.load before inspecting their catalog. The local user's /cc, /codex and /pi commands load only the selected harness asynchronously. The local user may explicitly call a discovered primitive with /cc TOOL {...}, /codex TOOL {...} or /pi TOOL {...}; those calls run asynchronously and retain native approvals. Empty slash commands show a tools page.",
         "inputSchema":{"type":"object","oneOf":[
             {"type":"object","required":["action","provider"],"additionalProperties":false,"properties":{
                 "action":{"const":"tools"},"provider":provider,

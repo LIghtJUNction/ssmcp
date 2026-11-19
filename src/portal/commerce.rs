@@ -38,6 +38,14 @@ impl Broker {
         let Some(commerce) = &self.portal.commerce else {
             return Ok(());
         };
+        if commerce.config.environment == "prod" {
+            let subjects = commerce.storage(|store| store.recharged_subjects()).await?;
+            for subject in subjects {
+                self.record_recharge(&subject)
+                    .await
+                    .map_err(|_| "could not restore a verified recharge benefit")?;
+            }
+        }
         let orders = commerce.storage(|store| store.pending_grants()).await?;
         for order in orders {
             grant(self, commerce, order)
@@ -174,8 +182,17 @@ async fn traffic(
         && quota.remaining_bytes.is_some()
         && month_end.saturating_sub(commerce::now()) >= commerce::CHECKOUT_SECONDS + 60
     {
+        let unit_price = commerce
+            .config
+            .price_per_gb_minor
+            .expect("validated unit price");
+        let decimals = commerce.config.currency_decimals;
+        let min_amount = commerce::amount(minimum * unit_price, decimals);
+        let max_amount = commerce::amount(maximum * unit_price, decimals);
+        let step = commerce::amount(unit_price, decimals);
+        let currency = view::escape(&commerce.config.currency);
         body.push_str(&format!(
-            "<form method=post action=/account/traffic/orders><input type=hidden name=csrf value=\"{}\"><input type=hidden name=request_nonce value=\"{nonce}\"><input type=hidden name=period value=\"{}\"><label>流量（GB）<input type=number name=quantity_gb value={minimum} min={minimum} max={maximum} required></label><label><input type=checkbox name=acknowledge_month value=yes required>我已了解：本次流量只在 {} 自然月有效，未用完部分下月清零。</label><button type=submit>创建订单</button></form>",
+            "<form method=post action=/account/traffic/orders><input type=hidden name=csrf value=\"{}\"><input type=hidden name=request_nonce value=\"{nonce}\"><input type=hidden name=period value=\"{}\"><label>税前金额（{currency}）<input type=number name=amount value={min_amount} min={min_amount} max={max_amount} step={step} required></label><label><input type=checkbox name=acknowledge_month value=yes required>我已了解：本次流量只在 {} 自然月有效，未用完部分下月清零。</label><button type=submit>创建订单</button></form>",
             view::escape(&csrf),view::escape(&period),view::escape(&period)
         ));
     } else if quota.remaining_bytes.is_none() {
@@ -201,10 +218,15 @@ async fn traffic(
 async fn checked_form(
     broker: &Broker,
     request: Request,
-    fields: &[&str],
+    field_sets: &[&[&str]],
 ) -> Result<(String, std::collections::HashMap<String, String>), Problem> {
     let (headers, values) = form(request).await?;
-    only(&values, fields)?;
+    if !field_sets
+        .iter()
+        .any(|fields| only(&values, fields).is_ok())
+    {
+        return Err(Problem::Invalid);
+    }
     let (_, subject) = broker
         .portal
         .verify(&headers, &values, &broker.public_url)?;
@@ -222,11 +244,20 @@ async fn purchase(
         &broker,
         request,
         &[
-            "csrf",
-            "quantity_gb",
-            "request_nonce",
-            "acknowledge_month",
-            "period",
+            &[
+                "csrf",
+                "amount",
+                "request_nonce",
+                "acknowledge_month",
+                "period",
+            ],
+            &[
+                "csrf",
+                "quantity_gb",
+                "request_nonce",
+                "acknowledge_month",
+                "period",
+            ],
         ],
     )
     .await?;
@@ -239,10 +270,20 @@ async fn purchase(
     if values.get("period").map(String::as_str) != Some(broker.traffic_period().as_str()) {
         return Ok(error(Error::Expired));
     }
-    let Some(quantity) = values
-        .get("quantity_gb")
-        .and_then(|v| v.parse::<u64>().ok())
-    else {
+    let quantity = match (values.get("amount"), values.get("quantity_gb")) {
+        (Some(amount), None) => {
+            let unit_price = commerce
+                .config
+                .price_per_gb_minor
+                .expect("validated unit price");
+            commerce::parse_amount(amount, commerce.config.currency_decimals)
+                .filter(|minor| *minor > 0 && minor % unit_price == 0)
+                .map(|minor| minor / unit_price)
+        }
+        (None, Some(quantity)) => quantity.parse::<u64>().ok(),
+        _ => None,
+    };
+    let Some(quantity) = quantity else {
         return Ok(error(Error::Invalid));
     };
     let quota = broker.traffic_quota(&subject).await?;
@@ -263,7 +304,7 @@ async fn resume(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Response, Problem> {
-    let (subject, _) = checked_form(&broker, request, &["csrf"]).await?;
+    let (subject, _) = checked_form(&broker, request, &[&["csrf"]]).await?;
     let Some(commerce) = &broker.portal.commerce else {
         return Ok(error(Error::Disabled));
     };
@@ -298,7 +339,7 @@ async fn reconcile(
     Path(id): Path<String>,
     request: Request,
 ) -> Result<Response, Problem> {
-    let (subject, _) = checked_form(&broker, request, &["csrf"]).await?;
+    let (subject, _) = checked_form(&broker, request, &[&["csrf"]]).await?;
     let Some(commerce) = &broker.portal.commerce else {
         return Ok(error(Error::Disabled));
     };
@@ -377,10 +418,15 @@ async fn grant(broker: &Broker, commerce: &Commerce, order: Order) -> Result<(),
         .grant_paid_traffic(&order.subject, &order.period, &order.id, order.bytes)
         .await
     {
-        Ok(_) => commerce
-            .storage(move |store| store.mark_granted(&order.id))
-            .await
-            .map_err(|_| Problem::Storage),
+        Ok(_) => {
+            if commerce.config.environment == "prod" {
+                broker.record_recharge(&order.subject).await?;
+            }
+            commerce
+                .storage(move |store| store.mark_granted(&order.id))
+                .await
+                .map_err(|_| Problem::Storage)
+        }
         Err(Problem::TrafficPeriodMismatch) => commerce
             .storage(move |store| store.mark_expired(&order.id))
             .await

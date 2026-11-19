@@ -1,6 +1,7 @@
 //! Compose logs and source audit with a configurable observational sidebar.
 //! Only this module writes the physical terminal while a Session is active.
 use super::{
+    account::status::{self as account_status, Status as AccountStatus},
     audit_view::AuditView,
     panel::{self, PanelLayout, PanelSnapshot, PanelTone},
     render::LogFormat,
@@ -22,6 +23,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
 mod events;
+mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
@@ -29,11 +31,13 @@ pub(crate) mod markdown;
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
 const MAX_SESSIONS: usize = 16;
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
 // Rendered cells cost much more than UTF-8 output. Keep a short interactive
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const LEAVE: &[u8] = b"\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
+const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -53,6 +57,7 @@ pub(crate) struct Session {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
+    account_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -79,9 +84,16 @@ impl Session {
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
+        state.server_origin = endpoint.and_then(footer::Origin::parse);
         let guide = endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
+        let account_server = endpoint
+            .and_then(account_status::server_from_endpoint)
+            .filter(|_| tokio::runtime::Handle::try_current().is_ok());
+        if account_server.is_some() {
+            state.account = AccountStatus::Loading;
+        }
         state.graphics = images::Graphics::environment(&options);
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
@@ -111,7 +123,7 @@ impl Session {
                     let handle = tokio::runtime::Handle::try_current().ok()?;
                     let display = Arc::downgrade(&shared);
                     Some(handle.spawn(async move {
-                        // Keep networking and QR encoding outside the compositor lock.
+                        // Keep guide route discovery outside the compositor lock.
                         let Some(guide) = guide::Guide::resolve(&url).await else {
                             return;
                         };
@@ -133,10 +145,39 @@ impl Session {
                         }
                     }))
                 });
+                let account_probe = account_server.and_then(|server| {
+                    let handle = tokio::runtime::Handle::try_current().ok()?;
+                    let display = Arc::downgrade(&shared);
+                    Some(handle.spawn(async move {
+                        loop {
+                            // Resolve this session's selected origin again on each refresh.
+                            // Requests and waits never hold the compositor lock.
+                            let status = AccountStatus::refresh(&server).await;
+                            {
+                                let Some(shared) = display.upgrade() else {
+                                    return;
+                                };
+                                if shared.stop.load(Ordering::Acquire)
+                                    || !shared.alive.load(Ordering::Acquire)
+                                {
+                                    return;
+                                }
+                                let mut state =
+                                    shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                                if !state.preview && state.account != status {
+                                    state.account = status;
+                                    state.dirty = true;
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_secs(60)).await;
+                        }
+                    }))
+                });
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
+                    account_probe,
                 }))
             }
             Err(error) => {
@@ -157,6 +198,9 @@ impl Drop for Session {
         if let Some(probe) = self.guide_probe.take() {
             probe.abort();
         }
+        if let Some(probe) = self.account_probe.take() {
+            probe.abort();
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -174,6 +218,18 @@ impl Drop for Session {
 
 pub(crate) fn active() -> bool {
     shared().is_some_and(|shared| shared.alive.load(Ordering::Acquire))
+}
+
+/// A local command requests normal frontend cleanup; it does not signal other processes.
+pub(crate) fn exit_requested() -> bool {
+    shared().is_some_and(|shared| {
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .conversation
+            .exit_requested
+    })
 }
 
 /// Wake the display after asynchronous local discovery without publishing a log.
@@ -470,10 +526,11 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.view == conversation::View::Activity},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":g.pty_rows,"cols":g.left,"visible":if chat {state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.log_rows},"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
-        "focus":if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
@@ -484,10 +541,22 @@ pub(crate) fn snapshot() -> serde_json::Value {
 fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
     let mut state = State::new(rows, cols, ui);
     state.preview = true;
+    state.server_origin = footer::Origin::parse(super::account::DEFAULT_SERVER);
     state.guide = guide::Guide::from_endpoint(super::account::DEFAULT_SERVER);
-    state.log("\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
+    state.account = AccountStatus::Ready {
+        login: "example".into(),
+        username: None,
+        traffic: account_status::Traffic::Remaining(750_000_000),
+    };
+    state.log_message("user", "Improve the client experience\nKeep commands, results and the original code easy to inspect.", "\n[USER] Improve the client experience\n  Keep commands, results and the original code easy to inspect.\n\n".as_bytes());
+    state.log_message(
+        "assistant",
+        "I’ll keep the conversation focused, with command details one step away.",
+        "\n[AGENT] I’ll keep the conversation focused, with command details one step away.\n\n"
+            .as_bytes(),
+    );
     state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"17","exit_code":0}), "[RUN] #17  cargo test --lib\n  cwd  ~/project/ssmcp\n\n[STDOUT] #17\n  test client::ui::custom_colors ... ok\n  test client::audit_view::browse ... ok\n\n[OK] #17  exit=0  1.42s\n  Command completed successfully.\n\n  Source retained in the code audit. Ctrl+O to inspect.\n\n".as_bytes());
-    state.log("[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
+    state.log_event("preview", &serde_json::json!({"type":"exec.exited","job_id":"preview-diff","exit_code":0}), "[DIFF] src/client/terminal/events.rs\n@@ -1 +1 @@\n- let expanded = true;\n+ let expanded = false;\n\n".as_bytes());
     state.log("[READY] A quieter workspace, with the details one key away.\n\n  Scroll directly · /filter cargo · ← agents · /queue\n  Write a requirement below; Enter queues it for the next tool response.\n\n".as_bytes());
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"started","run_id":"example-01","code":"const client = clients.find(c => c.name === \"workstation\");\nconst result = await exec.run(client.id, {\n  command: [\"cargo\", \"test\", \"--lib\"],\n  wait_ms: 1000,\n});\nprint({ exit: result.exit_code, output: result.stdout });"}));
     state.audit.ingest(&serde_json::json!({"type":"ssmcp.code_mode","phase":"finished","run_id":"example-01","success":true,"duration_ms":1420}));
@@ -663,6 +732,7 @@ impl Geometry {
 }
 
 fn request_interrupt() {
+    crate::client::interface::computer::local_input();
     #[cfg(unix)]
     // SAFETY: this targets only the current process, whose normal signal handler
     // owns graceful shutdown and restoration of the original terminal mode.
@@ -696,6 +766,8 @@ enum Key {
     Newline,
     HistoryStart,
     HistoryEnd,
+    CanvasLeft,
+    CanvasRight,
     Mouse {
         button: u16,
         x: u16,
@@ -706,6 +778,10 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[1;3D", Key::CanvasLeft),
+    (b"\x1b[1;3C", Key::CanvasRight),
+    (b"\x1b[57350;3u", Key::CanvasLeft),
+    (b"\x1b[57351;3u", Key::CanvasRight),
     (b"\x1b[1;2A", Key::Questions),
     (b"\x1b[18~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
@@ -806,6 +882,8 @@ impl Keyboard {
             | Key::Newline
             | Key::HistoryStart
             | Key::HistoryEnd
+            | Key::CanvasLeft
+            | Key::CanvasRight
             | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => true,
@@ -1023,7 +1101,9 @@ impl vt100::Callbacks for Replies {
 
 struct State {
     context_label: String,
+    server_origin: Option<footer::Origin>,
     guide: Option<guide::Guide>,
+    account: AccountStatus,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
     geometry: Geometry,
@@ -1056,10 +1136,13 @@ struct State {
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui);
-        Self {
+        let conversation = conversation::Conversation::default();
+        let mut state = Self {
             events: events::EventView::new(),
             context_label: String::new(),
+            server_origin: None,
             guide: None,
+            account: AccountStatus::Unavailable,
             graphics: images::Graphics::default(),
             media: Vec::new(),
             logs: vt100::Parser::new(
@@ -1098,8 +1181,12 @@ impl State {
                 logs: ui.layout == Layout::Logs,
                 ..Keyboard::default()
             },
-            conversation: conversation::Conversation::default(),
+            conversation,
+        };
+        if ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json {
+            state.chat_initial_logs();
         }
+        state
     }
     fn set_context(&mut self, cwd: &str, title: Option<&str>) {
         let project = std::path::Path::new(cwd)
@@ -1190,16 +1277,10 @@ impl State {
         replies
     }
     fn image(&mut self, preview: images::Preview, mime: &str) {
-        let width = usize::from(self.geometry.left.saturating_sub(4).max(1));
-        let height = usize::from(self.geometry.log_rows.saturating_sub(3).max(1));
-        let mut text = format!(
-            "\n[IMAGE] {} × {} · {}\n  Low-resolution thumbnail\n",
+        let text = format!(
+            "\n[IMAGE] {} × {} · {}\n  Image attachment\n\n",
             preview.width, preview.height, mime
         );
-        for row in preview.render(width, height, &self.ui) {
-            let _ = writeln!(text, "  {row}");
-        }
-        text.push('\n');
         self.log(text.as_bytes());
         self.events.attach_image(preview);
     }
@@ -1207,6 +1288,13 @@ impl State {
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
         self.log_raw(bytes);
+    }
+    fn log_message(&mut self, role: &str, text: &str, bytes: &[u8]) {
+        self.log_event(
+            "message",
+            &serde_json::json!({"type":"ssmcp.message", "role":role, "text":text}),
+            bytes,
+        );
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
         self.events.ingest_event(label, value, bytes);
@@ -1402,9 +1490,6 @@ impl State {
         let filtered = self.graphics.input(bytes, now, flush);
         for id in self.graphics.take_rejected_images() {
             self.events.reject_image(id);
-            if let Some(guide) = &self.guide {
-                guide.reject_image(id);
-            }
         }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
@@ -1420,6 +1505,9 @@ impl State {
             self.geometry.log_rows > 0,
             self.ui.layout == Layout::Logs,
         );
+        if !self.preview && (!output.is_empty() || !actions.is_empty()) {
+            crate::client::interface::computer::local_input();
+        }
         let mut layout_changed = false;
         for action in actions {
             if matches!(action, Key::Interrupt) {
@@ -1682,24 +1770,18 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
-                } else if let Some(guide) =
-                    self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18)
-                {
-                    let link = format!(" {} · F1 Help ", guide.url());
-                    if link.width() <= usize::from(g.cols) {
-                        link
-                    } else {
-                        " F1 · full online guide link ".into()
-                    }
                 } else if g.cols < 100 {
                     " Wheel Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F1 Help ".into()
                 } else {
                     " Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help · F4 Theme ".into()
                 };
-                let text = fit(&hint, g.cols);
-                let padded = format!(
-                    "{text}{}",
-                    " ".repeat(usize::from(g.cols).saturating_sub(text.width()))
+                let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
+                let text = footer::render(
+                    &hint,
+                    self.server_origin.as_ref(),
+                    connection,
+                    g.cols,
+                    self.notice.is_some() || self.filter_editing,
                 );
                 rows.push(self.tone(
                     if self.keyboard.logs {
@@ -1707,7 +1789,7 @@ impl State {
                     } else {
                         PanelTone::Muted
                     },
-                    &padded,
+                    &text,
                 ));
                 continue;
             }
@@ -1816,15 +1898,24 @@ impl State {
             mouse_capture: !self.selection,
         }
     }
-    fn guide_rows(&mut self, width: u16, height: u16, row: u16, col: u16) -> Vec<String> {
-        let Some(guide) = self.guide.as_ref() else {
-            return Vec::new();
-        };
-        let (rows, placement) =
-            guide.rows(width, height, &self.ui, self.graphics.cell(), (row, col));
-        if let Some(placement) = placement {
-            self.media.push(placement);
+    fn guide_rows(&mut self, width: u16, height: u16, _row: u16, _col: u16) -> Vec<String> {
+        let mut rows = Vec::new();
+        // Keep eight rows for the configured panels before reserving account space.
+        if height >= 10 && width >= 20 {
+            for text in self.account.rows() {
+                let text = fit(&text, width);
+                let padded = format!(
+                    "{text}{}",
+                    " ".repeat(usize::from(width).saturating_sub(text.width()))
+                );
+                rows.push(self.tone(PanelTone::Muted, &padded));
+            }
         }
+        rows.extend(guide::pet_rows(
+            width,
+            height.saturating_sub(rows.len() as u16),
+            &self.ui,
+        ));
         rows
     }
     fn tone(&self, tone: PanelTone, text: &str) -> String {
@@ -2061,6 +2152,29 @@ impl Frame {
     }
 }
 
+// Keep row diffs and native-image changes in one terminal presentation, even
+// when nonblocking output splits the bytes across several drain attempts.
+fn append_frame(
+    output: &mut Vec<u8>,
+    frame: &Frame,
+    previous: Option<&Frame>,
+    before: &str,
+    after: &str,
+) {
+    let diff = frame.diff(previous);
+    if previous.is_some() && before.is_empty() && diff.is_empty() && after.is_empty() {
+        return;
+    }
+    output.extend_from_slice(SYNC_BEGIN);
+    if previous.is_none() {
+        output.extend_from_slice(ENTER);
+    }
+    output.extend_from_slice(before.as_bytes());
+    output.extend_from_slice(&diff);
+    output.extend_from_slice(after.as_bytes());
+    output.extend_from_slice(SYNC_END);
+}
+
 struct RestoringOutput<'a> {
     shared: &'a Shared,
     output: PhysicalOutput,
@@ -2105,7 +2219,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         wrote: false,
         media: images::Renderer::default(),
     };
-    let mut pending = ENTER.to_vec();
+    let mut pending = Vec::new();
     let mut offset = 0;
     let mut previous = None;
     let mut previous_cell = None;
@@ -2136,9 +2250,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             pending = requests;
             if let Some((frame, media)) = refresh {
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
-                pending.extend_from_slice(before.as_bytes());
-                pending.extend_from_slice(&frame.diff(previous.as_ref()));
-                pending.extend_from_slice(after.as_bytes());
+                append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
                 previous = Some(frame);
             }
             offset = 0;
@@ -2334,9 +2446,42 @@ impl Drop for PhysicalOutput {
 mod tests {
     use super::*;
 
+    #[test]
+    fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
+        for layout in [Layout::Chat, Layout::Split, Layout::Logs] {
+            let mut ui = Ui {
+                color: false,
+                layout,
+                sidebar: true,
+                ..Ui::default()
+            };
+            let mut screen = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            screen.process(&preview_bytes(&ui, 30, 120));
+            let contents = screen.screen().contents();
+            assert!(contents.contains("账号  example"), "{layout:?}: {contents}");
+            assert!(
+                contents.contains("本月剩余  0.75 GB"),
+                "{layout:?}: {contents}"
+            );
+            assert!(contents.contains("( o.o )"), "{layout:?}: {contents}");
+            ui.sidebar = false;
+            let mut hidden = vt100::Parser::new(nonzero(30), nonzero(120), 0);
+            hidden.process(&preview_bytes(&ui, 30, 120));
+            let contents = hidden.screen().contents();
+            if layout == Layout::Chat {
+                assert!(contents.contains("账号  example"), "{contents}");
+                assert!(contents.contains("本月剩余  0.75 GB"), "{contents}");
+            } else {
+                assert!(!contents.contains("账号"));
+            }
+            assert!(!contents.contains("( o.o )"));
+        }
+    }
+
     fn split_ui() -> Ui {
         Ui {
             layout: Layout::Split,
+            sidebar: true,
             sidebar_width: 30,
             ..Ui::default()
         }
@@ -2384,8 +2529,14 @@ mod tests {
         let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
         let rejected_id = rejected.native.as_ref().unwrap().id();
         state.image(rejected, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -2410,7 +2561,7 @@ mod tests {
             physical(&after)
                 .screen()
                 .contents()
-                .contains("Low-resolution thumbnail")
+                .contains("Image attachment")
         );
         let (delete, _) =
             media.update(std::mem::take(&mut state.media), after.cursor, after.hidden);
@@ -2420,6 +2571,9 @@ mod tests {
         assert!(next.native.is_some());
         let next_id = next.native.as_ref().unwrap().id();
         state.image(next, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -2433,6 +2587,7 @@ mod tests {
 
     #[test]
     fn selection_freeze_releases_native_placements_when_cell_measurement_expires() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let ui = Ui {
             layout: Layout::Chat,
             color: true,
@@ -2442,16 +2597,32 @@ mod tests {
             ..Ui::default()
         };
         let mut state = State::new(30, 120, &ui);
-        state.guide = guide::Guide::from_endpoint("https://ssmcp.lmm.best/mcp");
-        state.guide.as_ref().unwrap().prepare_for_test();
         state.graphics = images::Graphics::probe_for_test();
         let now = Instant::now();
         assert!(
             state
                 .graphics
-                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false,)
+                .input(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[6;16;8t", now, false)
                 .is_empty()
         );
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([30, 120, 210, 255]),
+        ));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let block = serde_json::json!({
+            "type":"image", "mimeType":"image/png",
+            "data":STANDARD.encode(bytes.into_inner()),
+        });
+        let image = images::decode(&block, state.graphics.prepare_native()).unwrap();
+        state.image(image, "image/png");
+        state.events.set_scope(events::EventScope::Conversation);
+        state.events.latest();
+        assert!(state.events.open());
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();
@@ -2464,10 +2635,9 @@ mod tests {
         );
         assert!(
             upload.contains("a=p"),
-            "the frame has an actual native QR placement"
+            "the frame has an actual user image placement"
         );
         media.complete();
-        assert!(screen.screen().contents().contains("Scan for the guide"));
         state.dirty = true;
         assert!(
             !state.should_redraw(Some(&before), previous_cell),
@@ -2487,14 +2657,7 @@ mod tests {
         );
         assert!(!output.contains("a=p"));
         screen.process(&after.diff(Some(&before)));
-        assert!(screen.screen().contents().contains("Online guide"));
-        assert!(
-            screen
-                .screen()
-                .contents()
-                .contains("https://ssmcp.lmm.best/guide/")
-        );
-        assert!(!screen.screen().contents().contains("Scan for the guide"));
+        assert!(screen.screen().contents().contains("Image attachment"));
     }
 
     #[test]
@@ -2768,6 +2931,95 @@ mod tests {
         );
     }
     #[test]
+    fn synchronized_frame_includes_initial_clear_rows_and_native_images() {
+        let mut state = State::new(30, 110, &split_ui());
+        state.log(b"complete frame\n");
+        let frame = state.frame(Instant::now());
+        let before = "\x1b_Ga=d,d=I,i=42\x1b\\";
+        let after = "\x1b_Ga=p,i=43,p=1\x1b\\";
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &frame, None, before, after);
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        let initial_end = SYNC_BEGIN.len() + ENTER.len();
+        assert_eq!(&bytes[SYNC_BEGIN.len()..initial_end], ENTER);
+        assert!(bytes[initial_end..].starts_with(before.as_bytes()));
+        assert!(bytes[..bytes.len() - SYNC_END.len()].ends_with(after.as_bytes()));
+        assert_eq!(
+            bytes
+                .windows(SYNC_BEGIN.len())
+                .filter(|part| *part == SYNC_BEGIN)
+                .count(),
+            1
+        );
+        let mut screen = vt100::Parser::new(nonzero(30), nonzero(110), 0);
+        screen.process(&bytes);
+        assert!(screen.screen().contents().contains("complete frame"));
+        let mut unchanged = Vec::new();
+        append_frame(&mut unchanged, &frame, Some(&frame), "", "");
+        assert!(unchanged.is_empty());
+        assert!(LEAVE.starts_with(SYNC_END));
+    }
+
+    #[test]
+    fn synchronized_frame_remains_open_until_a_split_scroll_write_completes() {
+        let mut state = State::new(30, 110, &split_ui());
+        for index in 0..80 {
+            state.log(format!("scroll row {index:03}\n").as_bytes());
+        }
+        let first = state.frame(Instant::now());
+        state.keyboard(b"\x1b[5~", Instant::now(), false);
+        let next = state.frame(Instant::now());
+        let mut bytes = Vec::new();
+        append_frame(&mut bytes, &next, Some(&first), "", "");
+        assert!(bytes.starts_with(SYNC_BEGIN));
+        assert!(bytes.ends_with(SYNC_END));
+        assert!(!bytes.windows(ENTER.len()).any(|part| part == ENTER));
+
+        struct Backpressure {
+            bytes: Vec<u8>,
+            limit: usize,
+        }
+        impl Write for Backpressure {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let count = bytes.len().min(self.limit);
+                if count == 0 {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                self.bytes.extend_from_slice(&bytes[..count]);
+                self.limit -= count;
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = Backpressure {
+            bytes: Vec::new(),
+            limit: bytes.len() / 2,
+        };
+        let mut offset = 0;
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert!(offset > SYNC_BEGIN.len() && offset < bytes.len() - SYNC_END.len());
+        assert!(
+            !output
+                .bytes
+                .windows(SYNC_END.len())
+                .any(|part| part == SYNC_END)
+        );
+        output.limit = bytes.len();
+        drain(&mut output, &bytes, &mut offset).unwrap();
+        assert_eq!(offset, bytes.len());
+        assert_eq!(output.bytes, bytes);
+        let mut screen = physical(&first);
+        screen.process(&output.bytes);
+        assert_eq!(
+            screen.screen().contents(),
+            physical(&next).screen().contents()
+        );
+    }
+
+    #[test]
     fn nonblocking_output_keeps_partial_bytes_for_the_next_frame() {
         struct Partial {
             bytes: Vec<u8>,
@@ -3029,6 +3281,7 @@ mod tests {
             shared: shared.clone(),
             thread: Some(thread),
             guide_probe: None,
+            account_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];
@@ -3240,6 +3493,32 @@ mod tests {
             assert!(output.is_empty());
             assert!(matches!(actions.as_slice(), [Key::Interrupt]));
             assert!(!keyboard.pasting);
+        }
+    }
+
+    #[test]
+    fn connection_footer_uses_the_same_last_row_in_every_layout() {
+        for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
+            let ui = Ui {
+                layout,
+                color: false,
+                sidebar: false,
+                ..Ui::default()
+            };
+            let mut state = preview_state(12, 100, &ui);
+            let before = state.geometry;
+            state.notice = Some("/exit must be used without arguments".into());
+            let frame = state.frame(Instant::now());
+            assert_eq!(state.geometry, before);
+            assert_eq!(frame.rows.len(), 12);
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
+            assert!(
+                bottom.contains("https://ssmcp.lmm.best"),
+                "{layout:?}: {bottom}"
+            );
+            assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
+            assert_eq!(bottom.width(), 100, "{layout:?}: {bottom:?}");
         }
     }
 }

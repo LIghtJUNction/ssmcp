@@ -1,0 +1,77 @@
+{
+  "status": "passed",
+  "binaries": {
+    "ssmcp": "473022b715a1bf207a4ac18c1c040f9a069408bd9384f43194c7c40276a4b850",
+    "ssmcpd": "13509dc9ec94e52bff0e6fcbc07f388cb2d1e38fa6c171a4577139ffef52cb12",
+    "ztty": "5e1f6d111b7840ccbb2526bc253d7b75ab0a3f1d68f20685a8e74988f384607b"
+  },
+  "routes": [
+    {
+      "path": "/guide/",
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "title": "Guide · ssmcp"
+    },
+    {
+      "path": "/guide/en",
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "title": "Guide · ssmcp"
+    },
+    {
+      "path": "/guide/zh",
+      "status": 200,
+      "content_type": "text/html; charset=utf-8",
+      "title": "使用指南 · ssmcp"
+    },
+    {
+      "path": "/guide/style.css",
+      "status": 200,
+      "content_type": "text/css; charset=utf-8",
+      "title": null
+    }
+  ],
+  "qr_url": "https://ssmcp.example/guide/",
+  "cell_pixels": [
+    10,
+    25
+  ],
+  "checks": [
+    "effective sshd config permits public keys only",
+    "unauthenticated candidate GET /guide/ returns 200",
+    "/guide/ returns the correct localized guide",
+    "/guide/ renders real gateway examples",
+    "unauthenticated candidate GET /guide/en returns 200",
+    "/guide/en returns the correct localized guide",
+    "/guide/en renders real gateway examples",
+    "unauthenticated candidate GET /guide/zh returns 200",
+    "/guide/zh returns the correct localized guide",
+    "/guide/zh renders real gateway examples",
+    "unauthenticated candidate GET /guide/style.css returns 200",
+    "shared guide CSS is served as CSS",
+    "english-desktop renders from the candidate HTTP route",
+    "chinese-mobile renders from the candidate HTTP route",
+    "SSH returns an OAuth login code, not a reusable bearer secret",
+    "login code contains 256 random bits",
+    "login code reports its remaining thirty-minute lifetime",
+    "one-time login code cannot authenticate an MCP request",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact user endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "OAuth presents the login page",
+    "login page has one visible code field and a CSRF-bound transaction",
+    "login cookie is Secure, HttpOnly and SameSite Lax",
+    "login page permits same-origin forms without cross-origin referrer leakage",
+    "one-time login code authorizes the OAuth client",
+    "OAuth callback preserves state and identifies its issuer",
+    "OAuth code exchange returns an access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "actual 120x30 sidebar QR decodes exactly to the credential-free gateway guide URL",
+    "a small terminal switches away from a clipped QR",
+    "graphics replies and resizing leave the guide session draft empty"
+  ],
+  "metrics": {},
+  "duration_seconds": 5.961
+}

@@ -29,6 +29,7 @@ import zlib
 
 from e2e_dashboard import Frontend, sha256, text
 from e2e_input_history import InputHistory, png_fixture
+from e2e_client_ui import empty_composer_ready
 
 
 PASTE_READER = r"""#!/usr/bin/python3
@@ -191,11 +192,11 @@ class GraphicsFrontend(Frontend):
                 raise AssertionError("native PNG chunk checksum mismatch")
             if kind == b"IHDR":
                 width, height, depth, color, compression, filtering, interlace = struct.unpack(">IIBBBBB", data)
-                if (depth, color, compression, filtering, interlace) != (8, 6, 0, 0, 0):
-                    raise AssertionError("native PNG does not use bounded noninterlaced RGBA8")
+                if (depth, compression, filtering, interlace) != (8, 0, 0, 0) or color not in (2, 6):
+                    raise AssertionError("native PNG does not use bounded noninterlaced RGB8/RGBA8")
                 if not (0 < width <= 1024 and 0 < height <= 1024):
-                    raise AssertionError("native PNG exceeds the renderer dimension limit")
-                dimensions = (width, height)
+                    raise AssertionError("native PNG exceeds the fixture dimension limit")
+                dimensions = (width, height, 3 if color == 2 else 4)
             elif kind == b"IDAT":
                 compressed.extend(data)
             offset += length + 12
@@ -203,11 +204,11 @@ class GraphicsFrontend(Frontend):
                 break
         if dimensions is None or offset != len(png):
             raise AssertionError("native PNG has incomplete framing")
-        width, height = dimensions
-        stride = width * 4
+        width, height, channels = dimensions
+        stride = width * channels
         raw = zlib.decompress(compressed)
         if len(raw) != (stride + 1) * height:
-            raise AssertionError("native RGBA rows have the wrong length")
+            raise AssertionError("native RGB/RGBA rows have the wrong length")
         previous, pixels = bytes(stride), bytearray()
         for y in range(height):
             start = y * (stride + 1)
@@ -215,8 +216,9 @@ class GraphicsFrontend(Frontend):
             if mode not in range(5):
                 raise AssertionError("native PNG uses an invalid row filter")
             for i in range(stride):
-                left = row[i - 4] if i >= 4 else 0
-                above, upper_left = previous[i], previous[i - 4] if i >= 4 else 0
+                left = row[i - channels] if i >= channels else 0
+                above = previous[i]
+                upper_left = previous[i - channels] if i >= channels else 0
                 if mode == 1:
                     prediction = left
                 elif mode == 2:
@@ -232,6 +234,8 @@ class GraphicsFrontend(Frontend):
                 row[i] = (row[i] + prediction) & 255
             pixels.extend(row)
             previous = row
+        if channels == 3:
+            pixels = b"".join(pixels[i:i + 3] + b"\xff" for i in range(0, len(pixels), 3))
         return width, height, pixels
 
 
@@ -506,7 +510,7 @@ class FilePaste(InputHistory):
         self.last_frontend = front
         self.client_id = front.client_id
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the independent native-graphics composer")
         self.check(front.probes == 1 and front.cell_queries >= 1,
                    "native graphics starts only after the real PTY capability and cell-size queries")
@@ -599,19 +603,60 @@ class FilePaste(InputHistory):
 
         uploads, deletions = len(front.native_uploads), len(front.native_deletions)
         front.send(f"\x1b_Gi={image_id};ENOSPC:owned fixture failure\x1b\\")
-        front.until(lambda shot: len(front.native_deletions) > deletions
-                    and any("▀" in row for row in shot["rows"]),
-                    "a native graphics error selects readable cell fallback")
+        front.until(lambda shot: image_id in front.native_deletions[deletions:]
+                    and "Image attachment" in text(shot)
+                    and "Inline preview unavailable" in text(shot),
+                    "a rejected image loses its exact placement and shows an attachment card")
+        self.check(image_id in front.native_deletions[deletions:],
+                   "terminal rejection deletes the owned image ID instead of leaving stale graphics")
+        self.save_shot("native-graphics-rejected", front, cells=True)
+
+        # Redraw the retained event without decoding it again: this image ID
+        # must remain rejected, while capability stays usable for later images.
+        rejected_placements = len(front.native_placements)
+        self.focus_input(front)
+        front.send("/help\r")
+        front.until(lambda _shot: self.ui("/display/help"), "help after rejecting one image")
+        front.send(b"\x1b")
+        front.until(lambda shot: not self.ui("/display/help")
+                    and "Image attachment" in text(shot)
+                    and "Inline preview unavailable" in text(shot),
+                    "redrawing the same rejected event retains its attachment card")
+        self.check(all(item["id"] != image_id for item in front.native_uploads[uploads:])
+                   and all(item["i"] != image_id for item in front.native_placements[rejected_placements:]),
+                   "the rejected image ID is neither uploaded nor placed again on redraw")
+
+        # Reading the same original PNG creates a new attachment ID. Rejection
+        # is scoped to the previous ID, not the file contents or client session.
+        subsequent_uploads = len(front.native_uploads)
+        subsequent_placements = len(front.native_placements)
         self.read_native_image(path, source)
-        front.until(lambda shot: any("▀" in row for row in shot["rows"]),
-                    "subsequent image output remains visible after native failure")
-        self.check(len(front.native_uploads) == uploads,
-                   "native errors stop subsequent PNG encoding/upload while preserving image fallback")
+        front.until(lambda _shot: len(front.native_uploads) > subsequent_uploads
+                    and front.native_uploads[-1]["id"] != image_id
+                    and any(item["i"] == front.native_uploads[-1]["id"]
+                            for item in front.native_placements[subsequent_placements:]),
+                    "a later image has a fresh native upload and placement in the same session")
+        recovered = front.native_uploads[-1]
+        self.check(recovered["width"] == width and recovered["height"] == height
+                   and recovered["rgba_sha256"] == hashlib.sha256(rgba).hexdigest()
+                   and recovered["chunks"] > 1,
+                   "native recovery preserves every original pixel and the full chunked PNG transfer")
+        self.check(all(item["row"] >= 1 and item["row"] + item["rows"] - 1 <= 18
+                       and item["col"] >= 1 and item["col"] + item["columns"] - 1 <= 48
+                       for item in front.native_placements[subsequent_placements:]
+                       if item["i"] == recovered["id"]),
+                   "the recovered native image stays inside the narrow terminal")
+        self.check(all(item["id"] != image_id for item in front.native_uploads[uploads:])
+                   and all(item["i"] != image_id for item in front.native_placements[rejected_placements:]),
+                   "restoring native graphics for a new image never retries the rejected ID")
+        self.save_shot("native-graphics-recovered", front, cells=True)
         self.metrics["native_graphics"] = {
             "probes": front.probes, "cell_queries": front.cell_queries,
             "uploads": len(front.native_uploads), "placements": len(front.native_placements),
             "scoped_deletions": len(front.native_deletions),
             "rgba_sha256": upload["rgba_sha256"],
+            "rejected_image_id": image_id, "recovered_image_id": recovered["id"],
+            "native_after_rejection": True,
         }
         final, restored = front.disconnect()
         self.check(not final["alternate_screen"] and restored == front.original_termios,

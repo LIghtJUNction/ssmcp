@@ -57,11 +57,11 @@ fn timestamp(seconds: u64) -> String {
 
 fn heading(snapshot: &DashboardSnapshot, title: &str, description: &str, path: &str) -> String {
     format!(
-        r#"<header class="dashboard-head"><div><p class="eyebrow">CONTROL ROOM / {}</p><h1>{title}</h1><p>{description}</p></div><div class="snapshot-meta"><span>更新于 {}</span><a class="text-link" href="{path}">刷新快照 <span class="arrow" aria-hidden="true">↻</span></a></div></header>"#,
+        r#"<header class="dashboard-head"><div><p class="eyebrow">{}</p><h1>{title}</h1><p>{description}</p></div><div class="snapshot-meta"><span>更新于 {}</span><a class="text-link" href="{path}">刷新快照 <span class="arrow" aria-hidden="true">↻</span></a></div></header>"#,
         if snapshot.scope == Scope::All {
-            "ADMIN"
+            "管理员工作台"
         } else {
-            "ACCOUNT"
+            "账户管理"
         },
         timestamp(snapshot.generated_at)
     )
@@ -348,10 +348,14 @@ fn user_row(
         .rate_limit_bps
         .map(mib_per_second)
         .unwrap_or_default();
-    let default_rate = mib_per_second(default_rate_limit_bps);
+    let default_rate = mib_per_second(if account.has_recharged {
+        default_rate_limit_bps.max(crate::user_policy::RECHARGED_RATE_LIMIT_BPS)
+    } else {
+        default_rate_limit_bps
+    });
     html.push_str(&format!(
         r#"</td><td data-label="状态"><span class="account-state {state_class}">{state}</span></td><td class="user-rate-cell" data-label="限速 · MiB/s"><form class="user-rate-form" method="post" action="/account/admin/users"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="subject" value="{subject}"><input type="hidden" name="action" value="rate"><label class="visually-hidden" for="rate-{subject}">{username} 的限速，MiB/s</label><div class="rate-input"><input id="rate-{subject}" type="number" name="rate_mib" min="0.00000095367431640625" max="1024" step="any" inputmode="decimal" value="{value}" placeholder="默认 {default_rate}" aria-describedby="rate-help" autocomplete="off"><button class="secondary" type="submit">保存</button></div><small>{}</small></form></td><td class="user-actions" data-label="访问管理">"#,
-        if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else { "使用服务器默认" },
+        if account.rate_limit_bps.is_some() { "自定义 · 留空恢复默认" } else if account.has_recharged { "已充值 · 使用充值默认限速" } else { "使用服务器默认" },
     ));
     html.push_str(&user_access_control(
         account,
@@ -463,6 +467,7 @@ mod tests {
             key_count: 0,
             banned: false,
             rate_limit_bps: Some(524_288),
+            has_recharged: false,
         }
     }
 

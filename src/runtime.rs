@@ -1,6 +1,7 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
 mod capabilities;
 pub mod hooks;
+mod plugins;
 use crate::catalog::{self, ToolDescriptor};
 use crate::rsync::Rsync;
 use crate::{
@@ -276,6 +277,7 @@ pub struct Runtime {
     omarchy: Omarchy,
     context: Context,
     rsync: Rsync,
+    plugins: plugins::Plugins,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
@@ -308,6 +310,7 @@ impl Runtime {
         let browser = Browser::new(root.clone())?;
         let computer = Computer::new(root.clone())?;
         let omarchy = Omarchy::new(root.clone())?;
+        let plugins = plugins::Plugins::new(root.clone(), registry.clone());
         let rsync = Rsync::new(root)?;
         registry.replace(Provider::Client, capabilities::tools())?;
         registry.replace(Provider::Workspace, Workspace::tools())?;
@@ -316,6 +319,7 @@ impl Runtime {
         registry.replace(Provider::Omarchy, Omarchy::tools())?;
         registry.replace(Provider::Context, Context::tools())?;
         registry.replace(Provider::Rsync, Rsync::tools())?;
+        registry.replace(Provider::Plugins, plugins::Plugins::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
         if sessions.is_some() {
@@ -340,6 +344,7 @@ impl Runtime {
             omarchy,
             context,
             rsync,
+            plugins,
             code_audit: CodeAudit::new(audit.clone()),
             audit,
             output,
@@ -351,6 +356,12 @@ impl Runtime {
         crate::client::interface::harness::bind(&runtime);
         crate::client::completion::bind(&runtime);
         Ok(runtime)
+    }
+
+    /// Production startup opts in to exact installed skill sources and builtins.
+    /// Runtime constructors themselves never inspect the caller's home directory.
+    pub fn enable_default_skill_sources(&self) -> Result<(), String> {
+        self.context.enable_default_skill_sources()
     }
     /// Install an optional in-process call hook. The default is None.
     /// Each call keeps one snapshot; replacement affects subsequent calls.
@@ -364,6 +375,17 @@ impl Runtime {
     pub(crate) fn local_registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
+    /// Local frontend methods, deliberately absent from the remote tool registry.
+    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
+        self.computer.handoff_host_input_local(seconds)
+    }
+    pub(crate) fn revoke_host_input(&self) -> bool {
+        self.computer.revoke_host_input()
+    }
+    pub(crate) fn host_input_status(&self) -> Value {
+        self.computer.host_input_status()
+    }
+
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
@@ -596,6 +618,7 @@ impl Runtime {
                 None => Err("session management was not granted with --session-control".into()),
             },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+            Provider::Plugins => self.plugins.perform(&tool, arguments).await,
             _ => {
                 let dispatch = self.backend.dispatch(&tool, arguments);
                 if let Some(call) = &harness_call {
@@ -710,13 +733,14 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let (_, _, computer, _, _, _) = tokio::join!(
+        let (_, _, computer, _, _, _, plugins) = tokio::join!(
             self.workspace.shutdown(),
             self.browser.shutdown(),
             self.computer.shutdown(),
             self.omarchy.shutdown(),
             self.rsync.shutdown(),
-            self.backend.shutdown()
+            self.backend.shutdown(),
+            self.plugins.shutdown()
         );
         if let Err(error) = computer {
             // EventLog redacts, renders and retains the failure before closing.
@@ -725,6 +749,12 @@ impl Runtime {
                 "provider":"computer",
                 "cleanup_complete":false,
                 "error":error
+            }));
+        }
+        if let Err(error) = plugins {
+            self.audit.push(json!({
+                "type":"ssmcp.control.cleanup_failed", "provider":"plugins",
+                "cleanup_complete":false, "error":error
             }));
         }
         self.audit.close();

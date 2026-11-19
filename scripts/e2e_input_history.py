@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise references, image preview, copy/help, and persisted history in owned PTYs.
+"""Exercise references, image attachment cards, copy/help, and persisted history in owned PTYs.
 
 Build ssmcp, ssmcpd, and examples/vt_snapshot first, then run:
   python3 scripts/e2e_input_history.py --bin-dir target/debug --out /tmp/input-history
@@ -26,6 +26,7 @@ import time
 import zlib
 
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
+from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
@@ -71,7 +72,7 @@ class InputHistory(Composer):
             (directory / name).mkdir(mode=0o700)
 
         # Frontend deliberately forces NO_COLOR for its other suites. A private
-        # launcher changes that one setting for this real RGB-image scenario.
+        # launcher keeps colors enabled; graphics capability replies remain unanswered.
         launchers = directory / "launchers"
         launchers.mkdir(mode=0o700)
         (launchers / "ssmcpd").symlink_to(self.binary_dir / "ssmcpd")
@@ -203,7 +204,7 @@ class InputHistory(Composer):
     def start_front(self, label):
         front = self.frontend(label, self.config(label))
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the isolated live composer")
         return front
 
@@ -273,15 +274,17 @@ class InputHistory(Composer):
                    and metadata["sha256"] == hashlib.sha256(image_bytes).hexdigest(),
                    "the image metadata describes the same bytes returned to the model")
 
-        def red_over_blue(shot):
+        def attachment_card(shot):
+            rows = shot["rows"]
             return any(
-                cell["text"] == "▀" and cell["foreground"] == [255, 0, 0]
-                and cell["background"] == [0, 0, 255]
-                for row in shot.get("cells", []) for cell in row
+                "2 × 2 · Image attachment" in row
+                and "Inline preview unavailable" in rows[index + 1]
+                for index, row in enumerate(rows[:-1])
             )
 
-        front.until(red_over_blue, "red/blue image pixels in real terminal half-block cells", cells=True)
-        self.check(True, "the TUI visibly previews the PNG with true-color half-block pixels")
+        image_shot = front.until(attachment_card, "the PNG attachment card in the real terminal", cells=True)
+        self.check("▀" not in text(image_shot),
+                   "the TUI shows original PNG dimensions and an attachment card without half-block pixels")
         self.save_shot("image", front, cells=True)
         return source
 
@@ -539,10 +542,11 @@ class InputHistory(Composer):
         saved = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
         selected = next(index for index, item in enumerate(saved) if item["id"] == session_id)
         resumed.send("/resume\r")
-        resumed.until(lambda shot: "ssmcp  /  history" in text(shot) and session_id in text(shot),
+        resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot),
                       "the persisted conversation in the /resume picker")
         resumed.send(HOME + DOWN * selected + ENTER)
-        resumed.until(lambda shot: "HISTORY_REPLY_FIXTURE" in text(shot),
+        resumed.until(lambda shot: column(shot) == ("history", 6, 8)
+                      and "HISTORY_REPLY_FIXTURE" in text(shot) and not shot["hide_cursor"],
                       "the saved agent reply restored in the new process")
         self.save_shot("resumed", resumed)
         self.check(path.read_bytes() == raw, "viewing a saved conversation does not duplicate its JSONL records")
@@ -580,8 +584,17 @@ class InputHistory(Composer):
         self.save_shot("shell-command", front)
         front.send("/tasks")
         front.send(ENTER)
-        front.until(lambda shot: "Local tasks" in text(shot) and "exit 7" in text(shot),
-                    "the local task list includes the completed shell job")
+        tasks = front.until(lambda shot: column(shot) == ("tasks", 8, 8)
+                            and "Tasks ·" in text(shot) and "exit 7" in text(shot)
+                            and "SHELL_PREFIX" in text(shot),
+                            "the independent Tasks column includes the completed shell job")
+        task_state = self.ui("/display/conversation")["tasks"]
+        matching = [job for job in task_state["jobs"]
+                    if job.get("exit_code") == 7
+                    and "printf '%s_%s' SHELL_PREFIX OK; exit 7" in " ".join(job.get("command", []))]
+        self.check(task_state["source"] == "native" and len(matching) == 1
+                   and matching[0]["job_id"] in text(tasks),
+                   "Tasks renders the exact real job identity, command and exit status")
         self.check(len(self.queue()["queue"]) == before,
                    "/tasks remains a local command instead of an agent requirement")
         self.save_shot("tasks", front)
@@ -607,9 +620,10 @@ class InputHistory(Composer):
         roster = self.queue()["agents"]
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + RIGHT)
+        front.send(HOME + DOWN * selected + ENTER)
         front.until(lambda shot: "To · Input fixture member" in text(shot)
-                    and "ssmcp  /  activity" in text(shot), "the exact registered fixture recipient")
+                    and column(shot) == ("conversation", 2, 8),
+                    "Enter selecting the exact registered fixture recipient")
         first_source = self.reference_scenarios(front, member)
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)
@@ -643,6 +657,7 @@ def main():
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",
+            "e2e_client_ui.py",
         )},
     }
     with tempfile.TemporaryDirectory(prefix="ssmcp-input-history-e2e-") as directory:

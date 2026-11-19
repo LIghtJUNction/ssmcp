@@ -156,11 +156,20 @@ mod tests {
         broker
             .portal
             .storage(move |store| {
+                // Seed ordinary allowance usage even when the broker exposes an
+                // unlimited quota for a server-configured administrator.
+                let available = store
+                    .traffic_quota(&subject, &period, DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES, false)?
+                    .remaining_bytes
+                    .expect("ordinary account allowance is finite");
+                let reserve = available
+                    .checked_sub(remaining)
+                    .expect("target allowance cannot increase");
                 store.reserve_traffic(
                     &subject,
                     &period,
                     DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES,
-                    FREE_MONTHLY_TRAFFIC_BYTES - remaining,
+                    reserve,
                     false,
                 )
             })
@@ -358,14 +367,126 @@ mod tests {
         let session = broker.online_session("gh-123").await.unwrap();
         let call =
             tokio::spawn(async move { session.call(Operation::ListTools { cursor: None }).await });
-        assert!(matches!(wire::read_frame(&mut peer).await.unwrap(),
-            Some(Frame::Reject { message }) if message.contains("traffic_quota_exceeded")));
-        assert!(call.await.unwrap().is_err());
+        let message = match wire::read_frame(&mut peer).await.unwrap() {
+            Some(Frame::Reject { message }) => message,
+            _ => panic!("quota rejection must reach the client"),
+        };
+        assert!(message.starts_with("traffic_quota_exceeded:"));
+        assert!(message.contains("https://ssmcp.test/account/traffic"));
+        assert!(message.contains("未执行"));
+        assert_eq!(call.await.unwrap().unwrap_err(), message);
         assert!(server.await.unwrap().is_err());
         assert_eq!(
             broker.traffic_quota("123").await.unwrap().remaining_bytes,
             Some(0)
         );
+    }
+
+    #[tokio::test]
+    async fn quota_legacy_retains_pending_queued_and_disconnected_call_causes() {
+        let (_directory, broker) = fixture().await;
+        let (stream, mut peer) = tokio::io::duplex(8192);
+        let server = tokio::spawn(broker.clone().attach_stream(stream, "gh-123".into(), None));
+        wire::write_frame(&mut peer, &hello()).await.unwrap();
+        let mut peer = BufReader::new(peer);
+        assert!(matches!(
+            wire::read_frame(&mut peer).await.unwrap(),
+            Some(Frame::Ready { .. })
+        ));
+        let session = broker.online_session("gh-123").await.unwrap();
+        let first_session = session.clone();
+        let first = tokio::spawn(async move {
+            first_session
+                .call(Operation::ListTools { cursor: None })
+                .await
+        });
+        assert!(matches!(
+            wire::read_frame(&mut peer).await.unwrap(),
+            Some(Frame::Call { .. })
+        ));
+        use_until(&broker, "123", 0).await;
+
+        // Both are admitted without yielding. The first frame is rejected by
+        // the transport, while the second remains in the broker's request queue.
+        let (second_reply, second) = tokio::sync::oneshot::channel();
+        let (third_reply, third) = tokio::sync::oneshot::channel();
+        for reply in [second_reply, third_reply] {
+            assert!(
+                session
+                    .sender
+                    .try_send(super::super::Call {
+                        operation: Operation::ListTools { cursor: None },
+                        controller: None,
+                        code_context: None,
+                        reply,
+                    })
+                    .is_ok()
+            );
+        }
+        let terminal = match wire::read_frame(&mut peer).await.unwrap() {
+            Some(Frame::Reject { message }) => message,
+            _ => panic!("expected quota rejection"),
+        };
+        let pending = first.await.unwrap().unwrap_err();
+        let blocked = second.await.unwrap().unwrap_err();
+        let queued = third.await.unwrap().unwrap_err();
+        for error in [&terminal, &pending, &blocked, &queued] {
+            assert!(error.starts_with("traffic_quota_exceeded:"));
+            assert!(error.contains("https://ssmcp.test/account/traffic"));
+        }
+        assert!(pending.contains("可能已经执行"));
+        assert!(!pending.contains("未执行"));
+        assert!(blocked.contains("未执行"));
+        assert_eq!(blocked, terminal);
+        assert_eq!(queued, blocked);
+        assert!(server.await.unwrap().is_err());
+        let after = session
+            .call(Operation::ListTools { cursor: None })
+            .await
+            .unwrap_err();
+        assert_eq!(after, queued);
+    }
+
+    #[tokio::test]
+    async fn quota_legacy_lost_reply_keeps_uncertain_outcome_and_recharge_link() {
+        let (_directory, broker) = fixture().await;
+        let (stream, mut peer) = tokio::io::duplex(8192);
+        let server = tokio::spawn(broker.clone().attach_stream(stream, "gh-123".into(), None));
+        wire::write_frame(&mut peer, &hello()).await.unwrap();
+        let mut peer = BufReader::new(peer);
+        assert!(matches!(
+            wire::read_frame(&mut peer).await.unwrap(),
+            Some(Frame::Ready { .. })
+        ));
+        let session = broker.online_session("gh-123").await.unwrap();
+        let call =
+            tokio::spawn(async move { session.call(Operation::ListTools { cursor: None }).await });
+        let id = match wire::read_frame(&mut peer).await.unwrap() {
+            Some(Frame::Call { id, .. }) => id,
+            _ => panic!("expected dispatched call"),
+        };
+        use_until(&broker, "123", 0).await;
+        wire::write_frame(
+            peer.get_mut(),
+            &Frame::Reply {
+                id,
+                result: Ok(serde_json::json!({"marker": "reply must not reach the caller"})),
+            },
+        )
+        .await
+        .unwrap();
+        let terminal = match wire::read_frame(&mut peer).await.unwrap() {
+            Some(Frame::Reject { message }) => message,
+            _ => panic!("expected quota rejection"),
+        };
+        let error = call.await.unwrap().unwrap_err();
+        assert_eq!(error, terminal);
+        assert!(error.starts_with("traffic_quota_exceeded:"));
+        assert!(error.contains("https://ssmcp.test/account/traffic"));
+        assert!(error.contains("客户端结果未能送达"));
+        assert!(error.contains("可能已经执行"));
+        assert!(!error.contains("未执行"));
+        assert!(server.await.unwrap().is_err());
     }
 
     #[test]
