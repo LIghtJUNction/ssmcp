@@ -1,14 +1,15 @@
 # 独立核心库与子模块
 
-ssmcp 把终端绘制、原生扩展接口和动态库加载拆成三个独立 Rust 库。编译器将这些库连进客户端；它们本身不会启动模型、读取其他 Agent 的账号，或扫描机器上安装的 harness。外部 Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 仍遵循[显式加载](optional-harnesses.md)。
+ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面控制拆成四个独立 Rust 库。编译器将这些库连进客户端；它们本身不会启动模型、读取其他 Agent 的账号，或扫描机器上安装的 harness。外部 Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 仍遵循[显式加载](optional-harnesses.md)。
 
 | 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|
 | `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
-| `crates/zharness` | `zharness = 0.5.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
-| `crates/zplugin` | `zplugin = 0.3.0` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
+| `crates/zharness` | `zharness = 0.5.1` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
+| `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
+| `crates/zuse` | `zuse-computer = 0.2.0`，Rust 库名 `zuse` | Linux 管理桌面工作进程与平台支持的原生桌面操作 | [zuse](https://github.com/LIghtJUNction/zuse) |
 
-三个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
+四个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
 
 ## 获取与构建
 
@@ -28,13 +29,13 @@ GitHub 自动生成的源码压缩包不展开 Git 子模块。需要从源码�
 
 ## 独立修改与验收
 
-更新任一库时，先在相应独立仓库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。
+更新任一库时，先在相应独立仓库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。 底层库负责人同时负责把升级传播到所有受影响的直接和间接消费者：协调已有维护者，更新锁文件，验证实际调用，提交推送，并记录接手者与尚未完成的验收。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。
 
-ztuio、zharness、zplugin 均从父 workspace 显式排除，应用通过路径依赖使用固定源码。ztuio 虽然是单包仓库，也明确排除，以免 Cargo 自动把路径依赖收入父 workspace。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。
+ztuio、zharness、zplugin、zuse 均从父 workspace 显式排除，应用通过路径依赖使用固定源码。ztuio 虽然是单包仓库，也明确排除，以免 Cargo 自动把路径依赖收入父 workspace。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。 zplugin 0.3.1 与 zuse-computer 0.2.0 都精确依赖已发布的 `zsys = 0.1.1`，通过它复用操作系统动态库加载；zplugin-macros 与 zplugin 同为 0.3.1。升级后必须核对实际解析图只有一套这些共享包。
 
 父项目的 `cargo test --workspace` 不会执行已排除子库的独立契约测试。ztuio 使用 `cargo test --manifest-path crates/ztuio/Cargo.toml --locked` 验证；正式发布复用的 CI 配置也保留此显式检查。更新子库时，应在该子库执行自己的测试和发布检查，再对 ssmcp 做集成验证。发布到 crates.io 时使用精确 registry 版本；不把子库的正式依赖改成只在相邻目录才成立的路径。
 
-版本按实际变更分别递增。ssmcp 的版本递增不自动递增三个库。首次发布或升级公共依赖时，先发布对应库并核对包摘要，再发布应用。zplugin 的宏包先于 zplugin，新的 zharness 版本应依赖已发布的精确 zplugin 版本；ztuio 同样从自己的仓库发布，SSMCP 工作流只发布应用包。
+版本按实际变更分别递增。ssmcp 的版本递增不自动递增四个库。首次发布或升级公共依赖时，先发布对应库并核对包摘要，再发布应用。zplugin 的宏包先于 zplugin，新的 zharness 版本应依赖已发布的精确 zplugin 版本；ztuio 同样从自己的仓库发布，SSMCP 工作流只发布应用包。
 
 ## 执行边界
 
