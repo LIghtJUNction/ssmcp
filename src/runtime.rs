@@ -1,20 +1,18 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
 mod capabilities;
 pub mod hooks;
+pub(crate) mod native_host;
+pub(crate) mod native_plugins;
 mod plugins;
 use crate::catalog::{self, ToolDescriptor};
-use crate::rsync::Rsync;
 use crate::{
     backend::{self, Backend, events::EventLog},
-    browser::Browser,
-    computer::Computer,
-    context::Context,
-    omarchy::Omarchy,
     output::OutputStore,
     registry::{Provider, RegisteredTool, Registry},
     wire::Operation,
-    workspace::Workspace,
 };
+use native_host::{ConstructorContext, Definition, NativeHost, NativePlugin};
+use native_plugins::{desktop::Desktop, files::Files};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -271,12 +269,9 @@ impl Catalog {
 pub struct Runtime {
     backend: Arc<Backend>,
     registry: Arc<Registry>,
-    workspace: Workspace,
-    browser: Browser,
-    computer: Computer,
-    omarchy: Omarchy,
-    context: Context,
-    rsync: Rsync,
+    native: NativeHost,
+    files: Arc<Files>,
+    desktop: Arc<Desktop>,
     plugins: plugins::Plugins,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
@@ -305,20 +300,27 @@ impl Runtime {
     ) -> Result<Arc<Self>, String> {
         let output = backend.output();
         let registry = backend.registry.clone();
-        let workspace = Workspace::with_output(root.clone(), output.clone())?;
-        let context = Context::with_output(root.clone(), context_roots, output.clone())?;
-        let browser = Browser::new(root.clone())?;
-        let computer = Computer::new(root.clone())?;
-        let omarchy = Omarchy::new(root.clone())?;
-        let plugins = plugins::Plugins::new(root.clone(), registry.clone());
-        let rsync = Rsync::new(root)?;
+        let constructor = ConstructorContext {
+            root: root.clone(),
+            context_roots,
+            registry: registry.clone(),
+            output: output.clone(),
+        };
+        let files = Files::new(&constructor)?;
+        let desktop = Desktop::new(&constructor)?;
+        let native = NativeHost::new(
+            registry.clone(),
+            vec![
+                Definition::new(backend.clone()),
+                Definition::new(files.clone()),
+                Definition::new(desktop.clone()),
+            ],
+        )?;
+        let plugins = plugins::Plugins::new(root, registry.clone());
         registry.replace(Provider::Client, capabilities::tools())?;
-        registry.replace(Provider::Workspace, Workspace::tools())?;
-        registry.replace(Provider::Browser, Browser::tools())?;
-        registry.replace(Provider::Computer, Computer::tools())?;
-        registry.replace(Provider::Omarchy, Omarchy::tools())?;
-        registry.replace(Provider::Context, Context::tools())?;
-        registry.replace(Provider::Rsync, Rsync::tools())?;
+        for (provider, tools) in native.catalogs()? {
+            registry.replace(provider, tools)?;
+        }
         registry.replace(Provider::Plugins, plugins::Plugins::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
@@ -338,12 +340,9 @@ impl Runtime {
         let runtime = Arc::new(Self {
             backend,
             registry,
-            workspace,
-            browser,
-            computer,
-            omarchy,
-            context,
-            rsync,
+            native,
+            files,
+            desktop,
             plugins,
             code_audit: CodeAudit::new(audit.clone()),
             audit,
@@ -361,7 +360,7 @@ impl Runtime {
     /// Production startup opts in to exact installed skill sources and builtins.
     /// Runtime constructors themselves never inspect the caller's home directory.
     pub fn enable_default_skill_sources(&self) -> Result<(), String> {
-        self.context.enable_default_skill_sources()
+        self.files.enable_default_skill_sources()
     }
     /// Install an optional in-process call hook. The default is None.
     /// Each call keeps one snapshot; replacement affects subsequent calls.
@@ -377,13 +376,13 @@ impl Runtime {
     }
     /// Local frontend methods, deliberately absent from the remote tool registry.
     pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
-        self.computer.handoff_host_input_local(seconds)
+        self.desktop.handoff_host_input_local(seconds)
     }
     pub(crate) fn revoke_host_input(&self) -> bool {
-        self.computer.revoke_host_input()
+        self.desktop.revoke_host_input()
     }
     pub(crate) fn host_input_status(&self) -> Value {
-        self.computer.host_input_status()
+        self.desktop.host_input_status()
     }
 
     pub fn output(&self) -> Arc<OutputStore> {
@@ -425,21 +424,21 @@ impl Runtime {
         self.code_audit.finish(completion)
     }
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
-        crate::client::references::expand(text, &self.workspace, &self.context).await
+        self.files.expand_references(text).await
     }
 
     pub(crate) async fn reference_completions(
         &self,
         key: &crate::client::completion::Key,
     ) -> Result<crate::client::completion::Listing, String> {
-        crate::client::completion::enumerate(&self.workspace, &self.context, key).await
+        self.files.reference_completions(key).await
     }
 
     pub(crate) async fn import_input(
         &self,
         source: crate::client::attachments::Source,
     ) -> Result<crate::client::attachments::Loaded, String> {
-        crate::client::attachments::load(source, &self.workspace).await
+        self.files.import_input(source).await
     }
 
     pub async fn perform(&self, operation: Operation) -> Result<Value, String> {
@@ -566,44 +565,6 @@ impl Runtime {
                 .client_resource_call(&tool.native_name, arguments)
                 .await
                 .map(backend::result),
-            Provider::Browser => self
-                .browser
-                .perform(&tool.native_name, arguments)
-                .await
-                .and_then(|mut value| {
-                    if tool.native_name != "ssmcp.browser.discover" {
-                        return Ok(value);
-                    }
-                    let mut metadata = value
-                        .get_mut("structuredContent")
-                        .ok_or("browser discovery returned no metadata")?
-                        .take();
-                    metadata["routing"] = crate::browser::control_routes(&self.registry)?;
-                    Ok(backend::result(metadata))
-                }),
-            Provider::Computer => self.computer.perform(&tool.native_name, arguments).await,
-            Provider::Omarchy => self.omarchy.perform(&tool.native_name, arguments).await,
-            Provider::Workspace => self
-                .workspace
-                .perform(&tool.native_name, arguments)
-                .await
-                .map(|value| {
-                    if tool.native_name == "ssmcp.fs.read_image" {
-                        value
-                    } else {
-                        backend::result(value)
-                    }
-                }),
-            Provider::Context => self
-                .context
-                .perform(&tool.native_name, arguments)
-                .await
-                .map(backend::result),
-            Provider::Rsync => self
-                .rsync
-                .perform(&tool.native_name, arguments)
-                .await
-                .map(backend::result),
             Provider::Output => self
                 .output
                 .perform(&tool.native_name, arguments)
@@ -619,14 +580,15 @@ impl Runtime {
             },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
             Provider::Plugins => self.plugins.perform(&tool, arguments).await,
-            _ => {
-                let dispatch = self.backend.dispatch(&tool, arguments);
+            provider if self.native.contains(provider) => {
+                let dispatch = self.native.call(&tool, arguments);
                 if let Some(call) = &harness_call {
                     call.scope(dispatch).await
                 } else {
                     dispatch.await
                 }
             }
+            _ => Err("provider is not mounted in the native plugin host".into()),
         };
         if tool.provider.is_harness() {
             self.audit.push(
@@ -733,23 +695,24 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let (_, _, computer, _, _, _, plugins) = tokio::join!(
-            self.workspace.shutdown(),
-            self.browser.shutdown(),
-            self.computer.shutdown(),
-            self.omarchy.shutdown(),
-            self.rsync.shutdown(),
-            self.backend.shutdown(),
-            self.plugins.shutdown()
-        );
-        if let Err(error) = computer {
-            // EventLog redacts, renders and retains the failure before closing.
-            self.audit.push(json!({
-                "type":"ssmcp.control.cleanup_failed",
-                "provider":"computer",
-                "cleanup_complete":false,
-                "error":error
-            }));
+        let (native, plugins) = tokio::join!(self.native.shutdown(), self.plugins.shutdown(),);
+        for (plugin, outcome) in native {
+            if let Err(error) = outcome {
+                // Keep the established Computer cleanup category while retaining
+                // the exact plugin identity for other failures.
+                let provider = if plugin == Desktop::ID {
+                    "computer"
+                } else {
+                    &plugin
+                };
+                self.audit.push(json!({
+                    "type":"ssmcp.control.cleanup_failed",
+                    "provider":provider,
+                    "plugin":plugin,
+                    "cleanup_complete":false,
+                    "error":error
+                }));
+            }
         }
         if let Err(error) = plugins {
             self.audit.push(json!({
