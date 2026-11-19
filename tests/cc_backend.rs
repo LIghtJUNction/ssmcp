@@ -6,7 +6,10 @@ use ssmcp::backend::cc::Claude;
 use std::{
     ffi::{OsStr, OsString},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{sleep, timeout};
@@ -15,11 +18,21 @@ struct Directory(PathBuf);
 
 impl Directory {
     fn new() -> Self {
-        let unique = SystemTime::now()
+        let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("ssmcp-cc-{}-{unique}", std::process::id()));
+        Self::at(timestamp)
+    }
+
+    fn at(timestamp: u128) -> Self {
+        // Parallel tests can observe the same clock tick even with nanosecond units.
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ssmcp-cc-{}-{timestamp}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -45,6 +58,20 @@ impl Drop for Directory {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn directories_with_the_same_clock_tick_remain_isolated() {
+    let first = Directory::at(123_456);
+    let second = Directory::at(123_456);
+    assert_ne!(first.0, second.0);
+    std::fs::write(first.0.join("owner"), "first").unwrap();
+    std::fs::write(second.0.join("owner"), "second").unwrap();
+    drop(first);
+    assert_eq!(
+        std::fs::read_to_string(second.0.join("owner")).unwrap(),
+        "second"
+    );
 }
 
 fn payload(result: Value) -> Value {
