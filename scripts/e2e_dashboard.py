@@ -287,7 +287,7 @@ class Dashboard(Harness):
 
     def config(self, name, *, dashboard=True, log_format="pretty"):
         path = self.directory / f"{name}.toml"
-        path.write_text(f"[ui]\ndashboard={str(dashboard).lower()}\ncolor=false\nsidebar=true\n"
+        path.write_text(f"[ui]\ndashboard={str(dashboard).lower()}\ncolor=false\nsidebar=true\nsidebar_width=30\n"
                         f"log_format={json.dumps(log_format)}\ntimestamps=false\nlayout=\"split\"\n")
         return path
 
