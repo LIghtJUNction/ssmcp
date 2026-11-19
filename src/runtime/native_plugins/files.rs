@@ -299,10 +299,11 @@ mod tests {
         #[cfg(not(unix))]
         {
             // Private paste storage deliberately requires the Unix implementation.
+            let Err(error) = imported else {
+                panic!("private paste must report its platform limitation");
+            };
             assert_eq!(
-                imported
-                    .err()
-                    .expect("private paste must report its platform limitation"),
+                error,
                 concat!(
                     "Could not save the private input in .ssmcp/inputs: ",
                     "automatic private paste files are not supported on this platform yet; ",
