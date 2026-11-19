@@ -166,7 +166,7 @@ resolver = "3"
 [dependencies]
 ztui = { package = "ztui-core", version = "=0.1.2", path = "crates/ztui" }
 zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
-zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"
