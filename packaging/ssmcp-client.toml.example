@@ -1,4 +1,5 @@
-# Save as ~/.config/ssmcp/config.toml or select with --ui-config FILE.
+# Save as ~/.config/ssmcp/config.toml or set SSMCP_CLIENT_CONFIG to an absolute path.
+# --ui-config FILE selects display settings only.
 # Set the default relay with: ssmcp config set server https://relay.example.com
 # Find this file with: ssmcp config path
 # --server overrides this setting; omitting it preserves the last-login default.
@@ -8,6 +9,11 @@
 # HTTPS public keys belong in trusted-servers.toml next to this file.
 # Import a verified key with: ssmcp trust add --server URL --public-key FILE
 # See docs/client-server.md for the trust file format and certificate rotation.
+
+# Refresh the current branch's tracked upstream while connected, including
+# JSONL and background sessions. Applies to new connections; 0 disables fetch.
+[git]
+fetch_interval_seconds = 300 # 0 or 60..86400 seconds.
 
 [ui]
 color = true
