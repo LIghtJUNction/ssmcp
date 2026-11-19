@@ -57,11 +57,11 @@ fn timestamp(seconds: u64) -> String {
 
 fn heading(snapshot: &DashboardSnapshot, title: &str, description: &str, path: &str) -> String {
     format!(
-        r#"<header class="dashboard-head"><div><p class="eyebrow">CONTROL ROOM / {}</p><h1>{title}</h1><p>{description}</p></div><div class="snapshot-meta"><span>更新于 {}</span><a class="text-link" href="{path}">刷新快照 <span class="arrow" aria-hidden="true">↻</span></a></div></header>"#,
+        r#"<header class="dashboard-head"><div><p class="eyebrow">{}</p><h1>{title}</h1><p>{description}</p></div><div class="snapshot-meta"><span>更新于 {}</span><a class="text-link" href="{path}">刷新快照 <span class="arrow" aria-hidden="true">↻</span></a></div></header>"#,
         if snapshot.scope == Scope::All {
-            "ADMIN"
+            "管理员工作台"
         } else {
-            "ACCOUNT"
+            "账户管理"
         },
         timestamp(snapshot.generated_at)
     )
