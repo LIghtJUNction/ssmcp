@@ -9,6 +9,7 @@ mod history;
 mod login;
 pub(super) mod logout;
 mod questions;
+mod queue;
 mod tasks;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,6 +76,7 @@ pub(super) struct Conversation {
     drawn_agents: Vec<String>,
     list_start: usize,
     list_count: usize,
+    queue_hit_rows: Vec<Option<String>>,
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
@@ -2197,78 +2199,17 @@ impl State {
     fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
         self.conversation.list_start = 0;
         self.conversation.list_count = 0;
+        self.conversation.queue_hit_rows.clear();
         if self.conversation.view == View::Agents {
             return self.chat_agent_rows(data, height);
         }
-        let width = self.geometry.left;
-        let entries = items(data, "queue");
-        self.conversation.selected = self
-            .conversation
-            .selected
-            .min(entries.len().saturating_sub(1));
-        let mut rows = vec![self.chat_line(
-            "  Requests · Enter edit · i/I inspect · Delete cancel · R resend · Alt+←/→ panels",
-            PanelTone::Muted,
-            width,
-        )];
-        if entries.is_empty() {
-            rows.push(self.chat_line(
-                "  No queued requests. Write a requirement below.",
-                PanelTone::Normal,
-                width,
-            ));
-            return rows;
-        }
-        if self.conversation.detail {
-            let entry = &entries[self.conversation.selected];
-            rows.push(self.chat_line(
-                &format!(
-                    "  {} · {} · Esc back",
-                    field(entry, "status"),
-                    message_id(entry)
-                ),
-                PanelTone::Accent,
-                width,
-            ));
-            let wrapped = markdown::rows(references::source(field(entry, "text")), width, &self.ui);
-            self.conversation.detail_scroll = self.conversation.detail_scroll.min(
-                wrapped
-                    .len()
-                    .saturating_sub(usize::from(height).saturating_sub(2)),
-            );
-            rows.extend(wrapped.into_iter().skip(self.conversation.detail_scroll));
-            return rows;
-        }
-        for index in self.chat_list_window(entries.len(), height) {
-            let entry = &entries[index];
-            let marker = if index == self.conversation.selected {
-                "›"
-            } else {
-                " "
-            };
-            rows.push(self.chat_line(
-                &format!(
-                    "{marker} {}  ·  {}",
-                    field(entry, "status"),
-                    message_id(entry)
-                ),
-                if index == self.conversation.selected {
-                    PanelTone::Accent
-                } else {
-                    PanelTone::Normal
-                },
-                width,
-            ));
-            rows.push(self.chat_line(
-                &format!("  {}", field(entry, "text").lines().next().unwrap_or("")),
-                PanelTone::Muted,
-                width,
-            ));
-        }
-        rows
+        self.chat_queue_rows(data, height)
     }
 
     fn chat_list_hit(&self, row: u16) -> Option<usize> {
+        if self.conversation.view == View::Queue {
+            return self.chat_queue_hit(&self.chat_data(), row);
+        }
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
         if relative >= body_rows(self.geometry.rows).saturating_sub(1) {
             return None;
