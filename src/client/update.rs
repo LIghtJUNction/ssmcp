@@ -178,12 +178,14 @@ impl Installer {
         getrandom::fill(&mut nonce)
             .map_err(|e| format!("cannot create update staging name: {e}"))?;
         let directory = parent.join(format!(".ssmcp-update-{:032x}", u128::from_le_bytes(nonce)));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder.create(&directory).map_err(|e| format!("Cannot write the installation directory {}: {e}. Use the original installer or package manager with the required permissions.", parent.display()))?;
         let script = directory.join(if cfg!(windows) {
             "install.ps1"
