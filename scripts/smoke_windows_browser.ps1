@@ -318,6 +318,16 @@ const timer=setTimeout(()=>{process.stderr.write("Headless smoke deadline exceed
     return [bool]$report.ok
 }
 
+function Set-SmokeEnvironmentValue([string]$Name, [AllowNull()][object]$Value, [EnvironmentVariableTarget]$Target) {
+    # PowerShell converts $null to an empty string for string-typed .NET arguments.
+    # .NET 9+ preserves empty values, so absence must use an actual null string.
+    if ($null -eq $Value) {
+        [Environment]::SetEnvironmentVariable($Name, [NullString]::Value, $Target)
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, [string]$Value, $Target)
+    }
+}
+
 function Invoke-SmokeParent {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $phase = 'windows_guard'
@@ -349,7 +359,7 @@ function Invoke-SmokeParent {
         }
         foreach ($name in @('SSMCP_NODE', 'SSMCP_BROWSER_EXECUTABLE')) {
             $userBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'User')
-            [Environment]::SetEnvironmentVariable($name, $null, 'User')
+            Set-SmokeEnvironmentValue $name $null 'User'
         }
         $temporaryBase = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
         $temporaryRoot = Join-Path ([IO.Path]::GetFullPath($temporaryBase)) ('ssmcp-native-browser-smoke-' + [Guid]::NewGuid().ToString('N'))
@@ -454,13 +464,13 @@ function Invoke-SmokeParent {
         if ($process) { $process.Dispose() }
         foreach ($name in $userBefore.Keys) {
             try {
-                [Environment]::SetEnvironmentVariable($name, $userBefore[$name], 'User')
+                Set-SmokeEnvironmentValue $name $userBefore[$name] 'User'
                 if ([Environment]::GetEnvironmentVariable($name, 'User') -cne $userBefore[$name]) { throw 'User environment restore failed.' }
             } catch { $cleanupErrors.Add('user_environment_restore_failed') }
         }
         foreach ($name in $processBefore.Keys) {
             if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne $processBefore[$name]) {
-                try { [Environment]::SetEnvironmentVariable($name, $processBefore[$name], 'Process') }
+                try { Set-SmokeEnvironmentValue $name $processBefore[$name] 'Process' }
                 catch { $cleanupErrors.Add('process_environment_restore_failed') }
                 if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne $processBefore[$name]) { $cleanupErrors.Add('process_environment_restore_failed') }
             }
