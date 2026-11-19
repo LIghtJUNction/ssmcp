@@ -57,12 +57,12 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
             "Loading… · Esc close",
         ],
         Hint::EmptyInput => [
-            "@ files · $ skills · / commands · F1 help",
+            "@ files · $ skills · / commands · Alt+↑/↓ input height · F1 help",
             "@ files · $ skills · / commands",
             "@ files · $ skills · F1 help",
         ],
         Hint::Draft => [
-            "Enter send · Ctrl+J newline · Tab browse",
+            "Enter send · Ctrl+J newline · Alt+↑/↓ input height · Tab browse",
             "Enter send · Ctrl+J newline · Tab browse",
             "Enter send · Tab browse",
         ],
@@ -107,8 +107,10 @@ mod tests {
         assert!(!menu.contains("Enter send"));
         let draft = shortcuts(Hint::Draft, 100, "connected");
         assert!(draft.contains("Enter send") && draft.contains("Ctrl+J"));
+        assert!(draft.contains("Alt+↑/↓ input height"));
         let empty = shortcuts(Hint::EmptyInput, 100, "connected");
         assert!(empty.contains("@ files") && empty.contains("$ skills"));
+        assert!(empty.contains("Alt+↑/↓ input height"));
         let queue = shortcuts(Hint::Queue, 100, "connected");
         assert!(queue.contains("i inspect") && queue.contains("Delete cancel"));
     }

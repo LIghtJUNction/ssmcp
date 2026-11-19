@@ -575,10 +575,10 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let conversation = state.conversation.snapshot();
     serde_json::json!({
         "active": shared.alive.load(Ordering::Acquire), "rows":g.rows, "cols":g.cols,
-        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.log_rows},"cols":g.left,"visible":!chat || state.conversation.logs_open},
-            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {conversation::body_rows(g.rows)} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
-            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":conversation::body_rows(g.rows),"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
-            "input":{"row":conversation::prompt_top(g.rows)+1,"col":0,"rows":conversation::prompt_rows(g.rows),"cols":g.left,"visible":chat && conversation::prompt_rows(g.rows)>0}},
+        "panes":{"logs":{"row":if chat {conversation::body_top(g.rows)} else {0},"col":0,"rows":g.log_rows,"cols":g.left,"visible":!chat || state.conversation.logs_open},
+            "audit":{"row":if chat {conversation::body_top(g.rows)} else {g.pty_top},"col":0,"rows":if chat {g.log_rows} else {g.pty_rows},"cols":g.left,"visible":if chat {!state.conversation.logs_open && state.conversation.view == conversation::View::Audit} else {state.ui.layout != Layout::Logs}},
+            "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
+            "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
@@ -735,12 +735,13 @@ struct Geometry {
     cols: u16,
     left: u16,
     log_rows: u16,
+    input_rows: u16,
     pty_top: u16,
     pty_rows: u16,
 }
 
 impl Geometry {
-    fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
+    fn new(rows: u16, cols: u16, ui: &Ui, preferred_input_rows: Option<u16>) -> Self {
         let rows = rows.clamp(1, 1000);
         let cols = cols.clamp(1, 1000);
         let layout = PanelLayout::configured(
@@ -749,9 +750,14 @@ impl Geometry {
             ui.sidebar && !ui.panels.is_empty(),
             ui.sidebar_width,
         );
+        let input_rows = if ui.layout == Layout::Chat {
+            conversation::prompt_rows(rows, preferred_input_rows)
+        } else {
+            0
+        };
         let available = if rows >= 3 { rows - 1 } else { rows };
         let log_rows = match ui.layout {
-            Layout::Chat => conversation::body_rows(rows),
+            Layout::Chat => conversation::body_rows(rows, input_rows),
             Layout::Logs => available,
             Layout::Split if rows >= 5 => {
                 ((u32::from(available - 1) * u32::from(ui.log_height_percent) / 100) as u16)
@@ -774,6 +780,7 @@ impl Geometry {
             cols,
             left: layout.log_cols.max(1),
             log_rows,
+            input_rows,
             pty_top,
             pty_rows,
         }
@@ -817,6 +824,8 @@ enum Key {
     HistoryEnd,
     CanvasLeft,
     CanvasRight,
+    InputGrow,
+    InputShrink,
     Mouse {
         button: u16,
         x: u16,
@@ -827,6 +836,10 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[1;3A", Key::InputGrow),
+    (b"\x1b[1;3B", Key::InputShrink),
+    (b"\x1b[57352;3u", Key::InputGrow),
+    (b"\x1b[57353;3u", Key::InputShrink),
     (b"\x1b[1;3D", Key::CanvasLeft),
     (b"\x1b[1;3C", Key::CanvasRight),
     (b"\x1b[57350;3u", Key::CanvasLeft),
@@ -933,6 +946,8 @@ impl Keyboard {
             | Key::HistoryEnd
             | Key::CanvasLeft
             | Key::CanvasRight
+            | Key::InputGrow
+            | Key::InputShrink
             | Key::Mouse { .. } => true,
             Key::Toggle => allow_logs,
             Key::Up | Key::Down | Key::Home | Key::End => true,
@@ -1185,7 +1200,7 @@ struct State {
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
-        let geometry = Geometry::new(rows, cols, ui);
+        let geometry = Geometry::new(rows, cols, ui, None);
         let conversation = conversation::Conversation::default();
         let mut state = Self {
             events: events::EventView::new(),
@@ -1364,7 +1379,7 @@ impl State {
         self.dirty = true;
     }
     fn resize(&mut self, rows: u16, cols: u16) {
-        let geometry = Geometry::new(rows, cols, &self.ui);
+        let geometry = Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.geometry != geometry {
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
