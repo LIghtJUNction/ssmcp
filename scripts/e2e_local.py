@@ -426,6 +426,11 @@ class Local(Harness):
                    "the authorization code cannot be exchanged twice")
         self.check(self.rpc("ping")[0] == 401,
                    "replaying a redeemed local code revokes its previously issued token family")
+        self.front.send(b"\x03")
+        self.front.until(lambda shot: "Press Ctrl+C again to exit" in text(shot),
+                         "the local empty-input exit confirmation")
+        self.check(self.front.process.poll() is None,
+                   "empty-input Ctrl-C warns before the local client exits")
         _, restored = self.front.disconnect()
         self.check(restored == self.front.original_termios, "local shutdown restores the owned physical terminal mode")
         wait_for(lambda: all(process_identity(pid) != identity for pid, identity in children.items()),

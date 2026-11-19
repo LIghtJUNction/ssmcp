@@ -2,6 +2,7 @@
 //!
 //! MCP 2026-07-28 authorization, RFC 7636, 8414, 8707, 9207, 9728 and 9700.
 //! No external metadata fetching: DCR is the advertised registration mechanism.
+mod grants;
 mod registry;
 #[cfg(test)]
 #[path = "oauth/registry_tests.rs"]
@@ -120,6 +121,9 @@ struct Store {
     refresh: HashMap<Key, RefreshToken>,
     pending_codes: usize,
     next_sweep: Instant,
+    grants: Option<grants::Grants>,
+    grants_dirty: bool,
+    grants_failed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -234,12 +238,15 @@ struct Family {
     // The idle deadline slides on refresh, but never past the absolute deadline.
     expires: Instant,
     absolute_expires: Instant,
+    expires_at_ms: u64,
+    absolute_expires_at_ms: u64,
     revoked: bool,
 }
 
 struct AccessToken {
     family: Key,
     expires: Instant,
+    expires_at_ms: u64,
 }
 
 /// Non-secret references to the original grant, never a replacement controller
@@ -272,6 +279,7 @@ impl Delegation {
 struct RefreshToken {
     family: Key,
     expires: Instant,
+    expires_at_ms: u64,
     used: bool,
 }
 
@@ -393,6 +401,15 @@ impl OAuthError {
             )
         }
     }
+    fn storage() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            ..Self::new(
+                "temporarily_unavailable",
+                "Authorization storage is unavailable; no credential was issued",
+            )
+        }
+    }
     fn internal() -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -466,6 +483,9 @@ impl OAuth {
                 refresh: HashMap::new(),
                 pending_codes: 0,
                 next_sweep: Instant::now(),
+                grants: None,
+                grants_dirty: false,
+                grants_failed: false,
             })),
         })
     }
@@ -513,6 +533,9 @@ impl OAuth {
         }
         let (registry, clients) = registry::Registry::open(path, &self.issuer)?;
         state.clients = clients;
+        let grants = grants::Grants::open(&registry, &self.issuer)?;
+        grants.restore(&mut state)?;
+        state.grants = Some(grants);
         self.registry = Some(registry);
         Ok(())
     }
@@ -523,11 +546,19 @@ impl OAuth {
         }
         let now = Instant::now();
         let mut state = self.state.lock().unwrap();
+        if state.grants_failed {
+            return None;
+        }
+        let wall = grants::wall_now_ms().ok()?;
         state.sweep(now);
         let access = state.access.get(&hash(access_token))?;
         let family = state.families.get(&access.family)?;
         if now >= access.expires
             || now >= family.expires
+            || now >= family.absolute_expires
+            || wall >= access.expires_at_ms
+            || wall >= family.expires_at_ms
+            || wall >= family.absolute_expires_at_ms
             || family.revoked
             || family.binding.user != user
             || family.binding.resource != self.resource(user)
@@ -539,6 +570,7 @@ impl OAuth {
 
     /// Delegate only a verified account's existing resource and fixed access
     /// lifetime. This snapshots under the OAuth lock and performs no storage I/O.
+    #[cfg(test)]
     pub(crate) fn delegation(
         &self,
         user: &str,
@@ -549,11 +581,18 @@ impl OAuth {
         }
         let instant = Instant::now();
         let mut state = self.state.lock().ok()?;
+        if state.grants_failed {
+            return None;
+        }
+        let wall = grants::wall_now_ms().ok()?;
         state.sweep(instant);
         let access_key = hash(access_token);
         let access = state.access.get(&access_key)?;
         let family = state.families.get(&access.family)?;
         if instant >= access.expires
+            || wall >= access.expires_at_ms
+            || wall >= family.expires_at_ms
+            || wall >= family.absolute_expires_at_ms
             || instant >= family.expires
             || instant >= family.absolute_expires
             || family.revoked
@@ -603,6 +642,12 @@ impl OAuth {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
+        if state.grants_failed {
+            return false;
+        }
+        let Ok(wall) = grants::wall_now_ms() else {
+            return false;
+        };
         state.sweep(instant);
         let Some(access) = state.access.get(&parent.access) else {
             return false;
@@ -611,6 +656,9 @@ impl OAuth {
             return false;
         };
         access.family == parent.family
+            && wall < access.expires_at_ms
+            && wall < family.expires_at_ms
+            && wall < family.absolute_expires_at_ms
             && instant < access.expires
             && instant < family.expires
             && instant < family.absolute_expires
@@ -625,18 +673,21 @@ impl OAuth {
     }
 
     /// Revoke current MCP grants and pending codes for a banned account.
-    pub(crate) fn revoke_subject(&self, subject: &str) {
+    pub(crate) fn revoke_subject(&self, subject: &str) -> crate::Result<()> {
         let mut state = self.state.lock().unwrap();
         let matches = |authorization: &Authorization| {
             matches!(
                 authorization, Authorization::Identity(identity) if identity.subject == subject
             )
         };
+        let mut changed = false;
         for family in state.families.values_mut() {
             if matches(&family.binding.authorization) {
                 family.revoked = true;
+                changed = true;
             }
         }
+        state.grants_dirty |= changed;
         state
             .codes
             .retain(|_, code| !matches(&code.binding.authorization));
@@ -651,6 +702,9 @@ impl OAuth {
             .values()
             .filter(|transaction| transaction.busy)
             .count();
+        state
+            .persist()
+            .map_err(|_| "OAuth revocation persistence failed".into())
     }
 
     fn resource(&self, user: &str) -> String {
@@ -1242,12 +1296,15 @@ impl OAuth {
     fn token(&self, parameters: &Parameters, headers: &HeaderMap) -> OResult<Value> {
         let now = Instant::now();
         let mut state = self.state.lock().unwrap();
+        if state.grants_failed {
+            return Err(OAuthError::storage());
+        }
         state.sweep(now);
         let (client_id, client) = authenticate_client(&state, parameters, headers, now)?;
         let resource = parameters.required("resource")?;
         self.resource_user(resource)?;
         scope_mcp(parameters.get("scope"))?;
-        match parameters.required("grant_type")? {
+        let outcome = match parameters.required("grant_type")? {
             "authorization_code" => {
                 self.exchange_code(&mut state, parameters, &client_id, &client, resource, now)
             }
@@ -1258,7 +1315,9 @@ impl OAuth {
                 "unsupported_grant_type",
                 "Only authorization_code and refresh_token grants are supported",
             )),
-        }
+        };
+        state.persist()?;
+        outcome
     }
 
     fn exchange_code(
@@ -1295,6 +1354,7 @@ impl OAuth {
         if let Some(family) = code.used_family {
             if let Some(family) = state.families.get_mut(&family) {
                 family.revoked = true;
+                state.grants_dirty = true;
             }
             return Err(OAuthError::grant());
         }
@@ -1326,12 +1386,18 @@ impl OAuth {
         if access_end.duration_since(now).as_secs() == 0 {
             return Err(OAuthError::grant());
         }
+        let absolute_expires_at_ms =
+            grants::wall_deadline(absolute_end)?.min(client.expires_unix.saturating_mul(1000));
+        let expires_at_ms = grants::wall_deadline(end)?.min(absolute_expires_at_ms);
+        let access_expires_at_ms = grants::wall_deadline(access_end)?.min(expires_at_ms);
         state.families.insert(
             family_id,
             Family {
                 binding: code.binding,
                 expires: end,
                 absolute_expires: absolute_end,
+                expires_at_ms,
+                absolute_expires_at_ms,
                 revoked: false,
             },
         );
@@ -1340,6 +1406,7 @@ impl OAuth {
             AccessToken {
                 family: family_id,
                 expires: access_end,
+                expires_at_ms: access_expires_at_ms,
             },
         );
         if let Some(refresh) = &refresh {
@@ -1348,6 +1415,7 @@ impl OAuth {
                 RefreshToken {
                     family: family_id,
                     expires: end,
+                    expires_at_ms,
                     used: false,
                 },
             );
@@ -1356,6 +1424,7 @@ impl OAuth {
         code.used_family = Some(family_id);
         // Keep replay detection for the whole grant, including after idle renewal.
         code.retain_until = absolute_end;
+        state.grants_dirty = true;
         Ok(token_response(
             access,
             refresh,
@@ -1390,7 +1459,11 @@ impl OAuth {
             .families
             .get_mut(&refresh.family)
             .ok_or_else(OAuthError::grant)?;
+        let wall = grants::wall_now_ms().map_err(|_| OAuthError::storage())?;
         if family.revoked
+            || wall >= family.expires_at_ms
+            || wall >= family.absolute_expires_at_ms
+            || wall >= refresh.expires_at_ms
             || now >= family.expires
             || now >= refresh.expires
             || family.binding.live().is_none()
@@ -1401,6 +1474,7 @@ impl OAuth {
         }
         if refresh.used {
             family.revoked = true;
+            state.grants_dirty = true;
             return Err(OAuthError::grant());
         }
         let absolute_end = family.absolute_expires.min(client.expires);
@@ -1414,16 +1488,25 @@ impl OAuth {
         if access_end.duration_since(now).as_secs() == 0 {
             return Err(OAuthError::grant());
         }
+        // The original absolute wall deadline is immutable across refreshes.
+        // Re-deriving it could shift old replay markers by clock/read latency.
+        let absolute_expires_at_ms = family.absolute_expires_at_ms;
+        let expires_at_ms = grants::wall_deadline(end)?.min(absolute_expires_at_ms);
+        let access_expires_at_ms = grants::wall_deadline(access_end)?.min(expires_at_ms);
         family.expires = end;
+        family.expires_at_ms = expires_at_ms;
+        family.absolute_expires_at_ms = absolute_expires_at_ms;
         let consumed = state.refresh.get_mut(&key).unwrap();
         consumed.used = true;
         // A rotated-out RT remains a replay marker until the absolute limit.
         consumed.expires = absolute_end;
+        consumed.expires_at_ms = absolute_expires_at_ms;
         state.refresh.insert(
             hash(&next),
             RefreshToken {
                 family: refresh.family,
                 expires: end,
+                expires_at_ms,
                 used: false,
             },
         );
@@ -1432,8 +1515,10 @@ impl OAuth {
             AccessToken {
                 family: refresh.family,
                 expires: access_end,
+                expires_at_ms: access_expires_at_ms,
             },
         );
+        state.grants_dirty = true;
         Ok(token_response(
             access,
             Some(next),
@@ -1444,6 +1529,28 @@ impl OAuth {
 }
 
 impl Store {
+    fn persist(&mut self) -> OResult<()> {
+        if self.grants_failed {
+            return Err(OAuthError::storage());
+        }
+        if !self.grants_dirty {
+            return Ok(());
+        }
+        if let Some(grants) = &self.grants
+            && grants.save(self).is_err()
+        {
+            self.grants_failed = true;
+            crate::observability::log(
+                "error",
+                "persistence",
+                &[("event", "oauth_grant_commit_failed".into())],
+            );
+            return Err(OAuthError::storage());
+        }
+        self.grants_dirty = false;
+        Ok(())
+    }
+
     fn sweep(&mut self, now: Instant) {
         if now < self.next_sweep {
             return;
@@ -2300,6 +2407,10 @@ impl OAuth {
     /// Exercise the normal code/PKCE exchange with a fixture provider identity;
     /// no network, real provider token, or production authorization bypass.
     pub(crate) fn test_identity_tokens(&self, user: &str, subject: &str) -> Value {
+        self.test_identity_grant(user, subject).0
+    }
+
+    fn test_identity_grant(&self, user: &str, subject: &str) -> (Value, String) {
         fn checked<T>(result: OResult<T>) -> T {
             result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.description))
         }
@@ -2363,9 +2474,13 @@ impl OAuth {
             &HeaderMap::new(),
         ));
         tokens["client_id"] = json!(client);
-        tokens
+        (tokens, code)
     }
 }
+
+#[cfg(test)]
+#[path = "oauth/grant_tests.rs"]
+mod grant_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2677,7 +2792,7 @@ mod tests {
         let pending = identity_code(&broker.oauth, client, "42");
         let other = identity_code(&broker.oauth, client, "43");
         broker.user_policies.set("42", true, None);
-        broker.oauth.revoke_subject("42");
+        broker.oauth.revoke_subject("42").unwrap();
         assert!(
             broker
                 .authenticate("alice", tokens["access_token"].as_str().unwrap())
@@ -2733,7 +2848,7 @@ mod tests {
             .take_provider_login(&state, &form.csrf, "github"));
         // The upstream request began before the ban, when its subject was not known.
         broker.user_policies.set("42", true, None);
-        broker.oauth.revoke_subject("42");
+        broker.oauth.revoke_subject("42").unwrap();
         ok(broker
             .oauth
             .finish_provider_login(upstream, github_identity("42", "alice")));

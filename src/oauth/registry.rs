@@ -1,5 +1,4 @@
-//! Private, single-writer DCR registry. Tokens and authorization grants are not
-//! persisted: a daemon restart still requires a new user authorization.
+//! Private, single-writer DCR registry and safe storage primitives for grants.
 use super::{AuthMethod, Client, Key, MAX_CLIENTS, opaque, valid_redirect};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -54,7 +53,7 @@ fn cstring(value: &OsStr) -> crate::Result<CString> {
     CString::new(value.as_bytes()).map_err(|_| "invalid OAuth registry path".into())
 }
 
-fn open_at(dir: &File, name: &CString, flags: i32) -> io::Result<File> {
+pub(super) fn open_at(dir: &File, name: &CString, flags: i32) -> io::Result<File> {
     // SAFETY: dir and name live for the call; on success the new FD is owned here.
     let fd = unsafe {
         libc::openat(
@@ -71,7 +70,7 @@ fn open_at(dir: &File, name: &CString, flags: i32) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn private_file(file: &File) -> crate::Result<()> {
+pub(super) fn private_file(file: &File) -> crate::Result<()> {
     let meta = file.metadata()?;
     // SAFETY: geteuid has no preconditions.
     if !meta.is_file()
@@ -240,6 +239,16 @@ impl Registry {
         Ok(clients)
     }
 
+    pub(super) fn grant_storage(&self) -> crate::Result<(File, CString, File)> {
+        let mut name = self.filename.as_bytes().to_vec();
+        name.extend_from_slice(b".grants.json");
+        Ok((
+            self.dir.try_clone()?,
+            CString::new(name)?,
+            self._lock.try_clone()?,
+        ))
+    }
+
     pub(super) fn save(&self, clients: &HashMap<String, Client>) -> crate::Result<()> {
         if clients.len() > MAX_CLIENTS {
             return Err("OAuth registry capacity exceeded".into());
@@ -277,40 +286,7 @@ impl Registry {
         if text.len() as u64 > MAX_BYTES {
             return Err("OAuth registry exceeds size limit".into());
         }
-        let nonce =
-            super::random("tmp_").map_err(|_| "could not generate registry temporary filename")?;
-        let temp = CString::new(format!(".{}.{nonce}", self.filename.to_string_lossy()))?;
-        let result = (|| -> crate::Result<()> {
-            let mut file = open_at(
-                &self.dir,
-                &temp,
-                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
-            )?;
-            private_file(&file)?;
-            file.write_all(text.as_bytes())?;
-            file.sync_all()?;
-            // SAFETY: both names and the held directory FD are valid. renameat
-            // atomically publishes only a completely written same-directory file.
-            if unsafe {
-                libc::renameat(
-                    self.dir.as_raw_fd(),
-                    temp.as_ptr(),
-                    self.dir.as_raw_fd(),
-                    self.filename.as_ptr(),
-                )
-            } != 0
-            {
-                return Err(io::Error::last_os_error().into());
-            }
-            self.dir.sync_all()?;
-            Ok(())
-        })();
-        if result.is_err() {
-            // SAFETY: unlinkat is confined to our unpredictable temporary name.
-            unsafe {
-                libc::unlinkat(self.dir.as_raw_fd(), temp.as_ptr(), 0);
-            }
-        }
+        let result = write_atomic(&self.dir, &self.filename, text.as_bytes());
         if result.is_ok() {
             crate::observability::log(
                 "debug",
@@ -323,4 +299,51 @@ impl Registry {
         }
         result
     }
+}
+
+// All publications use the already verified directory descriptor. The old
+// file is checked again; changing permissions or replacing it with a symlink
+// never silently converts it into trusted state.
+pub(super) fn write_atomic(dir: &File, filename: &CString, bytes: &[u8]) -> crate::Result<()> {
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("OAuth state exceeds size limit".into());
+    }
+    match open_at(dir, filename, libc::O_RDONLY | libc::O_NONBLOCK) {
+        Ok(file) => private_file(&file)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let nonce = super::random("tmp_").map_err(|_| "could not generate OAuth temporary filename")?;
+    let mut name = b".".to_vec();
+    name.extend_from_slice(filename.as_bytes());
+    name.push(b'.');
+    name.extend_from_slice(nonce.as_bytes());
+    let temp = CString::new(name)?;
+    let result = (|| -> crate::Result<()> {
+        let mut file = open_at(dir, &temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+        private_file(&file)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        // SAFETY: both names and the held directory FD are valid.
+        if unsafe {
+            libc::renameat(
+                dir.as_raw_fd(),
+                temp.as_ptr(),
+                dir.as_raw_fd(),
+                filename.as_ptr(),
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
+        dir.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        // SAFETY: only our unpredictable temporary name in the held directory.
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), temp.as_ptr(), 0);
+        }
+    }
+    result
 }

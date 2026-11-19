@@ -134,7 +134,7 @@ impl State {
             let Ok(revision) = next(message.revision) else {
                 break;
             };
-            let value = json!({"source":"client_user","client_id":client_id,"message_id":message.id,
+            let value = json!({"source":"client_user","client_id":client_id,"session_id":client_id,"thread_id":agent_id,"message_id":message.id,
                 "revision":revision,"text":message.text,"target":message.target,"agent_id":agent_id});
             let bytes = value.to_string().len();
             if used.saturating_add(bytes) > max_bytes {
@@ -278,21 +278,45 @@ impl Queue {
                 {
                     return Err("user message must contain 1..=16384 UTF-8 bytes of text; only newline and tab control characters are allowed".into());
                 }
-                if target != "next" && !agents.iter().any(|agent| agent.agent_id == target) {
-                    return Err(
-                        "target agent is unavailable; select an active agent or next".into(),
-                    );
-                }
-                let message = SteeringMessage {
-                    id: message_id,
-                    revision,
-                    text,
-                    target,
-                    state: SteeringState::Queued,
-                    created_at_ms: index.map_or(now, |index| state.messages[index].created_at_ms),
-                    updated_at_ms: now,
-                    delivery: None,
+                let targets = if target == "global" {
+                    if index.is_some() || agents.is_empty() {
+                        return Err(
+                            "global sends require a new message and at least one active thread"
+                                .into(),
+                        );
+                    }
+                    agents
+                        .iter()
+                        .map(|agent| agent.agent_id.clone())
+                        .collect::<Vec<_>>()
+                } else {
+                    if target != "next" && !agents.iter().any(|agent| agent.agent_id == target) {
+                        return Err(
+                            "target thread is unavailable; select an active thread or next".into(),
+                        );
+                    }
+                    vec![target]
                 };
+                let mut messages = Vec::with_capacity(targets.len());
+                for (at, target) in targets.into_iter().enumerate() {
+                    let id = if at == 0 {
+                        message_id.clone()
+                    } else {
+                        let digest = Sha256::digest(format!("{message_id}:{target}").as_bytes());
+                        format!("broadcast_{digest:x}")
+                    };
+                    messages.push(SteeringMessage {
+                        id,
+                        revision,
+                        text: text.clone(),
+                        target,
+                        state: SteeringState::Queued,
+                        created_at_ms: index
+                            .map_or(now, |index| state.messages[index].created_at_ms),
+                        updated_at_ms: now,
+                        delivery: None,
+                    });
+                }
                 let pending_count = state
                     .messages
                     .iter()
@@ -305,16 +329,16 @@ impl Queue {
                     .filter(|(at, message)| Some(*at) != index && pending(message))
                     .map(|(_, message)| cost(message))
                     .sum();
-                if (index.is_none() && pending_count >= MAX_USER_MESSAGES)
-                    || retained_pending.saturating_add(cost(&message)) > MAX_RETAINED_BYTES
+                if pending_count - usize::from(index.is_some()) + messages.len() > MAX_USER_MESSAGES
+                    || retained_pending.saturating_add(messages.iter().map(cost).sum::<usize>())
+                        > MAX_RETAINED_BYTES
                 {
                     return Err("user message queue is full; take back or cancel a pending message before publishing another".into());
                 }
                 if let Some(index) = index {
-                    state.messages[index] = message;
-                } else {
-                    state.messages.push_back(message);
+                    state.messages[index] = messages.remove(0);
                 }
+                state.messages.extend(messages);
             }
             SteeringCommand::Takeback { .. } | SteeringCommand::Cancel { .. } => {
                 let message = &mut state.messages[index.expect("validated message")];
@@ -596,5 +620,160 @@ mod tests {
                 .is_err()
         );
         assert_eq!(snapshot(&queue).messages[0].text, "pending");
+    }
+    fn threads() -> Vec<SteeringAgent> {
+        ["thread_a", "thread_b"]
+            .into_iter()
+            .map(|id| SteeringAgent {
+                agent_id: id.into(),
+                name: id.into(),
+                role: None,
+                status: "available".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn global_publish_waits_for_each_exact_thread_and_retries_once() {
+        let queue = Queue::default();
+        let command = publish(
+            "global_retry",
+            "global_message",
+            0,
+            "check AGENTS.md",
+            "global",
+        );
+        let receipt = queue
+            .command("session", threads(), command.clone())
+            .unwrap();
+        assert_eq!(receipt.messages.len(), 2);
+        assert!(
+            queue
+                .claim("session", "unbound", None, 8, MAX_DELIVERY_BYTES)
+                .is_empty()
+        );
+        let first = queue.claim("session", "one", Some("thread_a"), 8, MAX_DELIVERY_BYTES);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0]["thread_id"], "thread_a");
+        assert!(
+            queue
+                .claim("session", "retry", Some("thread_a"), 8, MAX_DELIVERY_BYTES)
+                .is_empty()
+        );
+        let duplicate = queue.command("session", threads(), command).unwrap();
+        assert_eq!(
+            duplicate
+                .messages
+                .iter()
+                .map(|message| &message.id)
+                .collect::<Vec<_>>(),
+            receipt
+                .messages
+                .iter()
+                .map(|message| &message.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            queue
+                .claim("session", "two", Some("thread_b"), 8, MAX_DELIVERY_BYTES)
+                .len(),
+            1
+        );
+        assert!(
+            queue
+                .command(
+                    "session",
+                    threads(),
+                    publish("global_retry", "global_message", 0, "changed", "global")
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn global_publish_admission_is_atomic_and_private_delivery_keeps_user_origin() {
+        let queue = Queue::default();
+        for index in 0..MAX_USER_MESSAGES - 1 {
+            queue
+                .command(
+                    "session",
+                    threads(),
+                    publish(
+                        &format!("command_{index}"),
+                        &format!("message_{index}"),
+                        0,
+                        "queued",
+                        "next",
+                    ),
+                )
+                .unwrap();
+        }
+        let before = snapshot(&queue);
+        assert!(
+            queue
+                .command(
+                    "session",
+                    threads(),
+                    publish("overflow", "overflow_message", 0, "broadcast", "global")
+                )
+                .is_err()
+        );
+        assert_eq!(snapshot(&queue), before);
+        let other = Queue::default();
+        other
+            .command(
+                "session",
+                threads(),
+                publish(
+                    "private",
+                    "private_message",
+                    0,
+                    "private user request",
+                    "thread_a",
+                ),
+            )
+            .unwrap();
+        assert!(
+            other
+                .claim("session", "other", Some("thread_b"), 8, MAX_DELIVERY_BYTES)
+                .is_empty()
+        );
+        let claimed = other.claim("session", "right", Some("thread_a"), 8, MAX_DELIVERY_BYTES);
+        assert_eq!(claimed[0]["source"], "client_user");
+        assert_eq!(claimed[0]["session_id"], "session");
+        assert_eq!(claimed[0]["thread_id"], "thread_a");
+    }
+
+    #[test]
+    fn local_global_command_queues_independent_copies() {
+        let queue = Queue::default();
+        let command = publish(
+            "global_once",
+            "message_global",
+            0,
+            "pause after this step",
+            "global",
+        );
+        let queued = queue
+            .command("session", threads(), command.clone())
+            .unwrap();
+        assert_eq!(queued.messages.len(), 2);
+        assert_eq!(queued.messages[0].id, "message_global");
+        assert_eq!(queued.messages[0].target, "thread_a");
+        assert_eq!(queued.messages[1].target, "thread_b");
+        let repeated = queue.command("session", threads(), command).unwrap();
+        assert_eq!(repeated, queued);
+        assert_eq!(
+            queue
+                .claim("session", "a", Some("thread_a"), 8, MAX_DELIVERY_BYTES)
+                .len(),
+            1
+        );
+        assert_eq!(
+            queue
+                .claim("session", "b", Some("thread_b"), 8, MAX_DELIVERY_BYTES)
+                .len(),
+            1
+        );
     }
 }

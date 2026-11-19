@@ -188,9 +188,6 @@ async fn endpoint(
                 .await,
             )
         }
-        Ok(Action::Invite(arguments)) => tool_result(
-            crate::device::controller_invite(&broker, &user, &access_token, arguments).await,
-        ),
         Ok(Action::Code(arguments)) => {
             match execute(broker, user, authorization, access_token, arguments).await {
                 Ok(response) => response,
@@ -468,7 +465,6 @@ enum Action {
     List(ListArguments),
     Code(CodeArguments),
     Collab(Value),
-    Invite(crate::device::ControllerInvite),
     ResourceList(Option<String>),
     ResourceRead(String),
 }
@@ -703,14 +699,6 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             }
             Ok(Action::List(arguments))
         }
-        "invite" => {
-            let arguments: crate::device::ControllerInvite = serde_json::from_value(arguments)
-                .map_err(|_| Fault::params("invite accepts only ttl_secs, session_ttl_secs and shell (sh or powershell); owner, subject and tokens are derived from the current OAuth authorization"))?;
-            arguments
-                .validate()
-                .map_err(|error| Fault::params(&error))?;
-            Ok(Action::Invite(arguments))
-        }
         "collab" => {
             let args = arguments
                 .as_object()
@@ -765,7 +753,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::Code(arguments))
         }
         _ => Err(Fault::params(
-            "unknown public tool; use list, code_mode, collab or invite",
+            "unknown public tool; use list, code_mode or collab",
         )),
     }
 }
@@ -1492,16 +1480,7 @@ pub(crate) fn tool_definitions() -> Value {
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
         },
         collaboration_tool(),
-        {
-            "name":"invite",
-            "description":"Create a short-lived one-use device installation/enrollment command from this verified GitHub OAuth authorization. Returns shell and PowerShell commands containing only the invitation, exact currently published compatible client release, platforms and expiry. The device does not log into GitHub. Requires the identity /mcp resource or this account's own resource, configured account storage and a published gateway client release. The device remains bound to the original grant and its revocation; refresh never extends this delegation. The caller cannot choose another owner or supply credentials.",
-            "inputSchema":{"type":"object","properties":{
-                "ttl_secs":{"type":"integer","minimum":1,"maximum":3600,"default":600},
-                "session_ttl_secs":{"type":"integer","minimum":1,"maximum":86400,"default":3600},
-                "shell":{"type":"string","enum":["sh","powershell"],"default":"sh"}
-            },"additionalProperties":false},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
-        }
+
     ])
 }
 
@@ -2359,6 +2338,9 @@ mod tests {
             json!({"model":"x".repeat(129)}),
             json!({"model":false}),
             json!({"model":"model-a","source":"mcp-client-info"}),
+            json!({"name":"claimed","account":{"provider":"github","subject":"123","login":"alice"}}),
+            json!({"name":"claimed","attribution":{"account":{"subject":"123"}}}),
+            json!({"name":"claimed","agent_id":"agent_forged"}),
         ] {
             value["params"]["arguments"]["controller"] = claim;
             assert!(operation(&parse(&value)).is_err());
@@ -2703,12 +2685,12 @@ mod tests {
     }
 
     #[test]
-    fn public_invite_rejects_owner_tokens_and_unbounded_lifetimes() {
+    fn retired_invite_is_not_a_public_tool() {
         let mut value = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invite","arguments":{}}});
-        assert!(matches!(operation(&parse(&value)), Ok(Action::Invite(_))));
+        assert!(operation(&parse(&value)).is_err());
         value["params"]["arguments"] =
             json!({"ttl_secs":30,"session_ttl_secs":60,"shell":"powershell"});
-        assert!(matches!(operation(&parse(&value)), Ok(Action::Invite(_))));
+        assert!(operation(&parse(&value)).is_err());
         for arguments in [
             json!({"subject":"43"}),
             json!({"owner":"other"}),
@@ -2736,7 +2718,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["list", "code_mode", "collab", "invite"]);
+        assert_eq!(names, ["list", "code_mode", "collab"]);
         let mut value =
             json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list"}});
         assert!(matches!(operation(&parse(&value)), Ok(Action::List(_))));
