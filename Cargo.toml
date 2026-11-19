@@ -139,6 +139,7 @@ include = [
     "/docs/configuration.md",
     "/docs/commerce.md",
     "/docs/deployment.md",
+    "/docs/oauth-durability.md",
     "/docs/validation.md",
     "/docs/validation-portal.md",
     "/docs/portal-console.md",

@@ -968,7 +968,7 @@ mod tests {
         drop(store);
         let reopened = Credentials::open(&directory.0).unwrap();
         assert!(reopened.authenticate(&device, false).is_ok());
-        oauth.revoke_subject("123");
+        oauth.revoke_subject("123").unwrap();
         assert!(!oauth.delegation_is_live(record.oauth_parent.as_ref().unwrap()));
     }
 

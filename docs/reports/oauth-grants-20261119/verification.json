@@ -1,0 +1,176 @@
+{
+  "head": "1aacc8d61aabf4db304d1c766933e1aefaf7d916",
+  "source_before": "181fe8544537b5e37f8bb2e18853711fe1ea3e806e5686e8aaafd20c28b7afd5",
+  "source_after": "181fe8544537b5e37f8bb2e18853711fe1ea3e806e5686e8aaafd20c28b7afd5",
+  "steps": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.22
+    },
+    {
+      "name": "oauth",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "oauth::",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 18.263
+    },
+    {
+      "name": "management",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "broker::management",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 0.431
+    },
+    {
+      "name": "server-options",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcpd",
+        "--",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "seconds": 42.193
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 28.621
+    },
+    {
+      "name": "ssmcpd-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcpd"
+      ],
+      "exit_code": 0,
+      "seconds": 3.22
+    },
+    {
+      "name": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.056
+    }
+  ],
+  "binary": {
+    "sha256": "5417be1a47a56aae1e54e9c25daff8c96dcae01945cb672aadf2e0604f9c0161",
+    "bytes": 132298328
+  },
+  "test_count": 59,
+  "tests_passed": [
+    "broker::management::tests::allowed_tool_access_cannot_list_or_disconnect_another_owners_connection",
+    "broker::management::tests::audit_failure_prevents_tool_dispatch_but_never_blocks_internal_cleanup",
+    "broker::management::tests::completion_audit_failure_reports_uncertain_execution_and_preserves_intent",
+    "broker::management::tests::disconnect_closes_live_wire_and_records_metadata_without_arguments_or_results",
+    "broker::management::tests::failed_connect_audit_never_sends_ready_or_leaves_a_registered_session",
+    "broker::management::tests::graceful_shutdown_drains_wire_disconnect_history_before_task_abort",
+    "broker::management::tests::verified_callers_are_audited_separately_from_session_owners_and_controller_claims",
+    "oauth::github_tests::anonymous_http_allow_is_not_an_oauth_credential_or_login_code",
+    "oauth::github_tests::github_http_denial_consumes_consent_without_issuing_an_mcp_grant",
+    "oauth::github_tests::github_http_requires_bound_callback_and_explicit_consent_then_filters_acl_and_rotates_refresh",
+    "oauth::grant_tests::authorization_code_replay_keeps_its_pkce_and_resource_binding_after_restart",
+    "oauth::grant_tests::explicit_subject_revocation_remains_effective_after_restart",
+    "oauth::grant_tests::failed_snapshot_replacement_retains_intent_and_refuses_older_snapshot",
+    "oauth::grant_tests::grant_corruption_issuer_mismatch_and_incomplete_commit_fail_closed",
+    "oauth::grant_tests::grant_file_permissions_and_symlinks_are_checked_like_the_registry",
+    "oauth::grant_tests::real_core_process_restarts_preserve_tokens_and_refresh_replay_revocation",
+    "oauth::grant_tests::refresh_replay_revocation_survives_another_restart_and_is_account_scoped",
+    "oauth::grant_tests::restart_restores_account_access_refresh_and_original_absolute_deadline",
+    "oauth::registry_tests::concurrent_registrations_survive_reload_without_lost_updates",
+    "oauth::registry_tests::corrupt_registry_and_different_issuer_never_reset_the_file",
+    "oauth::registry_tests::failed_save_never_acknowledges_an_ephemeral_registration",
+    "oauth::registry_tests::native_mixed_callbacks_survive_and_invalid_records_are_rejected",
+    "oauth::registry_tests::restart_does_not_extend_expiration_and_expired_records_are_dropped",
+    "oauth::registry_tests::restart_restores_public_basic_and_post_clients_for_real_token_exchange",
+    "oauth::registry_tests::unsafe_permissions_symlinks_hardlinks_and_competing_writer_fail_closed",
+    "oauth::tests::a_late_verified_identity_cannot_authorize_while_banned",
+    "oauth::tests::account_ban_revokes_pending_codes_access_and_refresh_families",
+    "oauth::tests::client_expiry_caps_grants_and_disconnection_invalidates_original_binding",
+    "oauth::tests::code_expiration_and_access_expiration_are_enforced",
+    "oauth::tests::consent_csp_allows_only_the_registered_callback_origin",
+    "oauth::tests::delegation_keeps_original_scope_and_deadline_through_refresh_and_replay",
+    "oauth::tests::delegation_rejects_changed_subject_resource_and_original_access_expiry",
+    "oauth::tests::failed_login_finalization_releases_reservation_without_deadlocking",
+    "oauth::tests::failed_or_expired_provider_callback_releases_form_without_replay",
+    "oauth::tests::identity_grants_survive_disconnect_and_refresh_without_inheriting_legacy_sessions",
+    "oauth::tests::ipv6_callback_gets_script_free_navigation_after_the_login_post",
+    "oauth::tests::legacy_login_codes_cannot_delegate_an_account",
+    "oauth::tests::lifetimes_reject_zero_fractional_unbounded_and_inconsistent_values",
+    "oauth::tests::login_capacity_is_reserved_before_code_consumption",
+    "oauth::tests::metadata_is_configuration_and_html_escapes_untrusted_client_name",
+    "oauth::tests::pkce_rfc7636_vector_and_strict_lengths",
+    "oauth::tests::provider_state_is_single_use_browser_and_provider_bound",
+    "oauth::tests::refresh_inactivity_expires_before_absolute_limit",
+    "oauth::tests::refresh_slides_idle_expiry_and_caps_access_at_absolute_deadline",
+    "oauth::tests::replay_markers_survive_original_idle_deadline_after_refresh",
+    "oauth::tests::successful_final_provider_attempt_can_still_be_approved_or_denied",
+    "oauth::tests::transaction_expiry_csrf_and_cancelled_login_rollback",
+    "tests::authorization_config_cannot_be_group_or_world_writable_without_provider_secrets",
+    "tests::command_line_overrides_environment_without_parsing_shadowed_values",
+    "tests::commerce_defaults_keep_sales_closed_at_the_requested_rmb_price",
+    "tests::commerce_rejects_a_second_portal_only_billing_writer",
+    "tests::lifetime_options_require_bounded_positive_seconds",
+    "tests::management_configuration_fails_closed_and_has_bounded_defaults",
+    "tests::monthly_tier_configuration_is_optional_explicit_and_requires_accounts",
+    "tests::portal_only_flag_does_not_consume_an_option_value",
+    "tests::portal_only_requires_account_storage_and_never_needs_its_own_audit_store",
+    "tests::public_url_is_an_https_origin",
+    "tests::toml_schema_rejects_typos_and_redacts_secret_source_in_errors",
+    "tests::toml_secrets_need_private_permissions_and_environment_overrides_file_values"
+  ],
+  "success": true,
+  "scope": {
+    "installed_server_changed": false,
+    "real_oauth_provider_called": false,
+    "private_real_process_generations": 3,
+    "new_behavior_tests": 9,
+    "ignored_child_fixture_counted_as_test": false
+  }
+}

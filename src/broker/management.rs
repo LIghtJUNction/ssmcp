@@ -326,7 +326,7 @@ impl Broker {
             .await
             .map_err(policy_error)?;
         if account.banned {
-            self.oauth.revoke_subject(subject);
+            let oauth_revocation = self.oauth.revoke_subject(subject);
             self.portal
                 .revoke_browser_sessions(subject)
                 .map_err(policy_error)?;
@@ -365,6 +365,7 @@ impl Broker {
             })
             .await
             .map_err(|_| ManagementError::Unavailable)?;
+            oauth_revocation.map_err(|_| ManagementError::Unavailable)?;
         }
         event.outcome = AuditOutcome::Success;
         let audit = state.audit.clone();

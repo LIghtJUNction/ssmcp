@@ -22,6 +22,8 @@ socket = "/run/ssmcpd/control.sock"
 # See https://github.com/LIghtJUNction/ssmcp/blob/main/docs/client-accounts.md.
 
 [oauth]
+# Also stores hash-only account grants in oauth-clients.toml.grants.json.
+# Keep the registry and grant snapshot together when backing up; do not clear a .pending marker blindly.
 client_registry = "/var/lib/ssmcpd/oauth-clients.toml"
 access_token_ttl = 28800
 refresh_token_idle_ttl = 2592000
