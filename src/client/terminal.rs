@@ -27,6 +27,7 @@ mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
+mod sleep;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -640,6 +641,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
             "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
@@ -1266,6 +1268,9 @@ struct State {
     dirty: bool,
     keyboard: Keyboard,
     conversation: conversation::Conversation,
+    sleep: sleep::Sleep,
+    #[cfg(test)]
+    sleep_fixture: Option<crate::client::interface::user_wait::Snapshot>,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
@@ -1318,6 +1323,9 @@ impl State {
                 ..Keyboard::default()
             },
             conversation,
+            sleep: sleep::Sleep::default(),
+            #[cfg(test)]
+            sleep_fixture: None,
         };
         if ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json {
             state.chat_initial_logs();
@@ -1639,6 +1647,7 @@ impl State {
         }
         self.dirty |= self.graphics.take_changed();
         let bytes = filtered.as_slice();
+        self.sleep_update();
         if self.ui.layout == Layout::Chat {
             return self.chat_keyboard(bytes, now, flush);
         }
@@ -1658,6 +1667,9 @@ impl State {
             self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
+            if self.sleep_key(action) {
+                continue;
+            }
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return Vec::new();
@@ -1798,6 +1810,7 @@ impl State {
             self.dirty = true;
         }
 
+        self.sleep_wake_text(&output);
         if selection_input {
             self.keyboard.logs = old_focus;
             if self.selection && output == b"\x1b" {
@@ -1877,13 +1890,22 @@ impl State {
         previous_cell: Option<images::CellSize>,
     ) -> bool {
         let pixels_changed = self.graphics.cell() != previous_cell;
+        let sleep_changed = self.sleep.visible != self.sleep_wants_overlay();
         let frozen = self.selection
+            && !self.sleep.visible
+            && !sleep_changed
             && !pixels_changed
             && previous.is_some_and(|old| !old.mouse_capture && old.geometry == self.geometry);
-        (self.dirty || pixels_changed) && !frozen
+        (self.dirty || pixels_changed || sleep_changed) && !frozen
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        let mut frame = self.base_frame(now);
+        self.sleep_overlay(&mut frame);
+        frame
+    }
+
+    fn base_frame(&mut self, now: Instant) -> Frame {
         self.media.clear();
         self.events
             .image_cells(self.graphics.cell().filter(|_| self.ui.color));
