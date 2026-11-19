@@ -1008,7 +1008,19 @@ impl Renderer {
             .unwrap_or("");
         match kind {
             "exec.started" | "ssmcp.exec.started" => {
-                let command = command_label(&value["command"]);
+                // Both title and argv come from the audit-redacted event. A
+                // caller-provided purpose supplements the actual invocation.
+                let command = match value["title"]
+                    .as_str()
+                    .filter(|title| !title.trim().is_empty())
+                {
+                    Some(title) => format!(
+                        "{} · {}",
+                        activity::single_line(title, 160),
+                        command_label(&value["command"])
+                    ),
+                    None => command_label(&value["command"]),
+                };
                 self.activities.start(
                     activity_key("job", label, id),
                     id.into(),

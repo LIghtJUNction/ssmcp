@@ -46,6 +46,18 @@ await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cu
 
 exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start(clientId,{command:[...]}) starts background work. exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options}) manage it; legacy (clientId,jobId,options) also works. exec.list(clientId) lists jobs. Local parallel option errors mark that item not_started and leave its worker available. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.
 
+For complex inline scripts, provide an optional `title` describing the operation:
+
+```js
+await exec.run(clientId, {
+  title: "Read project version",
+  command: ["python3", "-c", "from pathlib import Path\nimport tomllib\nprint(tomllib.loads(Path('Cargo.toml').read_text())['package']['version'])"],
+  wait_ms: 1000,
+});
+```
+
+`exec.start`, `exec.run`, and each `exec.parallel` item pass `title` to the native client unchanged. The client accepts at most 160 Unicode characters, trims surrounding whitespace, and rejects blank text, control characters, and line separators before starting a process. The title is display metadata: it does not change argv, the working directory, permissions, or the job ID. Job snapshots and `exec.started` events retain it. The terminal shows the title through its existing redaction path alongside the actual command entry; without a title, it keeps the command summary and does not guess the script's effects. Full command and script details remain available in the command audit and verbose output.
+
 ### rtk
 
 rtk.status(clientId) checks the installed RTK version. rtk.run/start(clientId,{command:["git","status"],cwd,...}) execute literal RTK argv with managed exec jobs. Read/wait/cancel through exec. No shell rewriting or implicit fallback; preserve exit codes and RTK recall hints.
