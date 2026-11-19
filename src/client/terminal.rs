@@ -2295,9 +2295,9 @@ struct Frame {
     bracketed_paste: bool,
     mouse_capture: bool,
 }
-impl ztui::Frame for Frame {
-    fn size(&self) -> ztui::Size {
-        ztui::Size {
+impl ztuio::Frame for Frame {
+    fn size(&self) -> ztuio::Size {
+        ztuio::Size {
             rows: self.geometry.rows,
             columns: self.geometry.cols,
         }
@@ -2310,9 +2310,9 @@ impl ztui::Frame for Frame {
             .unwrap_or("")
     }
 
-    fn cursor(&self) -> ztui::Cursor {
-        ztui::Cursor {
-            position: ztui::Point {
+    fn cursor(&self) -> ztuio::Cursor {
+        ztuio::Cursor {
+            position: ztuio::Point {
                 row: self.cursor.0,
                 column: self.cursor.1,
             },
@@ -2320,8 +2320,8 @@ impl ztui::Frame for Frame {
         }
     }
 
-    fn modes(&self) -> ztui::Modes {
-        ztui::Modes {
+    fn modes(&self) -> ztuio::Modes {
+        ztuio::Modes {
             application_cursor: self.application_cursor,
             application_keypad: self.application_keypad,
             bracketed_paste: self.bracketed_paste,
@@ -2337,7 +2337,7 @@ impl ztui::Frame for Frame {
 impl Frame {
     fn diff(&self, previous: Option<&Self>) -> Vec<u8> {
         let mut output = String::new();
-        ztui::write_diff(&mut output, self, previous)
+        ztuio::write_diff(&mut output, self, previous)
             .expect("writing an ANSI frame into String cannot fail");
         output.into_bytes()
     }
