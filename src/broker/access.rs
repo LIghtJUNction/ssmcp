@@ -108,6 +108,7 @@ impl Session {
                     return Err("不能撤销当前会话的所有者".into());
                 }
                 allow.remove(index);
+                self.steering.wake_waiters();
                 Ok(snapshot(
                     &allow,
                     owner,

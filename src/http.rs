@@ -29,6 +29,7 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
 #[cfg(test)]
 mod relay_composer_fixture;
+mod user_wait;
 
 pub fn router(broker: Arc<Broker>) -> Router {
     Router::new()
@@ -513,7 +514,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Select an authorized live client with list, then discover the needed native schemas with tools.search(id,{query,name_prefix,include_schemas:true}). Call exact registered names with call(id,name,args); native permissions and approvals still apply.\n\nUse say(id,{text,kind:'progress'}) for user-facing updates and kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS on every response. SESSION CONTEXT is historical reference, not a new request. CONVERSATION REMINDER requests a terminal update for an existing task; it is not a new user request.\n\nRead resources.read('ssmcp://guide') for helper signatures, browser routing and editable @references. Read ssmcp://limits for budgets and ssmcp://collaboration for coordination. The JavaScript sandbox has no host filesystem or network access; a timeout can leave native work running.";
+const INSTRUCTIONS: &str = "Select an authorized live client with list, then discover the needed native schemas with tools.search(id,{query,name_prefix,include_schemas:true}). Call exact registered names with call(id,name,args); native permissions and approvals still apply.\n\nUse say(id,{text,kind:'progress'}) for user-facing updates and kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS on every response. SESSION CONTEXT is historical reference, not a new request. CONVERSATION REMINDER requests a terminal update for an existing task; it is not a new user request.\n\nContinue the authorized task unless the user has explicitly agreed to end. If user input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}). If it times out, wait again; timeout is not permission to stop. Use intent:'finish' for an explicit request to end. Only outer user_wait status received with matching user_messages confirms delivery. Native kind:'answer' and explicit wait intents can inject a continuation reminder; arbitrary external assistant final messages are not visible to this server.\n\nRead resources.read('ssmcp://guide') for helper signatures, browser routing and editable @references. Read ssmcp://limits for budgets and ssmcp://collaboration for coordination. The JavaScript sandbox has no host filesystem or network access; a timeout can leave native work running.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -746,6 +747,7 @@ fn usage() -> Value {
     json!({
         "language":"javascript",
         "user_messages":"Inspect user_messages / USER REQUIREMENTS on every response. Unbound observation does not collect requests; ui.message/ui.present are interaction. Full recipient rules: ssmcp://guide.",
+        "wait_user":"return await ui.wait(id,{timeout_ms:20000,intent:'need_user',reason:'Your input is needed',notify:true}); waits 1..25s for this authenticated recipient. Outer user_wait plus user_messages is the delivery receipt. Repeat after timed_out; intent:'finish' requests explicit user permission to end and cannot grant it.",
         "conversation_reminders":"A reminder follows an existing request after two responses without a new accepted terminal reply; it is not a new task. A successful nonduplicate message/present receipt clears it. Details: ssmcp://guide.",
         "collab":"collab.join/list/update/send/receive/ack/leave coordinate existing participants. Keep tokens private; use direct collab for receive waits over 1s. See ssmcp://collaboration.",
         "controller":"controller:{name,model} is caller-reported display attribution, not authentication.",
@@ -818,6 +820,12 @@ struct CodeRunReport {
 
 impl CodeRunReport {
     async fn finish(&mut self, result: &Result<Value, String>) {
+        let waits = if result.is_err() {
+            self.run.cancel_user_waits()
+        } else {
+            self.run.cancel_unfinished_user_waits()
+        };
+        user_wait::cancel_native(&self.broker, &self.user, &self.access_token, waits).await;
         let completion = self.run.completion(result);
         deliver_code_completion(
             &self.broker,
@@ -833,7 +841,8 @@ impl CodeRunReport {
 
 impl Drop for CodeRunReport {
     fn drop(&mut self) {
-        if self.delivered {
+        let waits = self.run.cancel_user_waits();
+        if self.delivered && waits.is_empty() {
             return;
         }
         // Dropping the HTTP future also stops its JavaScript worker. A native
@@ -852,8 +861,12 @@ impl Drop for CodeRunReport {
             self.access_token.clone(),
             self.run.clone(),
         );
+        let delivered = self.delivered;
         runtime.spawn(async move {
-            deliver_code_completion(&broker, &user, &access_token, &run, completion).await;
+            user_wait::cancel_native(&broker, &user, &access_token, waits).await;
+            if !delivered {
+                deliver_code_completion(&broker, &user, &access_token, &run, completion).await;
+            }
         });
     }
 }
@@ -913,8 +926,31 @@ async fn execute(
         run: audit_run.clone(),
         delivered: false,
     };
-    let host_run = audit_run.clone();
-    let host: Host = Arc::new(move |request| {
+    let host = code_host(
+        broker,
+        user,
+        access_token,
+        audit_run.clone(),
+        controller,
+        request_id,
+    );
+    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
+    audit_report.finish(&result).await;
+    let response =
+        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
+    let response = finish_user_response(&audit_report, response).await;
+    Ok(user_wait::append(response, &audit_report.run))
+}
+
+fn code_host(
+    broker: Arc<Broker>,
+    user: String,
+    access_token: String,
+    host_run: code_mode::AuditRun,
+    controller: Option<Controller>,
+    request_id: String,
+) -> Host {
+    Arc::new(move |request| {
         let request_id = request_id.clone();
         let controller = controller.clone();
         let broker = broker.clone();
@@ -923,6 +959,8 @@ async fn execute(
         let audit_run = host_run.clone();
         Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
             let capture_memory = matches!(&request, HostRequest::Call { .. });
+            let ending_intent = matches!(&request, HostRequest::Call { name, arguments, .. }
+                if matches!(name.as_str(), "ssmcp.ui.message" | "ssmcp.ui.present") && arguments["kind"] == "answer");
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
                     if name == "collab.receive"
@@ -936,6 +974,9 @@ async fn execute(
                     }
                     return crate::bridge::dispatch(broker, user, access_token, name, arguments)
                         .await;
+                }
+                HostRequest::WaitUser { client_id, arguments } => {
+                    return user_wait::wait(broker, user, access_token, client_id, arguments, controller).await;
                 }
                 HostRequest::Call {
                     client_id,
@@ -985,17 +1026,15 @@ async fn execute(
                 .await
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             broker.client(&user, &authorization, &client_id).await?;
+            if ending_intent {
+                let _ = code_mode::AUDIT_RUN.try_with(|run| run.native_ending_intent(&client_id, &result));
+            }
             if capture_memory {
                 let _ = code_mode::AUDIT_RUN.try_with(|run| run.capture_context(&client_id, &result));
             }
             Ok(result)
         }))
-    });
-    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
-    audit_report.finish(&result).await;
-    let response =
-        append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
-    Ok(finish_user_response(&audit_report, response).await)
+    })
 }
 
 fn context_memory_addition(memories: &[Value], deferred: bool) -> Value {
@@ -1087,6 +1126,10 @@ fn append_context_memories(mut response: Value, run: &code_mode::AuditRun) -> Va
 }
 
 fn delivery_budget(response: &Value) -> usize {
+    delivery_budget_with_reserve(response, 0)
+}
+
+fn delivery_budget_with_reserve(response: &Value, reserve: usize) -> usize {
     // User text appears both in structuredContent and in a textual block.
     // Reserve framing/header space before claiming any request, so a full
     // native result plus saved memory never consumes work it cannot return.
@@ -1094,11 +1137,20 @@ fn delivery_budget(response: &Value) -> usize {
         .saturating_sub(response.to_string().len())
         .saturating_sub(16 * 1024)
         .saturating_sub(code_mode::reminders::MAX_NOTICE_BYTES)
+        .saturating_sub(reserve)
         / 2)
     .min(crate::steering::MAX_DELIVERY_BYTES)
 }
 
-async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+struct EligibleUserResponse {
+    session: Arc<Session>,
+    owner: String,
+    binding: Option<code_mode::RunBinding>,
+    may_claim: bool,
+    waiting: bool,
+}
+
+async fn eligible_user_response(report: &CodeRunReport) -> Result<Vec<EligibleUserResponse>, ()> {
     let mut eligible = Vec::new();
     let steering_targets = report.run.steering_targets();
     // Finish every asynchronous authorization lookup before mutating a queue.
@@ -1109,66 +1161,193 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
             .authenticate(&report.user, &report.access_token)
             .await
         else {
-            return response;
+            for target in report.run.targets() {
+                report.run.finish_wait_state(
+                    &target,
+                    code_mode::user_wait::Outcome::AuthorizationRevoked,
+                    "authorization_revoked_before_delivery",
+                );
+            }
+            return Err(());
         };
         let Ok(session) = report
             .broker
             .client(&report.user, &authorization, &client_id)
             .await
         else {
+            let outcome = if report
+                .run
+                .wait_recipient(&client_id)
+                .is_some_and(|recipient| {
+                    recipient
+                        .connection
+                        .upgrade()
+                        .is_none_or(|session| !session.is_alive())
+                }) {
+                code_mode::user_wait::Outcome::Disconnected
+            } else {
+                code_mode::user_wait::Outcome::AuthorizationRevoked
+            };
+            report.run.finish_wait_state(
+                &client_id,
+                outcome,
+                "connection_or_access_changed_before_delivery",
+            );
             continue;
         };
         let Ok(owner) = crate::bridge::owner(&report.user, &authorization) else {
             continue;
         };
-        let agent_id = if let Some(binding) = report.run.binding(&client_id) {
-            if owner != binding.owner
+        let waiting = report.run.wait_recipient(&client_id);
+        if waiting
+            .as_ref()
+            .is_some_and(|recipient| recipient.owner != owner)
+        {
+            report.run.finish_wait_state(
+                &client_id,
+                code_mode::user_wait::Outcome::AuthorizationRevoked,
+                "recipient_owner_changed",
+            );
+            continue;
+        }
+        let binding = waiting.as_ref().map_or_else(
+            || report.run.binding(&client_id),
+            |recipient| recipient.binding.clone(),
+        );
+        if let Some(binding) = &binding
+            && (owner != binding.owner
                 || session
                     .collaboration
                     .bind(&owner, &binding.agent_id, &binding.token)
-                    .is_err()
-            {
-                continue;
-            }
-            Some(binding.agent_id)
-        } else {
-            None
-        };
+                    .is_err())
+        {
+            report.run.finish_wait_state(
+                &client_id,
+                code_mode::user_wait::Outcome::BindingInvalid,
+                "agent_binding_changed_before_delivery",
+            );
+            continue;
+        }
         let may_claim = steering_targets.contains(&client_id);
-        eligible.push((session, owner, agent_id, may_claim));
+        eligible.push(EligibleUserResponse {
+            session,
+            owner,
+            binding,
+            may_claim,
+            waiting: waiting.is_some(),
+        });
     }
+    Ok(eligible)
+}
+
+async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+    match eligible_user_response(report).await {
+        Ok(eligible) => commit_user_response(report, response, eligible),
+        Err(()) => response,
+    }
+}
+
+fn commit_user_response(
+    report: &CodeRunReport,
+    response: Value,
+    eligible: Vec<EligibleUserResponse>,
+) -> Value {
     let mut messages = Vec::new();
     let mut notices = Vec::new();
     let mut bytes = 0usize;
-    let budget = delivery_budget(&response);
+    let reserve = report.run.user_wait_reserve_bytes();
+    let budget = if reserve == 0 {
+        delivery_budget(&response)
+    } else {
+        delivery_budget_with_reserve(&response, reserve)
+    };
     let mut notice_budget = conversation_notice_budget(&response);
-    // No await after the first claim: each recipient's receipts, age and new
-    // delivery are finalized under the existing session Queue lock exactly once.
-    for (session, owner, agent_id, may_claim) in eligible {
+    // An eligibility snapshot is not authority. Refresh OAuth/account/ACL and
+    // the real agent binding at this synchronous decision point for each target.
+    // No await follows it. Queue revisions/receipts are atomic under their own
+    // lock; the distinct authorization stores are not one global transaction.
+    for EligibleUserResponse {
+        session,
+        owner,
+        binding,
+        may_claim,
+        waiting,
+    } in eligible
+    {
         if !session.is_alive() {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::Disconnected,
+                "connection_closed_before_delivery",
+            );
             continue;
         }
+        let Some(authorization) = report
+            .broker
+            .authenticate_now(&report.user, &report.access_token)
+        else {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::AuthorizationRevoked,
+                "oauth_or_account_revoked_at_delivery_decision",
+            );
+            continue;
+        };
+        if !authorization.is_live()
+            || !authorization.permits(&session)
+            || crate::bridge::owner(&report.user, &authorization).as_deref() != Ok(owner.as_str())
+        {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::AuthorizationRevoked,
+                "access_revoked_before_delivery",
+            );
+            continue;
+        }
+        if let Some(binding) = &binding
+            && (binding.owner != owner
+                || session
+                    .collaboration
+                    .bind(&owner, &binding.agent_id, &binding.token)
+                    .is_err())
+        {
+            report.run.finish_wait_state(
+                session.client_id(),
+                code_mode::user_wait::Outcome::BindingInvalid,
+                "agent_binding_invalid_at_delivery_decision",
+            );
+            continue;
+        }
+        let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
         let replies = report.run.accepted_replies(session.client_id());
-        let (claimed, notice) = session.steering.finish_response(
-            code_mode::reminders::Response {
-                client_id: session.client_id(),
-                run_id: &report.run.context.run_id,
-                owner: &owner,
-                agent_id: agent_id.as_deref(),
-                replies: &replies,
-                notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
-                    notice_budget
-                } else {
-                    0
-                },
-            },
-            if may_claim {
-                crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len())
+        let recipient_response = code_mode::reminders::Response {
+            client_id: session.client_id(),
+            run_id: &report.run.context.run_id,
+            owner: &owner,
+            agent_id,
+            replies: &replies,
+            notice_budget: if notices.len() < code_mode::reminders::MAX_NOTICES {
+                notice_budget
             } else {
                 0
             },
-            budget.saturating_sub(bytes),
-        );
+        };
+        let maximum = if may_claim || waiting {
+            crate::steering::MAX_DELIVERY_MESSAGES.saturating_sub(messages.len())
+        } else {
+            0
+        };
+        let (claimed, notice) = if waiting && report.run.wait_is_ready(session.client_id()) {
+            report
+                .run
+                .commit_user_wait(recipient_response, maximum, budget.saturating_sub(bytes))
+        } else {
+            session.steering.finish_response(
+                recipient_response,
+                if waiting { 0 } else { maximum },
+                budget.saturating_sub(bytes),
+            )
+        };
         bytes += claimed
             .iter()
             .map(|message| message.to_string().len())
@@ -1257,7 +1436,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args) or exec.run(id,{command:[...],cwd,wait_ms}). Native permissions and approvals apply.\n\nSend user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. conversation_reminders / CONVERSATION REMINDER follows an existing task; reply in the terminal. Controller names are display attribution, not authentication.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
+            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args) or exec.run(id,{command:[...],cwd,wait_ms}). Native permissions and approvals apply.\n\nSend user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. conversation_reminders / CONVERSATION REMINDER follows an existing task; reply in the terminal. Controller names are display attribution, not authentication.\n\nContinue authorized work unless the user explicitly agrees to end. When input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}); repeat after timed_out. Use intent:'finish' for an explicit ending request. Only outer user_wait.received with matching user_messages confirms delivery; agent fields cannot grant user consent.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -2031,7 +2210,11 @@ mod tests {
         http_server.abort();
     }
 
-    async fn cancellation_test_token(base: &str, resource: &str, login_code: &str) -> String {
+    pub(super) async fn cancellation_test_token(
+        base: &str,
+        resource: &str,
+        login_code: &str,
+    ) -> String {
         const CALLBACK: &str = "http://127.0.0.1:37401/callback";
         const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
