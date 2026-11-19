@@ -393,6 +393,53 @@ impl Drop for Temporary {
     }
 }
 
+// Cargo keeps examples in the profile directory, but test executables may use
+// either the legacy deps directory or the namespaced build/<crate>/<hash>/out layout.
+fn native_plugin_fixture_path(executable: &Path) -> Option<PathBuf> {
+    let artifacts = executable.parent()?;
+    let profile = if artifacts.ends_with("deps") {
+        artifacts.parent()?
+    } else {
+        let build = artifacts.ancestors().nth(3)?;
+        if !artifacts.ends_with("out") || !build.ends_with("build") {
+            return None;
+        }
+        build.parent()?
+    };
+    Some(profile.join("examples").join(format!(
+        "{}native_plugin_fixture{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    )))
+}
+
+#[test]
+fn native_plugin_fixture_supports_cargo_artifact_layouts() {
+    let library = format!(
+        "{}native_plugin_fixture{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    for profile in [
+        "target/debug",
+        "target/aarch64-apple-darwin/release",
+        "custom-target/x86_64-pc-windows-msvc/custom-profile",
+    ] {
+        let profile = Path::new(profile);
+        let expected = profile.join("examples").join(&library);
+        for relative in ["deps/ssmcp-test", "build/ssmcp/hash/out/ssmcp-test"] {
+            assert_eq!(
+                native_plugin_fixture_path(&profile.join(relative)),
+                Some(expected.clone())
+            );
+        }
+    }
+    assert_eq!(
+        native_plugin_fixture_path(Path::new("unrelated/hash/out/ssmcp-test")),
+        None
+    );
+}
+
 #[test]
 #[ignore = "requires cargo build --example native_plugin_fixture"]
 fn native_plugin_runtime_contract() {
@@ -409,12 +456,8 @@ fn native_plugin_runtime_contract() {
         return;
     }
     let executable = std::env::current_exe().unwrap();
-    let target = executable.parent().unwrap().parent().unwrap();
-    let library = target.join("examples").join(format!(
-        "{}native_plugin_fixture{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
+    let library =
+        native_plugin_fixture_path(&executable).expect("unrecognized Cargo test executable layout");
     assert!(
         library.is_file(),
         "missing real plugin fixture {}; run cargo build --example native_plugin_fixture with the same target/profile first",
