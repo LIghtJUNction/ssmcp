@@ -488,6 +488,7 @@ async fn completion_audit_failure_reports_uncertain_execution_and_preserves_inte
     let temp = Temp::new();
     let broker = small_journal(&temp);
     let (session, mut receiver) = queued_session(&broker).await;
+    session.allowed().push(identity("456"));
     let call = tokio::spawn(async move {
         session
             .call_with_authorization(
