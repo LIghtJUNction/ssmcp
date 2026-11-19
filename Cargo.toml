@@ -59,6 +59,7 @@ include = [
     "/tests/**",
     "/scripts/release.py",
     "/scripts/test_release.py",
+    "/scripts/test_server_runtime.py",
     "/docs/commands.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",
@@ -74,6 +75,7 @@ include = [
     "/scripts/e2e_questions.py",
     "/scripts/e2e_input_history.py",
     "/scripts/e2e_presentations.py",
+    "/scripts/e2e_image_fallback.py",
     "/scripts/e2e_context_memory.py",
     "/scripts/e2e_file_paste.py",
     "/docs/reports/client-experience-20261118/**",
@@ -129,6 +131,14 @@ include = [
     "/packaging/ssmcp-portal.service",
     "/packaging/sshd-ssmcp-portal.conf",
     "/docs/backends.md",
+    "/docs/optional-harnesses.md",
+    "/docs/dependencies.md",
+    "/docs/native-plugins.md",
+    "/scripts/ssmcp-ztty.sh",
+    "/scripts/test_ztty_launcher.py",
+    "/docs/windows-browser-setup.md",
+    "/scripts/test_windows_browser_bootstrap.ps1",
+    "/scripts/smoke_windows_browser.ps1",
     "/docs/configuration.md",
     "/docs/commerce.md",
     "/docs/deployment.md",
@@ -154,10 +164,13 @@ include = [
 
 [workspace]
 members = ["crates/ztui"]
+exclude = ["crates/zharness", "crates/zplugin"]
 resolver = "3"
 
 [dependencies]
 ztui = { package = "ztui-core", version = "=0.1.1", path = "crates/ztui" }
+zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"
@@ -193,6 +206,15 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[patch.crates-io]
+zplugin = { path = "crates/zplugin" }
+
+[[example]]
+name = "native_plugin_fixture"
+path = "tests/fixtures/native_plugin.rs"
+crate-type = ["cdylib"]
+test = false
 
 [profile.release]
 opt-level = "z"

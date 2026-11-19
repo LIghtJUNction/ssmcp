@@ -31,22 +31,67 @@ print(json.dumps({"type":"ready", "url":"https://ssmcp.example/mcp" if github el
                   "login_code":code, "login_expires_in":expires,
                   "client_id":"b"*64}), flush=True)
 
-def receive(identifier):
+pending = {}
+identifier = 6
+
+def request(operation, *, partial=False, before_finish=None):
+    global identifier
+    identifier += 1
+    frame = json.dumps({"type":"call", "id":identifier, "operation":operation}) + "\n"
+    if partial:
+        split = len(frame) // 2
+        sys.stdout.write(frame[:split]); sys.stdout.flush()
+        if before_finish is not None:
+            before_finish()
+        else:
+            time.sleep(0.02)
+        sys.stdout.write(frame[split:]); sys.stdout.flush()
+    else:
+        sys.stdout.write(frame); sys.stdout.flush()
+    return identifier
+
+def receive(wanted):
+    if wanted in pending:
+        return pending.pop(wanted)
     while True:
         line = sys.stdin.readline()
         assert line, "client closed SSH before delivering a reply"
         reply = json.loads(line)
         if reply["type"] == "steering":
-            # Presence polling is independent of the native startup/catalog
-            # traffic under test. This peer has an empty user request queue.
-            assert hello["version"] >= 7, hello
+            # Presence polling must remain independent of native calls.
+            assert hello["version"] == 7, hello
             assert reply["command"] == {"op":"snapshot"}, reply
             print(json.dumps({"type":"steering_reply", "id":reply["id"], "result":{"Ok":{
                 "schema_version":1, "client_id":"b"*64, "revision":0,
                 "agents":[], "messages":[]}}}), flush=True)
             continue
-        assert reply["type"] == "reply" and reply["id"] == identifier, reply
-        return reply
+        assert reply["type"] == "reply", reply
+        if reply["id"] == wanted:
+            return reply
+        assert reply["id"] not in pending and len(pending) < 32, reply
+        pending[reply["id"]] = reply
+
+def data(reply):
+    result = reply["result"]["Ok"]
+    assert not result.get("isError", False), result
+    return result.get("structuredContent", result)
+
+def call(name, arguments=None):
+    return data(receive(request({"op":"call_tool", "name":name, "arguments":arguments or {}})))
+
+def catalog(*, partial=False, before_finish=None):
+    first = receive(request({"op":"list_tools"}, partial=partial, before_finish=before_finish))
+    page = data(first)
+    tools = list(page["tools"])
+    cursors = set()
+    while page.get("nextCursor"):
+        cursor = page["nextCursor"]
+        assert cursor not in cursors and len(cursors) < 100, "invalid catalog pagination"
+        cursors.add(cursor)
+        page = data(receive(request({"op":"list_tools", "cursor":cursor})))
+        tools.extend(page["tools"])
+    assert len(tools) == len({tool["name"] for tool in tools}), "duplicate catalog entries"
+    return first, tools
 
 def wait_for(predicate, description):
     deadline = time.monotonic() + 4
@@ -54,60 +99,87 @@ def wait_for(predicate, description):
         assert time.monotonic() < deadline, description
         time.sleep(0.005)
 
+def assert_unloaded():
+    rows = call("ssmcp.harnesses.list")["harnesses"]
+    assert len(rows) == 5 and {row["provider"] for row in rows} == {
+        "codex", "claude", "pi", "opencode", "playwright"}, rows
+    assert all(row["status"] == "not_loaded" and row["tools"] == 0
+               and "executable" in row and row["executable"] is None
+               and "version" in row and row["version"] is None for row in rows), rows
+    for name in ("version-probe", "native-pid", "native-pids"):
+        assert not (directory / name).exists(), "observation launched an optional program: " + name
+    return {"harnesses":rows}
+
 wait_for(lambda: (directory / "native-request").exists(), "shell launch was never requested")
 if scenario.endswith("healthy"):
-    # Keep a partial SSH frame open until a native handshake is actually pending.
-    frame = json.dumps({"type":"call", "id":7, "operation":{"op":"list_tools"}}) + "\n"
-    split = len(frame) // 2
-    sys.stdout.write(frame[:split]); sys.stdout.flush()
-    wait_for(lambda: (directory / "native-request").read_text() in ("startup", "discovery"),
-             "background native handshake was never reached")
-    sys.stdout.write(frame[split:]); sys.stdout.flush()
-    reply = receive(7)
-    (directory / "reply.json").write_text(json.dumps(reply))
-    page = reply["result"]["Ok"]
-    catalog = list(page["tools"])
-    identifier = 8
-    cursors = set()
-    while page.get("nextCursor"):
-        cursor = page["nextCursor"]
-        assert cursor not in cursors, "tool catalog pagination repeated a cursor"
-        cursors.add(cursor)
-        print(json.dumps({"type":"call", "id":identifier, "operation":{
-            "op":"list_tools", "cursor":cursor}}), flush=True)
-        continuation = receive(identifier)
-        page = continuation["result"]["Ok"]
-        catalog.extend(page["tools"])
-        identifier += 1
-    assert len(catalog) == len({tool["name"] for tool in catalog}), "duplicate catalog entries"
-    (directory / "catalog.json").write_text(json.dumps({"tools":catalog}))
-    # Shell capabilities must be served while native discovery is still blocked.
-    assert not (directory / "release-native").exists()
-    assert not (directory / "native-response").exists()
-    (directory / "catalog-before-native").write_text("confirmed")
-    (directory / "release-native").write_text("continue")
-
-    provider = "claude"
-    expected = "unavailable" if scenario == "catalog-error-healthy" else "ready"
-    if scenario == "catalog-timeout-healthy":
-        expected = "discovering"
-    deadline = time.monotonic() + 4
-    while True:
-        assert time.monotonic() < deadline, "background discovery did not settle"
-        print(json.dumps({"type":"call","id":identifier,"operation":{
-            "op":"call_tool","name":"ssmcp.harnesses.list","arguments":{}}}), flush=True)
-        response = receive(identifier)
-        result = response["result"]["Ok"]
-        data = result.get("structuredContent", result)
-        state = next(item for item in data["harnesses"] if item["provider"] == provider)
-        if state["status"] != "discovering" or expected == "discovering":
+    # Ordinary startup serves a fragmented catalog request without probing even
+    # an installed fixture provider. Explicit cases establish this baseline too.
+    first, baseline = catalog(partial=True)
+    (directory / "reply.json").write_text(json.dumps(first))
+    (directory / "catalog.json").write_text(json.dumps({"tools":baseline}))
+    defaults = assert_unloaded()
+    (directory / "defaults.json").write_text(json.dumps(defaults))
+    shell = call("terminal.status")
+    assert shell["running"] and shell["pid"] > 0, shell
+    (directory / "shell-status.json").write_text(json.dumps(shell))
+    assert_unloaded()
+    explicit = scenario in ("native-healthy", "github-native-healthy",
+                            "catalog-error-healthy", "catalog-timeout-healthy")
+    if explicit:
+        load_id = request({"op":"call_tool", "name":"ssmcp.harnesses.load",
+                           "arguments":{"provider":"claude"}})
+        # Keep another SSH frame partial until initialize/tools-list is blocked.
+        # Completion of this independent request must not await the load reply.
+        def awaiting_native():
+            wait_for(lambda: (directory / "native-request").read_text() == phase,
+                     "explicit native handshake was never reached")
+        _, tools = catalog(partial=True, before_finish=awaiting_native)
+        assert tools == baseline, "pending initialization altered the native-only catalog"
+        (directory / "catalog.json").write_text(json.dumps({"tools":tools}))
+        shell = call("terminal.status")
+        assert shell["running"], shell
+        (directory / "shell-status.json").write_text(json.dumps(shell))
+        loading = call("ssmcp.harnesses.list")
+        state = next(row for row in loading["harnesses"] if row["provider"] == "claude")
+        assert state["status"] == "loading" and state["tools"] == 0, state
+        (directory / "loading.json").write_text(json.dumps(loading))
+        assert load_id not in pending, "load finished while its native response was gated"
+        assert not (directory / "release-native").exists()
+        assert not (directory / "native-response").exists()
+        (directory / "catalog-before-native").write_text("confirmed")
+        (directory / "release-native").write_text("continue")
+        if scenario == "catalog-timeout-healthy":
+            wait_for(lambda: (directory / "native-catalog-unanswered").exists(),
+                     "native fixture never reached the deliberately unanswered catalog")
+            settled = call("ssmcp.harnesses.list")
+            state = next(row for row in settled["harnesses"] if row["provider"] == "claude")
+            assert state["status"] == "loading", state
+            assert load_id not in pending, "unanswered catalog unexpectedly completed loading"
+            assert not (directory / "native-response").exists()
+        else:
+            loaded = receive(load_id)
+            if scenario == "catalog-error-healthy":
+                result = loaded["result"]
+                assert "Err" in result or result.get("Ok", {}).get("isError") is True, loaded
+                assert "fixture catalog unavailable" in json.dumps(loaded), loaded
+                expected = "unavailable"
+            else:
+                data(loaded)
+                expected = "ready"
+            (directory / "load-reply.json").write_text(json.dumps(loaded))
+            settled = call("ssmcp.harnesses.list")
+            state = next(row for row in settled["harnesses"] if row["provider"] == "claude")
             assert state["status"] == expected, state
-            (directory / "harnesses.json").write_text(json.dumps(data))
-            break
-        identifier += 1
+        assert all(row["status"] == "not_loaded" and row["tools"] == 0
+                   and row["executable"] is None and row["version"] is None
+                   for row in settled["harnesses"] if row["provider"] != "claude"), settled
+        (directory / "harnesses.json").write_text(json.dumps(settled))
+    else:
+        (directory / "catalog-before-native").write_text("confirmed without loading")
+        (directory / "harnesses.json").write_text(json.dumps(defaults))
 elif scenario == "partial-eof":
     sys.stdout.write('{"type":'); sys.stdout.flush()
-# Closing SSH cancels discovery and stops every owned native process.
+# Closing SSH cancels pending loading and stops every owned native process.
 "#;
 
 const NATIVE: &str = r#"#!/usr/bin/python3
@@ -145,6 +217,7 @@ for line in sys.stdin:
             wait_for_release()
         if scenario == "catalog-timeout-healthy":
             # Keep the native process alive but never acknowledge a catalog request.
+            (directory / "native-catalog-unanswered").write_text("waiting")
             continue
         if scenario == "catalog-error-healthy":
             response = {"jsonrpc":"2.0", "id":request["id"],
@@ -193,9 +266,8 @@ impl Fixture {
         phase: &str,
         extra_args: &[&str],
     ) -> std::process::Output {
-        // Delay either native initialize or tools/list on the same controlled
-        // MCP fixture. Automatic Pi startup is deliberately unavailable: its
-        // real startup hooks cannot satisfy discovery's no-model guarantee.
+        // Explicit scenarios delay native initialize or tools/list on the same
+        // controlled MCP fixture. Ordinary startup must not execute it at all.
         std::os::unix::fs::symlink(self.0.join("native"), self.0.join("claude")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
         std::fs::write(self.0.join("native-request"), "shell-started").unwrap();
@@ -203,7 +275,7 @@ impl Fixture {
             .args(["--ssh", "--no-watchdog", "--shell", "/bin/sh"])
             .args(extra_args)
             .arg("alice@fixture")
-            // Exercise automatic discovery without observing real installed harnesses.
+            // Expose only the fixture: no real installed harness can be discovered.
             .env("PATH", &self.0)
             // Explicit SSH must not borrow the developer's saved account or
             // configured relay while exercising this local transport fixture.
@@ -229,6 +301,19 @@ impl Fixture {
             .unwrap()
     }
 
+    fn assert_native_unloaded(&self) {
+        for name in ["version-probe", "native-pid", "native-pids"] {
+            assert!(
+                !self.0.join(name).exists(),
+                "native-only startup unexpectedly executed an optional program: {name}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(self.0.join("native-request")).unwrap(),
+            "shell-started"
+        );
+    }
+
     async fn assert_native_stopped(&self) {
         let pids = std::fs::read_to_string(self.0.join("native-pids")).unwrap_or_default();
         timeout(Duration::from_secs(2), async {
@@ -237,7 +322,7 @@ impl Fixture {
             }
         })
         .await
-        .expect("background discovery left an owned native process running");
+        .expect("optional loading left an owned native process running");
     }
 }
 
@@ -329,6 +414,56 @@ async fn live_ssh_preserves_partial_frames_and_publishes_shell_capabilities() {
     let tools = catalog["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "ssmcp.exec.start"));
     assert!(tools.iter().any(|tool| tool["name"] == "terminal.status"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "ssmcp.harnesses.load")
+    );
+    assert!(tools.iter().all(|tool| {
+        !["codex.", "claude.", "pi.", "opencode.", "playwright."]
+            .iter()
+            .any(|prefix| tool["name"].as_str().unwrap().starts_with(prefix))
+    }));
+    fixture.assert_native_unloaded();
+    fixture.assert_native_stopped().await;
+}
+
+#[tokio::test]
+async fn explicit_optional_initialize_keeps_shell_catalog_and_status_online() {
+    let fixture = Fixture::new();
+    let output = fixture.run("native-healthy", "startup").await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(ready["type"], "shell");
+    assert!(fixture.0.join("catalog-before-native").exists());
+    assert!(fixture.0.join("version-probe").exists());
+    assert!(fixture.0.join("native-response").exists());
+    let loading: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("loading.json")).unwrap()).unwrap();
+    assert!(
+        loading["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["provider"] == "claude" && entry["status"] == "loading")
+    );
+    let settled: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("harnesses.json")).unwrap()).unwrap();
+    assert!(
+        settled["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["provider"] == "claude" && entry["status"] == "ready")
+    );
+    let status: Value =
+        serde_json::from_slice(&std::fs::read(fixture.0.join("shell-status.json")).unwrap())
+            .unwrap();
+    assert_eq!(status["running"], true);
     fixture.assert_native_stopped().await;
 }
 
@@ -426,10 +561,10 @@ async fn an_unresponsive_optional_catalog_keeps_shell_online_and_cancels_on_disc
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["provider"] == "claude" && entry["status"] == "discovering")
+            .any(|entry| entry["provider"] == "claude" && entry["status"] == "loading")
     );
     // Every native request is still pending when SSH closes. The client must
-    // clean up discovery without waiting for its full catalog timeout.
+    // cancel explicit loading without waiting for its full catalog timeout.
     for line in String::from_utf8_lossy(&output.stderr).lines() {
         serde_json::from_str::<Value>(line).expect("every stderr line is JSON");
     }
@@ -453,6 +588,7 @@ async fn session_title_reaches_ssh_handshake_and_connection_output() {
     let hello: Value =
         serde_json::from_slice(&std::fs::read(fixture.0.join("hello.json")).unwrap()).unwrap();
     assert_eq!(hello["metadata"]["title"], title);
+    fixture.assert_native_unloaded();
     fixture.assert_native_stopped().await;
 }
 
@@ -491,6 +627,7 @@ async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
     assert_eq!(hello["version"], ssmcp::wire::VERSION);
     assert_eq!(hello["metadata"]["allow"], ready["allow"]);
     assert!(String::from_utf8_lossy(&output.stderr).contains("allowed GitHub account"));
+    fixture.assert_native_unloaded();
     fixture.assert_native_stopped().await;
 }
 
@@ -517,7 +654,7 @@ async fn jsonl_keeps_native_ssh_and_lifecycle_stderr_machine_readable() {
     let fixture = Fixture::new();
     let output = fixture
         .run_with_args(
-            "github-healthy",
+            "github-native-healthy",
             "startup",
             &[
                 "--allow",

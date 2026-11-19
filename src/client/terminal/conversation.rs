@@ -1851,6 +1851,23 @@ impl State {
         self.tone(tone, &padded)
     }
 
+    fn chat_input_line(&self, text: &str, width: u16) -> String {
+        let text = fit(text, width);
+        let padded = format!(
+            "{text}{}",
+            " ".repeat(usize::from(width).saturating_sub(text.width()))
+        );
+        if self.ui.color {
+            format!(
+                "\x1b[{};{}m{padded}\x1b[0m",
+                self.ui.input_background(),
+                self.ui.color("muted")
+            )
+        } else {
+            padded
+        }
+    }
+
     fn chat_list_window(&mut self, count: usize, height: u16) -> std::ops::Range<usize> {
         self.conversation.selected = self.conversation.selected.min(count.saturating_sub(1));
         let capacity = usize::from(height.saturating_sub(1) / 2).max(1);
@@ -2317,12 +2334,14 @@ impl State {
         );
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
-            prompt.lines[0] = self.chat_line(
-                "❯ Type an answer · number selects an option",
-                PanelTone::Muted,
-                g.left,
-            );
+            prompt.lines[0] =
+                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
         }
+        prompt
+            .lines
+            .resize_with(usize::from(prompt_rows(g.rows)), || {
+                self.chat_input_line("", g.left)
+            });
         let mut label = self
             .conversation
             .target
@@ -2347,23 +2366,16 @@ impl State {
         let mut rows = Vec::new();
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
-                let status = if self.preview {
-                    "preview · sample data"
-                } else if !data["connected"].as_bool().unwrap_or(false) {
-                    "disconnected"
-                } else if !data["supported"].as_bool().unwrap_or(false) {
-                    "server update required for queue"
-                } else {
-                    "connected"
-                };
+                let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
+                let priority_hint = self.notice.is_some() || scroll_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if let Some(hint) = self.chat_contextual_hint(status) { return hint; }
+                    if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Tasks {
@@ -2389,19 +2401,14 @@ impl State {
                             "← / Esc  back to agents".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "↑↓ select · Enter latest call · ←/→ panels · Esc back".into()
+                                "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
                             } else {
-                                "↑↓ select · Enter message · ←/→ panels · Esc back".into()
+                                "Esc back · ↑↓ select · Enter message · ←/→ panels".into()
                             }
                         };
                     }
-                    if let Some(guide) = self.guide.as_ref().filter(|_| g.cols < 96 || g.rows < 18) {
-                        let link = format!("{status} · {}", guide.url());
-                        return if link.width() < usize::from(g.cols) { link }
-                            else { "F1 · full online guide link".into() };
-                    }
                     format!(
-                        "{} · {status} · Alt+←/→ panels · right-click logs · /help",
+                        "{} · Alt+←/→ panels · right-click logs · /help",
                         if self.conversation.content_focus {
                             "browse"
                         } else {
@@ -2409,7 +2416,14 @@ impl State {
                         }
                     )
                 });
-                rows.push(self.chat_line(&format!(" {hint}"), hint_tone, g.cols));
+                let text = super::footer::render(
+                    &hint,
+                    self.server_origin.as_ref(),
+                    connection,
+                    g.cols,
+                    priority_hint,
+                );
+                rows.push(self.tone(hint_tone, &text));
                 continue;
             } else if top > 0 && index == 0 {
                 let suffix = if self.conversation.view == View::Logs
@@ -2423,33 +2437,57 @@ impl State {
                 } else {
                     String::new()
                 };
-                let label = self.conversation.canvas.label(g.left);
-                let mut heading = format!("  ssmcp  /  {label}{}{suffix}", self.context_label);
-                if heading.width() > usize::from(g.left) {
-                    heading = format!(
-                        "  ssmcp  /  {}{}{suffix}",
-                        self.conversation.canvas.label(0),
-                        self.context_label,
+                let label = format!("{}{suffix}", self.conversation.canvas.label(g.left));
+                if g.left < 32 {
+                    self.chat_line(&format!("ssmcp · {label}"), PanelTone::Muted, g.left)
+                } else {
+                    let label = fit(&label, g.left.saturating_sub(11));
+                    let title = fit(
+                        &format!("  ssmcp{}", self.context_label),
+                        g.left.saturating_sub(label.width() as u16 + 4),
                     );
+                    let gap = usize::from(g.left).saturating_sub(title.width() + label.width() + 2);
+                    format!(
+                        "{}{}",
+                        self.tone(PanelTone::Heading, &title),
+                        self.tone(PanelTone::Muted, &format!("{}{label}  ", " ".repeat(gap))),
+                    )
                 }
-                self.chat_line(&heading, PanelTone::Heading, g.left)
             } else if index >= top && index < top + height {
                 body[usize::from(index - top)].clone()
             } else if index == prompt_top(g.rows) && prompt_rows(g.rows) > 0 {
-                let title = format!(
-                    "─ {} · {} ",
-                    if self.conversation.view == View::Questions {
-                        "Answer"
-                    } else if self.conversation.editing.is_some() {
-                        "Editing"
+                let title = if self.conversation.view == View::Questions {
+                    format!(" Answer · {label} ")
+                } else if self.conversation.editing.is_some() {
+                    format!(" Editing · {label} ")
+                } else if self.conversation.target.is_some() {
+                    format!(" To · {label} ")
+                } else if pending > 0 {
+                    format!(" {pending} queued · /queue ")
+                } else {
+                    String::new()
+                };
+                let title = fit(title.trim(), g.left.saturating_sub(4));
+                let available = usize::from(g.left).saturating_sub(title.width() + 4);
+                let detail = if g.left == g.cols {
+                    let [account, remaining] = self.account.rows();
+                    let full = format!("{} · {}", account.trim(), remaining.trim());
+                    if full.width() <= available {
+                        full
+                    } else if remaining.trim().width() <= available {
+                        remaining.trim().into()
                     } else {
-                        "To"
-                    },
-                    label
-                );
-                let mut border = fit(&title, g.left);
-                border.push_str(&"─".repeat(usize::from(g.left).saturating_sub(border.width())));
-                self.chat_line(&border, PanelTone::Muted, g.left)
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                let gap = " ".repeat(available.saturating_sub(detail.width()));
+                self.chat_line(
+                    &format!("  {title}{gap}{detail}  "),
+                    PanelTone::Muted,
+                    g.left,
+                )
             } else {
                 prompt
                     .lines
@@ -2824,33 +2862,27 @@ mod tests {
         };
         let mut state = super::super::preview_state(24, 100, &ui);
         for (cwd, title, expected) in [
-            (
-                "/workspace/alpha-project/",
-                None,
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  alpha-project",
-            ),
+            ("/workspace/alpha-project/", None, "ssmcp  /  alpha-project"),
             (
                 "/workspace/终端",
                 Some("修复输入框"),
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›  /  终端  /  修复输入框",
+                "ssmcp  /  终端  /  修复输入框",
             ),
-            (
-                "",
-                None,
-                "  ssmcp  /  ‹ agents     conversation  2/8     code audit ›",
-            ),
+            ("", None, "ssmcp"),
         ] {
             state.set_context(cwd, title);
             let screen = display(&mut state).screen().contents();
-            assert_eq!(screen.lines().next().unwrap().trim_end(), expected);
+            let header = screen.lines().next().unwrap().trim();
+            assert!(header.starts_with(expected), "{header}");
+            assert!(header.ends_with("conversation  2/8"), "{header}");
+            assert!(!header.contains("agents") && !header.contains("code audit"));
         }
         state.set_context("/workspace/alpha-project", Some("Review uploads"));
         state.chat_change_view(View::Queue);
         let screen = display(&mut state).screen().contents();
-        assert_eq!(
-            screen.lines().next().unwrap().trim_end(),
-            "  ssmcp  /  ‹ code audit     queue  4/8     questions ›  /  alpha-project  /  Review uploads",
-        );
+        let header = screen.lines().next().unwrap().trim();
+        assert!(header.starts_with("ssmcp  /  alpha-project  /  Review uploads"));
+        assert!(header.ends_with("queue  4/8"));
     }
 
     #[test]
@@ -3014,7 +3046,11 @@ mod tests {
             "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
         }));
         let rows = state.chat_agent_rows(&data, 24).join("\n");
-        assert_eq!(rows.matches("Repeated caller").count(), 1);
+        assert_eq!(
+            rows.matches("↳ Repeated caller").count(),
+            1,
+            "the roster groups calls; details may repeat the selected name"
+        );
         assert!(rows.contains("4 calls"));
         assert_eq!(state.conversation.selected_agent, selected);
         assert_eq!(state.chat_selected().unwrap()["calls"], 4);
@@ -3185,7 +3221,7 @@ mod tests {
                 if rows >= 10 && cols >= 80 {
                     let visible = shot.screen().contents();
                     assert!(visible.contains("Agents"));
-                    assert!(visible.contains("Esc back"));
+                    assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }
             }
@@ -3892,7 +3928,14 @@ mod tests {
 
     #[test]
     fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
-        let mut state = preview(36, 120);
+        let mut state = super::super::preview_state(
+            36,
+            120,
+            &Ui {
+                sidebar: true,
+                ..Ui::default()
+            },
+        );
         state.ui.panels = vec![crate::client::ui::Panel::Queue];
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Queue · 1 pending"));
@@ -4383,6 +4426,62 @@ mod tests {
                 assert_eq!(state.conversation.editing, editing);
                 assert_eq!(state.conversation.submitting, submitting);
             }
+        }
+    }
+
+    #[test]
+    fn server_footer_keeps_canvas_drafts_and_recipients_intact() {
+        let mut state = preview(24, 100);
+        state.server_origin = super::super::footer::Origin::parse(
+            "https://user:password@ssmcp.lmm.best/mcp?token=hidden#private",
+        );
+        state.conversation.composer.set_text("保留草稿界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("example-builder".into());
+        let draft = state.conversation.snapshot()["draft"].clone();
+        let queue = state.chat_data()["queue"].clone();
+        for view in [View::Activity, View::Logs, View::Tasks, View::Audit] {
+            state.canvas_focus(view);
+            state.notice = Some("/exit must be used without arguments".into());
+            let frame = state.chat_frame(Instant::now());
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains("https://ssmcp.lmm.best"), "{bottom}");
+            assert!(bottom.contains("without arguments"), "{bottom}");
+            for secret in ["user:password", "token", "hidden", "private"] {
+                assert!(!bottom.contains(secret), "{bottom}");
+            }
+            assert_eq!(state.conversation.snapshot()["draft"], draft);
+            assert_eq!(
+                state.conversation.target.as_deref(),
+                Some("example-builder")
+            );
+            assert_eq!(state.chat_data()["queue"], queue);
+            assert_eq!(frame.rows.len(), 24);
+        }
+    }
+
+    #[test]
+    fn joined_emoji_notices_keep_the_full_chat_footer() {
+        for (columns, notice) in [
+            (100, "\u{1f469}\u{200d}\u{1f4bb}".to_owned()),
+            (20, "\u{1f469}\u{200d}\u{1f4bb}".repeat(8)),
+        ] {
+            let mut state = preview(24, columns);
+            state.ui.color = false;
+            state.server_origin = super::super::footer::Origin::parse("https://ssmcp.lmm.best/mcp");
+            state.notice = Some(notice.clone());
+            let frame = state.chat_frame(Instant::now());
+            let bottom = frame.rows.last().unwrap();
+            assert!(bottom.contains(notice.as_str()), "{columns}: {bottom:?}");
+            assert_eq!(bottom.width(), usize::from(columns), "{bottom:?}");
+            if columns == 100 {
+                assert!(
+                    bottom.trim_end().ends_with("https://ssmcp.lmm.best"),
+                    "{bottom:?}"
+                );
+            }
+            // Exercise the measured row encoder as well as the footer string.
+            assert!(!frame.diff(None).is_empty());
         }
     }
 }

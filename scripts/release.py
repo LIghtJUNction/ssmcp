@@ -51,25 +51,125 @@ def version(root=None):
 
 
 def publication_packages(root=None):
-    """Dependency-first package order; keep the Rust import name separate."""
+    """Dependency-first workspace packages; independent versions do not follow the app."""
     root = root or ROOT
     result = [("ssmcp", version(root))]
+    with (root / "Cargo.toml").open("rb") as stream:
+        dependency = tomllib.load(stream).get("dependencies", {}).get("ztui")
     member = root / "crates/ztui/Cargo.toml"
-    if not member.is_file():
+    if dependency is None and not member.is_file():
         return result
+    if not member.is_file():
+        raise ValueError("ztui-core source is missing; initialize the pinned submodules recursively")
     with member.open("rb") as stream:
         core = tomllib.load(stream)
     if core["package"]["name"] != "ztui-core" or core.get("lib", {}).get("name") != "ztui":
         raise ValueError("the Project Z package must be ztui-core with library name ztui")
-    with (root / "Cargo.toml").open("rb") as stream:
-        dependency = tomllib.load(stream).get("dependencies", {}).get("ztui", {})
     core_version = core["package"]["version"]
+    version_key(core_version)
     if (not isinstance(dependency, dict) or dependency.get("package") != "ztui-core"
             or dependency.get("path") != "crates/ztui"
             or dependency.get("version") != "=" + core_version):
         raise ValueError("ssmcp must pin its local ztui-core package by exact version")
     return [("ztui-core", core_version), *result]
 
+
+def registry_dependencies(root=None):
+    """Validate independent source pins; their repositories own publication."""
+    root = root or ROOT
+    with (root / "Cargo.toml").open("rb") as stream:
+        manifest = tomllib.load(stream)
+    dependencies = manifest.get("dependencies", {})
+    result = []
+    local = {}
+    for name in ("zplugin", "zharness"):
+        dependency = dependencies.get(name)
+        if dependency is None:
+            continue
+        expected_path = "crates/" + name
+        if (not isinstance(dependency, dict)
+                or dependency.get("package", name) != name
+                or dependency.get("path") != expected_path
+                or not isinstance(dependency.get("version"), str)
+                or not dependency["version"].startswith("=")):
+            raise ValueError(f"ssmcp must pin its local {name} package by path and exact version")
+        release_version = dependency["version"][1:]
+        version_key(release_version)
+        path = root / expected_path / "Cargo.toml"
+        if not path.is_file():
+            raise ValueError(f"{name} source is missing; initialize the pinned submodules recursively")
+        with path.open("rb") as stream:
+            local[name] = tomllib.load(stream)
+        package = local[name]["package"]
+        source_version = package.get("version")
+        if source_version == {"workspace": True}:
+            source_version = local[name].get("workspace", {}).get("package", {}).get("version")
+        if package["name"] != name or source_version != release_version:
+            raise ValueError(f"{name} source and exact dependency version differ")
+        result.append((name, release_version))
+    if "zharness" in local:
+        if "zplugin" not in local:
+            raise ValueError("the local zharness integration requires the same pinned zplugin source")
+        expected = "=" + dict(result)["zplugin"]
+        dependency = local["zharness"].get("dependencies", {}).get("zplugin")
+        declared = dependency.get("version") if isinstance(dependency, dict) else dependency
+        if declared != expected:
+            raise ValueError("zharness and ssmcp must use the same exact zplugin version")
+        patch = manifest.get("patch", {}).get("crates-io", {}).get("zplugin")
+        if (not isinstance(patch, dict) or patch.get("path") != "crates/zplugin"
+                or patch.get("package", "zplugin") != "zplugin"
+                or patch.get("version") not in (None, expected, expected[1:])):
+            raise ValueError("patch.crates-io must unify zplugin at the pinned local source")
+    return result
+
+
+def source_submodules(root=None):
+    """Record only initialized, clean gitlinks at their committed object IDs."""
+    root = Path(root or ROOT).resolve()
+    records = []
+
+    def visit(folder, prefix=""):
+        listing = command("git", "ls-tree", "-r", "-z", "HEAD", cwd=folder)
+        for entry in listing.split("\0"):
+            if not entry:
+                continue
+            metadata, path = entry.split("\t", 1)
+            mode, kind, commit = metadata.split(" ", 2)
+            if mode != "160000":
+                continue
+            relative = Path(path)
+            if kind != "commit" or relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("invalid submodule gitlink path")
+            checkout = folder / relative
+            label = prefix + path
+            if (checkout.is_symlink() or not checkout.is_dir()
+                    or Path(command("git", "rev-parse", "--show-toplevel", cwd=checkout)).resolve()
+                    != checkout.resolve()):
+                raise ValueError(f"submodule {label} is not initialized; run git submodule update --init --recursive")
+            if command("git", "rev-parse", "HEAD", cwd=checkout) != commit:
+                raise ValueError(f"submodule {label} differs from its pinned gitlink")
+            dirty = subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=checkout).returncode
+            untracked = command("git", "ls-files", "--others", "--exclude-standard", cwd=checkout)
+            if dirty or untracked:
+                raise ValueError(f"submodule {label} contains uncommitted source")
+            records.append({"path": label, "commit": commit,
+                            "tree": command("git", "rev-parse", "HEAD^{tree}", cwd=checkout)})
+            visit(checkout, label + "/")
+
+    visit(root)
+    return sorted(records, key=lambda record: record["path"])
+
+
+def version_key(value):
+    """A SemVer ordering key, restricted to the versions accepted by release tags."""
+    match = TAG.fullmatch("v" + value) if isinstance(value, str) else None
+    if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
+                        for part in (match.group(4) or "").split(".")):
+        raise ValueError("version must be MAJOR.MINOR.PATCH with an optional SemVer prerelease")
+    prerelease = match.group(4)
+    suffix = (1,) if prerelease is None else (
+        0, tuple((0, int(part)) if part.isdigit() else (1, part) for part in prerelease.split(".")))
+    return tuple(int(match.group(index)) for index in (1, 2, 3)) + (suffix,)
 
 def validate_package(tag, root):
     match = TAG.fullmatch(tag)
@@ -81,7 +181,7 @@ def validate_package(tag, root):
         raise ValueError(f"tag {tag} does not match Cargo.toml version {actual}")
     with (root / "Cargo.lock").open("rb") as stream:
         locked_packages = tomllib.load(stream)["package"]
-    for name, package_version in publication_packages(root):
+    for name, package_version in publication_packages(root) + registry_dependencies(root):
         locked = [p["version"] for p in locked_packages if p["name"] == name]
         if locked != [package_version]:
             raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
@@ -132,7 +232,8 @@ def validate_tag(tag, root=None, *, build_only=False):
     subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"],
                    cwd=root, check=True)
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    return emit({"tag": tag or "", "version": actual, "sha": sha,
+    modules = source_submodules(root)
+    return emit({"tag": tag or "", "version": actual, "sha": sha, "submodule_count": len(modules),
                  "prerelease": str("-" in actual).lower(),
                  "publish": str(not build_only).lower(), "create_tag": "false",
                  "build_only": str(build_only).lower()})
@@ -155,6 +256,7 @@ def create_tag(tag, sha, root=None):
     command("git", "fetch", "origin", "main", "--tags", cwd=root)
     subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=root, check=True)
     subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+    source_submodules(root)
     exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", "refs/tags/" + tag], cwd=root).returncode == 0
     if exists:
         if command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}", cwd=root) != sha:
@@ -167,21 +269,33 @@ def create_tag(tag, sha, root=None):
     command("git", "push", "origin", "refs/tags/" + tag, cwd=root)
 
 
-def bumped_version(old, level):
-    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", old):
-        raise ValueError("automatic bump expects a stable package version")
+def bumped_version(old, level, custom_version=None):
+    previous = version_key(old)
+    if level == "custom":
+        if not custom_version:
+            raise ValueError("custom bump requires --custom-version without a leading v")
+        if version_key(custom_version) <= previous:
+            raise ValueError("custom version must be greater than the current version")
+        return custom_version
+    if custom_version:
+        raise ValueError("--custom-version is only valid with the custom level")
+    if level not in {"major", "minor", "patch"}:
+        raise ValueError("unknown version increment")
+    if "-" in old:
+        raise ValueError("automatic bump expects a stable package version; use custom for prereleases")
     parts = [int(part) for part in old.split(".")]
     index = {"major": 0, "minor": 1, "patch": 2}[level]
     parts[index] += 1
     parts[index + 1:] = [0] * (2 - index)
     return ".".join(map(str, parts))
 
-
-def bump(level, root=None):
+def bump(level, root=None, *, custom_version=None, dry_run=False):
     root = root or ROOT
-    packages = publication_packages(root)
     old = version(root)
-    new = bumped_version(old, level)
+    # Validate every local dependency/lock entry before changing either app file.
+    validate_package("v" + old, root)
+    packages = publication_packages(root)
+    new = bumped_version(old, level, custom_version)
     manifest_path, lock_path = root / "Cargo.toml", root / "Cargo.lock"
     manifest, manifest_count = re.subn(
         r'(?m)^(version\s*=\s*")' + re.escape(old) + r'("\s*)$',
@@ -191,30 +305,13 @@ def bump(level, root=None):
         lambda match: match[1] + new + match[2], lock_path.read_text(encoding="utf-8"))
     if manifest_count != 1 or lock_count != 1:
         raise ValueError("expected one matching ssmcp version in Cargo.toml and Cargo.lock")
-    writes = {}
-    result = {"tag": "v" + new, "version": new}
+    result = {"tag": "v" + new, "version": new, "dry_run": str(dry_run).lower()}
     if packages[0][0] == "ztui-core":
-        core_old = packages[0][1]
-        core_new = bumped_version(core_old, "patch")
-        core_path = root / "crates/ztui/Cargo.toml"
-        core, core_count = re.subn(
-            r'(?m)^(version\s*=\s*")' + re.escape(core_old) + r'("\s*)$',
-            lambda match: match[1] + core_new + match[2], core_path.read_text(encoding="utf-8"), count=1)
-        manifest, dependency_count = re.subn(
-            r'(?m)^(ztui\s*=\s*\{[^\n]*?\bversion\s*=\s*")=' + re.escape(core_old) + r'(")',
-            lambda match: match[1] + "=" + core_new + match[2], manifest)
-        lock, core_lock_count = re.subn(
-            r'(\[\[package\]\]\nname = "ztui-core"\nversion = ")' + re.escape(core_old) + r'("\n)',
-            lambda match: match[1] + core_new + match[2], lock)
-        if (core_count, dependency_count, core_lock_count) != (1, 1, 1):
-            raise ValueError("expected one matching ztui-core version and exact dependency before bumping")
-        writes[core_path] = core
-        result["ztui_core_version"] = core_new
-    writes[manifest_path], writes[lock_path] = manifest, lock
-    for path, text in writes.items():
-        path.write_text(text, encoding="utf-8")
+        result["ztui_core_version"] = packages[0][1]
+    if not dry_run:
+        manifest_path.write_text(manifest, encoding="utf-8")
+        lock_path.write_text(lock, encoding="utf-8")
     return emit(result)
-
 
 def archive_name(target, release_version):
     if target not in TARGETS:
@@ -309,7 +406,8 @@ def checksums(root=None):
         records.append({"name": name, "sha256": digest(path), "bytes": path.stat().st_size})
     (output / "SHA256SUMS").write_text("".join(f"{r['sha256']}  {r['name']}\n" for r in records), encoding="utf-8")
     manifest = {"package": "ssmcp", "version": release_version,
-                "commit": command("git", "rev-parse", "HEAD", cwd=root), "artifacts": records}
+                "commit": command("git", "rev-parse", "HEAD", cwd=root),
+                "submodules": source_submodules(root), "artifacts": records}
     (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Verified {len(expected)} target archives and {len(installers)} installers")
 
@@ -347,8 +445,15 @@ def check_registry(root=None, package="ssmcp", release_version=None):
     return False
 
 
+def check_registry_dependencies(root=None):
+    for package, release_version in registry_dependencies(root):
+        if registry_checksum(release_version, package) is None:
+            raise ValueError(f"publish {package} {release_version} from its independent repository before releasing ssmcp")
+
+
 def publish(root=None):
     root = root or ROOT
+    check_registry_dependencies(root)
     pending = []
     # Check the entire verified set before the first irreversible upload.
     for package, release_version in publication_packages(root):
@@ -384,7 +489,7 @@ def release_notes(root=None):
         "`ssmcp` client; the gateway daemon runs on Linux. Both x86_64 and ARM64 are available "
         "for each platform.\n\n"
         "Verify downloads against `SHA256SUMS`. `release-manifest.json` records the source "
-        "commit and SHA-256 digest of every archive.\n"
+        "commit, pinned submodule commits/trees and SHA-256 digest of every archive.\n"
     )
     document = root / "docs" / f"release-notes-{release_version}.md"
     if document.is_file():
@@ -482,7 +587,10 @@ def main():
     tag_parser = commands.add_parser("tag")
     tag_parser.add_argument("tag")
     tag_parser.add_argument("sha")
-    commands.add_parser("bump").add_argument("level", choices=["patch", "minor", "major"])
+    bump_parser = commands.add_parser("bump")
+    bump_parser.add_argument("level", choices=["patch", "minor", "major", "custom"])
+    bump_parser.add_argument("--custom-version")
+    bump_parser.add_argument("--dry-run", action="store_true")
     validate_parser = commands.add_parser("validate")
     validation_mode = validate_parser.add_mutually_exclusive_group(required=True)
     validation_mode.add_argument("--tag")
@@ -503,7 +611,7 @@ def main():
     elif args.command == "tag":
         create_tag(args.tag, args.sha)
     elif args.command == "bump":
-        bump(args.level)
+        bump(args.level, custom_version=args.custom_version, dry_run=args.dry_run)
     elif args.command == "validate":
         if args.event:
             with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
@@ -517,6 +625,7 @@ def main():
     elif args.command == "checksums":
         checksums()
     elif args.command == "check-registry":
+        check_registry_dependencies()
         for package_name, release_version in publication_packages():
             check_registry(package=package_name, release_version=release_version)
     elif args.command in {"publish", "publish-crate"}:
