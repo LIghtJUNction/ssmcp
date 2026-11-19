@@ -1,6 +1,6 @@
 # ssmcp 门户、终端与运行体验迭代
 
-记录日期：2026-11-19。本文把实际部署、已合并源码和候选构建验证分开记录。门户已随 v0.10.10 上线；v0.10.11 的正式发布在测试夹具门禁失败后停止，没有替换生产版本。后续两层插件化、强制发送、等待用户、纯本地入口和 007 显式升级已完成对应验收并合入主线 `571a9879`。v0.10.12 的 Windows 正式门禁发现两处测试平台假设；修正已通过 Linux 定点验证并合入主线 `3e84fe48`，Windows 正式复测仍待下一次发布。实际生产替换与本机 007 升级仍需在后续分别验证。下文保留成功、初次失败与尚未达到的目标，不把旧版本的通过记录移用到新版本。
+记录日期：2026-11-19。本文对应正式版本 v0.10.13 及此前相关验收。门户先随 v0.10.10 上线；本轮后续功能与 Windows 测试修正已随 v0.10.13 正式发布和部署，Release 的 19 项任务全部成功。生产核对确认实际服务器运行 v0.10.13；007 现场验收确认保存和运行映像均为官方 v0.10.13、协议 7、connected。v0.10.11 和 v0.10.12 的失败记录及标签继续保留，未将旧候选的结果冒充新版本验收。[正式发布与生产核对](checks/production-release-0.10.13.json) · [007 现场验收](checks/007-live-validation-20261119.json)
 
 ## 门户：明确入口，减轻视觉负担
 
@@ -97,7 +97,7 @@ ssmcp local \
 
 ## 007 后台恢复服务：让保存的旧版本可以明确升级
 
-本机排查发现，007 的 systemd 用户服务仍在运行，保存的程序是 v0.7.4，连接处于反复重连状态。保存文件与实际运行映像都与此前安装记录中的 SHA-256 完全一致；其对应源码使用协议 5，而当前网关只接受协议 7。这解释了旧程序无法完成注册。旧协议版本来自精确映像与源码的对应核对，现场缺失的协议字段仍记为未知。日常 CLI 更新没有解决它，因为 007 本来就保存独立的程序副本，重复安装也有意保留这个副本。进程活着与连接可用，是两个不同状态。[只读实际安装预检](checks/007-upgrade-live-preflight-20261119.json) · [现场基线](checks/007-live-baseline-20261119.json) · [协议与安装记录核对](checks/007-protocol-diagnosis-20261119.json)
+升级前的现场排查发现，007 的 systemd 用户服务仍在运行，保存的程序是 v0.7.4，连接处于反复重连状态。保存文件与实际运行映像都与此前安装记录中的 SHA-256 完全一致；其对应源码使用协议 5，而当前网关只接受协议 7。这解释了旧程序无法完成注册。旧协议版本来自精确映像与源码的对应核对，现场缺失的协议字段仍记为未知。日常 CLI 更新没有解决它，因为 007 本来就保存独立的程序副本，重复安装也有意保留这个副本。进程活着与连接可用，是两个不同状态。[只读实际安装预检](checks/007-upgrade-live-preflight-20261119.json) · [现场基线](checks/007-live-baseline-20261119.json) · [协议与安装记录核对](checks/007-protocol-diagnosis-20261119.json)
 
 [PR98](https://github.com/LIghtJUNction/ssmcp/pull/98) 增加显式升级命令：
 
@@ -115,7 +115,11 @@ ssmcp 007 status --json
 
 原有恢复流程另通过 **47/47 项检查**，包含 32 项生命周期检查和 15 项真实生产 Broker/HTTP 路由检查。两次 HTTP `code_mode` 调用到达原 client ID、原 PID，完成观察帧之后保持连接；测试没有用重新连接来满足这条断言。首次运行因旧 v5 断言失败，原记录保留，修正为当前 v7 后完整通过。
 
-实际旧安装的 `--dry-run` 已通过，确认能够验证该服务的归属。真实服务升级与正式版本发布在后续记录中单独确认，不把预检当成已更新。
+实际旧安装此前的 `--dry-run` 已通过。控制连接恢复后，22:02 UTC 的新预检发现该服务已经更新为 v0.10.13，并处于 `connected`；systemd 记录的新进程启动时间为 21:15:10 UTC。本轮没有再次执行实际 `upgrade` 或重启，原更新的执行者未确认，因此这里只记录可直接验证的现状与保全结果。[恢复后现场预检](checks/007-live-existing-upgrade-preflight-20261119.json)
+
+保存映像和实际运行映像的 SHA-256 均与下载后验证的官方 v0.10.13 程序一致。保留的旧程序备份与原 v0.7.4 保存文件和运行映像完全匹配，权限为 `0700`；10 份保存会话的定义与快照、配置及服务定义均与原始基线一致。现场没有正在运行的托管会话，运行中任务的保全依据仍是前述独立隔离验收。[官方程序校验](checks/007-official-candidate-0.10.13.json) · [最终现场状态](checks/007-live-final-state-20261119.json)
+
+22:07 UTC 又经两个独立的 `code_mode` 响应，实际调用 `ssmcp.007.status` 与 `ssmcp.007.list`：前者返回 v0.10.13／协议 7，后者返回 10 份保存会话。两次调用后仍是原来的 client ID 和 PID，连接保持 `connected`；核对期间另一个 `ssmcp.service` 也保持原有进程身份。该结果验证了完成观察帧不会使恢复连接断开，未启动新会话或调用模型。[两次实际 MCP 调用与完整保全记录](checks/007-live-validation-20261119.json)
 
 ## 服务器所有者的额度显示
 
@@ -185,11 +189,11 @@ guardian 自执行实验通过了实际任务生命周期与故障注入检查�
 
 ## 尚未宣称完成的部分
 
-等待用户、系统通知与纯本地入口的候选验证已在上文单独记载；发布状态仍以正式发布章节为准。007 的隔离升级、回滚和原有流程已验证；真实保存副本的更新尚待正式程序发布后执行，不把进程 active 等同于已经连接。
+Windows 与 macOS 的正式平台门禁通过，不能替代其真实桌面通知验收；通知实际送达用户视野仍保持未知。纯本地入口的完整实测范围是 Linux；`.local` 名称解析与可信 TLS 仍由既有网络环境提供。内存专项没有得到可交付的收益，相关实验结论与未合并分支继续保留。
 
-完整的逻辑 session/thread 运行模型尚未合入；当前已有的是托管进程会话及其连接、恢复与生命周期管理。Linux 本机测试不替代 Windows/macOS 的正式平台任务。
+后续提出的逻辑 session/thread、广播或全屏休眠界面扩展不属于本次 v0.10.13 的验收范围，其实现与状态应以对应后续提交及独立验证为准。本次已验收的是托管进程会话及其连接、恢复与生命周期管理，不将后续主线变更套用到本报告。
 
-跨独立 MCP endpoint 的多会话互联仍处于接口设计阶段，尚未宣称新的 `remotes.resolve`、`target.call` 或 `target.codeMode` 已实现。设计明确区分目标身份、原始结果、未知执行结果和独立任务生命周期；完整建议见[多会话路由设计](multi-session-routing-design.md)。
+本次 v0.10.13 没有将跨独立 MCP endpoint 的多会话互联作为新增实现交付，也未将设计中的 `remotes.resolve`、`target.call` 或 `target.codeMode` 写成已实现能力。设计明确区分目标身份、原始结果、未知执行结果和独立任务生命周期；完整建议见[多会话路由设计](multi-session-routing-design.md)。
 
 ## 正式发布状态
 
@@ -201,12 +205,22 @@ v0.10.11 的正式 Release `44563443850` 在 Linux x64 的工作区测试门禁�
 
 正式 Bump `44601617428` 已成功，Release [`44601683739`](https://github.com/LIghtJUNction/ssmcp/actions/runs/44601683739) 的 Windows x64 与 ARM64 测试均出现同样两项失败：测试调用了 Windows 明确不支持的自动私有粘贴入口，并要求关闭监听后的 TCP 连接必须在 1 秒内失败。[PR99](https://github.com/LIghtJUNction/ssmcp/pull/99) 已按实际平台合同修正测试并合入主线 `3e84fe48`，保留公共引用、授权与资源清理的检查，生产实现未变。标签源码为 `c57fb6d7a25cb5967811180cfc77214ade63c0d2`，其唯一父提交是完成验收后合入的 `571a9879`，只修改版本清单与锁文件。此前的 v0.10.11 标签保持不变。
 
-该次正式 Release 最终为 13 项成功、2 项失败、4 项跳过：六个平台构建、两套 Linux 和两套 macOS 门禁，以及两个已安装服务器运行测试通过；两项失败均为上述 Windows 测试。GitHub Release、crates 发布与部署均跳过，两个版本发布接口返回 404。独立只读核对确认生产仍为 v0.10.10，二进制及六个静态资源与既有正式部署一致。旧标签不移动；修正后的源码将经过下一次正式补丁发布。[失败与生产状态记录](checks/release-0.10.12-final-failure.json) · [正式启动记录](checks/stable-release-0.10.12-started.json) · [主线与冻结候选的逐字核对](checks/final-main-source-equivalence.json)
+该次正式 Release 最终为 13 项成功、2 项失败、4 项跳过：六个平台构建、两套 Linux 和两套 macOS 门禁，以及两个已安装服务器运行测试通过；两项失败均为上述 Windows 测试。GitHub Release、crates 发布与部署均跳过，两个版本发布接口返回 404。该次失败后的独立只读核对确认生产当时仍为 v0.10.10，二进制及六个静态资源与既有正式部署一致。旧标签保持不变；修正后的源码已纳入下述 v0.10.13 正式补丁发布。[失败与生产状态记录](checks/release-0.10.12-final-failure.json) · [正式启动记录](checks/stable-release-0.10.12-started.json) · [主线与冻结候选的逐字核对](checks/final-main-source-equivalence.json)
 
-PR99 的 Linux 定点验证通过 fmt、严格 clippy、库测试构建，以及实际执行的 Files 模块 **3/3 项测试**。验证使用冻结测试程序 `b4581446…`；合并提交的完整 Git tree 与 PR head `0dc0ce99` 相同。记录保留了此前连接中断、没有最终退出状态的尝试，未把该尝试算作通过。修订后，Unix 仍验证私有粘贴与引用展开，非 Unix 明确核对现有“不支持”错误；监听清理要求同一地址在关闭前绑定失败、关闭后重新绑定成功。此次实际执行平台为 Linux，Windows 分支仍须通过下一次正式 Windows 门禁，真实 007 保存副本升级也尚未记录完成。[定点验证](checks/windows-files-fixture-validation-20261119.json) · [合并树核对](checks/windows-files-main-merge-validation.json)
+PR99 的 Linux 定点验证通过 fmt、严格 clippy、库测试构建，以及实际执行的 Files 模块 **3/3 项测试**。验证使用冻结测试程序 `b4581446…`；合并提交的完整 Git tree 与 PR head `0dc0ce99` 相同。记录保留了此前连接中断、没有最终退出状态的尝试，未把该尝试算作通过。修订后，Unix 仍验证私有粘贴与引用展开，非 Unix 明确核对现有“不支持”错误；监听清理要求同一地址在关闭前绑定失败、关闭后重新绑定成功。这组定点验证的实际执行平台为 Linux；后续 Windows 正式门禁已在 v0.10.13 完整通过，007 的当前运行与会话保全则使用独立现场记录核对。[定点验证](checks/windows-files-fixture-validation-20261119.json) · [合并树核对](checks/windows-files-main-merge-validation.json)
+
+### v0.10.13 正式发布、生产核对与清理完成
+
+正式 Bump [`44610146313`](https://github.com/LIghtJUNction/ssmcp/actions/runs/44610146313) 成功后，Release [`44610211292`](https://github.com/LIghtJUNction/ssmcp/actions/runs/44610211292) 的 attempt 1 完成 **19/19 项任务**。Windows x64 与 ARM64 的完整检查均通过，六个平台程序包和两套已安装服务器运行验证全部通过。发布标签指向 `4e3132d60600dca5053af81cdefa6962c3058ac4`，唯一父提交为已经验收的 `3e84fe48`，差异仅为 Cargo.toml 和 Cargo.lock 中的版本号。[正式启动与源码对应记录](checks/stable-release-0.10.13-started.json)
+
+[GitHub v0.10.13](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13) 已正式发布 16 项 assets；crates.io 的 `ssmcp 0.10.13` 和 `ztui-core 0.1.2` 均经实时接口确认存在且未撤回。自动 CD 已完成，运行程序与正式目标哈希一致；21:59:23 UTC 的独立只读核对再次确认实际 `/proc/MainPID/exe` 为 `ssmcpd 0.10.13`，检查前后 PID 稳定，直接入口与公开入口健康检查均通过，主页及全部 6 项指纹资源的长度、SHA-256 和 MIME 一致。[发布与当前生产实测](checks/production-release-0.10.13.json) · [官方 CD 回执](checks/deployment-receipt-0.10.13.json)
+
+部署清除了 23,015,657 bytes 临时材料；22:03 UTC 核对时，本次服务器部署目录仅保留 intent 与 receipt，共 7,307 bytes。stage、大型临时件和已无引用的旧 managed runtime 均已清理，服务器空闲空间为 17,453,576,192 bytes。旧 v0.10.10 恢复材料已在开发机统一备份位置保存并再次校验：15 个文件，归档 6,778,880 bytes，内容、权限、归属与链接信息可核对；恢复时需从开发机传回服务器。业务数据库未纳入这次程序恢复包。
+
+007 的最终现场结果以其独立章节与证据为准：新预检时升级已经存在，本轮保留现状并补充只读验收，没有重复升级。正式发布与现场观察分别记录，避免把“已发布”、systemd “运行中”和 MCP “实际可用”混成同一个结论。
 
 ## 文件与证据
 
 本报告附带经过检查的公开证据和实际渲染图片。除门户首页外，终端图全部使用合成数据。原始用户截图中的账号或一次性授权信息不进入交付包；证据中的私有机器路径被替换为说明性占位符，源码与二进制哈希、失败结果和测量数字保留。
 
-[证据清单](evidence-manifest.json) 列出文件哈希。代码在 [LIghtJUNction/ssmcp](https://github.com/LIghtJUNction/ssmcp)，线上入口为 [ssmcp.lmm.best](https://ssmcp.lmm.best/)。
+[证据清单](evidence-manifest.json) 列出文件哈希。代码在 [LIghtJUNction/ssmcp](https://github.com/LIghtJUNction/ssmcp)，线上入口为 [ssmcp.lmm.best](https://ssmcp.lmm.best/)。 完整云端文档见 [Google Docs 迭代与验收报告](https://docs.google.com/document/d/1UwbjVcVW8q8DZ37HcsItcKr6dqYHX46qHR93BMB0i_Q/edit)。

@@ -1,12 +1,43 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-19T20:31:18.339972+00:00",
-  "status": "checkpoint: PR99 merged after Linux targeted validation; v0.10.11 and v0.10.12 release failures retained; next official Windows gate, production rollout and live 007 migration pending",
+  "generated_at": "2026-11-19T22:19:15.901179+00:00",
+  "status": "final: v0.10.13 published and deployed; existing 007 v0.10.13 independently verified without repeating its upgrade; memory optimization goal not met",
+  "scope_status": {
+    "formal_release": {
+      "status": "published_and_deployed_verified",
+      "version": "0.10.13",
+      "source_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+      "formal_jobs_success": 19,
+      "evidence": "checks/production-release-0.10.13.json"
+    },
+    "live_007": {
+      "status": "existing_upgrade_read_only_validated",
+      "version": "0.10.13",
+      "actual_upgrade_executed_by_this_controller": false,
+      "upgrade_actor_identified": false,
+      "connection_state": "connected",
+      "evidence": "checks/007-live-validation-20261119.json"
+    },
+    "memory_optimization": {
+      "goal_met": false,
+      "guardian_experiment_merged": false,
+      "event_cache_product_patch_merged": false,
+      "evidence": [
+        "checks/guardian-memory-interpretation-20261119.json",
+        "checks/event-cache-memory-driver-closeout-20261119.json"
+      ]
+    },
+    "later_session_thread_broadcast_and_sleep_scope": {
+      "included_in_v0_10_13_acceptance": false,
+      "reference": "README.md"
+    }
+  },
+  "coverage": "All files in this package except evidence-manifest.json itself. The ZIP and publisher index are stored outside the package.",
   "files": [
     {
       "path": "README.md",
-      "sha256": "1f2d7cfaabfe23f5599a1ad56723f711b8486e64ef561db0cfce4467df1ddd24",
-      "bytes": 29176
+      "sha256": "f9e7c84aee851bcd86d0c618349e51bb7d28c9754ec2c19c5d7b5b22c8acbce3",
+      "bytes": 32957
     },
     {
       "path": "checks/007-live-baseline-20261119.json",
@@ -14,9 +45,29 @@
       "bytes": 1411
     },
     {
+      "path": "checks/007-live-existing-upgrade-preflight-20261119.json",
+      "sha256": "d2045780b746b7f20eebb4a88400e5b573209084e984caaa7df809bda6153153",
+      "bytes": 1739
+    },
+    {
+      "path": "checks/007-live-final-state-20261119.json",
+      "sha256": "79e41d8d3aca360f349b4791dbc734a9fca1be4c5d937f3ca46b6b5f0ee71fcf",
+      "bytes": 1739
+    },
+    {
+      "path": "checks/007-live-validation-20261119.json",
+      "sha256": "d0efca9dd993b7a78fc425396fa93704be059c59dd0bbeab788507aa5c6959b5",
+      "bytes": 3215
+    },
+    {
       "path": "checks/007-main-merge-validation.json",
       "sha256": "5cc9e1e50ef008c2e33c1e66c59b4752b3b8ecfbe1a0917d9cd3573f5fcbedf5",
       "bytes": 1155
+    },
+    {
+      "path": "checks/007-official-candidate-0.10.13.json",
+      "sha256": "46d2d7014a18a6c96ea9b5624d7c7da1e0333d041315e0a502025e6b908cb669",
+      "bytes": 736
     },
     {
       "path": "checks/007-protocol-diagnosis-20261119.json",
@@ -72,6 +123,11 @@
       "path": "checks/daemon-account-wss-validation-20261119.json",
       "sha256": "0709b8dc67aef6a43c3cbf2aa427c99eacf7311854f9b96a2229b98da40e97b3",
       "bytes": 3140
+    },
+    {
+      "path": "checks/deployment-receipt-0.10.13.json",
+      "sha256": "36de8a276ffd903d226cfd9b64de3590c70fa2ef7de8d7027c07e9b9a148b609",
+      "bytes": 5964
     },
     {
       "path": "checks/event-cache-candidate-review-20261119.json",
@@ -209,6 +265,11 @@
       "bytes": 64912
     },
     {
+      "path": "checks/production-release-0.10.13.json",
+      "sha256": "abd75dec01903d3fe540e97790590a68f3fcfb4cf1c6f2798ea4c399c0b2f31f",
+      "bytes": 21939
+    },
+    {
       "path": "checks/read-activity-projection-checkpoint-20261119.json",
       "sha256": "0247cbe7492696bbf8c21deefd1b69f07d213d62f13371d453c28a7c6975fba6",
       "bytes": 3425
@@ -239,9 +300,19 @@
       "bytes": 3108
     },
     {
+      "path": "checks/release-0.10.13-official-linux-asset.json",
+      "sha256": "7e4c6d5df38410eb86371579c65b9d3882b88f6adaaa57714e7ac4a8ec194a24",
+      "bytes": 492
+    },
+    {
       "path": "checks/stable-release-0.10.12-started.json",
       "sha256": "6501aed3af24a818b3d791040656f0da1cc329e00338c21879b553fa15022b52",
       "bytes": 2698
+    },
+    {
+      "path": "checks/stable-release-0.10.13-started.json",
+      "sha256": "1f806395844ea5d211176de358594deb5072b8525759f64e5fc8cbe509b0efa7",
+      "bytes": 2340
     },
     {
       "path": "checks/stable-ui-validation-20261119.json",

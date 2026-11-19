@@ -1,0 +1,75 @@
+{
+  "schema": "ssmcp.007.live-validation.v1",
+  "verified_at": "2026-11-19T22:07:43.849815+00:00",
+  "outcome": "existing official v0.10.13 upgrade verified without repeating service mutation",
+  "actual_upgrade_executed_by_this_controller": false,
+  "upgrade_actor_identified": false,
+  "observed_service_start_utc": "2026-11-19T21:15:10Z",
+  "discovery": "The fresh preflight already found v0.10.13 connected. This controller downloaded and verified the official candidate, ran a dry-run and read-only preservation checks, and left that existing upgrade in place.",
+  "original_version": "0.7.4",
+  "current_version": "0.10.13",
+  "current_wire_version_directly_observed": 7,
+  "original_wire_version_directly_observed": null,
+  "original_wire_version_inferred_from_verified_source": 5,
+  "official_candidate": {
+    "schema": "ssmcp.007.official-candidate.v1",
+    "captured_at": "2026-11-19T22:00:06.005021+00:00",
+    "release_url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.13",
+    "asset_url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.13/ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+    "archive_sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b",
+    "archive_bytes": 9529375,
+    "archive_digest_matched_official_metadata": true,
+    "archive_member": "ssmcp",
+    "binary_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "binary_bytes": 12946488,
+    "version": "ssmcp 0.10.13",
+    "version_exit_code": 0,
+    "service_mutations": [],
+    "installation_performed": false
+  },
+  "backup": {
+    "count": 1,
+    "sha256": "e7e3d84b6afc869c5e340fbf9cf0c8c4092e60f6ce68c85379b4b64e8cc0c048",
+    "matches_original_running_and_saved_image": true,
+    "mode": "0o700"
+  },
+  "preservation": {
+    "config_and_unit_preserved": true,
+    "saved_session_files_preserved": true,
+    "saved_session_count_before": 10,
+    "saved_session_count_after": 10,
+    "saved_session_process_identities_preserved": true,
+    "existing_backups_preserved": true,
+    "recovery_process_changed": true,
+    "recovery_image_changed": true
+  },
+  "saved_sessions": 10,
+  "active_saved_session_units": 0,
+  "session_snapshots_matching_manifest": 10,
+  "saved_sessions_sha256": "808d88b7663bc14173a3c07e97c17fdfe0d5463ec6c434c815da28144ec45d83",
+  "preserved_config_and_unit_sha256": "9ea154bc9dc16f99aef6c3428239b16efdf5beee25b0d373f3c7aabca1cc68aa",
+  "independent_mcp_calls": [
+    {
+      "method": "ssmcp.007.status",
+      "success": true,
+      "mode": "007",
+      "version": "0.10.13",
+      "wire_version": 7
+    },
+    {
+      "method": "ssmcp.007.list",
+      "success": true,
+      "saved_sessions": 10
+    }
+  ],
+  "separate_code_mode_responses": true,
+  "same_original_client_id_after_both_calls": true,
+  "same_process_after_both_calls": true,
+  "client_identity_sha256": "a2b0005b19a387448bc4f5f74fbf00b05cbde60c1e5dc755676bc4ef7db80f4e",
+  "connection_state_after_both_calls": "connected",
+  "other_ssmcp_service_unchanged_during_verification": true,
+  "other_system_ssmcp_service_start_utc": "2026-11-19T04:57:21Z",
+  "models_invoked": false,
+  "new_sessions_started": false,
+  "service_mutations_by_this_controller": 0
+}

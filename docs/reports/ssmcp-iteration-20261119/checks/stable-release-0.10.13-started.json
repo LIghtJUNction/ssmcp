@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-19T20:36:11.521243+00:00",
+  "version": "0.10.13",
+  "approved_base": "3e84fe481fa49fc7093e880ff213909e46df35a6",
+  "tag_object": "0c45ca98a9c4f389ddbff1b58797aed235fee422",
+  "tag_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+  "tree_sha": "f122be555b8e0ea597b4561b63d2acb574057e57",
+  "single_parent_verified": true,
+  "version_only_change_verified": true,
+  "changed_files": [
+    "Cargo.lock",
+    "Cargo.toml"
+  ],
+  "preserved_failed_release_tags": {
+    "v0.10.11": {
+      "sha": "e88b03c98fe849e1abe402d9fb078cb18e128f6f",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/e88b03c98fe849e1abe402d9fb078cb18e128f6f"
+    },
+    "v0.10.12": {
+      "sha": "ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee",
+      "type": "tag",
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/git/tags/ea3a4baebcc3bb2eb66c27b8c641d6b51469e4ee"
+    }
+  },
+  "bump": {
+    "id": 44610146313,
+    "status": "completed",
+    "conclusion": "success",
+    "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44610146313",
+    "run_attempt": 1,
+    "head_sha": "3e84fe481fa49fc7093e880ff213909e46df35a6"
+  },
+  "release": {
+    "id": 44610211292,
+    "status": "in_progress",
+    "conclusion": null,
+    "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44610211292",
+    "run_attempt": 1,
+    "head_sha": "4e3132d60600dca5053af81cdefa6962c3058ac4"
+  },
+  "github_release_status": "pending",
+  "crates_status": "pending",
+  "deployment_status": "pending",
+  "predeployment_recovery": {
+    "schema_version": 1,
+    "status": "verified",
+    "created_at": "2026-11-19T20:34:15.303712+00:00",
+    "version": "0.10.10",
+    "runtime_sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79",
+    "archive_sha256": "39183599d07a8d86fca51875f4f5e3fea8438447edae52d2d05ad88d1b87b3e4",
+    "archive_bytes": 6778880,
+    "file_count": 15,
+    "symlink_count": 0,
+    "content_permissions_links_verified": true,
+    "same_pid_and_lease_verified": true,
+    "database_included": false,
+    "production_modified": false
+  },
+  "production_at_dispatch": {
+    "version": "0.10.10",
+    "sha256": "c0dd811b8fd51aea45c80ff22c771c1a205d8fc8dfb24f977a6fc97bccf13b79"
+  },
+  "dispatch_count": 1,
+  "old_run_retries": 0
+}
