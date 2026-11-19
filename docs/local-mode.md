@@ -4,6 +4,20 @@
 
 本页描述仓库中的 Linux 首版实现。安装包是否包含此命令，以 `ssmcp local --help` 为准；源码合入、正式发布和已经安装的程序是不同状态。macOS、Windows 本地宿主、后台本地会话与 MCP stdio 桥接尚不在此入口的支持范围内。
 
+## 运行前提
+
+本地模式同时承担客户端与 MCP 宿主的工作。除了 `ssmcp` 可执行文件，执行 `code_mode` 还需要已安装的原生 Node.js、Bubblewrap 的 `bwrap`、util-linux 的 `prlimit`，以及与当前版本匹配的 `code-mode.js`。这不是只复制一个 Rust 可执行文件就能完成的运行环境。
+
+`node`、`bwrap` 和 `prlimit` 通常从启动进程的 `PATH` 查找；Node 也可用 `SSMCP_NODE` 指向已经安装的原生可执行文件。程序会检查 Node 是否支持隔离运行所需的参数。Bubblewrap 必须能创建本次沙箱使用的用户与其他 Linux namespace；系统策略禁止该操作时，工具编排会报错，不会退回无沙箱执行。
+
+正式构建默认从安装前缀下的 `libexec/ssmcp/code-mode.js` 加载执行脚本；例如程序位于 `/usr/local/bin/ssmcp` 时，对应 `/usr/local/libexec/ssmcp/code-mode.js`。如果只有客户端安装包而缺少该脚本，需先准备同版本脚本，再以绝对路径明确指定：
+
+```sh
+SSMCP_CODE_MODE_RUNNER=/absolute/path/to/matching/code-mode.js ssmcp local
+```
+
+脚本路径必须存在。源码的调试构建可以回退到其编译时源码目录中的脚本，正式安装不能依赖该调试行为。单独的文件、命令与已安装工具仍有各自的运行前提；本地模式不会下载模型程序、安装上述依赖或修改系统 namespace 策略。以上查找与沙箱规则对应 [`runner_path` / `sandbox_command`](../src/code_mode.rs) 和 [Node 运行时检查](../src/program.rs)。
+
 ## 直接在本机连接
 
 在要共享的项目目录运行：

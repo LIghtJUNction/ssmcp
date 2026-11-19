@@ -117,9 +117,9 @@ class LocalFrontend(Frontend):
         os.set_blocking(self.master, False)
         environment = harness.client_environment(label)
         # Unlike the account fixture, this process also owns the real MCP host
-        # and its code-mode runner. Expose those two installed prerequisites in
+        # and its code-mode runner. Expose its installed prerequisites in
         # the otherwise restricted utility PATH; no model binary is added.
-        for name in ("git", "node"):
+        for name in ("git", "node", "bwrap", "prlimit"):
             binary = shutil.which(name)
             if not binary:
                 raise RuntimeError(f"local terminal E2E requires installed {name}")
