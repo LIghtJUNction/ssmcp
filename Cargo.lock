@@ -1457,7 +1457,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zharness",
  "zplugin",
- "ztui-core",
+ "ztuio",
 ]
 
 [[package]]
@@ -2258,8 +2258,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ztui-core"
-version = "0.1.2"
+name = "ztuio"
+version = "0.1.0"
 
 [[package]]
 name = "zune-core"

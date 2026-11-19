@@ -4,3 +4,6 @@
 [submodule "zplugin"]
 	path = crates/zplugin
 	url = https://github.com/LIghtJUNction/zplugin.git
+[submodule "ztuio"]
+	path = crates/ztuio
+	url = https://github.com/LIghtJUNction/ztuio.git
