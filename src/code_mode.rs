@@ -1,5 +1,6 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
 pub(crate) mod reminders;
+pub(crate) mod user_wait;
 use crate::backend::process::Managed;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -52,6 +53,7 @@ pub(crate) struct AuditRun {
     bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
     memories: Arc<Mutex<ContextMemories>>,
     accepted_replies: Arc<Mutex<reminders::Receipts>>,
+    waits: Arc<Mutex<user_wait::State>>,
     started: Instant,
 }
 
@@ -109,6 +111,7 @@ impl AuditRun {
             bindings: Arc::new(Mutex::new(HashMap::new())),
             memories: Arc::new(Mutex::new(ContextMemories::default())),
             accepted_replies: Arc::new(Mutex::new(reminders::Receipts::default())),
+            waits: Arc::new(Mutex::new(user_wait::State::default())),
             started: Instant::now(),
         })
     }
@@ -377,6 +380,10 @@ pub enum HostRequest {
         #[serde(default)]
         cursor: Option<String>,
     },
+    WaitUser {
+        client_id: String,
+        arguments: user_wait::Arguments,
+    },
 }
 pub type Host = Arc<
     dyn Fn(HostRequest) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>>
@@ -462,10 +469,17 @@ fn node_arguments(command: &mut Command) {
 }
 
 fn sandbox_command() -> Result<Command, String> {
+    sandbox_command_with_runner(None)
+}
+
+fn sandbox_command_with_runner(local_runner: Option<PathBuf>) -> Result<Command, String> {
     let node = executable("node")?;
     let bwrap = executable("bwrap")?;
     let prlimit = executable("prlimit")?;
-    let runner = runner_path()?;
+    let runner = match local_runner {
+        Some(path) => path,
+        None => runner_path()?,
+    };
     let mut command = Command::new(bwrap);
     command.env_clear().args([
         "--unshare-all",
@@ -571,6 +585,22 @@ pub async fn execute(
     host: Host,
 ) -> Result<Value, String> {
     let command = prepare_command(sandbox_command).await?;
+    execute_process(command, code, timeout_ms, clients, host).await
+}
+
+/// Local hosts supply their private, version-matched runner. Remote execution
+/// keeps the established installed-runtime path, sandbox and resource limits.
+pub(crate) async fn execute_with_runner(
+    code: String,
+    timeout_ms: u64,
+    clients: Value,
+    host: Host,
+    local_runner: Option<PathBuf>,
+) -> Result<Value, String> {
+    let Some(runner) = local_runner else {
+        return execute(code, timeout_ms, clients, host).await;
+    };
+    let command = prepare_command(move || sandbox_command_with_runner(Some(runner))).await?;
     execute_process(command, code, timeout_ms, clients, host).await
 }
 
@@ -783,6 +813,13 @@ fn validate_request(request: &HostRequest) -> Result<(), String> {
             if cursor.as_ref().is_some_and(|c| c.len() > 128) {
                 return Err("tool cursor is too long".into());
             }
+            client_id
+        }
+        HostRequest::WaitUser {
+            client_id,
+            arguments,
+        } => {
+            arguments.validate()?;
             client_id
         }
     };
@@ -1052,6 +1089,7 @@ mod tests {
             "ssmcp.ui.history",
             "ssmcp.ui.harness",
             "ssmcp.ui.listener",
+            "ssmcp.ui.wait",
             "ssmcp.ui.messages",
             "ssmcp.client.capabilities",
             "ssmcp.resources.list",
@@ -1159,6 +1197,10 @@ mod tests {
             HostRequest::Tools {
                 client_id: "unavailable".into(),
                 cursor: None,
+            },
+            HostRequest::WaitUser {
+                client_id: "unavailable".into(),
+                arguments: serde_json::from_value(json!({})).unwrap(),
             },
         ] {
             let (host, called) = runtime_check_host();
@@ -1280,6 +1322,12 @@ mod tests {
                     HostRequest::Tools { client_id, cursor } => Ok(
                         json!({"tools":[{"name":"echo","inputSchema":{"type":"object"}}],"id":client_id,"cursor":cursor}),
                     ),
+                    HostRequest::WaitUser {
+                        client_id,
+                        arguments,
+                    } => Ok(json!({
+                        "client_id":client_id,"status":"timed_out","timeout_ms":arguments.timeout_ms
+                    })),
                 }
             })
         })
@@ -1293,6 +1341,18 @@ mod tests {
             host(),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn user_wait_helper_uses_a_controlled_host_request() {
+        let _guard = TESTS.lock().await;
+        let result =
+            run_code("return await ui.wait('one',{timeout_ms:1000,intent:'finish',notify:false});")
+                .await
+                .unwrap();
+        assert_eq!(result["result"]["client_id"], "one");
+        assert_eq!(result["result"]["status"], "timed_out");
+        assert_eq!(result["result"]["timeout_ms"], 1000);
     }
 
     #[tokio::test]

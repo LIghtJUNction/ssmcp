@@ -10,6 +10,29 @@ pub(super) struct Origin {
 }
 
 impl Origin {
+    #[cfg(target_os = "linux")]
+    pub(super) fn parse_local(endpoint: &str) -> Option<Self> {
+        if endpoint.len() > 2048
+            || endpoint
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+        {
+            return None;
+        }
+        let endpoint = Url::parse(endpoint).ok()?;
+        if !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return None;
+        }
+        let origin = crate::oauth::local_origin(&endpoint.origin().ascii_serialization()).ok()?;
+        let full = origin.origin().ascii_serialization();
+        let authority = full.split_once("://")?.1.to_owned();
+        Some(Self { full, authority })
+    }
+
     /// Retain only the validated public origin, never endpoint credentials or tokens.
     pub(super) fn parse(endpoint: &str) -> Option<Self> {
         if endpoint.len() > 2048
@@ -209,6 +232,30 @@ pub(super) fn render(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_origin_retains_loopback_and_named_proxy_without_credentials() {
+        for endpoint in [
+            "http://127.0.0.1:43123/alice",
+            "http://[::1]:43123/alice",
+            "https://workstation.local/alice",
+        ] {
+            let origin = Origin::parse_local(endpoint).unwrap();
+            let row = render("", Some(&origin), Connection::Connected, 100, false);
+            assert!(row.contains(&origin.full));
+            assert!(!row.contains("/alice"));
+        }
+        for endpoint in [
+            "http://localhost:43123/alice",
+            "http://192.0.2.1/alice",
+            "https://remote.example/alice",
+            "http://user:secret@127.0.0.1/alice",
+            "http://127.0.0.1/alice?token=secret",
+        ] {
+            assert!(Origin::parse_local(endpoint).is_none());
+        }
+    }
 
     #[test]
     fn endpoint_identity_removes_credentials_path_query_and_fragment() {

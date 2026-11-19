@@ -21,6 +21,8 @@ mod handoff;
 mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
+#[cfg(target_os = "linux")]
+mod local;
 pub(crate) mod notification;
 mod panel;
 pub(crate) mod presentation;
@@ -64,6 +66,7 @@ Usage: ssmcp [username@server] [options]
 
 Start
   ssmcp                         Reuse your last authorized account
+  ssmcp local                   Run a local MCP session on Linux
   ssmcp alice@relay.example     Connect and sign in when needed
   ssmcp list                    List your online devices
   ssmcp -i                      Open an authorized remote terminal
@@ -314,6 +317,8 @@ fn ssh_ended(status: io::Result<ExitStatus>) -> String {
 }
 
 struct Options {
+    #[cfg(target_os = "linux")]
+    local: Option<local::Settings>,
     destination: Option<String>,
     server: Option<String>,
     username: Option<String>,
@@ -376,7 +381,17 @@ impl Options {
         default_watchdog: bool,
         legacy_destination: bool,
     ) -> Result<Option<Self>, String> {
-        let mut args = args.into_iter();
+        let mut args = args.into_iter().peekable();
+        let local_mode = args.peek().is_some_and(|arg| arg == "local");
+        if local_mode {
+            args.next();
+        }
+        #[cfg(not(target_os = "linux"))]
+        if local_mode {
+            return Err("ssmcp local currently requires Linux".into());
+        }
+        #[cfg(target_os = "linux")]
+        let mut local = local_mode.then(local::Settings::default);
         let mut destination = None;
         let mut server = None;
         let mut username = None;
@@ -404,6 +419,11 @@ impl Options {
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("-h" | "--help") => {
+                    #[cfg(target_os = "linux")]
+                    if local_mode {
+                        print!("{}", local::HELP);
+                        return Ok(None);
+                    }
                     print!("{HELP}");
                     return Ok(None);
                 }
@@ -426,6 +446,24 @@ impl Options {
                     return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
                 }
                 Some("--ssh") => ssh = true,
+                #[cfg(target_os = "linux")]
+                Some("--listen") => {
+                    let value = args.next().ok_or("--listen requires IP:PORT")?;
+                    local
+                        .as_mut()
+                        .ok_or("--listen is only available with ssmcp local")?
+                        .set_listen(value.to_str().ok_or("--listen must be UTF-8")?)?;
+                }
+                #[cfg(target_os = "linux")]
+                Some("--public-url") => {
+                    let value = args
+                        .next()
+                        .ok_or("--public-url requires https://NAME.local")?;
+                    local
+                        .as_mut()
+                        .ok_or("--public-url is only available with ssmcp local")?
+                        .set_public_url(value.to_str().ok_or("--public-url must be UTF-8")?)?;
+                }
                 Some("--no-browser") => no_browser = true,
                 Some("--username") => {
                     let value = args.next().ok_or("--username requires a name")?;
@@ -575,7 +613,26 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
-        if destination.is_none() && server.is_none() && !list_tools {
+        if local_mode
+            && (destination.is_some()
+                || server.is_some()
+                || username.is_some()
+                || ssh
+                || identity.is_some()
+                || port.is_some()
+                || config.is_some()
+                || !allow.is_empty()
+                || daemon
+                || session_control
+                || list_tools)
+        {
+            return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --allow, --daemon, --session-control and --list-tools".into());
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(settings) = &local {
+            settings.validate()?;
+        }
+        if !local_mode && destination.is_none() && server.is_none() && !list_tools {
             destination = default_destination.map(str::to_owned);
         }
         // Explicit SSH switches and old saved manifests retain their established
@@ -654,6 +711,8 @@ impl Options {
             return Err("client name must be nonempty, contain no control characters, and be at most 128 bytes".into());
         }
         Ok(Some(Self {
+            #[cfg(target_os = "linux")]
+            local,
             destination,
             server,
             username,
@@ -683,6 +742,17 @@ impl Options {
         }))
     }
 
+    fn is_local(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.local.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
     fn metadata(&self) -> crate::Result<ClientMetadata> {
         let hostname = crate::platform::hostname()?;
         let cwd = std::env::current_dir()?
@@ -707,6 +777,11 @@ impl Options {
     /// Store only validated connection settings. Service stdout/stderr have a
     /// fixed non-interactive format, so display themes are deliberately omitted.
     fn session_spec(&self) -> crate::Result<crate::session::SessionSpec> {
+        if self.is_local() {
+            return Err(
+                "local sessions currently run in the foreground; keep this terminal open".into(),
+            );
+        }
         let metadata = self.metadata()?;
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
@@ -1115,6 +1190,12 @@ async fn apply_account(
     join: Option<JoinRequest>,
     allow_login: bool,
 ) -> crate::Result<()> {
+    if options.is_local() {
+        if join.is_some() {
+            return Err("local mode cannot enroll an account invitation".into());
+        }
+        return Ok(());
+    }
     if options.list_tools {
         if join.is_some() {
             return Err("join starts a controlled session; --list-tools is local".into());
@@ -1176,6 +1257,19 @@ async fn apply_account(
 }
 
 pub async fn run() -> crate::Result<()> {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__local-relay")) {
+        let code = match local::relay().await {
+            Ok(()) => 0,
+            Err(error) => {
+                report_error(&error.to_string());
+                1
+            }
+        };
+        // Like __relay, this transport-only process may have a blocking stdin
+        // reader when the host closes first. It owns no tool processes.
+        std::process::exit(code);
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__tty-view")) {
         let args: Vec<_> = std::env::args_os().skip(2).collect();
         if args.len() != 2 {
@@ -1277,7 +1371,15 @@ pub async fn run() -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
-    apply_account(&mut options, join, service.is_none()).await?;
+    if options.is_local() {
+        if service.is_some() || join.is_some() {
+            return Err(
+                "local mode requires a foreground session without an account invitation".into(),
+            );
+        }
+    } else {
+        apply_account(&mut options, join, service.is_none()).await?;
+    }
     if let Some(runner) = &service
         && (options.daemon
             || options.list_tools
@@ -1770,6 +1872,58 @@ async fn reclaim_steering(
     }).await.map_err(|_| "queued requests could not be reclaimed in time; client remains running")?
 }
 
+enum Transport<'a> {
+    Account(&'a account::Credential),
+    #[cfg(target_os = "linux")]
+    Local(&'a local::Host),
+}
+
+impl Transport<'_> {
+    fn command(&self, executable: &std::path::Path) -> Command {
+        match self {
+            Self::Account(credential) => relay::command(executable, credential),
+            #[cfg(target_os = "linux")]
+            Self::Local(host) => host.command(executable),
+        }
+    }
+
+    fn report_connecting(&self) {
+        match self {
+            Self::Account(credential) => render::status(
+                "https",
+                "Progress",
+                &format!(
+                    "Connecting to {} with an authenticated HTTPS relay",
+                    credential.server
+                ),
+            ),
+            #[cfg(target_os = "linux")]
+            Self::Local(host) => render::status(
+                "local",
+                "Progress",
+                &format!(
+                    "Starting local MCP at {} with private OS-user transport",
+                    host.origin
+                ),
+            ),
+        }
+    }
+
+    fn start_display(
+        &self,
+        ui: &ui::Ui,
+        cwd: &str,
+        title: Option<&str>,
+        url: &str,
+    ) -> io::Result<Option<terminal::Session>> {
+        match self {
+            Self::Account(_) => terminal::Session::start(ui, cwd, title, Some(url)),
+            #[cfg(target_os = "linux")]
+            Self::Local(_) => terminal::Session::start_local(ui, cwd, title, Some(url)),
+        }
+    }
+}
+
 async fn connect(
     options: &Options,
     ui: &ui::Ui,
@@ -1778,24 +1932,56 @@ async fn connect(
     attempt: u64,
     registered: &mut bool,
 ) -> crate::Result<ConnectionExit> {
+    #[cfg(target_os = "linux")]
+    if let Some(settings) = &options.local {
+        let host = local::Host::start(settings).await?;
+        let result = connect_inner(
+            options,
+            ui,
+            service,
+            attachment,
+            attempt,
+            registered,
+            Transport::Local(&host),
+        )
+        .await;
+        // Complete cleanup before /reload can replace this process or the
+        // watchdog begins a new connection with a new one-use authorization.
+        host.shutdown().await;
+        return result;
+    }
+    let credential = options
+        .relay
+        .as_ref()
+        .ok_or("OAuth credentials are required to connect")?;
+    connect_inner(
+        options,
+        ui,
+        service,
+        attachment,
+        attempt,
+        registered,
+        Transport::Account(credential),
+    )
+    .await
+}
+
+async fn connect_inner(
+    options: &Options,
+    ui: &ui::Ui,
+    service: Option<&crate::session::Runner>,
+    attachment: Option<&crate::session::attach::Handle>,
+    attempt: u64,
+    registered: &mut bool,
+    transport: Transport<'_>,
+) -> crate::Result<ConnectionExit> {
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
-    let credential = options
-        .relay
-        .as_ref()
-        .ok_or("OAuth credentials are required to connect")?;
     let executable = std::env::current_exe()?;
-    render::status(
-        "https",
-        "Progress",
-        &format!(
-            "Connecting to {} with an authenticated HTTPS relay",
-            credential.server
-        ),
-    );
+    transport.report_connecting();
     let cancelled = async {
         tokio::select! {
             _ = interrupt.recv() => {},
@@ -1805,7 +1991,7 @@ async fn connect(
     let registration = register_ssh(
         &metadata,
         registered,
-        || relay::command(&executable, credential),
+        || transport.command(&executable),
         cancelled,
         Duration::from_secs(120),
     )
@@ -1824,7 +2010,7 @@ async fn connect(
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     let display_session =
-        match terminal::Session::start(ui, &metadata.cwd, metadata.title.as_deref(), Some(&url)) {
+        match transport.start_display(ui, &metadata.cwd, metadata.title.as_deref(), &url) {
             Ok(session) => session,
             Err(error) => {
                 render::status(
@@ -1835,7 +2021,7 @@ async fn connect(
                 None
             }
         };
-    terminal::set_logout_target(if options.temporary {
+    terminal::set_logout_target(if options.temporary || options.is_local() {
         None
     } else {
         options
@@ -1918,6 +2104,10 @@ async fn connect(
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
+    if options.is_local() {
+        output["transport"] = json!("local");
+        output["auth"] = json!("local_user");
+    }
     if let Some(title) = &metadata.title {
         output["title"] = json!(title);
     }
@@ -2217,6 +2407,63 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_options_do_not_select_or_persist_a_remote_account() {
+        let options = Options::parse_with_default(
+            ["local", "--listen", "127.0.0.1:0", "--title", "--server"].map(OsString::from),
+            Some("saved@remote.example"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(options.is_local());
+        assert!(options.destination.is_none());
+        assert!(options.server.is_none());
+        assert!(options.relay.is_none());
+        assert_eq!(options.title.as_deref(), Some("--server"));
+        assert!(options.session_spec().is_err());
+        assert!(
+            Options::parse(
+                ["local", "--public-url", "https://workstation.local"].map(OsString::from)
+            )
+            .is_err()
+        );
+        for flags in [
+            [
+                "local",
+                "--public-url",
+                "https://workstation.local",
+                "--listen",
+                "127.0.0.1:8765",
+            ],
+            [
+                "local",
+                "--listen",
+                "127.0.0.1:8765",
+                "--public-url",
+                "https://workstation.local",
+            ],
+        ] {
+            assert!(
+                Options::parse(flags.map(OsString::from))
+                    .unwrap()
+                    .unwrap()
+                    .is_local()
+            );
+        }
+        for flags in [
+            vec!["local", "--server", "https://remote.example"],
+            vec!["local", "--username", "alice"],
+            vec!["local", "--allow", "alice@github"],
+            vec!["local", "--daemon"],
+            vec!["local", "--session-control"],
+            vec!["local", "--list-tools"],
+            vec!["local", "alice@remote.example"],
+        ] {
+            assert!(Options::parse(flags.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
     use super::*;
 
     #[test]
