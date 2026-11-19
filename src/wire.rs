@@ -4,6 +4,9 @@ use serde_json::Value;
 use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
+mod attribution;
+pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
+
 /// The sole supported wire protocol, including controller, source audit and steering.
 pub const VERSION: u32 = 7;
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -15,6 +18,8 @@ pub const MAX_CLIENTS_PER_USER: usize = 128;
 pub const MAX_ALLOWED_PRINCIPALS: usize = 32;
 /// Opted into through the authenticated WebSocket HTTP handshake, never display metadata.
 pub const SESSION_ACCESS_CAPABILITY: &str = "session_access_v1";
+/// Relay-derived account/agent attribution, separately negotiated for strict v7 peers.
+pub const CONTROL_ATTRIBUTION_CAPABILITY: &str = "control_attribution_v1";
 pub const CAPABILITIES_HEADER: &str = "ssmcp-capabilities";
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
@@ -402,6 +407,18 @@ fn default_max_bytes() -> usize {
 }
 
 impl Operation {
+    /// The actual operation, independent of caller-supplied display descriptions.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::CallTool { name, .. } => name,
+            Self::ListTools { .. } => "tools/list",
+            Self::Read { .. } => "terminal.read",
+            Self::Write { .. } => "terminal.write",
+            Self::Resize { .. } => "terminal.resize",
+            Self::Status {} => "terminal.status",
+        }
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         match self {
             Self::Read {
@@ -533,6 +550,10 @@ pub enum Frame {
         /// overwriting one another's displayed identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         controller: Option<Controller>,
+        /// Derived by the authenticated relay; caller metadata cannot supply this.
+        /// Omitted unless the client negotiated control_attribution_v1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attribution: Option<Box<ControlAttribution>>,
         /// Present only when this call belongs to an audited code-mode run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code_context: Option<CodeContext>,
@@ -637,6 +658,7 @@ mod tests {
             id: 7,
             operation: Operation::Status {},
             controller: None,
+            attribution: None,
             code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
@@ -656,6 +678,7 @@ mod tests {
                 model: Some("model-a".into()),
                 source: ControllerSource::CallerReported,
             }),
+            attribution: None,
             code_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
@@ -741,6 +764,7 @@ mod tests {
                 arguments: serde_json::json!({"value":3}),
             },
             controller: None,
+            attribution: None,
             code_context: Some(context.clone()),
         };
         let value = serde_json::to_value(frame).unwrap();

@@ -65,7 +65,11 @@ pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
         .env("SSMCP_RELAY_TOKEN", &credential.token)
         .env(
             "SSMCP_RELAY_CAPABILITIES",
-            crate::wire::SESSION_ACCESS_CAPABILITY,
+            format!(
+                "{},{}",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+            ),
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -75,8 +79,17 @@ pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
 }
 
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
-    (parent_offer == Some(crate::wire::SESSION_ACCESS_CAPABILITY))
-        .then(|| HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY))
+    let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
+    let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
+    if capabilities.iter().enumerate().any(|(index, value)| {
+        !matches!(
+            *value,
+            crate::wire::SESSION_ACCESS_CAPABILITY | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        ) || capabilities[..index].contains(value)
+    }) {
+        return None;
+    }
+    HeaderValue::from_str(&capabilities.join(",")).ok()
 }
 
 fn websocket_url(server: &str) -> crate::Result<String> {
@@ -265,6 +278,19 @@ mod tests {
             access_capability_header(Some(crate::wire::SESSION_ACCESS_CAPABILITY)).unwrap(),
             crate::wire::SESSION_ACCESS_CAPABILITY
         );
+        let both = format!(
+            "{},{}",
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+            crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        );
+        assert_eq!(access_capability_header(Some(&both)).unwrap(), both);
+        for invalid in [
+            "control_attribution_v10",
+            "control_attribution_v1,admin",
+            "control_attribution_v1,control_attribution_v1",
+        ] {
+            assert!(access_capability_header(Some(invalid)).is_none());
+        }
     }
 
     #[test]
