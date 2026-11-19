@@ -801,7 +801,7 @@ mod tests {
             // This mutation is deliberately after every async eligibility
             // lookup and before the synchronous queue-delivery decision.
             match failure {
-                "oauth" => report.broker.oauth.revoke_subject("42"),
+                "oauth" => report.broker.oauth.revoke_subject("42").unwrap(),
                 "ban" => {
                     report.broker.user_policies.set("42", true, None);
                 }

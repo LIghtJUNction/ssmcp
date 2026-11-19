@@ -33,7 +33,7 @@ fn quota_rejection(server: &str, _body: Option<&[u8]>) -> crate::Result<String> 
     // explanation and recharge link locally, including for older bodyless replies.
     let origin = super::account::normalize_server(server)?;
     Ok(format!(
-        "traffic_quota_exceeded: 本月剩余流量不足。请求未发送到客户端，未执行。充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{origin}/account/traffic"
+        "traffic_quota_exceeded: 本月剩余流量不足。请求未发送到客户端，未执行。补充流量后可继续发起新请求，或等待下月额度恢复；本次请求不会自动重放。流量与充值：{origin}/account/traffic"
     ))
 }
 
@@ -57,26 +57,44 @@ pub(super) fn failure(message: String) -> crate::Error {
 
 /// Secrets are passed in this one child's environment, never argv, session
 /// manifests, connection output or inherited native-tool environments.
-pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
+pub(super) fn command(executable: &Path, server: &str, credential: Option<&Credential>) -> Command {
     let mut command = Command::new(executable);
     command
         .arg("__relay")
-        .env("SSMCP_RELAY_SERVER", &credential.server)
-        .env("SSMCP_RELAY_TOKEN", &credential.token)
+        .env("SSMCP_RELAY_SERVER", server)
+        .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(super::link_metrics::ENV)
+        .env_remove(super::link_metrics::ID_ENV)
         .env(
             "SSMCP_RELAY_CAPABILITIES",
-            crate::wire::SESSION_ACCESS_CAPABILITY,
+            format!(
+                "{},{}",
+                crate::wire::SESSION_ACCESS_CAPABILITY,
+                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+            ),
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(credential) = credential {
+        command.env("SSMCP_RELAY_TOKEN", &credential.token);
+    }
     command
 }
 
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
-    (parent_offer == Some(crate::wire::SESSION_ACCESS_CAPABILITY))
-        .then(|| HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY))
+    let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
+    let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
+    if capabilities.iter().enumerate().any(|(index, value)| {
+        !matches!(
+            *value,
+            crate::wire::SESSION_ACCESS_CAPABILITY | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        ) || capabilities[..index].contains(value)
+    }) {
+        return None;
+    }
+    HeaderValue::from_str(&capabilities.join(",")).ok()
 }
 
 fn websocket_url(server: &str) -> crate::Result<String> {
@@ -100,15 +118,17 @@ fn decode_frame(bytes: &[u8]) -> io::Result<Frame> {
 }
 
 pub(super) async fn run() -> crate::Result<()> {
+    let mut metrics = super::link_metrics::Recorder::from_environment();
     let server = std::env::var("SSMCP_RELAY_SERVER")
         .map_err(|_| "private relay must be started by ssmcp")?;
-    let token = std::env::var("SSMCP_RELAY_TOKEN")
-        .map_err(|_| "private relay requires a client credential")?;
+    let token = std::env::var("SSMCP_RELAY_TOKEN").ok();
     let mut request = websocket_url(&server)?.into_client_request()?;
-    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-        .map_err(|_| "invalid client credential")?;
-    authorization.set_sensitive(true);
-    request.headers_mut().insert("authorization", authorization);
+    if let Some(token) = &token {
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| "invalid client credential")?;
+        authorization.set_sensitive(true);
+        request.headers_mut().insert("authorization", authorization);
+    }
     // The parent, not just this helper, must understand the optional Ready fields.
     // This also supports an old running client that starts a newer relay after update.
     // Older servers ignore the HTTP offer and keep the strict v7 Ready shape.
@@ -156,7 +176,11 @@ pub(super) async fn run() -> crate::Result<()> {
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
-                    message: AUTH_EXPIRED.into(),
+                    message: if token.is_some() {
+                        AUTH_EXPIRED.into()
+                    } else {
+                        UNSUPPORTED.into()
+                    },
                 },
             )
             .await?;
@@ -194,6 +218,8 @@ pub(super) async fn run() -> crate::Result<()> {
         }
     });
     let mut stdout = tokio::io::stdout();
+    let mut metrics_tick = tokio::time::interval(Duration::from_secs(1));
+    metrics_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(25));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result = async {
@@ -202,13 +228,7 @@ pub(super) async fn run() -> crate::Result<()> {
                 frame = frames.recv() => {
                     match frame {
                         Some(Ok(Some(frame))) => {
-                            let mut encoded = serde_json::to_vec(&frame)?;
-                            encoded.push(b'\n');
-                            if encoded.len() > MAX_FRAME {
-                                return Err("outgoing relay frame exceeds size limit".into());
-                            }
-                            timeout(Duration::from_secs(15), outgoing.send(Message::Binary(encoded.into())))
-                                .await.map_err(|_| "relay send timed out")??;
+                            send_application(&mut outgoing, &frame, &mut metrics).await?;
                         }
                         Some(Err(error)) => return Err(error.into()),
                         Some(Ok(None)) | None => {
@@ -219,8 +239,9 @@ pub(super) async fn run() -> crate::Result<()> {
                 }
                 message = incoming.next() => {
                     let frame = match message {
-                        Some(Ok(Message::Text(text))) => Some(decode_frame(text.as_bytes())?),
-                        Some(Ok(Message::Binary(bytes))) => Some(decode_frame(&bytes)?),
+                        Some(Ok(message @ (Message::Text(_) | Message::Binary(_)))) => {
+                            application_frame(message, &mut metrics)?
+                        }
                         Some(Ok(Message::Ping(bytes))) => {
                             timeout(Duration::from_secs(15), outgoing.send(Message::Pong(bytes)))
                                 .await.map_err(|_| "relay pong timed out")??;
@@ -241,6 +262,7 @@ pub(super) async fn run() -> crate::Result<()> {
                             .await.map_err(|_| "local relay output timed out")??;
                     }
                 }
+                _ = metrics_tick.tick(), if metrics.enabled() => metrics.publish(),
                 _ = heartbeat.tick() => {
                     timeout(Duration::from_secs(15), outgoing.send(Message::Ping(Vec::new().into())))
                         .await.map_err(|_| "relay heartbeat timed out")??;
@@ -251,6 +273,51 @@ pub(super) async fn run() -> crate::Result<()> {
     stdin_task.abort();
     result
 }
+
+async fn send_application<S>(
+    outgoing: &mut S,
+    frame: &Frame,
+    metrics: &mut super::link_metrics::Recorder,
+) -> crate::Result<()>
+where
+    S: futures_util::Sink<Message, Error = tungstenite::Error> + Unpin,
+{
+    let mut encoded = serde_json::to_vec(frame)?;
+    encoded.push(b'\n');
+    if encoded.len() > MAX_FRAME {
+        return Err("outgoing relay frame exceeds size limit".into());
+    }
+    let bytes = encoded.len();
+    timeout(
+        Duration::from_secs(15),
+        outgoing.send(Message::Binary(encoded.into())),
+    )
+    .await
+    .map_err(|_| "relay send timed out")??;
+    metrics.sent(bytes);
+    Ok(())
+}
+
+fn application_frame(
+    message: Message,
+    metrics: &mut super::link_metrics::Recorder,
+) -> io::Result<Option<Frame>> {
+    match message {
+        Message::Text(text) => {
+            metrics.received(text.len());
+            decode_frame(text.as_bytes()).map(Some)
+        }
+        Message::Binary(bytes) => {
+            metrics.received(bytes.len());
+            decode_frame(&bytes).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+#[path = "relay/metrics_tests.rs"]
+mod metrics_tests;
 
 #[cfg(test)]
 mod tests {
@@ -265,6 +332,19 @@ mod tests {
             access_capability_header(Some(crate::wire::SESSION_ACCESS_CAPABILITY)).unwrap(),
             crate::wire::SESSION_ACCESS_CAPABILITY
         );
+        let both = format!(
+            "{},{}",
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+            crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+        );
+        assert_eq!(access_capability_header(Some(&both)).unwrap(), both);
+        for invalid in [
+            "control_attribution_v10",
+            "control_attribution_v1,admin",
+            "control_attribution_v1,control_attribution_v1",
+        ] {
+            assert!(access_capability_header(Some(invalid)).is_none());
+        }
     }
 
     #[test]

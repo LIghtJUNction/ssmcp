@@ -393,7 +393,7 @@ impl State {
 
     /// The log column owns scrolling; horizontal arrows still navigate the canvas.
     pub(super) fn logs_key(&mut self, key: Key) {
-        let page = isize::try_from(body_rows(self.geometry.rows))
+        let page = isize::try_from(self.geometry.log_rows)
             .unwrap_or(1)
             .saturating_sub(1)
             .max(1);

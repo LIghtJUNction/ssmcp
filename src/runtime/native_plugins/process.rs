@@ -147,6 +147,13 @@ impl Process {
         });
         Ok(backend)
     }
+    #[cfg(test)]
+    pub(crate) fn observe_exec_projection(
+        &self,
+    ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {
+        self.shell.observe_projection()
+    }
+
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
@@ -379,7 +386,15 @@ impl Process {
                 .call(&native_name, arguments)
                 .await
                 .map(result),
-            Provider::Exec => self.shell.call(&native_name, arguments).await.map(result),
+            Provider::Exec => self
+                .shell
+                .call_scoped(
+                    &native_name,
+                    arguments,
+                    crate::runtime::call_scope::current(),
+                )
+                .await
+                .map(result),
             Provider::Harnesses => match native_name.as_str() {
                 "ssmcp.harnesses.list" => {
                     if !arguments.as_object().is_some_and(|a| a.is_empty()) {

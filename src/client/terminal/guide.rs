@@ -1,10 +1,7 @@
-//! Public guide links and same-origin route checks, plus the local ASCII footer.
+//! Public guide links and same-origin route checks.
 use super::super::account;
 use reqwest::Url;
 use std::time::Duration;
-
-mod pet;
-pub(super) use pet::rows as pet_rows;
 
 const MAX_URL_BYTES: usize = 512;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);

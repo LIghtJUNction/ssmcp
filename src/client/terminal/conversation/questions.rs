@@ -307,7 +307,7 @@ impl State {
             } if !release && x < self.geometry.left => {
                 if button & 64 != 0 {
                     self.question_move(if button & 1 == 0 { -3 } else { 3 });
-                } else if y > prompt_top(self.geometry.rows) && self.conversation.detail {
+                } else if y > prompt_top(self.geometry) && self.conversation.detail {
                     self.conversation.content_focus = false;
                 } else if !self.conversation.detail {
                     if let Some(index) = self.chat_list_hit(y) {

@@ -30,8 +30,6 @@ use std::{
 };
 use tokio::{net::TcpListener, task::JoinHandle};
 
-const ISSUER: &str = "https://relay-composer.example";
-const CALLBACK: &str = "https://relay-composer.example/oauth/callback/github";
 const GITHUB_CLIENT: &str = "relay-composer-fixture-client";
 const GITHUB_SECRET: &str = "relay-composer-fixture-secret";
 const MAX_GRANTS: usize = 64;
@@ -43,6 +41,7 @@ struct Grant {
 
 #[derive(Default)]
 struct Provider {
+    callback: String,
     codes: Mutex<HashMap<String, Grant>>,
     tokens: Mutex<HashSet<String>>,
 }
@@ -76,7 +75,7 @@ async fn provider_authorize(
         return rejected();
     };
     if parameters.get("client_id").map(String::as_str) != Some(GITHUB_CLIENT)
-        || parameters.get("redirect_uri").map(String::as_str) != Some(CALLBACK)
+        || parameters.get("redirect_uri").map(String::as_str) != Some(provider.callback.as_str())
         || parameters.get("code_challenge_method").map(String::as_str) != Some("S256")
         || !(32..=512).contains(&state.len())
         || !state
@@ -102,7 +101,7 @@ async fn provider_authorize(
             expires: Instant::now() + Duration::from_secs(60),
         },
     );
-    let mut callback = reqwest::Url::parse(CALLBACK).unwrap();
+    let mut callback = reqwest::Url::parse(&provider.callback).unwrap();
     callback
         .query_pairs_mut()
         .append_pair("code", &code)
@@ -126,7 +125,7 @@ async fn provider_token(
     };
     if parameters.get("client_id").map(String::as_str) != Some(GITHUB_CLIENT)
         || parameters.get("client_secret").map(String::as_str) != Some(GITHUB_SECRET)
-        || parameters.get("redirect_uri").map(String::as_str) != Some(CALLBACK)
+        || parameters.get("redirect_uri").map(String::as_str) != Some(provider.callback.as_str())
         || !(43..=128).contains(&verifier.len())
         || !verifier
             .bytes()
@@ -299,7 +298,12 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         tasks: Vec::new(),
         ready: ready.clone(),
     };
-    let provider = Arc::new(Provider::default());
+    let relay_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let server_url = format!("http://{}", relay_listener.local_addr()?);
+    let provider = Arc::new(Provider {
+        callback: format!("{server_url}/oauth/callback/github"),
+        ..Provider::default()
+    });
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let github_test_origin = format!("http://{}", listener.local_addr()?);
     let provider_routes = Router::new()
@@ -312,9 +316,14 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         axum::serve(listener, provider_routes).await
     }));
 
-    let mut broker = Broker::new(ISSUER.into());
+    // Keep the real ACL namespace, MCP issuer and selected CLI origin identical.
+    // Only this cfg(test) fixture runs HTTP on a private literal loopback socket;
+    // production identity construction continues to require HTTPS.
+    let mut broker = Broker::new(server_url.replacen("http://", "https://", 1));
+    broker.public_url = server_url.clone();
+    broker.oauth = crate::oauth::OAuth::new(server_url.clone());
     broker.identities = IdentityProviders::with_github_test_endpoints(
-        ISSUER,
+        &server_url,
         GitHubConfig {
             client_id: GITHUB_CLIENT.into(),
             client_secret: GITHUB_SECRET.into(),
@@ -342,17 +351,15 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         .map_err(|_| "could not issue the isolated account credential")?;
     broker.configure_user_policies(8 * 1024 * 1024).await?;
     let broker = Arc::new(broker);
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let server_url = format!("http://{}", listener.local_addr()?);
     let routes = super::router(broker.clone());
-    running.tasks.push(tokio::spawn(
-        async move { axum::serve(listener, routes).await },
-    ));
+    running.tasks.push(tokio::spawn(async move {
+        axum::serve(relay_listener, routes).await
+    }));
 
     let data = json!({
         "schema_version":1,
         "server_url":server_url,
-        "issuer":ISSUER,
+        "issuer":server_url,
         "identity":{
             "provider":"github","subject":"123","login":"fixture",
             "principal":"fixture@github","username":"relayfixture"

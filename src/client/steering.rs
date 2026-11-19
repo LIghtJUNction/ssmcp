@@ -1,4 +1,6 @@
 //! Client-owned requests. Broker revisions decide whether an edit won against delivery.
+pub(super) mod receipt;
+
 use crate::wire::{
     MAX_USER_MESSAGE_BYTES, MAX_USER_MESSAGES, SteeringAgent, SteeringCommand, SteeringMessage,
     SteeringSnapshot, SteeringState,
@@ -329,7 +331,13 @@ impl Manager {
     fn snapshot(&self) -> Value {
         json!({
             "schema_version":1,"connected":self.connected,"supported":self.supported,
-            "room_id":self.outbox.room_id,"revision":self.revision,"agents":self.agents,
+            "room_id":self.outbox.room_id,"session_id":self.outbox.room_id,"revision":self.revision,
+            "agents":self.agents.iter().map(|agent| {
+                let mut value = serde_json::to_value(agent).expect("serializable agent");
+                value["thread_id"] = json!(agent.agent_id);
+                value["session_id"] = json!(self.outbox.room_id);
+                value
+            }).collect::<Vec<_>>(),
             "draft":{"text":self.outbox.draft.text,"cursor":self.outbox.draft.cursor},
             "draft_context":self.outbox.context,
             "queue":self.outbox.records.iter().map(|record| json!({
@@ -337,6 +345,7 @@ impl Manager {
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
+                "source":if record.message.id.starts_with("webhook_") {"webhook"} else {"client_user"},
                 "retarget_required":record.retarget_required,"uncertain":record.uncertain
             })).collect::<Vec<_>>(),
             "error":self.error,"reloading":self.frozen || self.reload_requested
@@ -360,6 +369,13 @@ impl Manager {
         let target = target.unwrap_or("next");
         if target == "next" {
             return Ok(target.into());
+        }
+        if target == "global" {
+            return if self.connected && self.ready && !self.agents.is_empty() {
+                Ok(target.into())
+            } else {
+                Err("global messages require an active session with at least one thread".into())
+            };
         }
         if !valid_id(target)
             || !self.connected
@@ -501,6 +517,24 @@ impl Manager {
             return Err(error);
         }
         Ok(())
+    }
+
+    fn take_back_latest(&mut self) -> Result<Option<String>, String> {
+        let Some(record) = self
+            .outbox
+            .records
+            .iter()
+            .rev()
+            .find(|record| record.message.state == SteeringState::Queued)
+        else {
+            return Ok(None);
+        };
+        if record.pending.is_some() {
+            return Err("Waiting for queue confirmation · your draft is preserved".into());
+        }
+        let id = record.message.id.clone();
+        self.take_back(&id)?;
+        Ok(Some(id))
     }
 
     fn take_back(&mut self, id: &str) -> Result<(), String> {
@@ -914,8 +948,12 @@ impl Manager {
                     if !record.terminal()
                         && message.revision > record.message.revision
                         && message.state == SteeringState::Delivered
-                        && message.delivery.is_some()
+                        && message
+                            .delivery
+                            .as_ref()
+                            .is_some_and(|delivery| delivery.agent_id.is_none())
                         && message.target == "next"
+                        && !message.id.starts_with("webhook_")
                     {
                         self.delivered_memory.push(DeliveredMemory {
                             id: message.id.clone(),
@@ -1011,6 +1049,9 @@ impl Manager {
     }
 
     fn reply(&mut self, id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
+        if id == 0 {
+            return self.merge(&result?);
+        }
         let Some(request) = self.requests.remove(&id) else {
             return Ok(());
         };
@@ -1236,6 +1277,9 @@ pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String>
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
     with(|manager| manager.publish_edit(id, text, target))
 }
+pub(super) fn take_back_latest() -> Result<Option<String>, String> {
+    with(|manager| manager.take_back_latest())
+}
 pub(super) fn take_back(id: &str) -> Result<(), String> {
     with(|manager| manager.take_back(id))
 }
@@ -1321,6 +1365,9 @@ pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result
             );
         }
     }
+    // Exact-agent deliveries remain in the original request history and outbox.
+    // No thread-private checkpoint writer exists yet; never fold these texts
+    // into the shared workspace checkpoint as a substitute.
     // Queue publication is not delivery. Only a newly confirmed public request
     // can become shared workspace memory, after its original history exists.
     for message in delivered {
@@ -1605,7 +1652,7 @@ mod tests {
 
     #[test]
     fn only_new_public_delivery_receipts_enter_shared_memory_once() {
-        for target in ["next", "agent_one"] {
+        for (target, bound) in [("next", false), ("next", true), ("agent_one", true)] {
             let mut manager = Manager::default();
             let mut receiver = manager.connect("room_one", crate::wire::VERSION);
             ready(&mut manager, &mut receiver, "room_one");
@@ -1620,12 +1667,12 @@ mod tests {
             message.revision = 2;
             message.delivery = Some(crate::wire::SteeringDelivery {
                 run_id: "delivery_run".into(),
-                agent_id: Some("agent_one".into()),
+                agent_id: bound.then(|| "agent_one".into()),
                 included_at_ms: 42,
             });
             let snapshot = snapshot_for("room_one", 2, vec![message.clone()]);
             manager.merge(&snapshot).unwrap();
-            if target == "next" {
+            if target == "next" && !bound {
                 assert_eq!(
                     manager.delivered_memory,
                     vec![DeliveredMemory {
@@ -1638,7 +1685,7 @@ mod tests {
             } else {
                 assert!(
                     manager.delivered_memory.is_empty(),
-                    "exact-agent requests remain private"
+                    "exact-agent and bound-next requests remain private"
                 );
             }
             manager.delivered_memory.clear();
@@ -1947,6 +1994,139 @@ mod tests {
     }
 
     #[test]
+    fn latest_takeback_reclaims_only_the_latest_unsent_request() {
+        let mut manager = Manager::default();
+        let first = manager.submit("keep queued", None).unwrap();
+        let latest = manager.submit("edit this", None).unwrap();
+        let cancelled = manager.submit("cancelled", None).unwrap();
+        manager.cancel(&cancelled).unwrap();
+        assert_eq!(manager.take_back_latest().unwrap(), Some(latest.clone()));
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: latest.clone(),
+                text: "edit this".into()
+            })
+        );
+        assert_eq!(manager.snapshot()["queue"][0]["id"], first);
+        assert_eq!(manager.snapshot()["queue"][0]["status"], "offline");
+        assert_eq!(manager.snapshot()["queue"][1]["status"], "editing");
+        assert_eq!(manager.snapshot()["queue"][2]["status"], "cancelled");
+        assert!(manager.requests.is_empty());
+    }
+
+    #[test]
+    fn latest_takeback_waits_for_publication_and_recall_acknowledgements() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let first = publish(&mut manager, &mut receiver, "keep queued", None);
+        let latest = manager.submit("take back", None).unwrap();
+        assert!(
+            manager
+                .take_back_latest()
+                .unwrap_err()
+                .contains("confirmation")
+        );
+        assert!(manager.events.is_empty());
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { message_id, .. } if message_id == latest)
+        );
+        assert!(receiver.try_recv().is_err());
+        let mut message = manager.outbox.records.last().unwrap().message.clone();
+        message.revision = 1;
+        manager
+            .reply(
+                publish_id,
+                Ok(snapshot_for(
+                    "room_one",
+                    2,
+                    vec![first.clone(), message.clone()],
+                )),
+            )
+            .unwrap();
+        assert!(
+            matches!(manager.events.pop_front(), Some(UiEvent::Accepted { id, .. }) if id == latest)
+        );
+        assert_eq!(manager.take_back_latest().unwrap(), Some(latest.clone()));
+        assert!(
+            manager.events.is_empty(),
+            "the UI must wait for the takeback ACK"
+        );
+        assert!(
+            manager.take_back_latest().is_err(),
+            "repeated Up cannot reclaim another item"
+        );
+        let (takeback_id, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Takeback { message_id, expected_revision: 1, .. } if message_id == latest)
+        );
+        assert!(receiver.try_recv().is_err());
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(
+                takeback_id,
+                Ok(snapshot_for("room_one", 3, vec![first.clone(), message])),
+            )
+            .unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                id: latest,
+                text: "take back".into()
+            })
+        );
+        assert_eq!(manager.outbox.records[0].message, first);
+    }
+
+    #[test]
+    fn latest_takeback_disconnect_keeps_the_request_and_requires_confirmation() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message = publish(&mut manager, &mut receiver, "keep this request", None);
+        assert_eq!(
+            manager.take_back_latest().unwrap(),
+            Some(message.id.clone())
+        );
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(matches!(request, SteeringCommand::Takeback { .. }));
+        manager.disconnect();
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(manager.outbox.records[0].message, message);
+        assert!(manager.outbox.records[0].uncertain);
+        assert!(manager.take_back_latest().is_err());
+        assert!(
+            manager
+                .events
+                .iter()
+                .all(|event| !matches!(event, UiEvent::Editable { .. }))
+        );
+    }
+
+    #[test]
+    fn latest_takeback_never_skips_uncertain_or_retarget_required_input() {
+        let mut manager = Manager::default();
+        manager.submit("older draft", None).unwrap();
+        manager.submit("latest draft", None).unwrap();
+        manager.outbox.records[1].uncertain = true;
+        assert!(manager.take_back_latest().is_err());
+        manager.outbox.records[1].uncertain = false;
+        manager.outbox.records[1].retarget_required = true;
+        assert!(manager.take_back_latest().is_err());
+        assert!(manager.events.is_empty());
+        assert!(
+            manager
+                .outbox
+                .records
+                .iter()
+                .all(|record| record.message.state == SteeringState::Queued)
+        );
+    }
+
+    #[test]
     fn enqueue_ack_and_edit_use_the_same_message_and_expected_revision() {
         let mut manager = Manager::default();
         let mut receiver = manager.connect("room_one", 7);
@@ -2011,7 +2191,10 @@ mod tests {
         let mut receiver = manager.connect("room_one", 7);
         ready(&mut manager, &mut receiver, "room_one");
         let mut message = publish(&mut manager, &mut receiver, "one request", None);
-        manager.take_back(&message.id).unwrap();
+        assert_eq!(
+            manager.take_back_latest().unwrap(),
+            Some(message.id.clone())
+        );
         let (id, _) = command(&mut manager, &mut receiver);
         manager
             .reply(
@@ -2581,5 +2764,207 @@ mod tests {
         let pending = &manager.outbox.records[manager.index(&pending_id).unwrap()];
         assert!(!pending.uncertain);
         assert_eq!(pending.status(true), "sending");
+    }
+    #[test]
+    fn bound_next_delivery_stays_out_of_shared_context_and_pushes_are_idempotent() {
+        let mut manager = Manager::default();
+        manager.outbox.room_id = Some("room_one".into());
+        let message = SteeringMessage {
+            id: "message_thread".into(),
+            revision: 2,
+            text: "private requirement".into(),
+            target: "next".into(),
+            state: SteeringState::Delivered,
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            delivery: Some(crate::wire::SteeringDelivery {
+                run_id: "run".into(),
+                agent_id: Some("agent_one".into()),
+                included_at_ms: 2,
+            }),
+        };
+        let snapshot = snapshot_for("room_one", 2, vec![message.clone()]);
+        manager.reply(0, Ok(snapshot.clone())).unwrap();
+        assert!(manager.delivered_memory.is_empty());
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(
+            manager.outbox.records[0]
+                .message
+                .delivery
+                .as_ref()
+                .unwrap()
+                .agent_id
+                .as_deref(),
+            Some("agent_one")
+        );
+        assert_eq!(
+            manager.outbox.records[0].room_id.as_deref(),
+            Some("room_one")
+        );
+        manager.reply(0, Ok(snapshot)).unwrap();
+        assert_eq!(manager.outbox.records.len(), 1);
+        let webhook = SteeringMessage {
+            id: "webhook_event".into(),
+            ..message
+        };
+        manager
+            .reply(0, Ok(snapshot_for("room_one", 3, vec![webhook])))
+            .unwrap();
+        assert_eq!(manager.outbox.records.len(), 2);
+        assert!(manager.delivered_memory.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn receipt_for(manager: &Manager, id: &str) -> receipt::Receipt {
+        let snapshot = manager.snapshot();
+        receipt::Receipt::from_entry(
+            snapshot["queue"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_changes_only_after_claim_and_confirmed_delivery_survives_a_late_ack() {
+        use receipt::Receipt;
+        let queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+
+        let message_id = manager.submit("只在真实响应送达后变实心", None).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Sending);
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        let queued = queue.command("room_one", vec![], request).unwrap();
+        manager.reply(publish_id, Ok(queued.clone())).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Waiting);
+        manager.events.clear();
+
+        let claimed = queue.claim("room_one", "run_receipt", None, 1, 64 * 1024);
+        assert_eq!(claimed[0]["message_id"], message_id);
+        assert_eq!(claimed[0]["text"], "只在真实响应送达后变实心");
+        assert_eq!(
+            receipt_for(&manager, &message_id),
+            Receipt::Waiting,
+            "server claim alone cannot update a client that has not observed the receipt"
+        );
+        manager.request_snapshot().unwrap();
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        assert!(manager.take_back(&message_id).is_err());
+        manager.reply(publish_id, Ok(queued.clone())).unwrap();
+        manager.merge(&queued).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        manager.disconnect();
+        assert_eq!(
+            receipt_for(&manager, &message_id),
+            Receipt::Read,
+            "a known receipt remains true after transport loss"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_takeback_delivery_race_uses_the_broker_winner_without_optimistic_read() {
+        use receipt::Receipt;
+        for takeback_wins in [false, true] {
+            let queue = crate::steering::Queue::default();
+            let mut manager = Manager::default();
+            let mut receiver = manager.connect("room_one", 7);
+            let (id, request) = command(&mut manager, &mut receiver);
+            manager
+                .reply(id, queue.command("room_one", vec![], request))
+                .unwrap();
+            let message_id = manager.submit("one request", None).unwrap();
+            let (id, request) = command(&mut manager, &mut receiver);
+            manager
+                .reply(id, queue.command("room_one", vec![], request))
+                .unwrap();
+            manager.events.clear();
+            manager.take_back(&message_id).unwrap();
+            assert_eq!(receipt_for(&manager, &message_id), Receipt::Recalling);
+            assert!(manager.events.is_empty());
+            let (takeback_id, request) = command(&mut manager, &mut receiver);
+            if takeback_wins {
+                let snapshot = queue.command("room_one", vec![], request).unwrap();
+                assert!(
+                    queue
+                        .claim("room_one", "run_race", None, 1, 64 * 1024)
+                        .is_empty()
+                );
+                manager.reply(takeback_id, Ok(snapshot)).unwrap();
+                assert_eq!(receipt_for(&manager, &message_id), Receipt::Editing);
+                assert!(
+                    matches!(manager.events.pop_front(), Some(UiEvent::Editable { id, .. }) if id == message_id)
+                );
+            } else {
+                assert_eq!(
+                    queue
+                        .claim("room_one", "run_race", None, 1, 64 * 1024)
+                        .len(),
+                    1
+                );
+                let response = queue.command("room_one", vec![], request);
+                assert!(response.is_err());
+                manager.reply(takeback_id, response).unwrap();
+                assert_ne!(receipt_for(&manager, &message_id), Receipt::Read);
+                assert!(
+                    !manager
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, UiEvent::Editable { .. }))
+                );
+                let (id, request) = command(&mut manager, &mut receiver);
+                manager
+                    .reply(id, queue.command("room_one", vec![], request))
+                    .unwrap();
+                assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+                assert!(!receipt_for(&manager, &message_id).editable());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn receipt_disconnect_and_late_publish_ack_remain_unconfirmed_until_reconciled() {
+        use receipt::Receipt;
+        let queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        let message_id = manager.submit("retain me", None).unwrap();
+        let (publish_id, request) = command(&mut manager, &mut receiver);
+        let ack = queue.command("room_one", vec![], request).unwrap();
+        manager.disconnect();
+        manager.reply(publish_id, Ok(ack)).unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Review);
+        assert!(!receipt_for(&manager, &message_id).editable());
+        assert!(manager.events.is_empty());
+        let claimed = queue.claim("room_one", "run_disconnected", None, 1, 64 * 1024);
+        assert_eq!(claimed[0]["text"], "retain me");
+        assert_ne!(receipt_for(&manager, &message_id), Receipt::Read);
+        let mut receiver = manager.connect("room_one", 7);
+        let (id, request) = command(&mut manager, &mut receiver);
+        manager
+            .reply(id, queue.command("room_one", vec![], request))
+            .unwrap();
+        assert_eq!(receipt_for(&manager, &message_id), Receipt::Read);
+        assert!(
+            manager.events.is_empty(),
+            "a late ACK must not create a second send"
+        );
     }
 }
