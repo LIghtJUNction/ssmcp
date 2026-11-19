@@ -1600,7 +1600,31 @@ fn valid_url(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn installed_browser(explicit: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn installed_browser(explicit: Option<&str>) -> Result<PathBuf, String> {
+    installed_browser_with_override(
+        explicit,
+        std::env::var_os("SSMCP_BROWSER_EXECUTABLE").as_deref(),
+    )
+}
+
+fn installed_browser_with_override(
+    explicit: Option<&str>,
+    configured: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    if explicit.is_none()
+        && let Some(configured) = configured
+    {
+        let path = PathBuf::from(configured);
+        if path.as_os_str().len() > 4096
+            || !path.is_absolute()
+            || !crate::platform::is_executable(&path)
+        {
+            return Err("SSMCP_BROWSER_EXECUTABLE must name an existing absolute browser executable; fix or remove this override".into());
+        }
+        return path
+            .canonicalize()
+            .map_err(|error| format!("SSMCP_BROWSER_EXECUTABLE: {error}"));
+    }
     if let Some(explicit) = explicit {
         if explicit.len() > 4096 {
             return Err("browser executable path is too long".into());
@@ -1999,6 +2023,31 @@ const FILL_SCRIPT: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_override_is_checked_and_explicit_tool_argument_has_priority() {
+        let path = std::env::current_exe().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            installed_browser_with_override(None, Some(path.as_os_str())).unwrap(),
+            path
+        );
+        let invalid = std::ffi::OsStr::new("relative-browser");
+        assert!(
+            installed_browser_with_override(None, Some(invalid))
+                .unwrap_err()
+                .contains("SSMCP_BROWSER_EXECUTABLE")
+        );
+        assert_eq!(
+            installed_browser_with_override(path.to_str(), Some(invalid)).unwrap(),
+            path
+        );
+        let missing = path.with_file_name("ssmcp-missing-browser-override");
+        assert!(
+            installed_browser_with_override(None, Some(missing.as_os_str()))
+                .unwrap_err()
+                .contains("SSMCP_BROWSER_EXECUTABLE")
+        );
+    }
 
     async fn poll_once<F: std::future::Future>(
         mut future: std::pin::Pin<&mut F>,

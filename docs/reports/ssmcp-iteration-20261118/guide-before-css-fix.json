@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "started_at_utc": "2026-11-18T14:18:24.485058+00:00",
+  "completed_at_utc": "2026-11-18T14:18:35.858166+00:00",
+  "scope": "Read-only public HTTPS GET; no credentials, no remote writes, no deployment retry or reload.",
+  "deployment_receipt": {
+    "path": "out/iteration-20261118/guide-production-deployment/deployment.json",
+    "sha256": "8ebaa0235450872bdee45b2f0f7fba4f9bef1505ff44cf9e38ec2ab4b73eb4dc"
+  },
+  "candidate_sha256": "a9e05b8b4ba49aa44f57b5d4308b7406306b2f5d7e80e0e3843762421d0e3218",
+  "network": {
+    "tls_verification": true,
+    "redirects_followed": false,
+    "accept_encoding": "identity",
+    "max_attempts_per_url": 3,
+    "timeout_seconds": 15,
+    "concurrency": 2
+  },
+  "results": [
+    {
+      "url": "https://ssmcp.lmm.best/guide/",
+      "path": "/guide/",
+      "passed": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 1115,
+          "status": 200,
+          "headers": {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Encoding": null
+          },
+          "bytes": 9730,
+          "sha256": "cbae275fa92818ac5239f96566f00684d605b45b219a273abd97b6f96d51bc2e",
+          "set_cookie_present": false,
+          "www_authenticate_present": false,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true,
+            "content_type": true,
+            "csp": true,
+            "cache_control": true,
+            "nosniff": true,
+            "body_sha256": true,
+            "body_size": true,
+            "no_cookie": true,
+            "no_template_markers": true,
+            "no_script": true
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://ssmcp.lmm.best/guide/en",
+      "path": "/guide/en",
+      "passed": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 2412,
+          "status": 200,
+          "headers": {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Encoding": null
+          },
+          "bytes": 9730,
+          "sha256": "cbae275fa92818ac5239f96566f00684d605b45b219a273abd97b6f96d51bc2e",
+          "set_cookie_present": false,
+          "www_authenticate_present": false,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true,
+            "content_type": true,
+            "csp": true,
+            "cache_control": true,
+            "nosniff": true,
+            "body_sha256": true,
+            "body_size": true,
+            "no_cookie": true,
+            "no_template_markers": true,
+            "no_script": true
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://ssmcp.lmm.best/guide/zh",
+      "path": "/guide/zh",
+      "passed": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 1393,
+          "status": 200,
+          "headers": {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Encoding": null
+          },
+          "bytes": 9544,
+          "sha256": "ee6fcd5d9d57665134cfced7d6e18c510b9e3b20ec208ac9543622f79bd5af8a",
+          "set_cookie_present": false,
+          "www_authenticate_present": false,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true,
+            "content_type": true,
+            "csp": true,
+            "cache_control": true,
+            "nosniff": true,
+            "body_sha256": true,
+            "body_size": true,
+            "no_cookie": true,
+            "no_template_markers": true,
+            "no_script": true
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://ssmcp.lmm.best/guide/style.css",
+      "path": "/guide/style.css",
+      "passed": false,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 1954,
+          "status": 200,
+          "headers": {
+            "Content-Type": "text/css",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Encoding": null
+          },
+          "bytes": 4974,
+          "sha256": "345b07c68fa2ce2eaebf5e212d02c1d3083507f558963dacb840097c79cd28af",
+          "set_cookie_present": false,
+          "www_authenticate_present": false,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true,
+            "content_type": false,
+            "csp": true,
+            "cache_control": true,
+            "nosniff": true,
+            "body_sha256": true,
+            "body_size": true,
+            "no_cookie": true,
+            "no_template_markers": true,
+            "no_script": true
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://ssmcp.lmm.best/guide",
+      "path": "/guide",
+      "passed": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 1648,
+          "status": 401,
+          "headers": {
+            "Content-Type": null,
+            "Content-Security-Policy": null,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": null,
+            "Content-Encoding": null
+          },
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "set_cookie_present": false,
+          "www_authenticate_present": true,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true,
+            "auth_challenge": true,
+            "not_redirected": true
+          }
+        }
+      ]
+    },
+    {
+      "url": "https://ssmcp.lmm.best/",
+      "path": "/",
+      "passed": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "elapsed_ms": 7202,
+          "status": 200,
+          "headers": {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self' https://github.com; base-uri 'none'; frame-ancestors 'none'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Encoding": null
+          },
+          "bytes": 8019,
+          "sha256": "423e5180579e7ddd5b2d65e0ed4e81f9784ae745e91ba7bb9996b7d03f194a52",
+          "set_cookie_present": true,
+          "www_authenticate_present": false,
+          "redirect_location_present": false,
+          "checks": {
+            "status": true
+          }
+        }
+      ]
+    }
+  ],
+  "passed": false,
+  "response_bodies_saved": false,
+  "browser_screenshots": "separate isolated harness validation pending"
+}

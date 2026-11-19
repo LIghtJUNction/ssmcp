@@ -65,6 +65,8 @@ ssmcp invite
 
 Linux / macOS 默认安装到 `~/.local/bin/ssmcp`；Windows 默认到 `%LOCALAPPDATA%\ssmcp\bin\ssmcp.exe`。`SSMCP_INSTALL_DIR` 可指定绝对安装目录，PowerShell 另接受 `-InstallDir`。临时下载结束后清理，已安装程序保留；脚本不修改 PATH，也不注册后台服务。系统范围是 Linux GNU x86_64 / ARM64（glibc 2.35+）、macOS Intel / Apple Silicon、Windows x64 / ARM64。Linux 的 musl 与其他 CPU 不在此入口支持范围内。[Shell](../src/client_downloads/install.sh) · [PowerShell](../src/client_downloads/install.ps1)
 
+Windows 默认同时准备原生 Node.js、固定 Playwright npm 包和 Chromium；不安装或注册外部 harness。成功前会实际验证浏览器启动，并通过 `SSMCP_NODE` / `SSMCP_BROWSER_EXECUTABLE` 保存当前和后续终端使用的路径。依赖失败不会继续邀请接入；只装基础客户端可明确使用 `-SkipBrowserDependencies`。[安装位置、版本、原生检查和失败处理](windows-browser-setup.md)
+
 默认邀请可在 **10 分钟**内使用一次。B 兑换成功后，临时会话可用 **1 小时**，同时受 A 本次登录的剩余有效期约束。A 在另一终端运行 `ssmcp list` 或 `ssmcp -i` 即可控制 B。
 
 ~~~sh

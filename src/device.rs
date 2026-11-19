@@ -4,6 +4,9 @@ use crate::{
     broker::{Authorization, Broker, IDENTITY_RESOURCE},
     identity::Identity,
     portal::Problem,
+    user_policy::{
+        TrafficError, TrafficFailure, TrafficFailureState, TrafficOutcome, traffic_recharge_url,
+    },
     wire::{self, Operation},
 };
 use axum::{
@@ -904,7 +907,14 @@ async fn connect(
         .await
         .map_err(problem)?;
     if quota.remaining_bytes == Some(0) {
-        return Err(problem(Problem::TrafficQuotaExceeded));
+        return Ok((
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "error": "traffic_quota_exceeded",
+                "message": TrafficError::Exhausted.notice(&broker.public_url, TrafficOutcome::NotDispatched),
+                "recharge_url": traffic_recharge_url(&broker.public_url),
+            })),
+        ).into_response());
     }
     Ok(ws
         .max_message_size(wire::MAX_FRAME)
@@ -917,6 +927,11 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
     let outgoing_broker = broker.clone();
     let incoming_subject = registration.identity.subject.clone();
     let outgoing_subject = incoming_subject.clone();
+    let traffic_failure = TrafficFailureState::default();
+    let incoming_failure = traffic_failure.clone();
+    let outgoing_failure = traffic_failure.clone();
+    let banned_failure = traffic_failure.clone();
+    let public_url = broker.public_url.clone();
     let (transport, stream) = tokio::io::duplex(256 * 1024);
     let (input, mut output) = tokio::io::split(transport);
     let mut input = tokio::io::BufReader::new(input);
@@ -939,7 +954,14 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
                         .charge_relay(&incoming_subject, false, data.len())
                         .await
                     {
-                        return Some(error);
+                        let failure = match &frame {
+                            wire::Frame::Reply { id, .. } => {
+                                TrafficFailure::rejected_reply(error, *id)
+                            }
+                            _ => TrafficFailure::new(error),
+                        };
+                        // Store the trusted reason before dropping the duplex writer.
+                        return Some(incoming_failure.record(failure));
                     }
                     if wire::write_frame(&mut output, &frame).await.is_err() {
                         break;
@@ -971,7 +993,13 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
                                 .charge_relay(&outgoing_subject, true, data.len())
                                 .await
                             {
-                                return Some(error);
+                                let failure = match &frame {
+                                    wire::Frame::Call { id, .. } => {
+                                        TrafficFailure::rejected_call(error, *id)
+                                    }
+                                    _ => TrafficFailure::new(error),
+                                };
+                                return Some(outgoing_failure.record(failure));
                             }
                             if sender.send(Message::Binary(data.into())).await.is_err() {
                                 break;
@@ -985,7 +1013,7 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
             tokio::select! {
                 result = inbound => result,
                 result = outbound => result,
-                _ = bandwidth.wait_banned() => Some(crate::user_policy::TrafficError::Banned),
+                _ = bandwidth.wait_banned() => Some(banned_failure.record(TrafficFailure::new(TrafficError::Banned))),
             }
         };
         // Release the relay before flushing a single, uncharged terminal error.
@@ -993,7 +1021,7 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
         drop(input);
         if let Some(error) = failure
             && let Ok(mut data) = serde_json::to_vec(&wire::Frame::Reject {
-                message: error.to_string(),
+                message: error.notice(&public_url),
             })
         {
             data.push(b'\n');
@@ -1006,7 +1034,7 @@ async fn socket_bridge(broker: Arc<Broker>, registration: Registration, socket: 
         let _ = tokio::time::timeout(Duration::from_secs(2), sender.close()).await;
     };
     tokio::pin!(pumps);
-    let mut session = tokio::spawn(broker.attach_device(stream, registration));
+    let mut session = tokio::spawn(broker.attach_device(stream, registration, traffic_failure));
     tokio::select! {
         _ = &mut session => {
             // Flush the final authorization rejection before closing the socket.
@@ -1993,14 +2021,32 @@ mod tests {
         let app = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let mut incoming = open_socket(&base, &device, vec![]).await;
-        assert!(matches!(
-            receive(&mut incoming).await,
-            Some(wire::Frame::Ready { .. })
-        ));
+        let first_id = match receive(&mut incoming).await {
+            Some(wire::Frame::Ready { client_id, .. }) => client_id,
+            _ => panic!("expected a ready frame"),
+        };
         let mut outgoing = open_socket(&base, &device, vec![]).await;
         let second_id = match receive(&mut outgoing).await {
             Some(wire::Frame::Ready { client_id, .. }) => client_id,
             _ => panic!("expected a ready frame"),
+        };
+        let authorization = Authorization::Identity(Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "alice".into(),
+        });
+        let first_session = broker
+            .client(IDENTITY_RESOURCE, &authorization, &first_id)
+            .await
+            .unwrap();
+        let first_call = tokio::spawn(async move {
+            first_session
+                .call(Operation::ListTools { cursor: None })
+                .await
+        });
+        let first_request = match receive(&mut incoming).await {
+            Some(wire::Frame::Call { id, .. }) => id,
+            _ => panic!("expected a dispatched call"),
         };
         let quota = broker.traffic_quota("123").await.unwrap();
         assert!(
@@ -2020,7 +2066,7 @@ mod tests {
         incoming
             .send(PeerMessage::Binary(
                 serde_json::to_vec(&wire::Frame::Reply {
-                    id: 777,
+                    id: first_request,
                     result: Ok(json!({"quota_marker":"must not be forwarded"})),
                 })
                 .unwrap()
@@ -2028,34 +2074,57 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert!(matches!(receive(&mut incoming).await,
-            Some(wire::Frame::Reject { message }) if message.contains("traffic_quota_exceeded")));
+        let incoming_error = match receive(&mut incoming).await {
+            Some(wire::Frame::Reject { message }) => message,
+            _ => panic!("expected incoming quota rejection"),
+        };
+        assert!(incoming_error.starts_with("traffic_quota_exceeded:"));
+        assert!(incoming_error.contains("https://ssmcp.test/account/traffic"));
+        assert!(incoming_error.contains("客户端结果未能送达"));
+        assert!(incoming_error.contains("可能已经执行"));
+        assert!(!incoming_error.contains("未执行"));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(4), first_call)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err(),
+            incoming_error
+        );
         assert_eq!(
             broker.traffic_quota("123").await.unwrap().remaining_bytes,
             Some(10)
         );
 
         // The second connection shares exactly the same budget for outgoing calls.
-        let authorization = Authorization::Identity(Identity {
-            provider: "github".into(),
-            subject: "123".into(),
-            login: "alice".into(),
-        });
         let session = broker
             .client(IDENTITY_RESOURCE, &authorization, &second_id)
             .await
             .unwrap();
-        let call =
-            tokio::spawn(async move { session.call(Operation::ListTools { cursor: None }).await });
-        assert!(matches!(receive(&mut outgoing).await,
-            Some(wire::Frame::Reject { message }) if message.contains("traffic_quota_exceeded")));
-        assert!(
-            tokio::time::timeout(Duration::from_secs(4), call)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_err()
-        );
+        let mut calls = Vec::new();
+        for _ in 0..3 {
+            let session = session.clone();
+            calls.push(tokio::spawn(async move {
+                session.call(Operation::ListTools { cursor: None }).await
+            }));
+        }
+        let outgoing_error = match receive(&mut outgoing).await {
+            Some(wire::Frame::Reject { message }) => message,
+            _ => panic!("expected outgoing quota rejection"),
+        };
+        assert!(outgoing_error.starts_with("traffic_quota_exceeded:"));
+        assert!(outgoing_error.contains("https://ssmcp.test/account/traffic"));
+        assert!(outgoing_error.contains("未执行"));
+        for call in calls {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(4), call)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap_err(),
+                outgoing_error
+            );
+        }
         assert_eq!(
             broker.traffic_quota("123").await.unwrap().remaining_bytes,
             Some(10)
@@ -2086,6 +2155,24 @@ mod tests {
             }
             _ => panic!("an empty allowance must reject a new WebSocket upgrade"),
         }
+        let rejected = reqwest::Client::new()
+            .get(format!("{base}/api/client/connect"))
+            .bearer_auth(&device)
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::PAYMENT_REQUIRED);
+        let rejected: Value = rejected.json().await.unwrap();
+        assert_eq!(rejected["error"], "traffic_quota_exceeded");
+        assert_eq!(
+            rejected["recharge_url"],
+            "https://ssmcp.test/account/traffic"
+        );
+        assert_eq!(rejected["message"], outgoing_error);
         let status: Value = reqwest::Client::new()
             .get(format!("{base}/api/client/whoami"))
             .bearer_auth(&login)

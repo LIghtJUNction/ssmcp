@@ -51,12 +51,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.inputs.tag || (github.ref == 'refs/heads/release-check' && 'main') || github.sha }}
+          submodules: recursive
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
-      - name: Validate the tag, locked version and main ancestry
+      - name: Validate the tag, versions, main ancestry and pinned submodules
         id: tag
         run: python scripts/release.py validate --event
       - name: Test publication safeguards
@@ -101,14 +102,16 @@ jobs:
             runner: windows-11-arm
             build_args: --bin ssmcp
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       TARGET: ${{ matrix.target }}
       BUILD_ARGS: ${{ matrix.build_args }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -125,6 +128,33 @@ jobs:
         run: python scripts/release.py package --target "$TARGET"
       - name: Verify native installation, update and failed-download handling
         run: python scripts/test_installers.py "$TARGET"
+      - name: Test native Windows browser bootstrap safeguards
+        if: contains(matrix.target, 'windows')
+        run: pwsh -NoProfile -NonInteractive -File scripts/test_windows_browser_bootstrap.ps1 -Out "out/windows-browser-bootstrap-${{ matrix.target }}.json"
+      - name: Smoke test real native Windows browser dependencies
+        if: contains(matrix.target, 'windows')
+        timeout-minutes: 35
+        run: >-
+          pwsh -NoProfile -NonInteractive -File scripts/smoke_windows_browser.ps1
+          -ClientPath "target/$TARGET/release/ssmcp.exe"
+          -Target "$TARGET" -ExpectedVersion "$RELEASE_VERSION"
+          -Out "out/windows-native-browser-${{ matrix.target }}.json"
+      - name: Retain real Windows browser dependency evidence
+        if: always() && contains(matrix.target, 'windows')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-native-browser-${{ matrix.target }}
+          path: out/windows-native-browser-${{ matrix.target }}.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Retain Windows browser bootstrap evidence
+        if: always() && contains(matrix.target, 'windows')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-browser-bootstrap-${{ matrix.target }}
+          path: out/windows-browser-bootstrap-${{ matrix.target }}.json
+          if-no-files-found: warn
+          retention-days: 14
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ssmcp-${{ matrix.target }}
@@ -199,6 +229,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          submodules: recursive
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
@@ -212,7 +243,7 @@ jobs:
           pattern: ssmcp-*
           merge-multiple: true
           path: dist
-      - name: Recheck the validated source or existing release tag
+      - name: Recheck the source, submodules and existing release tag
         run: |
           if [ -n "$RELEASE_TAG" ]; then
             python scripts/release.py validate --tag "$RELEASE_TAG"
@@ -248,6 +279,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          submodules: recursive
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
@@ -281,6 +313,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          submodules: recursive
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
