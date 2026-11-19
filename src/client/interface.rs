@@ -18,6 +18,7 @@ pub(crate) mod history;
 pub(crate) mod listener;
 pub(crate) mod messages;
 pub(crate) mod questions;
+pub(crate) mod user_wait;
 
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static UPDATES: Mutex<()> = Mutex::new(());
@@ -61,6 +62,7 @@ pub(crate) fn get() -> Value {
         "activity": render::snapshot(),
         "steering": super::steering::snapshot(),
         "listener": listener::snapshot(),
+        "user_wait": user_wait::snapshot(),
         "questions": questions::snapshot(),
     })
 }
@@ -482,7 +484,10 @@ pub(crate) async fn call(
     arguments: Value,
     terminals: &crate::terminals::Terminals,
 ) -> Result<Value, String> {
-    // A listener's bounded wait must not hold the UI configuration lock.
+    // Bounded waits must not hold the UI configuration lock.
+    if name == "ssmcp.ui.wait" {
+        return user_wait::call(arguments).await;
+    }
     if name == "ssmcp.ui.listener" {
         return listener::call(arguments).await;
     }
@@ -588,6 +593,7 @@ pub(crate) fn tools() -> Vec<Value> {
     vec![
         queue_tool(),
         listener::tool(),
+        user_wait::tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),
         json!({"name":"ssmcp.ui.set","description":"Validate and apply a partial display configuration immediately. Colors merge by key; panels replace the ordered list. Set persist:true to save to this client's UI config. Running jobs and terminal contents are retained.","inputSchema":{"type":"object","required":["patch"],"additionalProperties":false,"properties":{"patch":{"type":"object","properties":properties,"additionalProperties":false},"persist":{"type":"boolean","default":false}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
@@ -1061,13 +1067,14 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 12);
+        assert_eq!(names.len(), 13);
         assert!(names.contains("ssmcp.ui.harness"));
         assert!(names.contains("ssmcp.ui.history"));
         for name in [
             "ssmcp.ui.ask",
             "ssmcp.ui.questions",
             "ssmcp.ui.listener",
+            "ssmcp.ui.wait",
             "ssmcp.ui.message",
             "ssmcp.ui.present",
         ] {
