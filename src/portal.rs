@@ -1,5 +1,6 @@
 //! Browser account portal, sharing the MCP gateway's verified GitHub identity provider.
 //! A separate privileged synchronizer provisions restricted SSH accounts and public keys.
+mod assets;
 mod commerce;
 mod dashboard;
 mod dashboard_view;
@@ -491,60 +492,7 @@ impl Portal {
 pub fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .route("/", get(home))
-        .route(
-            "/favicon.svg",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "image/svg+xml")],
-                    include_str!("portal/favicon.svg"),
-                )
-            }),
-        )
-        .route(
-            "/portal.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    view::CSS,
-                )
-            }),
-        )
-        .route(
-            "/copy-command.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("portal/copy-command.js"),
-                )
-            }),
-        )
-        .route(
-            "/portal-refresh.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("portal/portal-refresh.css"),
-                )
-            }),
-        )
-        .route(
-            "/traffic-meter.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("portal/traffic-meter.js"),
-                )
-            }),
-        )
-        .route(
-            "/client-install-copy.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("portal/client-install-copy.js"),
-                )
-            }),
-        )
+        .merge(assets::routes())
         .route("/account/login", post(login))
         .route("/account/logout", post(logout))
         .route("/account/username", post(register_username))
