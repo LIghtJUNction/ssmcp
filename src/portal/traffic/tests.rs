@@ -351,6 +351,7 @@ fn snapshots_with_unbacked_paid_balance_or_unknown_version_fail_closed() {
         Usage {
             used_bytes: 0,
             paid_bytes: 100,
+            adjusted_limit_bytes: None,
         },
     );
     for record in [
