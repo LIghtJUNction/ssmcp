@@ -295,7 +295,7 @@ try {
         self.check(history_path.read_bytes() == branch_journal,
                    "context forks, switches and provided summaries do not rewrite original JSONL records")
 
-        # Activate the fork and reexec the real client; normal OAuth login is repeated.
+        # Activate the fork and reexec the real client under the same account grant.
         _, active = self.context("switch", {
             "id": fork_id, "expected_revision": self.current()["revision"],
         })
@@ -308,8 +308,12 @@ try {
         front.credentials = credentials
         front.client_id = self.client_id = credentials["client_id"]
         status, _, _ = self.rpc("ping", modern=True, secret=old_token)
-        self.check(status == 401, "reload revokes the old login-code grant")
-        self.oauth_login(credentials)
+        self.check(status == 200 and self.secret == old_token,
+                   "reload preserves the independent account OAuth grant")
+        listed = self.public_call("list", secret=old_token)["clients"]
+        self.check(any(item["id"] == self.client_id for item in listed)
+                   and all(item["id"] != old_id for item in listed),
+                   "the account grant sees the replacement without a stale client route")
         restored = self.current()
         self.check(restored["branch"]["id"] == fork_id
                    and restored["summary"] == fork_summary
@@ -365,7 +369,7 @@ def main():
         "source_commit": subprocess.check_output(["/usr/bin/git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "platform": platform.system(),
         "scope": "new isolated wire-7 client/relay, shared JSONL, @file images, context native/projection APIs and bounded cross-tool memory; no models",
-        "shared_relay_tested": False,
+        "shared_relay_tested": True,
         "binaries": {name: sha256(path) for name, path in (
             ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"),
             ("vt_snapshot", decoder),
