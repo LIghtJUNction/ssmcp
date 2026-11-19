@@ -1813,7 +1813,7 @@ mod tests {
         );
         let rows = view.render(100, 30, &plain_ui(), false).join("\n");
         assert!(!rows.contains("ui-fixture-secret"), "{rows}");
-        assert!(rows.contains("Authorization: [redacted]"), "{rows}");
+        assert!(rows.contains("Authorization:[redacted]"), "{rows}");
         assert!(
             rows.contains("A public explanation remains visible."),
             "{rows}"
