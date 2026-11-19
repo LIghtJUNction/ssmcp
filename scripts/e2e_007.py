@@ -340,8 +340,8 @@ class Fixture:
 
     def run(self, idle_timeout=False, routing_only=False):
         connection = self.start_zero() if routing_only else self.start()
-        self.check(connection.hello["version"] == 5,
-                   "the actual recovery Hello advertises v5 without full-client audit or steering")
+        self.check(connection.hello["version"] == 7,
+                   "the actual recovery Hello advertises v7 with only recovery capabilities")
         self.check(relay.descendants(self.zero.pid) == [], "idle 007 starts no relay child, PTY or tool backend")
         listed = connection.operation({"op": "list_tools", "cursor": None})
         self.check({item["name"] for item in listed["tools"]} == TOOLS,
