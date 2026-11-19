@@ -169,6 +169,8 @@ pub(super) struct ComposerRows {
     pub lines: Vec<String>,
     pub cursor_row: u16,
     pub cursor_col: u16,
+    /// Exact reference names for visible menu rows, before display clipping.
+    pub references: Vec<(u16, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -562,6 +564,20 @@ impl Composer {
         Ok(true)
     }
 
+    pub(super) fn accept_reference(&mut self, name: &str) -> Result<bool, String> {
+        if !self.reference_active() {
+            return Err("The input changed; choose a current suggestion".into());
+        }
+        let index = self
+            .references
+            .items
+            .iter()
+            .position(|item| item.name == name)
+            .ok_or("The reference suggestions changed; choose a current file or skill")?;
+        self.suggestion_index = index;
+        self.accept_suggestion()
+    }
+
     pub(super) fn move_suggestion(&mut self, delta: isize) -> bool {
         let count = self.suggestions().len();
         if count == 0 {
@@ -653,12 +669,16 @@ impl Composer {
             .suggestion_index
             .min(suggestions.len().saturating_sub(1));
         let suggestion_start = selected.saturating_sub(hint_count.saturating_sub(1));
+        let mut reference_rows = Vec::new();
         for (index, command) in suggestions
             .iter()
             .enumerate()
             .skip(suggestion_start)
             .take(hint_count)
         {
+            if command.reference {
+                reference_rows.push((lines.len() as u16, command.name.to_owned()));
+            }
             lines.push(paint_row(
                 &[
                     (if index == selected { "› " } else { "  " }, "accent"),
@@ -677,6 +697,7 @@ impl Composer {
             lines,
             cursor_row: (cursor_row - first) as u16,
             cursor_col: (prefix_width + cursor_col).min(width - 1) as u16,
+            references: reference_rows,
         }
     }
 
@@ -1158,5 +1179,55 @@ mod tests {
         draft.dismiss_suggestions();
         assert!(draft.suggestions().is_empty());
         assert_eq!(draft.text(), text);
+    }
+
+    #[test]
+    fn reference_menu_rows_accept_the_drawn_name_after_results_reorder() {
+        let text = "检查 @设";
+        let mut draft = reference_fixture(text, text.len(), "@\"设计 甲.md\" ");
+        draft.references.items[0].name = "@设计 甲.md".into();
+        draft.references.items.push(completion::Candidate {
+            name: "@设计 乙.md".into(),
+            description: "File".into(),
+            replacement: "@\"设计 乙.md\" ".into(),
+        });
+        for width in [8, 20, 48, 120] {
+            let rows = draft.rows(width, 3, &Ui::default(), true);
+            assert_eq!(
+                rows.references,
+                vec![(1, "@设计 甲.md".into()), (2, "@设计 乙.md".into()),]
+            );
+            assert!(
+                draft
+                    .rows(width, 3, &Ui::default(), false)
+                    .references
+                    .is_empty()
+            );
+        }
+        draft.references.items.swap(0, 1);
+        assert!(draft.accept_reference("@设计 乙.md").unwrap());
+        assert_eq!(draft.text(), "检查 @\"设计 乙.md\" ");
+        assert_eq!(draft.cursor(), draft.text().len());
+        assert!(
+            draft.suggestions().is_empty(),
+            "the next Enter can submit the completed draft"
+        );
+    }
+
+    #[test]
+    fn vanished_or_invalid_reference_click_preserves_the_draft() {
+        let text = "检查 @文";
+        let mut draft = reference_fixture(text, text.len(), "@\"设计 文稿.md\" ");
+        let original = (draft.text().to_owned(), draft.cursor());
+        draft.references.items.clear();
+        assert!(draft.accept_reference("@设计 文稿.md").is_err());
+        assert_eq!((draft.text().to_owned(), draft.cursor()), original);
+
+        let mut draft = reference_fixture(text, text.len(), &"x".repeat(MAX_DRAFT_BYTES + 1));
+        assert!(draft.accept_reference("@设计 文稿.md").is_err());
+        assert_eq!((draft.text().to_owned(), draft.cursor()), original);
+        draft.dismiss_suggestions();
+        assert!(draft.accept_reference("@设计 文稿.md").is_err());
+        assert_eq!((draft.text().to_owned(), draft.cursor()), original);
     }
 }

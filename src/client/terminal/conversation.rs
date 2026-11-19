@@ -77,6 +77,8 @@ pub(super) struct Conversation {
     list_start: usize,
     list_count: usize,
     queue_hit_rows: Vec<Option<String>>,
+    reference_rows: Vec<(u16, String)>,
+    reference_stamp: Option<(u64, usize, u16, u16)>,
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
@@ -667,6 +669,37 @@ impl State {
                 .menu_visible(self.geometry.left, prompt_rows(self.geometry.rows))
     }
 
+    fn chat_reference_mouse(&mut self, x: u16, y: u16) -> bool {
+        let composer = &self.conversation.composer;
+        if self.help
+            || self.conversation.view == View::Questions
+            || x >= self.geometry.left
+            || !self.chat_menu_visible()
+            || self.conversation.reference_stamp
+                != Some((
+                    composer.revision(),
+                    composer.cursor(),
+                    self.geometry.rows,
+                    self.geometry.left,
+                ))
+        {
+            return false;
+        }
+        let Some((_, name)) = self
+            .conversation
+            .reference_rows
+            .iter()
+            .find(|(row, _)| *row == y)
+        else {
+            return false;
+        };
+        let name = name.clone();
+        self.notice = self.conversation.composer.accept_reference(&name).err();
+        self.conversation.content_focus = false;
+        self.dirty = true;
+        true
+    }
+
     fn chat_wait_for_input(&mut self) -> bool {
         if self.conversation.input_task.is_none() {
             return false;
@@ -930,6 +963,16 @@ impl State {
             return;
         }
         if self.selection {
+            return;
+        }
+        if let Key::Mouse {
+            button: 0,
+            x,
+            y,
+            release: false,
+        } = key
+            && self.chat_reference_mouse(x, y)
+        {
             return;
         }
         if let Key::Mouse {
@@ -2310,11 +2353,18 @@ impl State {
                 && !self.conversation.content_focus
                 && (self.conversation.editing.is_none() || input.reference_active()),
         );
+        let reference_stamp = (input.revision(), input.cursor(), g.rows, g.left);
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
             prompt.lines[0] =
                 self.chat_input_line("❯ Type an answer · number selects an option", g.left);
         }
+        self.conversation.reference_stamp = Some(reference_stamp);
+        self.conversation.reference_rows = std::mem::take(&mut prompt.references)
+            .into_iter()
+            .filter(|(row, _)| *row < prompt_rows(g.rows))
+            .map(|(row, name)| (prompt_top(g.rows) + 1 + row, name))
+            .collect();
         prompt
             .lines
             .resize_with(usize::from(prompt_rows(g.rows)), || {
