@@ -634,6 +634,28 @@ impl State {
                     crate::client::interface::queue_theme(theme);
                 }
             }
+            "/language" => {
+                use crate::client::language::{Language, localized};
+                if rest.is_empty() {
+                    let code = self.ui.language.code();
+                    self.notice = Some(localized!(
+                        self.ui.language,
+                        "Language: {code} · use /language en or /language zh; changes are saved",
+                        "当前语言：{code} · 使用 /language en 或 /language zh；更改会保存"
+                    ));
+                } else {
+                    let language = Language::parse(rest).map_err(|_| {
+                        self.ui
+                            .language
+                            .text(
+                                "Use /language en or /language zh",
+                                "请使用 /language en 或 /language zh",
+                            )
+                            .to_owned()
+                    })?;
+                    crate::client::interface::queue_language(language);
+                }
+            }
             "/filter" => {
                 if let Some(level) = rest.strip_prefix("--") {
                     let level = match level {
@@ -770,6 +792,17 @@ impl State {
         ) {
             if let Err(error) = self.chat_command(text.trim()) {
                 self.notice = Some(error);
+            }
+            self.dirty = true;
+            return;
+        }
+        if text.split_whitespace().next() == Some("/language") {
+            match self.chat_command(&text) {
+                Ok(_) if self.conversation.editing.is_none() => {
+                    self.conversation.composer.take_text();
+                }
+                Ok(_) => {}
+                Err(error) => self.notice = Some(error),
             }
             self.dirty = true;
             return;

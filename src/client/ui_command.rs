@@ -1,5 +1,8 @@
 //! Local display commands. Preview uses fixture data and never starts a backend.
-use super::ui::{Theme, Ui};
+use super::{
+    language::Language,
+    ui::{Theme, Ui},
+};
 use std::{
     ffi::OsString,
     fs::OpenOptions,
@@ -26,11 +29,13 @@ Commands:
 Options:
   --ui-config FILE  Override SSMCP_UI_CONFIG and the default config path
   --theme NAME     dark (default), minimal, codex-dark, nord, solarized, or light
+  --language LANG  en (default) or zh; show/preview override (not saved)
   --static         Render one preview frame to stdout, including ANSI colors
   --rows N         Static frame height, 1..1000 (default: 36)
   --cols N         Static frame width, 1..1000 (default: 120)
 
-Preview: F1 help; Ctrl-C or Ctrl-] exits. Changes stay in memory unless saved.
+Preview: F1 help; Ctrl-C or Ctrl-] exits. /language en|zh saves immediately.
+Other appearance changes stay in memory unless saved.
 Default configuration: $XDG_CONFIG_HOME/ssmcp/config.toml, or ~/.config/ssmcp/config.toml.
 NO_COLOR disables preview colors, including in static output.
 "#;
@@ -47,6 +52,7 @@ struct Options {
     command: Command,
     path: Option<PathBuf>,
     theme: Option<Theme>,
+    language: Option<Language>,
     static_frame: bool,
     rows: u16,
     cols: u16,
@@ -73,6 +79,7 @@ impl Options {
             command,
             path: None,
             theme: None,
+            language: None,
             static_frame: false,
             rows: 36,
             cols: 120,
@@ -91,6 +98,12 @@ impl Options {
                     let theme = args.next().ok_or("--theme requires a name")?;
                     options.theme =
                         Some(Theme::parse(theme.to_str().ok_or("theme must be UTF-8")?)?);
+                }
+                Some("--language") if matches!(command, Command::Show | Command::Preview) => {
+                    let value = args.next().ok_or("--language requires en or zh")?;
+                    options.language = Some(Language::parse(
+                        value.to_str().ok_or("language must be UTF-8")?,
+                    )?);
                 }
                 Some("--static") if command == Command::Preview => options.static_frame = true,
                 Some("--rows" | "--cols") if command == Command::Preview => {
@@ -132,6 +145,9 @@ pub(crate) async fn run(args: Vec<OsString>) -> crate::Result<()> {
     let mut ui = Ui::load(options.path.as_deref())?;
     if let Some(theme) = options.theme {
         ui.theme = theme;
+    }
+    if let Some(language) = options.language {
+        ui.language = language;
     }
     match options.command {
         Command::Show => print!("{}", ui.to_toml()?),
@@ -238,6 +254,32 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Option<Options>, String> {
         Options::parse(args.iter().map(OsString::from).collect())
+    }
+
+    #[test]
+    fn language_preview_override_is_explicit_and_bounded() {
+        assert_eq!(
+            parse(&["preview", "--language", "zh"])
+                .unwrap()
+                .unwrap()
+                .language,
+            Some(Language::Chinese)
+        );
+        assert_eq!(
+            parse(&["show", "--language", "en"])
+                .unwrap()
+                .unwrap()
+                .language,
+            Some(Language::English)
+        );
+        for args in [
+            vec!["check", "--language", "zh"],
+            vec!["init", "--language", "zh"],
+            vec!["preview", "--language", "fr"],
+            vec!["preview", "--language"],
+        ] {
+            assert!(parse(&args).is_err());
+        }
     }
 
     #[test]

@@ -503,15 +503,7 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
 pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     let shared = shared()?;
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.ui = ui.clone();
-    state.conversation.history_width = 0;
-    state.ui.color &= std::env::var_os("NO_COLOR").is_none();
-    let (rows, cols) = (state.geometry.rows, state.geometry.cols);
-    state.resize(rows, cols);
-    state.keyboard.logs = ui.layout == Layout::Logs;
-    state.notice = None;
-    state.dirty = true;
-    Some((state.geometry.pty_rows, state.geometry.left))
+    state.apply_settings(ui)
 }
 
 /// Called after the steering lock is released; recipients and audit runs stay intact.
@@ -1268,6 +1260,25 @@ struct State {
     conversation: conversation::Conversation,
 }
 impl State {
+    fn apply_settings(&mut self, ui: &Ui) -> Option<(u16, u16)> {
+        let mut next = ui.clone();
+        next.color &= std::env::var_os("NO_COLOR").is_none();
+        let mut only_language = self.ui.clone();
+        only_language.language = next.language;
+        let language_only = next == only_language;
+        self.ui = next;
+        self.conversation.history_width = 0;
+        self.notice = None;
+        self.dirty = true;
+        if language_only {
+            // Keep cursor, selection, focus, scroll anchors and PTY geometry intact.
+            return None;
+        }
+        self.resize(self.geometry.rows, self.geometry.cols);
+        self.keyboard.logs = self.ui.layout == Layout::Logs;
+        Some((self.geometry.pty_rows, self.geometry.left))
+    }
+
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
         let geometry = Geometry::new(rows, cols, ui, None);
         let conversation = conversation::Conversation::default();
@@ -2688,6 +2699,34 @@ impl Drop for PhysicalOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_apply_keeps_editor_focus_scroll_selection_and_geometry() {
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let mut state = State::new(30, 80, &ui);
+        state.conversation.composer.insert("draft 中文 /tmp/Tasks");
+        state.conversation.composer.left();
+        state.conversation.content_focus = true;
+        state.conversation.history_width = 80;
+        state.keyboard.logs = true;
+        state.selection = true;
+        state.filter_offset = 7;
+        let before = state.conversation.snapshot();
+        let geometry = state.geometry;
+        let changed = Ui {
+            language: super::super::language::Language::Chinese,
+            ..ui
+        };
+        assert_eq!(state.apply_settings(&changed), None);
+        assert_eq!(state.conversation.snapshot(), before);
+        assert_eq!(state.geometry, geometry);
+        assert!(state.keyboard.logs && state.selection && state.dirty);
+        assert_eq!(state.filter_offset, 7);
+        assert_eq!(state.conversation.history_width, 0);
+    }
 
     #[cfg(unix)]
     #[test]
