@@ -88,7 +88,16 @@ impl Broker {
         self.portal
             .storage(move |store| {
                 let period = traffic_period_at(crate::management::now(), offset);
-                store.reserve_traffic(&subject, &period, offset, bytes, unlimited)
+                store.reserve_traffic_frame(
+                    &subject,
+                    &period,
+                    offset,
+                    crate::user_policy::TrafficFrame {
+                        uploaded: outbound,
+                        bytes,
+                    },
+                    unlimited,
+                )
             })
             .await
             .map_err(|error| match error {
@@ -202,7 +211,7 @@ mod tests {
                 Err(error) => assert_eq!(error, TrafficError::Exhausted),
             }
         }
-        assert_eq!(accepted, 8);
+        assert_eq!(accepted, 16);
         let quota = broker.traffic_quota("123").await.unwrap();
         assert_eq!(quota.used_bytes, FREE_MONTHLY_TRAFFIC_BYTES);
         assert_eq!(quota.remaining_bytes, Some(0));
