@@ -1,5 +1,5 @@
 //! Display settings are local to the client and never forwarded to a backend.
-use super::render::LogFormat;
+use super::{language::Language, render::LogFormat};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -236,6 +236,7 @@ fn color_code(value: &str, background: bool) -> Option<String> {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Ui {
+    pub language: Language,
     pub color: bool,
     /// On a real terminal, show logs, source audit and the configured sidebar.
     pub dashboard: bool,
@@ -260,6 +261,7 @@ pub(crate) struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
+            language: Language::default(),
             color: true,
             dashboard: true,
             log_format: LogFormat::Pretty,
@@ -462,6 +464,36 @@ impl Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_defaults_round_trips_and_merges_without_changing_appearance() {
+        assert_eq!(Ui::parse("").unwrap().language, Language::English);
+        let mut ui = Ui::parse("[ui]\ntheme='nord'\nsidebar=true\nlanguage='zh'\n").unwrap();
+        assert_eq!(ui.language, Language::Chinese);
+        assert_eq!(Ui::parse(&ui.to_toml().unwrap()).unwrap(), ui);
+        let before = ui.clone();
+        ui = ui.merge_json(serde_json::json!({"language":"en"})).unwrap();
+        assert_eq!(ui.language, Language::English);
+        ui.language = before.language;
+        assert_eq!(ui, before);
+        for value in [
+            serde_json::json!("fr"),
+            serde_json::json!(""),
+            serde_json::json!("EN"),
+            serde_json::json!(1),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            let candidate = before.clone();
+            assert!(
+                candidate
+                    .merge_json(serde_json::json!({"language":value}))
+                    .is_err()
+            );
+            assert_eq!(candidate, before);
+        }
+    }
+
     use serde_json::json;
 
     #[test]

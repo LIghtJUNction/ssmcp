@@ -22,6 +22,7 @@ mod highlight;
 pub mod inbox;
 pub(crate) mod input;
 pub(crate) mod interface;
+pub(crate) mod language;
 mod link_metrics;
 #[cfg(target_os = "linux")]
 mod local;

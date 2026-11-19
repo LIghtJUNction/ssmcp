@@ -110,6 +110,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Choose a display theme",
     },
     SlashCommand {
+        name: "/language",
+        description: "Switch and save the interface language: en or zh",
+    },
+    SlashCommand {
         name: "/sidebar",
         description: "Toggle sidebar",
     },
@@ -671,7 +675,10 @@ impl Composer {
                 _ => "",
             };
             let (body, tone) = if self.text.is_empty() {
-                ("Message the agent", "muted")
+                (
+                    ui.language.text("Message the agent", "向智能体发送消息"),
+                    "muted",
+                )
             } else {
                 (body.as_str(), "foreground")
             };
