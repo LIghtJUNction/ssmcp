@@ -346,7 +346,12 @@ pub(super) fn log(bytes: &[u8]) -> bool {
 }
 
 /// Keep correlated activity and the original transcript in the same update.
-pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) -> bool {
+pub(super) fn log_event(
+    label: &str,
+    value: &serde_json::Value,
+    bytes: &[u8],
+    scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+) -> bool {
     let Some(shared) = shared() else {
         return false;
     };
@@ -354,7 +359,7 @@ pub(super) fn log_event(label: &str, value: &serde_json::Value, bytes: &[u8]) ->
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.log_event(label, value, bytes);
+    state.log_scoped_event(label, value, bytes, scope);
     true
 }
 
@@ -1401,6 +1406,16 @@ impl State {
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
         self.events.ingest_event(label, value, bytes);
+        self.log_raw(bytes);
+    }
+    fn log_scoped_event(
+        &mut self,
+        label: &str,
+        value: &serde_json::Value,
+        bytes: &[u8],
+        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    ) {
+        self.events.ingest_scoped_event(label, value, bytes, scope);
         self.log_raw(bytes);
     }
     fn log_raw(&mut self, bytes: &[u8]) {

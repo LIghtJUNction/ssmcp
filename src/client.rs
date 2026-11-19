@@ -1995,6 +1995,10 @@ async fn connect(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
+                    let call_scope = match backend.call_scope(id, attribution.as_deref(), code_context.as_ref()) {
+                        Ok(scope) => scope,
+                        Err(error) => break Err(error.into()),
+                    };
                     let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), attribution.as_deref(), code_context) {
                         Ok(call) => call,
                         Err(error) => break Err(error.into()),
@@ -2065,7 +2069,7 @@ async fn connect(
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
                             .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
-                        let mut result = backend.perform(operation).await;
+                        let mut result = call_scope.scope(backend.perform(operation)).await;
                         if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {

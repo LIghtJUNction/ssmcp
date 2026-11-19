@@ -141,6 +141,8 @@ struct State {
     stderr: Output,
 }
 struct Job {
+    /// Bound once after successful native spawn; observers cannot retag it.
+    creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
     id: String,
     pid: u32,
     command: Vec<String>,
@@ -243,6 +245,13 @@ impl Shell {
     fn registry(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(|e| e.into_inner())
     }
+    #[cfg(test)]
+    pub(crate) fn observe_projection(
+        &self,
+    ) -> std::sync::mpsc::Receiver<super::events::ProjectedEvent> {
+        self.events.observe_projection()
+    }
+
     pub fn audit(&self, event: Value) {
         self.events.push(event);
     }
@@ -327,8 +336,19 @@ impl Shell {
         ]
     }
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
+        self.call_scoped(name, args, None).await
+    }
+
+    /// Only the native host's validated Exec route supplies a creator. The
+    /// retained job, rather than a later result payload, owns that identity.
+    pub(crate) async fn call_scoped(
+        &self,
+        name: &str,
+        args: Value,
+        creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    ) -> Result<Value, String> {
         match name {
-            "ssmcp.exec.start" => self.start(args).await,
+            "ssmcp.exec.start" => self.start(args, creator).await,
             "ssmcp.exec.write" => self.write_input(args).await,
             "ssmcp.exec.list" => {
                 empty(args)?;
@@ -502,12 +522,19 @@ impl Shell {
         }
         drop(input);
         let result = job.write_result(written, data.len(), timed_out, error);
-        self.events.push(json!({"type":"exec.stdin","job_id":job.id,
-            "written":written,"closed":result["closed"],"timed_out":timed_out}));
+        self.events.push_scoped(
+            json!({"type":"exec.stdin","job_id":job.id,
+            "written":written,"closed":result["closed"],"timed_out":timed_out}),
+            job.creator.clone(),
+        );
         Ok(result)
     }
 
-    async fn start(&self, args: Value) -> Result<Value, String> {
+    async fn start(
+        &self,
+        args: Value,
+        creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    ) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Start {
@@ -651,6 +678,7 @@ impl Shell {
         let (cancel, cancel_rx) = watch::channel(false);
         let (input_stopped, _) = watch::channel(args.stdin != InputMode::Pipe);
         let job = Arc::new(Job {
+            creator,
             id: id.clone(),
             pid,
             command: args.command,
@@ -685,7 +713,7 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"title":job.title,"cwd":job.cwd}));
+        self.events.push_scoped(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"title":job.title,"cwd":job.cwd}), job.creator.clone());
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -745,7 +773,7 @@ impl Shell {
             worker.changed.notify_waiters();
             let mut snapshot = worker.snapshot();
             snapshot["type"] = json!("exec.exited");
-            events.push(snapshot);
+            events.push_scoped(snapshot, worker.creator.clone());
         });
         let mut result = job.snapshot();
         result["timeout_ms"] = json!(args.timeout_ms);
@@ -866,11 +894,11 @@ async fn capture<R: AsyncRead + Unpin>(
                 };
                 // Retention and live observation are independent: spilling never
                 // stops new output events or repeats bytes already displayed.
-                events.push(json!({"type":format!("exec.{stream}"),"job_id":job.id,
+                events.push_scoped(json!({"type":format!("exec.{stream}"),"job_id":job.id,
                     "method":"command/exec/outputDelta","params":{"deltaBase64":STANDARD.encode(&buffer[..count]),
-                    "stream":stream,"processId":job.id,"offset":offset,"next_offset":offset+count as u64}}));
+                    "stream":stream,"processId":job.id,"offset":offset,"next_offset":offset+count as u64}}), job.creator.clone());
                 if let Some(artifact) = notice {
-                    events.push(json!({"type":"ssmcp.output_archived","job_id":job.id,"stream":stream,"artifact":artifact}));
+                    events.push_scoped(json!({"type":"ssmcp.output_archived","job_id":job.id,"stream":stream,"artifact":artifact}), job.creator.clone());
                 }
                 job.changed.notify_waiters();
             }
@@ -1027,6 +1055,7 @@ mod tests {
         stdout.finish(None);
         stderr.finish(None);
         Arc::new(Job {
+            creator: None,
             id,
             pid: 0,
             command: vec!["completed fixture".into()],

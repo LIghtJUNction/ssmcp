@@ -222,8 +222,11 @@ impl Context {
             | "ssmcp.context.fork"
             | "ssmcp.context.switch" => {
                 let name = name.to_owned();
+                let scope = crate::runtime::call_scope::current();
                 return tokio::task::spawn_blocking(move || {
-                    crate::client::context_memory::call(&name, args)
+                    crate::runtime::call_scope::blocking(scope, || {
+                        crate::client::context_memory::call(&name, args)
+                    })
                 })
                 .await
                 .map_err(|_| "context memory worker stopped".to_owned())?;
