@@ -85,3 +85,5 @@ return await ui.wait(client.id, {
 认证、消息预约及最终回执位于 [服务端等待协调器](../src/code_mode/user_wait.rs)；本机截止时间、取消和完成缓存位于 [原生等待模块](../src/client/interface/user_wait.rs)；终端命令和提示位于 [等待交互模块](../src/client/terminal/conversation/user_wait.rs)；系统通知位于 [通知器](../src/client/notification.rs)。
 
 定点测试覆盖四条等待的容量、精确取消与模糊前缀拒绝、取消与完成竞争、旧注册清理、真实 deadline、严格参数解析，以及同 episode 的混合意图展示。实际交付还应通过统一客户端与服务器的隔离 PTY 验收；源码测试与真实端到端验收分别记录，不相互替代。
+
+本阶段统一客户端、服务端和私有 DBus 的运行结果见[双端整合验收](reports/user-wait-integration-20261119/report.zh-CN.md)。

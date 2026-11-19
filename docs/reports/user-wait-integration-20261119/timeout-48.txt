@@ -1,0 +1,24 @@
+  ssmcp  /  workspace             conversation  
+      会话继续，消息队列和草稿保持原样          
+                                                
+  ❯ The real Enter key submits exactly this auth
+    enticated requirement.                      
+                                                
+  ● User wait                                   
+      当前没有程序在等待你的输入\n\n最近的本机等
+      待结果：\n#wait_a2cde772785a17c4c61d5f9a83
+      3005516f625464d3a6cfbbd9966518c409fc25 ·  
+      本轮等待超时\n#wait_f614b7310744cfdf5bb2fe
+      a4ee8d95e33c600545e11d1c996ed3661ec1d1b542
+       · 消息已就绪，等待提交\n#wait_9c6d7654e60
+      e9215657b3d42b36b369188635240d0c62121313f4
+      72e7c79c965 · 等待已取消，会话继续\n#wait_
+      14e4d398ce20e199683941a3a60c58c01c8b2c0f63
+      56e458fe9fdd8ac37c3400 · 等待已取消，会话 
+      继续\n取消只结束等待；你的消息仍按队列状态
+      处理                                      
+  1 queued · /queue─────────────本月剩余  未知  
+❯ Unsubmitted draft @"资料/等待 界.txt"         
+      keep indentation                          
+                                                
+     connected · https://relay-composer.example 

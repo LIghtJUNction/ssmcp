@@ -1,0 +1,337 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "candidate_commit": "e9b83a3367940d7bd8b1a77bdc853a22f6bbe9d6",
+  "base_main": "46c646351e225b045f300e2ea2e24c3ad04739bc",
+  "merged_ui": "4de90fd73c05c56e83b8533a532f7a04471e60a3",
+  "merged_coordinator": "4f35eebc8f7fb18d25b2fde863b454ef3deb4c70",
+  "platform": "Linux x86_64",
+  "unique_rust_node_tests": 63,
+  "test_names": [
+    "client::interface::user_wait::tests::user_wait_cancelled_future_and_local_deadline_clear_the_real_wait",
+    "client::interface::user_wait::tests::user_wait_capacity_and_busy_do_not_replace_existing_requests",
+    "client::interface::user_wait::tests::user_wait_concurrent_ready_and_local_cancel_have_one_winner",
+    "client::interface::user_wait::tests::user_wait_deadline_prevents_late_ready_and_completed_metadata_is_bounded",
+    "client::interface::user_wait::tests::user_wait_exact_cancel_and_finish_ack_keep_the_first_terminal_result",
+    "client::interface::user_wait::tests::user_wait_old_drop_cannot_cancel_a_reused_id_after_reconnect",
+    "client::interface::user_wait::tests::user_wait_request_accepts_null_reason_but_never_native_received_or_authority_fields",
+    "client::notification::tests::cancellation_keeps_unknown_delivery_and_does_not_retry",
+    "client::notification::tests::deduplication_retains_only_bounded_hashes_and_rate_limited_calls_can_retry",
+    "client::notification::tests::failed_or_unavailable_submissions_are_not_automatically_retried",
+    "client::notification::tests::helper_and_lock_waits_share_a_bounded_deadline",
+    "client::notification::tests::only_platform_receipts_confirm_submission_and_never_user_viewing",
+    "client::notification::tests::platform_arguments_keep_untrusted_text_out_of_programs",
+    "client::notification::tests::rejects_empty_oversized_and_control_text_without_changing_unicode",
+    "client::notification::tests::repeated_wait_and_distinct_concurrent_calls_cannot_repeat_notices",
+    "client::steering::tests::aborted_reload_preserves_manual_edits_and_uncertain_takebacks",
+    "client::steering::tests::aborted_reload_requeues_confirmed_reclaims_without_replacing_the_draft",
+    "client::steering::tests::aborted_reload_waits_for_a_late_takeback_ack_before_republishing",
+    "client::steering::tests::abrupt_reconnect_preserves_uncertain_requests_and_replays_only_never_sent_ones",
+    "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+    "client::steering::tests::draft_context_is_bounded_and_older_handoffs_remain_readable",
+    "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+    "client::steering::tests::exact_agent_targets_need_explicit_retarget_after_a_room_change",
+    "client::steering::tests::failed_reference_edit_keeps_revision_target_and_draft_through_old_snapshots",
+    "client::steering::tests::handoff_rejects_shared_permissions_without_consuming_private_data",
+    "client::steering::tests::headless_publish_ack_produces_one_history_record_without_consuming_ui_events",
+    "client::steering::tests::missing_history_reconciliation_ignores_stale_snapshots_and_pending_mutations",
+    "client::steering::tests::offline_unsent_request_can_be_explicitly_retargeted_into_editing",
+    "client::steering::tests::old_gateways_never_receive_new_frames_and_invalid_input_cannot_change_the_outbox",
+    "client::steering::tests::only_new_public_delivery_receipts_enter_shared_memory_once",
+    "client::steering::tests::planned_reload_reclaims_pending_delivery_and_round_trips_a_private_outbox",
+    "client::steering::tests::prepared_publish_freezes_command_payload_and_ui_events_keep_the_source",
+    "client::steering::tests::prepared_publish_survives_handoff_and_cancelled_transport_cannot_send",
+    "client::steering::tests::reference_parse_failure_never_becomes_sendable_and_preserves_chinese_draft",
+    "client::steering::tests::trimmed_server_history_marks_requests_uncertain_without_replaying",
+    "client::steering::tests::unreceipted_or_already_terminal_requests_do_not_enter_memory",
+    "client::terminal::conversation::user_wait::tests::user_wait_commands_stay_local_and_preserve_an_edited_draft",
+    "client::terminal::conversation::user_wait::tests::user_wait_display_groups_retry_episodes_and_keeps_exact_cancel_ids",
+    "client::terminal::conversation::user_wait::tests::user_wait_ready_and_notification_never_claim_user_delivery_or_seen",
+    "client::terminal::conversation::user_wait::tests::user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls",
+    "code_mode::tests::ui_observation_retains_source_audit_without_claiming_user_requirements",
+    "code_mode::tests::user_wait_helper_uses_a_controlled_host_request",
+    "code_mode::user_wait::tests::user_wait_arguments_are_bounded_and_do_not_accept_agent_consent",
+    "code_mode::user_wait::tests::user_wait_cancellation_releases_the_reservation_before_native_cleanup",
+    "code_mode::user_wait::tests::user_wait_is_received_only_after_the_exact_reserved_messages_commit",
+    "code_mode::user_wait::tests::user_wait_prompt_hook_requires_explicit_native_reply_evidence",
+    "http::user_wait::tests::user_wait_answer_hook_uses_real_reauthorized_host_replies",
+    "http::user_wait::tests::user_wait_final_decision_rechecks_revocation_ban_and_agent_after_eligible_collection",
+    "http::user_wait::tests::user_wait_real_host_blocks_and_only_final_http_response_commits",
+    "http::user_wait::tests::user_wait_real_host_cancel_wins_after_reservation_without_losing_user_input",
+    "http::user_wait::tests::user_wait_real_host_rejects_native_forged_ready_and_does_not_claim_after_timeout",
+    "skill_discovery_and_instruction_resolution_preserve_scope_and_provenance",
+    "steering::tests::capacity_rejects_new_pending_messages_without_losing_old_ones",
+    "steering::tests::exact_agent_targets_and_retries_preserve_fifo_and_do_not_restore_delivered_records",
+    "steering::tests::response_reminders_follow_actual_claims_without_adding_queue_records",
+    "steering::tests::successful_takeback_prevents_old_text_delivery_and_publish_requires_current_revision",
+    "steering::waiting::tests::user_wait_drop_preserves_editable_messages_and_wakes_other_waiters",
+    "steering::waiting::tests::user_wait_edit_supersedes_only_the_old_revision_without_consuming_new_text",
+    "steering::waiting::tests::user_wait_permits_are_bounded_and_notification_episode_is_recipient_scoped",
+    "steering::waiting::tests::user_wait_reservations_exclude_concurrent_and_ordinary_claims",
+    "steering::waiting::tests::user_wait_respects_exact_agent_target_and_response_budget",
+    "steering::waiting::tests::user_wait_watch_retains_publish_and_close_without_polling",
+    "text_helpers_preserve_unicode_binary_compatibility_and_edit_preconditions"
+  ],
+  "steps": [
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 1.668,
+      "passed_tests": [],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user-waits",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 22.116,
+      "passed_tests": [
+        "client::interface::user_wait::tests::user_wait_cancelled_future_and_local_deadline_clear_the_real_wait",
+        "client::interface::user_wait::tests::user_wait_capacity_and_busy_do_not_replace_existing_requests",
+        "client::interface::user_wait::tests::user_wait_concurrent_ready_and_local_cancel_have_one_winner",
+        "client::interface::user_wait::tests::user_wait_deadline_prevents_late_ready_and_completed_metadata_is_bounded",
+        "client::interface::user_wait::tests::user_wait_exact_cancel_and_finish_ack_keep_the_first_terminal_result",
+        "client::interface::user_wait::tests::user_wait_old_drop_cannot_cancel_a_reused_id_after_reconnect",
+        "client::interface::user_wait::tests::user_wait_request_accepts_null_reason_but_never_native_received_or_authority_fields",
+        "client::terminal::conversation::user_wait::tests::user_wait_commands_stay_local_and_preserve_an_edited_draft",
+        "client::terminal::conversation::user_wait::tests::user_wait_display_groups_retry_episodes_and_keeps_exact_cancel_ids",
+        "client::terminal::conversation::user_wait::tests::user_wait_ready_and_notification_never_claim_user_delivery_or_seen",
+        "client::terminal::conversation::user_wait::tests::user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls",
+        "code_mode::tests::user_wait_helper_uses_a_controlled_host_request",
+        "code_mode::user_wait::tests::user_wait_arguments_are_bounded_and_do_not_accept_agent_consent",
+        "code_mode::user_wait::tests::user_wait_cancellation_releases_the_reservation_before_native_cleanup",
+        "code_mode::user_wait::tests::user_wait_is_received_only_after_the_exact_reserved_messages_commit",
+        "code_mode::user_wait::tests::user_wait_prompt_hook_requires_explicit_native_reply_evidence",
+        "http::user_wait::tests::user_wait_answer_hook_uses_real_reauthorized_host_replies",
+        "http::user_wait::tests::user_wait_final_decision_rechecks_revocation_ban_and_agent_after_eligible_collection",
+        "http::user_wait::tests::user_wait_real_host_blocks_and_only_final_http_response_commits",
+        "http::user_wait::tests::user_wait_real_host_cancel_wins_after_reservation_without_losing_user_input",
+        "http::user_wait::tests::user_wait_real_host_rejects_native_forged_ready_and_does_not_claim_after_timeout",
+        "steering::waiting::tests::user_wait_drop_preserves_editable_messages_and_wakes_other_waiters",
+        "steering::waiting::tests::user_wait_edit_supersedes_only_the_old_revision_without_consuming_new_text",
+        "steering::waiting::tests::user_wait_permits_are_bounded_and_notification_episode_is_recipient_scoped",
+        "steering::waiting::tests::user_wait_reservations_exclude_concurrent_and_ordinary_claims",
+        "steering::waiting::tests::user_wait_respects_exact_agent_target_and_response_budget",
+        "steering::waiting::tests::user_wait_watch_retains_publish_and_close_without_polling"
+      ],
+      "log_sha256": "472e3f2875ec43a7aaeec7ab246f88165cd8b8139406693cd51715a526c5abd8"
+    },
+    {
+      "name": "notifications",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.468,
+      "passed_tests": [
+        "client::notification::tests::cancellation_keeps_unknown_delivery_and_does_not_retry",
+        "client::notification::tests::deduplication_retains_only_bounded_hashes_and_rate_limited_calls_can_retry",
+        "client::notification::tests::failed_or_unavailable_submissions_are_not_automatically_retried",
+        "client::notification::tests::helper_and_lock_waits_share_a_bounded_deadline",
+        "client::notification::tests::only_platform_receipts_confirm_submission_and_never_user_viewing",
+        "client::notification::tests::platform_arguments_keep_untrusted_text_out_of_programs",
+        "client::notification::tests::rejects_empty_oversized_and_control_text_without_changing_unicode",
+        "client::notification::tests::repeated_wait_and_distinct_concurrent_calls_cannot_repeat_notices"
+      ],
+      "log_sha256": "d6997ae945c6afa71fbdecf0257828502a9bb5d0ee17883deda6381c3dac606a"
+    },
+    {
+      "name": "ordinary-steering",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.566,
+      "passed_tests": [
+        "client::steering::tests::aborted_reload_preserves_manual_edits_and_uncertain_takebacks",
+        "client::steering::tests::aborted_reload_requeues_confirmed_reclaims_without_replacing_the_draft",
+        "client::steering::tests::aborted_reload_waits_for_a_late_takeback_ack_before_republishing",
+        "client::steering::tests::abrupt_reconnect_preserves_uncertain_requests_and_replays_only_never_sent_ones",
+        "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+        "client::steering::tests::draft_context_is_bounded_and_older_handoffs_remain_readable",
+        "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+        "client::steering::tests::exact_agent_targets_need_explicit_retarget_after_a_room_change",
+        "client::steering::tests::failed_reference_edit_keeps_revision_target_and_draft_through_old_snapshots",
+        "client::steering::tests::handoff_rejects_shared_permissions_without_consuming_private_data",
+        "client::steering::tests::headless_publish_ack_produces_one_history_record_without_consuming_ui_events",
+        "client::steering::tests::missing_history_reconciliation_ignores_stale_snapshots_and_pending_mutations",
+        "client::steering::tests::offline_unsent_request_can_be_explicitly_retargeted_into_editing",
+        "client::steering::tests::old_gateways_never_receive_new_frames_and_invalid_input_cannot_change_the_outbox",
+        "client::steering::tests::only_new_public_delivery_receipts_enter_shared_memory_once",
+        "client::steering::tests::planned_reload_reclaims_pending_delivery_and_round_trips_a_private_outbox",
+        "client::steering::tests::prepared_publish_freezes_command_payload_and_ui_events_keep_the_source",
+        "client::steering::tests::prepared_publish_survives_handoff_and_cancelled_transport_cannot_send",
+        "client::steering::tests::reference_parse_failure_never_becomes_sendable_and_preserves_chinese_draft",
+        "client::steering::tests::trimmed_server_history_marks_requests_uncertain_without_replaying",
+        "client::steering::tests::unreceipted_or_already_terminal_requests_do_not_enter_memory",
+        "steering::tests::capacity_rejects_new_pending_messages_without_losing_old_ones",
+        "steering::tests::exact_agent_targets_and_retries_preserve_fifo_and_do_not_restore_delivered_records",
+        "steering::tests::response_reminders_follow_actual_claims_without_adding_queue_records",
+        "steering::tests::successful_takeback_prevents_old_text_delivery_and_publish_requires_current_revision"
+      ],
+      "log_sha256": "ba02c392a279debd9a391de77322eaf877d5cbf7f5b6b018364457c4606d30cd"
+    },
+    {
+      "name": "ui-observation",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.114,
+      "passed_tests": [
+        "code_mode::tests::ui_observation_retains_source_audit_without_claiming_user_requirements"
+      ],
+      "log_sha256": "0a7b635f6109e37a39dc72dd782fc869af6a4619cc247235dd4669131bd07e2c"
+    },
+    {
+      "name": "context-helpers",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 0.916,
+      "passed_tests": [
+        "skill_discovery_and_instruction_resolution_preserve_scope_and_provenance",
+        "text_helpers_preserve_unicode_binary_compatibility_and_edit_preconditions"
+      ],
+      "log_sha256": "66d27255e411ff96ff37fc096b1dc0099f4d8c84208487f5cd1472eae59b006b"
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 41.152,
+      "passed_tests": [],
+      "log_sha256": "bc437d2add86b0674c099ba070e3bd5ec1eb7eef5e67bd4929d1ca83374906a5"
+    },
+    {
+      "name": "build-binaries",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 1.069,
+      "passed_tests": [],
+      "log_sha256": "50a36e2c87a973223c6684841d17bd73745a10678a7ac404a4330e796cf93793"
+    },
+    {
+      "name": "real-pty",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 12.246,
+      "passed_tests": [],
+      "log_sha256": "6b2b92c795c890d00dec852ece89324888de1042aef0f9dc9cfde5292c72e0ae"
+    },
+    {
+      "name": "private-notifications",
+      "exit_code": 0,
+      "ok": true,
+      "duration_seconds": 2.42,
+      "passed_tests": [],
+      "log_sha256": "7cd1898a7e6056db7aab019e3049fa99a54f4077dcf94c0c9b76206efb960da3"
+    }
+  ],
+  "binaries": {
+    "client": {
+      "sha256": "c445b0da7524a293de265b0c4decb76251b7c77ad2621041812342c16358d374",
+      "bytes": 163291664
+    },
+    "daemon": {
+      "sha256": "7f2ce7dfa682b335125ac90b53b3c63119af2fa669b1eb3d611cfee8a02b6952",
+      "bytes": 133545160
+    },
+    "fixture": {
+      "sha256": "7b8d7332fb325dddbc9e1502bf9036d3aa88efd020268da81059cd26b985a92c",
+      "bytes": 259635424
+    },
+    "decoder": {
+      "sha256": "798dbaa2ebf1225c8f08d4a96ba15ac7239a7af72deab279547147170fb44174",
+      "bytes": 6472768
+    }
+  },
+  "binaries_unchanged_across_real_gates": true,
+  "source_fingerprint_before": {
+    "sha256": "a22c6891723ebc1f0405c6679aa85e83b7a65ef32175997ecfd616c23e0bd871",
+    "files": 301
+  },
+  "source_fingerprint_after": {
+    "sha256": "a22c6891723ebc1f0405c6679aa85e83b7a65ef32175997ecfd616c23e0bd871",
+    "files": 301
+  },
+  "source_files_sha256": {
+    "scripts/e2e.py": "7e89fd2e631925cdb21f721145e5b357632ab490739de297047e8fe9e05d4908",
+    "scripts/e2e_user_wait.py": "38ab26c572a4068d37890478b31bfbd65a4a2c02cdad1ede875824b36cc30229",
+    "scripts/e2e_user_wait_notifications.py": "c0033b9f97212af748a1c0531ee5f022a5eb6adf79e4fc44119c1e1b5bbc4997",
+    "src/backend/process.rs": "cc0317cfe4c82601741e7cbf8b31a79b515559661202b3d408de1394a3b0aa94",
+    "src/broker.rs": "9cfed34392c122eca906b03094e30d8bc1baa5cb99f04d93054bec3eca36621d",
+    "src/broker/access.rs": "2c739b647b9ad2eab9b4ddbf6fb57c3b8db482ae085122e7cc156232152824b9",
+    "src/client.rs": "8054bba1ee0f5bbe7af4f80fe7af3e78b42cda4861581fdf8faaa133d044d9ab",
+    "src/client/composer.rs": "4fe13a546570de879ce0bdd4528a892925ead3e0965d72faeaf19a44bb78385e",
+    "src/client/interface.rs": "032c3fdf3f23c27bef800d9324c59723a13827d11eea5a14269c4a9103829315",
+    "src/client/interface/user_wait.rs": "f2cd5983e79e9ccdd489187675f1316831eb9138e42aa5c64e4cef6d9b66ebd3",
+    "src/client/notification.rs": "106e990373db1df96d22bbc364faf4ed0715e2be1545a1a658275299a43aa16b",
+    "src/client/steering.rs": "b544f99b07166f8cb46c89628dc3d149044405c20ab445353d7581c2f70a1909",
+    "src/client/terminal/conversation.rs": "f60fd85cfed898668a7afb85943c9ef8acf00dd82f65b223940731b98c2b45a9",
+    "src/client/terminal/conversation/user_wait.rs": "24772c5a6b96e64b9c3a3c02ef51c8f296ae0508072bdc5902b001ee55ac8347",
+    "src/code_mode.js": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+    "src/code_mode.rs": "c02ad97b0faac549a28d37aec7a0bf13e9b24297cfc03034b22bb2d9aceb3885",
+    "src/code_mode/user_wait.rs": "8b8ccc46ddbfa29a0ae271608d3eb05cbfceea7a9d189422f29a25bed52b606b",
+    "src/computer.rs": "dd3f3e3180af08af40f7f7a7f45575f5b22016e6d1f33bca65f932154e3ffb79",
+    "src/http.rs": "7b02f8942de593dffc480f4a9b9c81192ed4e2b5fc844beb491f0d8402b32a5a",
+    "src/http/user_wait.rs": "9040d3e3bb77fbce53833b0617aa4440141e40b100af45353c1397c52e9b6104",
+    "src/steering.rs": "f7485db9b9ea4cc9792dc544723141d9348fd2067914eda85b74d408bfa73ac3",
+    "src/steering/waiting.rs": "5e904abf85bdea9f7c4f02ddef018fbbb69fa5f253911c3e40d0eb54f85b52f9",
+    "tests/context_helpers.rs": "1fbc7a370f75826d9002172d19b7546f24c9dce256259f3f01cdcf16dbc1a487"
+  },
+  "end_to_end": {
+    "real_pty": {
+      "assertions": 119,
+      "seconds": 11.85,
+      "result": "passed"
+    },
+    "private_notifications": {
+      "scenarios": [
+        "real_private_dbus_submission",
+        "same_episode_deduplication",
+        "helper_unavailable_keeps_wait_cancellable",
+        "cancelled_native_wait_cleans_helper_tree"
+      ],
+      "assertions": 74,
+      "seconds": 2.058,
+      "result": "passed"
+    }
+  },
+  "prior_attempts": [
+    {
+      "directory": "gate-20261119T183527Z",
+      "ok": false,
+      "complete": false,
+      "source": {
+        "sha256": "15c81af124c48cd1dd7d9ce74796e8640efebb9bff9b6f9609667ea979e2e6b4",
+        "files": 301
+      }
+    },
+    {
+      "directory": "gate-20261119T183843Z",
+      "ok": false,
+      "complete": false,
+      "source": {
+        "sha256": "a22c6891723ebc1f0405c6679aa85e83b7a65ef32175997ecfd616c23e0bd871",
+        "files": 301
+      }
+    },
+    {
+      "directory": "gate-20261119T184126Z",
+      "ok": true,
+      "complete": true,
+      "source": {
+        "sha256": "a22c6891723ebc1f0405c6679aa85e83b7a65ef32175997ecfd616c23e0bd871",
+        "files": 301
+      }
+    }
+  ],
+  "corrected_test_setup": [
+    "The 48-column footer regression originally required text already omitted by the unchanged adaptive footer. It now compares the specific controls with and without active waits; 120-column shortcut text remains asserted.",
+    "The first context-helper command omitted --ignored and executed zero tests. The gate rejected this; both actual isolated Node tests were then run explicitly."
+  ],
+  "counting": "63 distinct Rust/Node test names; PTY and notification assertion counts include repeated setup checks and are not additional unique Rust tests.",
+  "boundaries": [
+    "No deployed relay/client was replaced, installed or reloaded.",
+    "OS transport is real notify-send and DBus; the notification service is an owned private fixture, not the user's desktop.",
+    "Notification sent means submission, never human viewing or consent.",
+    "Windows and macOS notification command construction is unit-tested; native runtime notification tests ran on Linux only.",
+    "No model or user session receives test traffic.",
+    "Debug ELF hashes are recorded; no redundant full binary copies are retained in this evidence archive."
+  ]
+}
