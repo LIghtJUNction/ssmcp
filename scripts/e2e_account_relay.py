@@ -403,6 +403,9 @@ class Harness:
             print(f"\n{err.name}: {self.redacted(err.read_text(errors='replace')[-6000:])}")
 
     def run(self):
+        retired = self.cli("A", "--ssh", "legacy.example", success=False)
+        self.check("SSH device connections have been removed" in retired.stderr,
+                   "legacy SSH stops before any transport starts")
         login = self.cli("A", "login", "--server", self.state.origin, "--no-browser", "--json")
         self.check(json.loads(login.stdout)["identity"] == IDENTITY,
                    "device login stores the verified synthetic GitHub identity")
