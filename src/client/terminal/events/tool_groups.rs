@@ -1,7 +1,7 @@
 //! Bounded, source-aware tool containers. Child identities and scroll anchors
 //! survive projection; old full-height cards are never clipped into a new box.
 use super::*;
-use crate::runtime::call_scope::CallScope;
+use crate::{client::language::localized, runtime::call_scope::CallScope};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(super) const MAX_BODY_ROWS: usize = 8;
@@ -264,7 +264,12 @@ pub(super) fn render(
         .min(page.saturating_sub(heading + footer).max(1));
     let inset = 5.min(width.saturating_sub(1));
     let content_width = width.saturating_sub(inset).max(1);
-    let palette = format!("{}:tool-group:{}", palette_key(ui), diff_mode.name());
+    let palette = format!(
+        "{}:{}:tool-group:{}",
+        palette_key(ui),
+        ui.language.code(),
+        diff_mode.name()
+    );
     state.layout.clear();
     state.rows = 0;
     for event in events.iter_mut().take(group.end).skip(group.start) {
@@ -279,7 +284,11 @@ pub(super) fn render(
                 })
             {
                 let body = if event.meta.command && !event.meta.diff {
-                    format!("Command\n{}", event.text.trim_end())
+                    format!(
+                        "{}\n{}",
+                        ui.language.text("Command", "命令"),
+                        event.text.trim_end()
+                    )
                 } else if let Some(read) = &event.meta.read {
                     read.details(&event.text)
                 } else {
@@ -326,7 +335,13 @@ pub(super) fn render(
             id: group.head,
             text: paint(
                 &clip_plain(
-                    &format!("╭ Tools · {} · {}", group.end - group.start, group.label()),
+                    &localized!(
+                        ui.language,
+                        "╭ Tools · {} · {}",
+                        "╭ 工具 · {} · {}",
+                        group.end - group.start,
+                        group.label()
+                    ),
                     width,
                 ),
                 "muted",
@@ -372,8 +387,10 @@ pub(super) fn render(
             let gutter = paint(&clip_plain("│  │ ", inset), "muted", ui, false);
             (format!("{gutter}{body}"), true)
         } else {
-            let text = format!(
+            let text = localized!(
+                ui.language,
                 "│  └ {}–{}/{} · output",
+                "│  └ {}–{}/{} · 输出",
                 event.panel.offset() + 1,
                 event.panel.offset() + event.panel.page,
                 event.panel.rows
@@ -388,14 +405,20 @@ pub(super) fn render(
         });
     }
     let hint = if width >= 68 {
-        " · left wheel inside · right wheel chat"
+        ui.language.text(
+            " · left wheel inside · right wheel chat",
+            " · 左半滚轮内部 · 右半滚轮对话",
+        )
     } else if width >= 32 {
-        " · PgUp/PgDn · Esc back"
+        ui.language
+            .text(" · PgUp/PgDn · Esc back", " · PgUp/PgDn · Esc 返回")
     } else {
         ""
     };
-    let detail = format!(
+    let detail = localized!(
+        ui.language,
         "╰ {}–{}/{} rows{hint}",
+        "╰ {}–{}/{} 行{hint}",
         offset + 1,
         offset + state.page,
         state.rows
