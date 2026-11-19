@@ -689,7 +689,7 @@ impl Runtime {
         let value = if matches!(tool.provider, Provider::Context | Provider::Client)
             || matches!(
                 name.as_str(),
-                "ssmcp.output.read" | "terminal.read" | "ssmcp.exec.read"
+                "ssmcp.output.read" | "ssmcp.output.search" | "terminal.read" | "ssmcp.exec.read"
             ) {
             value
         } else {

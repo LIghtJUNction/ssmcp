@@ -1434,6 +1434,7 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "libc",
+ "memchr",
  "miniz_oxide 0.9.1",
  "png",
  "portable-pty",
