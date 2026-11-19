@@ -2401,32 +2401,49 @@ struct PhysicalOutput {
 impl PhysicalOutput {
     #[cfg(unix)]
     fn open() -> io::Result<Self> {
+        Self::open_terminal(libc::STDERR_FILENO)
+    }
+    #[cfg(unix)]
+    fn open_terminal(terminal: std::os::fd::RawFd) -> io::Result<Self> {
         use std::{
             ffi::CStr,
             os::fd::{AsRawFd, FromRawFd},
         };
         let mut name = [0 as libc::c_char; 4096];
         // SAFETY: ttyname_r writes a bounded NUL-terminated terminal path.
-        let error = unsafe { libc::ttyname_r(libc::STDERR_FILENO, name.as_mut_ptr(), name.len()) };
+        let error = unsafe { libc::ttyname_r(terminal, name.as_mut_ptr(), name.len()) };
         if error != 0 {
             return Err(io::Error::from_raw_os_error(error));
         }
         let name = unsafe { CStr::from_ptr(name.as_ptr()) };
         // Reopen, never set O_NONBLOCK on a dup which shares the parent's flags.
-        let fd = unsafe {
-            libc::open(
-                name.as_ptr(),
-                libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY,
-            )
+        let flags = libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY;
+        let fd = unsafe { libc::open(name.as_ptr(), flags) };
+        let (fd, controlling) = if fd >= 0 {
+            (fd, false)
+        } else {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::PermissionDenied {
+                return Err(error);
+            }
+            // su can retain a writable terminal while its device node still
+            // belongs to the original user. /dev/tty opens a new description;
+            // verify the underlying controlling terminal before using it.
+            let fd = unsafe { libc::open(c"/dev/tty".as_ptr(), flags) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            (fd, true)
         };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if controlling {
+            Self::verify_controlling_terminal(terminal, file.as_raw_fd())?;
+            return Ok(Self { file });
+        }
         let mut before = std::mem::MaybeUninit::<libc::stat>::uninit();
         let mut after = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: both descriptors are open and stat destinations are valid.
-        if unsafe { libc::fstat(libc::STDERR_FILENO, before.as_mut_ptr()) } != 0
+        if unsafe { libc::fstat(terminal, before.as_mut_ptr()) } != 0
             || unsafe { libc::fstat(file.as_raw_fd(), after.as_mut_ptr()) } != 0
         {
             return Err(io::Error::last_os_error());
@@ -2438,6 +2455,41 @@ impl PhysicalOutput {
             return Err(io::Error::other("terminal changed while opening display"));
         }
         Ok(Self { file })
+    }
+    #[cfg(unix)]
+    fn verify_controlling_terminal(
+        terminal: std::os::fd::RawFd,
+        candidate: std::os::fd::RawFd,
+    ) -> io::Result<()> {
+        // A session has one controlling terminal. Both descriptors must belong
+        // to our session and foreground group; redirected stderr is not enough.
+        let session = unsafe { libc::getsid(0) };
+        let group = unsafe { libc::getpgrp() };
+        if session < 0
+            || unsafe { libc::tcgetsid(terminal) } != session
+            || unsafe { libc::tcgetsid(candidate) } != session
+            || unsafe { libc::tcgetpgrp(terminal) } != group
+            || unsafe { libc::tcgetpgrp(candidate) } != group
+        {
+            return Err(io::Error::other(
+                "display is not the current controlling terminal",
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // fstat(/dev/tty) describes the alias, not /dev/pts/N. TIOCGDEV
+            // compares the actual terminal devices behind both descriptors.
+            let (mut original, mut reopened) = (0 as libc::c_uint, 0 as libc::c_uint);
+            if unsafe { libc::ioctl(terminal, libc::TIOCGDEV, &mut original) } != 0
+                || unsafe { libc::ioctl(candidate, libc::TIOCGDEV, &mut reopened) } != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if original != reopened {
+                return Err(io::Error::other("terminal changed while opening display"));
+            }
+        }
+        Ok(())
     }
     #[cfg(windows)]
     fn open() -> io::Result<Self> {
@@ -2496,6 +2548,89 @@ impl Drop for PhysicalOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_output_reopens_without_changing_inherited_flags() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let (mut master, mut slave) = (-1, -1);
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            },
+            0
+        );
+        let _master = unsafe { std::fs::File::from_raw_fd(master) };
+        let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+        let before = unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFL) };
+        let output = PhysicalOutput::open_terminal(slave.as_raw_fd()).unwrap();
+        assert_eq!(
+            unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFL) },
+            before
+        );
+        assert_ne!(
+            unsafe { libc::fcntl(output.file.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
+            0
+        );
+        assert_ne!(
+            unsafe { libc::fcntl(output.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an inherited foreign-owned PTY and dropped UID from the multi-user fixture"]
+    fn physical_output_multi_user_fixture() {
+        use std::os::fd::AsRawFd;
+        let mode = std::env::var("SSMCP_TEST_DISPLAY_MODE").expect("fixture mode");
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "fixture must drop privileges"
+        );
+        let mut name = [0 as libc::c_char; 4096];
+        assert_eq!(
+            unsafe { libc::ttyname_r(libc::STDERR_FILENO, name.as_mut_ptr(), name.len()) },
+            0
+        );
+        let reopened = unsafe { libc::open(name.as_ptr(), libc::O_WRONLY | libc::O_NOCTTY) };
+        assert_eq!(reopened, -1, "the original device must reject this UID");
+        assert_eq!(
+            io::Error::last_os_error().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let before = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
+        let result = PhysicalOutput::open();
+        if mode == "different" {
+            assert!(
+                result.is_err(),
+                "must not draw to a different controlling terminal"
+            );
+        } else {
+            assert_eq!(mode, "same");
+            let mut output = result.unwrap();
+            assert_ne!(
+                unsafe { libc::fcntl(output.file.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK,
+                0
+            );
+            assert_ne!(
+                unsafe { libc::fcntl(output.file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0
+            );
+            output.write_all(b"SSMCP_MULTI_USER_DISPLAY_OK\n").unwrap();
+        }
+        assert_eq!(
+            unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) },
+            before
+        );
+    }
 
     #[test]
     fn account_preview_uses_the_shared_sidebar_and_preserves_the_ascii_pet() {
