@@ -593,7 +593,37 @@ async fn session_title_reaches_ssh_handshake_and_connection_output() {
 }
 
 #[tokio::test]
-async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
+async fn allow_help_explains_both_target_namespaces_without_connecting() {
+    for arguments in [
+        vec!["--help"],
+        vec!["--help-full"],
+        vec!["sessions", "create", "--help"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ssmcp"))
+            .args(&arguments)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {:?}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{arguments:?}: {:?}",
+            output.stderr
+        );
+        let help = String::from_utf8(output.stdout).unwrap();
+        assert!(help.contains("--allow USER"), "{arguments:?}: {help}");
+        assert!(help.contains("USER@github"), "{arguments:?}: {help}");
+        assert!(help.contains("server username"), "{arguments:?}: {help}");
+        assert!(help.contains("SSH"), "{arguments:?}: {help}");
+    }
+}
+
+#[tokio::test]
+async fn mixed_allow_handshake_publishes_browser_auth_without_login_code() {
     let fixture = Fixture::new();
     let output = fixture
         .run_with_args(
@@ -601,9 +631,9 @@ async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
             "startup",
             &[
                 "--allow",
-                "OctoCat@GitHub, Alice@github",
+                "OctoCat@GitHub, Alice, Alice@github, Alice_Dev",
                 "--allow",
-                "OCTOCAT@github",
+                "OCTOCAT@github,ALICE",
             ],
         )
         .await;
@@ -617,7 +647,7 @@ async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
     assert_eq!(ready["url"], "https://ssmcp.example/mcp");
     assert_eq!(
         ready["allow"],
-        serde_json::json!(["octocat@github", "alice@github"])
+        serde_json::json!(["octocat@github", "alice", "alice@github", "alice_dev"])
     );
     assert_eq!(ready["client_id"], "b".repeat(64));
     assert!(ready.get("login_code").is_none());
@@ -632,20 +662,22 @@ async fn github_allow_handshake_publishes_browser_auth_without_login_code() {
 }
 
 #[tokio::test]
-async fn github_allow_fails_closed_before_backend_start_if_server_returns_legacy_credentials() {
-    for scenario in ["github-legacy", "github-bad-ttl"] {
-        let fixture = Fixture::new();
-        let output = fixture
-            .run_with_args(scenario, "startup", &["--allow", "alice@github"])
-            .await;
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        assert!(!fixture.0.join("native-pid").exists());
-        assert!(!fixture.0.join("version-probe").exists());
-        assert!(!fixture.0.join("native-pids").exists());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("did not acknowledge the --allow"), "{error}");
-        assert!(!error.contains(&"a".repeat(64)));
+async fn allow_fails_closed_before_backend_start_if_server_returns_legacy_credentials() {
+    for principal in ["alice", "alice@github"] {
+        for scenario in ["github-legacy", "github-bad-ttl"] {
+            let fixture = Fixture::new();
+            let output = fixture
+                .run_with_args(scenario, "startup", &["--allow", principal])
+                .await;
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!fixture.0.join("native-pid").exists());
+            assert!(!fixture.0.join("version-probe").exists());
+            assert!(!fixture.0.join("native-pids").exists());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains("did not acknowledge the --allow"), "{error}");
+            assert!(!error.contains(&"a".repeat(64)));
+        }
     }
 }
 

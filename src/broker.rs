@@ -1,5 +1,6 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod access;
+mod allow;
 mod management;
 mod traffic;
 use crate::{
@@ -763,7 +764,7 @@ impl Broker {
             }
             vec![registration.identity.clone()]
         } else if restricted {
-            match self.identities.resolve_allow(&metadata.allow).await {
+            match self.resolve_initial_allow(&metadata.allow).await {
                 Ok(identities) if !identities.is_empty() => identities,
                 result => {
                     let message = result

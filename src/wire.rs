@@ -163,7 +163,7 @@ pub struct ClientMetadata {
     /// Absolute working directory at client startup; agent sessions may use other directories.
     pub cwd: String,
     pub hostname: String,
-    /// Canonical GitHub principals allowed to access this connection.
+    /// Canonical server usernames or GitHub principals allowed to access this connection.
     /// Empty retains connection-bound login-code authorization.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
@@ -189,12 +189,15 @@ impl ClientMetadata {
         }
         if self.allow.len() > MAX_ALLOWED_PRINCIPALS {
             return Err(format!(
-                "client allow list must contain at most {MAX_ALLOWED_PRINCIPALS} GitHub principals"
+                "client allow list must contain at most {MAX_ALLOWED_PRINCIPALS} principals"
             ));
         }
         for (index, principal) in self.allow.iter().enumerate() {
-            if canonical_github_principal(principal)? != *principal {
-                return Err("client allow entries must use lowercase username@github".into());
+            if canonical_allow_principal(principal)? != *principal {
+                return Err(
+                    "client allow entries must use lowercase server usernames or username@github"
+                        .into(),
+                );
             }
             if self.allow[..index].contains(principal) {
                 return Err("client allow list must not contain duplicate principals".into());
@@ -243,6 +246,16 @@ pub fn validate_title(title: Option<&str>) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Startup allow targets use separate server-name and GitHub-login namespaces.
+pub fn canonical_allow_principal(principal: &str) -> Result<String, String> {
+    if principal.contains('@') {
+        canonical_github_principal(principal)
+    } else {
+        crate::username::normalize(principal)
+            .map_err(|error| format!("invalid server username: {error}"))
+    }
 }
 
 /// Validate a GitHub principal and return its case-insensitive canonical form.
@@ -914,6 +927,41 @@ mod tests {
     }
 
     #[test]
+    fn allow_principals_distinguish_server_usernames_from_github_logins() {
+        for (input, expected) in [
+            ("Alice", "alice"),
+            ("Alice_2-home", "alice_2-home"),
+            ("Alice@GitHub", "alice@github"),
+            ("a@github", "a@github"),
+            ("root@github", "root@github"),
+            ("gh-123@github", "gh-123@github"),
+        ] {
+            assert_eq!(canonical_allow_principal(input).unwrap(), expected);
+        }
+        assert!(canonical_allow_principal(&"a".repeat(32)).is_ok());
+        for input in [
+            "",
+            "ab",
+            "root",
+            "gh-123",
+            " alice",
+            "alice ",
+            "alice/bob",
+            "alice@example.com",
+            "alice@github@github",
+            "alice,",
+            "álïce",
+        ] {
+            assert!(canonical_allow_principal(input).is_err(), "{input:?}");
+        }
+        assert!(canonical_allow_principal(&"a".repeat(33)).is_err());
+        assert_ne!(
+            canonical_allow_principal("alice").unwrap(),
+            canonical_allow_principal("alice@github").unwrap()
+        );
+    }
+
+    #[test]
     fn client_metadata_keeps_legacy_shape_and_validates_allow_policy() {
         let legacy = serde_json::json!({
             "name":"dev", "cwd":"/project", "hostname":"workstation"
@@ -929,7 +977,16 @@ mod tests {
             serde_json::to_value(&metadata).unwrap()["allow"],
             serde_json::json!(["alice@github", "bob@github"])
         );
+        metadata.allow = vec!["alice".into(), "alice@github".into(), "bob_dev".into()];
+        assert!(metadata.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap()["allow"],
+            serde_json::json!(["alice", "alice@github", "bob_dev"])
+        );
         for allow in [
+            vec!["Alice".into()],
+            vec!["root".into()],
+            vec!["alice".into(), "alice".into()],
             vec!["Alice@github".into()],
             vec!["alice@example.com".into()],
             vec!["alice@github".into(), "alice@github".into()],

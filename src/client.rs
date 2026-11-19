@@ -45,7 +45,7 @@ use crate::{
     runtime::Runtime,
     wire::{
         ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_github_principal, read_frame, validate_title, write_frame,
+        canonical_allow_principal, read_frame, validate_title, write_frame,
     },
 };
 use serde_json::json;
@@ -85,6 +85,8 @@ Manage
 Options
   --name NAME   --title TEXT   --server URL   --context-root PATH
   --no-browser  --no-watchdog  --theme NAME   --no-color
+  --allow USER[,USER...]  Share an SSH session with registered server usernames
+  --allow USER@github    Share with GitHub logins; both forms can be mixed/repeated
 
 Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
@@ -132,8 +134,9 @@ Usage: ssmcp username@server [options]
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
-  --allow USER@github  Allow GitHub identities; repeat or separate with commas
-                       (SSH sharing; at most 32 users; your logged-in account is automatic)
+  --allow USER|USER@github
+                       Allow a registered server username or GitHub login
+                       (SSH only; repeat or comma-separate; at most 32 targets)
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -167,6 +170,8 @@ Examples:
   ssmcp --title "Fix ssmcp client reload" my-server
   ssmcp -F ~/.ssh/work_config my-server
   ssmcp -i ~/.ssh/id_ed25519 -p 2222 alice@ssmcp.example
+  ssmcp --ssh --allow alice my-server
+  ssmcp --ssh --allow alice,octocat@github my-server
   ssmcp --allow octocat@github,alice@github my-server
   ssmcp --daemon --watchdog --name workstation --allow octocat@github my-server
   ssmcp sessions status workstation
@@ -198,7 +203,11 @@ Interactive stdout shows the MCP URL and OAuth login instructions.
 Add url to your MCP client, then enter login_code on its OAuth login page.
 login_expires_in deducts local backend startup time.
 With --allow, prints url, client information, allow and auth:"github" instead
-of a login_code. Add url to the MCP client and sign in with an allowed GitHub
+of a login_code. A bare USER is the username chosen during account registration
+on this relay; USER@github is a GitHub login. The two names can identify different
+accounts. Server usernames require an updated relay with account storage enabled;
+unknown or banned server usernames are rejected. Access binds to the account's
+stable GitHub ID. Add url to the MCP client and sign in with the allowed GitHub
 account in the browser. On a first-connection failure, interactive setup opens
 GitHub authorization, checks account keys and offers to create/register a local
 Ed25519 key. Enter confirms a default computer name. Setup backs up and verifies
@@ -495,7 +504,7 @@ impl Options {
                     title = Some(value["--title=".len()..].to_owned());
                 }
                 Some("--allow") => {
-                    let value = args.next().ok_or("--allow requires username@github")?;
+                    let value = args.next().ok_or("--allow requires USER or USER@github")?;
                     add_allowed_principals(
                         &mut allow,
                         value.to_str().ok_or("--allow must be UTF-8")?,
@@ -978,7 +987,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] HOST\n\n  --allow USER|USER@github  Share an SSH session; repeat or comma-separate targets\n  USER is a registered server username; USER@github is a GitHub login.\n\nRequires a running ssmcp service. See ssmcp --help-full for SSH options."
         );
         return Ok(());
     }
@@ -1051,12 +1060,12 @@ fn connection_option_takes_value(option: &str) -> bool {
 
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
     for entry in value.split(',') {
-        let principal = canonical_github_principal(entry.trim())
-            .map_err(|error| format!("--allow: {error}"))?;
+        let principal =
+            canonical_allow_principal(entry.trim()).map_err(|error| format!("--allow: {error}"))?;
         if !allow.contains(&principal) {
             if allow.len() == MAX_ALLOWED_PRINCIPALS {
                 return Err(format!(
-                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct GitHub users"
+                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct allow targets"
                 ));
             }
             allow.push(principal);
@@ -2923,9 +2932,42 @@ mod tests {
     }
 
     #[test]
-    fn github_allow_limits_distinct_users_and_rejects_invalid_or_local_options() {
+    fn allow_server_usernames_and_github_logins_remain_distinct() {
+        let options = Options::parse(
+            [
+                "--ssh",
+                "--name",
+                "sharing",
+                "--allow",
+                "Alice, ALICE_2, alice@GitHub",
+                "--allow",
+                "alice,OctoCat@github",
+                "my-server",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            options.allow,
+            ["alice", "alice_2", "alice@github", "octocat@github"]
+        );
+        assert_eq!(options.metadata().unwrap().allow, options.allow);
+        let saved = options.session_spec().unwrap();
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.allow, options.allow);
+    }
+
+    #[test]
+    fn allow_limits_distinct_targets_and_rejects_invalid_or_local_options() {
         let all = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@github"))
+            .map(|i| {
+                if i % 2 == 0 {
+                    format!("user-{i}")
+                } else {
+                    format!("user-{i}@github")
+                }
+            })
             .collect::<Vec<_>>()
             .join(",");
         let options =
@@ -2941,7 +2983,10 @@ mod tests {
         assert!(error.contains("32 distinct"), "{error}");
         for value in [
             "",
-            "alice",
+            "ab",
+            "root",
+            "gh-123",
+            "alice.dev",
             "alice@example.com",
             "alice@github,",
             ",alice@github",
@@ -2955,7 +3000,7 @@ mod tests {
             Options::parse(["--allow"].map(OsString::from))
                 .err()
                 .unwrap()
-                .contains("requires username@github")
+                .contains("requires USER or USER@github")
         );
         assert!(
             Options::parse(["--list-tools", "--allow", "alice@github"].map(OsString::from))
