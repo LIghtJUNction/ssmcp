@@ -1,0 +1,21 @@
+{
+  "status": "source-checkpoint",
+  "publication_python_tests": 72,
+  "publication_python_exit_code": 0,
+  "consumer_format_command": [
+    "cargo",
+    "fmt",
+    "--package",
+    "ssmcp",
+    "--",
+    "--check"
+  ],
+  "consumer_format_exit_code": 0,
+  "workspace_members": [
+    "ssmcp"
+  ],
+  "ztuio_exact_dependency": "=0.1.0",
+  "full_metadata_status": "owned 120-second metadata job timed out without a resolution result; combination build will verify the exact lockfile",
+  "lock_change": "only path package name/version and the matching root dependency entry",
+  "nested_workspace_note": "cargo fmt --all follows excluded local dependencies into an enclosing worktree workspace; package-scoped formatting passes, independent library checks use an external clean checkout"
+}

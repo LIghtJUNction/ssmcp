@@ -1959,6 +1959,8 @@ async fn connect_inner(
             .as_ref()
             .map(|credential| (credential.server.as_str(), credential.token.as_str()))
     });
+    // Explicit --allow uses the same relay transport without an account token.
+    // Preserve its final authorization outcome even when the child exits first.
     let mut incoming = Incoming::start(reader);
     let _link_metrics = display_session
         .as_ref()
@@ -1973,7 +1975,7 @@ async fn connect_inner(
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(relay::failure(error)); },
         status = ssh.wait() => {
             let mut error = ssh_ended(status);
-            if options.relay.is_some() { error = incoming.after_relay_exit(error).await; }
+            if matches!(&transport, Transport::Account { .. }) { error = incoming.after_relay_exit(error).await; }
             return Err(relay::failure(error));
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
@@ -2018,7 +2020,7 @@ async fn connect_inner(
         error = incoming.disconnected() => Err(error),
         status = ssh.wait() => {
             let error = ssh_ended(status);
-            Err(if options.relay.is_some() { incoming.after_relay_exit(error).await } else { error })
+            Err(if matches!(&transport, Transport::Account { .. }) { incoming.after_relay_exit(error).await } else { error })
         },
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
@@ -2026,7 +2028,7 @@ async fn connect_inner(
     };
     let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
     if let Err(mut error) = readiness {
-        if options.relay.is_some() && ssh.try_wait()?.is_some() {
+        if matches!(&transport, Transport::Account { .. }) && ssh.try_wait()?.is_some() {
             error = incoming.after_relay_exit(error).await;
         }
         let _ = ssh.start_kill();
@@ -2443,10 +2445,9 @@ mod tests {
                 "--reconnect-delay",
                 "20",
                 "--allow",
-                "octocat@github",
-                "-F",
-                "relative-ssh-config",
-                "work-server",
+                "octocat@relay.example",
+                "--server",
+                "https://relay.example",
             ]
             .map(OsString::from),
         )
@@ -2468,9 +2469,9 @@ mod tests {
             .unwrap();
         assert_eq!(parsed.allow, parent.allow);
         assert_eq!(parsed.destination, parent.destination);
+        assert_eq!(parsed.server, parent.server);
         assert_eq!(parsed.title.as_deref(), Some("--help"));
         assert_eq!(parsed.name.as_deref(), Some("worker"));
-        assert!(PathBuf::from(parsed.config.unwrap()).is_absolute());
         assert!(!parsed.session_control);
         assert!(!parsed.daemon);
         assert_eq!(parsed.reconnect_delay_secs, 2);
@@ -2660,62 +2661,84 @@ mod tests {
 
     #[test]
     fn background_manifest_retains_native_connection_arguments_without_recursing() {
-        let options = Options::parse(
-            [
-                "--daemon",
-                "--watchdog",
-                "--reconnect-delay",
-                "7",
-                "--name",
-                "workstation",
-                "--title",
-                "--daemon",
-                "--allow",
-                "OctoCat@GitHub",
-                "-i",
-                "key with spaces",
-                "-F",
-                "config with spaces",
-                "-p",
-                "2222",
-                "--theme",
-                "nord",
-                "user@host",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        let spec = options.session_spec().unwrap();
-        assert_eq!(spec.name, "workstation");
-        assert!(spec.cwd.is_absolute());
-        assert!(spec.watchdog);
-        assert_eq!(spec.reconnect_delay_secs, 7);
-        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
-        let restored = Options::parse(spec.args.into_iter().map(OsString::from))
-            .unwrap()
-            .unwrap();
-        assert!(!restored.daemon);
-        assert_eq!(restored.title.as_deref(), Some("--daemon"));
-        assert_eq!(restored.allow, ["octocat@github"]);
-        assert_eq!(
-            restored.identity,
-            options
-                .identity
-                .as_ref()
-                .map(|path| spec.cwd.join(path).into_os_string())
-        );
-        assert_eq!(
-            restored.config,
-            options
-                .config
-                .as_ref()
-                .map(|path| spec.cwd.join(path).into_os_string())
-        );
-        assert_eq!(restored.port, options.port);
-        assert_eq!(restored.destination, options.destination);
-        assert_eq!(restored.shell, options.shell);
-        assert!(restored.theme.is_none());
+        for (args, expected_allow) in [
+            (
+                vec![
+                    "--daemon",
+                    "--watchdog",
+                    "--reconnect-delay",
+                    "7",
+                    "--name",
+                    "workstation",
+                    "--title",
+                    "--daemon",
+                    "--server",
+                    "https://relay.example",
+                    "--allow",
+                    "OctoCat@Relay.Example",
+                    "--theme",
+                    "nord",
+                ],
+                vec!["octocat@relay.example"],
+            ),
+            (
+                vec![
+                    "--daemon",
+                    "--watchdog",
+                    "--reconnect-delay",
+                    "7",
+                    "--name",
+                    "workstation",
+                    "--title",
+                    "--daemon",
+                    "-i",
+                    "key with spaces",
+                    "-F",
+                    "config with spaces",
+                    "-p",
+                    "2222",
+                    "--theme",
+                    "nord",
+                    "user@host",
+                ],
+                vec![],
+            ),
+        ] {
+            let options = Options::parse(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            let spec = options.session_spec().unwrap();
+            assert_eq!(spec.name, "workstation");
+            assert!(spec.cwd.is_absolute());
+            assert!(spec.watchdog);
+            assert_eq!(spec.reconnect_delay_secs, 7);
+            assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
+            let restored = Options::parse(spec.args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert!(!restored.daemon);
+            assert_eq!(restored.title.as_deref(), Some("--daemon"));
+            assert_eq!(restored.allow, expected_allow);
+            assert_eq!(
+                restored.identity,
+                options
+                    .identity
+                    .as_ref()
+                    .map(|path| spec.cwd.join(path).into_os_string())
+            );
+            assert_eq!(
+                restored.config,
+                options
+                    .config
+                    .as_ref()
+                    .map(|path| spec.cwd.join(path).into_os_string())
+            );
+            assert_eq!(restored.port, options.port);
+            assert_eq!(restored.destination, options.destination);
+            assert_eq!(restored.server, options.server);
+            assert_eq!(restored.shell, options.shell);
+            assert!(restored.theme.is_none());
+        }
     }
 
     #[test]

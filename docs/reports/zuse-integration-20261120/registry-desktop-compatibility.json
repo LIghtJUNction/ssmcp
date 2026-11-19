@@ -1,0 +1,47 @@
+{
+  "crate": "zuse-computer",
+  "version": "0.1.0",
+  "archive_sha256": "d8213abf0138ae60e79b92c51dcc2b0d7942f6c61edf96e00f86ac3a5d97d109",
+  "vcs": {
+    "git": {
+      "sha1": "dd57e38a7b0eafb11f438a539c7dbbac98b349a0"
+    },
+    "path_in_vcs": ""
+  },
+  "files": {
+    "src/lib.rs": {
+      "identical": true,
+      "sha256": "08c2c52ff06314315e8fc435b512fd34e82481dec002b59e59e5cf64c96737f8"
+    },
+    "src/platform/mod.rs": {
+      "identical": true,
+      "sha256": "933554561d45c748b89b7952e856ea80930fb4cceb81cff67b9298b4fa54565a"
+    },
+    "src/platform/linux.rs": {
+      "identical": true,
+      "sha256": "d0c63dfc38b5f7b587ae26ea33ea5649673c7cc546bbc9003eaf6342c509eb69"
+    },
+    "src/platform/x11.rs": {
+      "identical": true,
+      "sha256": "801381f60f83902a3fdecea811f718a5951f96a85057f295c83490dbf24f0615"
+    },
+    "src/platform/wayland.rs": {
+      "identical": true,
+      "sha256": "79abf4a8eb3c0871ae6c00e6c590ddac5453b7e18dad13a432ce706619605018"
+    },
+    "src/platform/windows.rs": {
+      "identical": true,
+      "sha256": "b81f83c1ac9228062a4ab0a6382f99713fb01657a040017ae9e836651d2a6bc0"
+    },
+    "src/platform/macos.rs": {
+      "identical": true,
+      "sha256": "1d64902dd53afb6c2e5a4e9490c1450983510921f0f250bb85821415af42cf4b"
+    },
+    "src/platform/png.rs": {
+      "identical": true,
+      "sha256": "a34223cbb070fa0e41d9e255a4753f75ff41ff4daa40a81b256bcb58c3ae951b"
+    }
+  },
+  "consumer_gitlink": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41",
+  "scope": "Every linked Desktop platform source is byte-identical to the published crate; Android/runtime-only git additions are outside this integration."
+}

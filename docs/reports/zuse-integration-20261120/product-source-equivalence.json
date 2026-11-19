@@ -1,0 +1,87 @@
+{
+  "schema": "ssmcp.product-input-equivalence.v1",
+  "product_source_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "validated_test_source_commit": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "documentation_merge_commit": "9d197026112b24b32e39466d4e9cd0425e34702e",
+  "method": "All changed Rust source is in existing cfg(test) modules; unchanged prefixes and the complete source diff are retained for review. Cargo/build inputs and dependency gitlinks are identical.",
+  "cargo_and_build_inputs_unchanged": [
+    "Cargo.toml",
+    "Cargo.lock",
+    ".gitmodules",
+    ".cargo",
+    "build.rs",
+    "crates",
+    "frontend"
+  ],
+  "rust_test_prefixes": {
+    "src/client.rs": {
+      "unchanged_before_test_module": true,
+      "prefix_sha256": "2e541c55197bbff3c03459c0f8c245836aaef801229c205744526ae57f306751"
+    },
+    "src/client/terminal.rs": {
+      "unchanged_before_test_module": true,
+      "prefix_sha256": "a90b06ecde2265dea20bafc6f0f2a0808bbfe3944291632b6a414b4643e000f0"
+    },
+    "src/client/terminal/events.rs": {
+      "unchanged_before_test_module": true,
+      "prefix_sha256": "49612b70feafb67d3db291200050745f97fb7bc4e95005baf190e2e95907a375"
+    },
+    "src/device.rs": {
+      "unchanged_before_test_module": true,
+      "prefix_sha256": "75704c7d0dca080bec6ad7146a117f5f10160989f2e434518c4e5756e1744647"
+    }
+  },
+  "source_diff": "test-only-source.diff",
+  "source_diff_sha256": "05faef7e04b752d48b44faf638dc8a06530bb16b7a63ad52eac5d4081d96bb73",
+  "all_changed_paths": [
+    "docs/commands.md",
+    "docs/configuration.md",
+    "docs/deployment.md",
+    "docs/onboarding.md",
+    "docs/releases.md",
+    "docs/reports/native-plugin-validation-20261120/README.zh-CN.md",
+    "docs/reports/native-plugin-validation-20261120/evidence.json",
+    "docs/reports/user-wait-sleep-20261120/README.md",
+    "docs/reports/user-wait-sleep-20261120/decoder-source-equivalence.json",
+    "docs/reports/user-wait-sleep-20261120/frame-awake-120.png",
+    "docs/reports/user-wait-sleep-20261120/frame-awake-48.png",
+    "docs/reports/user-wait-sleep-20261120/frame-sleep-120.png",
+    "docs/reports/user-wait-sleep-20261120/frame-sleep-48.png",
+    "docs/reports/user-wait-sleep-20261120/preview-initial-font.json",
+    "docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png",
+    "docs/reports/user-wait-sleep-20261120/pty-sleep-120.png",
+    "docs/reports/user-wait-sleep-20261120/pty-sleep-48.png",
+    "docs/reports/user-wait-sleep-20261120/terminal-targeted.txt",
+    "docs/reports/user-wait-sleep-20261120/user-wait-e2e.json",
+    "docs/reports/user-wait-sleep-20261120/validation.json",
+    "docs/reports/ztuio-integration-20261120/README.md",
+    "docs/reports/ztuio-integration-20261120/consumer-package.json",
+    "docs/reports/ztuio-integration-20261120/consumer-package.txt",
+    "docs/reports/ztuio-integration-20261120/core-clippy.txt",
+    "docs/reports/ztuio-integration-20261120/core-contracts.txt",
+    "docs/reports/ztuio-integration-20261120/core-format.txt",
+    "docs/reports/ztuio-integration-20261120/core-package.txt",
+    "docs/reports/ztuio-integration-20261120/core-validation.json",
+    "docs/reports/ztuio-integration-20261120/package-contents.json",
+    "docs/reports/zuse-integration-20261120/frozen-build.json",
+    "docs/reports/zuse-integration-20261120/native-desktop.jpg",
+    "docs/reports/zuse-integration-20261120/native-worker-cli.json",
+    "docs/reports/zuse-integration-20261120/native-worker-daemon.json",
+    "docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg",
+    "docs/reports/zuse-integration-20261120/private-desktop-mcp.json",
+    "docs/reports/zuse-integration-20261120/registry-desktop-compatibility.json",
+    "docs/reports/zuse-integration-20261120/validation.json",
+    "scripts/e2e_user_wait.py",
+    "scripts/e2e_zuse_worker.py",
+    "src/client.rs",
+    "src/client/terminal.rs",
+    "src/client/terminal/events.rs",
+    "src/device.rs"
+  ],
+  "submodules": {
+    "zuse": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41",
+    "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "zplugin": "3e758b5c21af1bad1cfaf10264b43fe15440e69c",
+    "zharness": "84e370450f1d047d43119bf81caf73f742ba6b0a"
+  }
+}

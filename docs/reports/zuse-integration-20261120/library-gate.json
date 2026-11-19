@@ -1,0 +1,179 @@
+{
+  "schema": "ssmcp.library-gate.v1",
+  "source_commit": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "product_source_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "version": "0.10.14",
+  "libtest": {
+    "path": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "sha256": "b5c3a9cb0801ccccfe57c00cba0c2c35d215b836b258966213e8eff19ee31132"
+  },
+  "native_plugin_fixture": {
+    "path": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/frozen/debug/examples/libnative_plugin_fixture.so",
+    "sha256": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a"
+  },
+  "stages": [
+    {
+      "stage": "test-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 2.335,
+      "log": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/test-fmt.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "stage": "test-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 22.112,
+      "log": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/test-clippy.log",
+      "sha256": "8399757c504ecca51f4212ca3c26348d1b4524f4c5cd2ba59b3ad7db7b5f2cf5"
+    },
+    {
+      "stage": "libtest-only-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run",
+        "--lib",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 46.384,
+      "log": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/libtest-only-build.log",
+      "sha256": "8a2caadf10bdd42cbc345aa3f61b6de92fd9637f1c21cf89a6c54642279246bc"
+    },
+    {
+      "stage": "library-default-suite",
+      "command": [
+        "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+        "--test-threads=2"
+      ],
+      "exit_code": 0,
+      "duration_seconds": 88.855,
+      "log": "${WORKTREE}/target/zuse-validation/fab35e11425cdd147434de6d2eaa20510bf6db1e/library-default-suite.log",
+      "sha256": "bc88fd80eee38213a2c6b870374d6ad2c56ffbf10bbffb29810c43fadc9880cf"
+    }
+  ],
+  "status": "passed",
+  "results": {
+    "passed": 1498,
+    "failed": 0,
+    "ignored": 18,
+    "filtered_out": 0,
+    "test_threads": 2
+  },
+  "initial_gate": {
+    "source_commit": "560cd81fd8ba30bb0f975a5cdabe099bc65451b9",
+    "test_threads": "host default",
+    "passed": 1485,
+    "failed": 13,
+    "ignored": 18,
+    "exact_rechecks": [
+      {
+        "test": "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+        "exit_code": 0,
+        "seconds": 2.821,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-01.log"
+      },
+      {
+        "test": "backend::rpc::tests::discovery_has_one_reserved_slot_without_raising_the_native_call_limit",
+        "exit_code": 0,
+        "seconds": 0.615,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-02.log"
+      },
+      {
+        "test": "backend::shell::tests::large_output_keeps_the_full_artifact_after_releasing_the_live_tail",
+        "exit_code": 0,
+        "seconds": 2.318,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-03.log"
+      },
+      {
+        "test": "broker::allow::tests::anonymous_allow_slow_request_does_not_block_other_controller",
+        "exit_code": 0,
+        "seconds": 0.114,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-04.log"
+      },
+      {
+        "test": "client::terminal::events::tests::decoded_image_is_a_tool_event_while_a_plain_image_marker_is_only_a_log",
+        "exit_code": 101,
+        "seconds": 0.016,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-05.log"
+      },
+      {
+        "test": "client::terminal::tests::rejected_native_image_keeps_other_images_and_future_uploads_available",
+        "exit_code": 101,
+        "seconds": 0.008,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-06.log"
+      },
+      {
+        "test": "client::terminal::tests::selection_freeze_releases_native_placements_when_cell_measurement_expires",
+        "exit_code": 101,
+        "seconds": 0.008,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-07.log"
+      },
+      {
+        "test": "client::tests::background_manifest_retains_native_connection_arguments_without_recursing",
+        "exit_code": 101,
+        "seconds": 0.004,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-08.log"
+      },
+      {
+        "test": "client::tests::session_children_inherit_access_without_management_authority",
+        "exit_code": 101,
+        "seconds": 0.003,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-09.log"
+      },
+      {
+        "test": "device::tests::control_attribution_websocket_negotiates_without_changing_legacy_frames",
+        "exit_code": 101,
+        "seconds": 0.064,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-10.log"
+      },
+      {
+        "test": "observer::tests::parallel_jobs_cancel_owned_children_and_reuse_observers",
+        "exit_code": 0,
+        "seconds": 1.567,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-11.log"
+      },
+      {
+        "test": "pty::tests::shutdown_stops_background_jobs_in_separate_process_groups",
+        "exit_code": 0,
+        "seconds": 0.916,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-12.log"
+      },
+      {
+        "test": "runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener",
+        "exit_code": 0,
+        "seconds": 0.064,
+        "log": "${WORKTREE}/target/zuse-validation/560cd81fd8ba30bb0f975a5cdabe099bc65451b9/failure-serial-13.log"
+      }
+    ],
+    "disposition": {
+      "stable_fixture_failures": 6,
+      "single_test_rechecks_passed": 7,
+      "fixture_fixes": {
+        "account_inheritance": "aae048c351e4b620cae62131434cc434e7900f2f",
+        "image_expansion": "9bfd4de8ee55bc66e2414f20f2e4bb6f4b5fbe9e",
+        "capability_probe": "04ea6ee23d94126117983180f60c67ae46db4fdc"
+      },
+      "remaining_failures": "none in complete default collection with two test threads; no timeout or product assertions were relaxed"
+    }
+  }
+}

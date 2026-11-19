@@ -1,0 +1,84 @@
+{
+  "schema": "ssmcp.live-access-compatibility.v1",
+  "candidate_source": "78442aa0849cc1a168db039ff7427ea076594409",
+  "candidate_version": "0.10.14",
+  "scope": "Read-only audit of the active development connection and primary 007 recovery service before deployment",
+  "root": {
+    "live_version": "0.10.12",
+    "startup_mode": "implicit saved account",
+    "explicit_legacy_allow_or_ssh_arguments": false,
+    "selected_server": "https://ssmcp.lmm.best",
+    "v14_whoami": {
+      "source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+      "method": "GET",
+      "route": "/api/client/whoami",
+      "exit_code": 0,
+      "registered_username": "lightjunction",
+      "credentials_exposed": false,
+      "login_or_store_mutation": false
+    },
+    "initial_query_note": "An earlier read-only query failed without a retained detailed cause; the subsequent query succeeded. Credential expiry was not inferred from the first failure.",
+    "hello_metadata_review": {
+      "source_ref": "v0.10.12",
+      "client_source_blob": "72c225579e5be17a609b500a2b9311ccb3848bdd",
+      "relay_source_blob": "9c8363c8ecc36396b6c4434b53a12ad14eec2653",
+      "parser_default_allow": "empty vector before account selection",
+      "account_selection": "implicit saved-account path overwrites allow with one saved credential principal",
+      "hello": "Options.metadata clones allow; register_ssh serializes the resulting Hello",
+      "relay": "forwards parsed Frame unchanged to the authenticated WebSocket",
+      "empty_allow": false,
+      "saved_principal_value_read": false,
+      "current_connection_packet_captured": false,
+      "candidate_server_acceptance_of_existing_v12_hello": "source-incompatible legacy @github allow entry; no reconnect experiment performed",
+      "account_source_blob": "dff8ed924b774cb58ac86793548b98f59b07cde4",
+      "valid_saved_principal_format": "canonical GitHub principal ending in @github",
+      "source_inference_basis": "The live process reports v0.10.12 and uses implicit saved-account startup; the corresponding official source validates the saved principal and forwards it in Hello.allow.",
+      "v13_client_source_identical": true,
+      "v13_relay_source_identical": true,
+      "strict_v14_allow_schema_compatible": false
+    }
+  },
+  "recovery007": {
+    "version": "0.10.13",
+    "wire_version": 7,
+    "primary_pid_stable": true,
+    "primary_pid": 811652,
+    "uptime_seconds": [
+      7201,
+      7579
+    ],
+    "official_image_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "config_sha256": "47e4ec9dbffed3ee9b3509290c6bae01314be230458487a94044d62786c7a763",
+    "loaded_unit_sha256": "430a7dc61421eaa4f82e4c2b6eab60bc68bb85b2e612f4ac08c23695925c496d",
+    "loaded_unit_matches_process": true,
+    "connected_state_matches_primary_status": true,
+    "source": "direct saved-account connection; Hello metadata.allow is empty",
+    "v13_and_v14_zero_source_blob": "318122770fa536513de3fefe1d59651cdca15255",
+    "same_auth_store_reference_as_root": true,
+    "old_saved_session_manifests_are_not_the_primary_recovery_connection": true,
+    "independent_reauthentication_performed": false
+  },
+  "connection_preservation": {
+    "before": 14,
+    "after": 14,
+    "all_client_ids_unchanged": true,
+    "clients_stopped_or_restarted": 0,
+    "configuration_modified": false
+  },
+  "conclusion": {
+    "registered_account_on_current_relay_confirmed": true,
+    "new_source_compatibility_reviewed": true,
+    "post_deployment_reconnection_tested": false,
+    "other_saved_sessions_or_clients_not_claimed_migrated": true,
+    "root_old_parent_hello_empty": false,
+    "root_v12_reconnect_after_server_upgrade_verified": false,
+    "recovery007_empty_allow_source_compatible": true,
+    "suggested_release_order": "Resolve or explicitly migrate affected legacy ordinary-client handshakes before CD, preserve the independently verified 007 recovery path, and verify post-deployment reconnection before declaring deployment ready.",
+    "both_selected_connections_use_authenticated_https_transport": true,
+    "active_startup_definitions_use_retired_ssh_or_atgithub_arguments": false,
+    "root_normal_client_v12_and_v13_strict_v14_allow_schema_compatible": false,
+    "deployment_ready": false,
+    "deployment_blocker": "The ordinary v0.10.12/v0.10.13 account client sends a saved GitHub principal in Hello.allow; the v0.10.14 strict registered-account allow list does not accept that legacy syntax. The primary 007 path sends an empty allow list, but whoami success alone does not validate old ordinary-client reconnection."
+  },
+  "exported_at_utc": "2026-11-19T23:38:35.316511+00:00"
+}

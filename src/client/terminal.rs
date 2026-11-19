@@ -27,6 +27,7 @@ mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
+mod sleep;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -640,6 +641,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
             "tasks":{"row":conversation::body_top(g.rows),"col":0,"rows":g.log_rows,"cols":g.left,"visible":chat && state.conversation.view == conversation::View::Tasks},
             "input":{"row":conversation::prompt_top(g)+1,"col":0,"rows":g.input_rows,"cols":g.left,"visible":chat && g.input_rows>0}},
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
+        "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
@@ -1266,6 +1268,9 @@ struct State {
     dirty: bool,
     keyboard: Keyboard,
     conversation: conversation::Conversation,
+    sleep: sleep::Sleep,
+    #[cfg(test)]
+    sleep_fixture: Option<crate::client::interface::user_wait::Snapshot>,
 }
 impl State {
     fn new(rows: u16, cols: u16, ui: &Ui) -> Self {
@@ -1318,6 +1323,9 @@ impl State {
                 ..Keyboard::default()
             },
             conversation,
+            sleep: sleep::Sleep::default(),
+            #[cfg(test)]
+            sleep_fixture: None,
         };
         if ui.log_format == LogFormat::PrettyVerbose || ui.show_raw_json {
             state.chat_initial_logs();
@@ -1658,6 +1666,9 @@ impl State {
             self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
+            if self.sleep_key(action) {
+                continue;
+            }
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return Vec::new();
@@ -1798,6 +1809,7 @@ impl State {
             self.dirty = true;
         }
 
+        self.sleep_wake_text(&output);
         if selection_input {
             self.keyboard.logs = old_focus;
             if self.selection && output == b"\x1b" {
@@ -1877,13 +1889,22 @@ impl State {
         previous_cell: Option<images::CellSize>,
     ) -> bool {
         let pixels_changed = self.graphics.cell() != previous_cell;
+        let sleep_changed = self.sleep.visible != self.sleep_wants_overlay();
         let frozen = self.selection
+            && !self.sleep.visible
+            && !sleep_changed
             && !pixels_changed
             && previous.is_some_and(|old| !old.mouse_capture && old.geometry == self.geometry);
-        (self.dirty || pixels_changed) && !frozen
+        (self.dirty || pixels_changed || sleep_changed) && !frozen
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        let mut frame = self.base_frame(now);
+        self.sleep_overlay(&mut frame);
+        frame
+    }
+
+    fn base_frame(&mut self, now: Instant) -> Frame {
         self.media.clear();
         self.events
             .image_cells(self.graphics.cell().filter(|_| self.ui.color));
@@ -2295,9 +2316,9 @@ struct Frame {
     bracketed_paste: bool,
     mouse_capture: bool,
 }
-impl ztui::Frame for Frame {
-    fn size(&self) -> ztui::Size {
-        ztui::Size {
+impl ztuio::Frame for Frame {
+    fn size(&self) -> ztuio::Size {
+        ztuio::Size {
             rows: self.geometry.rows,
             columns: self.geometry.cols,
         }
@@ -2310,9 +2331,9 @@ impl ztui::Frame for Frame {
             .unwrap_or("")
     }
 
-    fn cursor(&self) -> ztui::Cursor {
-        ztui::Cursor {
-            position: ztui::Point {
+    fn cursor(&self) -> ztuio::Cursor {
+        ztuio::Cursor {
+            position: ztuio::Point {
                 row: self.cursor.0,
                 column: self.cursor.1,
             },
@@ -2320,8 +2341,8 @@ impl ztui::Frame for Frame {
         }
     }
 
-    fn modes(&self) -> ztui::Modes {
-        ztui::Modes {
+    fn modes(&self) -> ztuio::Modes {
+        ztuio::Modes {
             application_cursor: self.application_cursor,
             application_keypad: self.application_keypad,
             bracketed_paste: self.bracketed_paste,
@@ -2337,7 +2358,7 @@ impl ztui::Frame for Frame {
 impl Frame {
     fn diff(&self, previous: Option<&Self>) -> Vec<u8> {
         let mut output = String::new();
-        ztui::write_diff(&mut output, self, previous)
+        ztuio::write_diff(&mut output, self, previous)
             .expect("writing an ANSI frame into String cannot fail");
         output.into_bytes()
     }
@@ -2910,7 +2931,8 @@ mod tests {
         let frame = physical(&state.frame(Instant::now()));
         let text = frame.screen().contents();
         assert!(text.contains("本地会话"), "{text}");
-        assert!(text.contains("一次性登录码"), "{text}");
+        assert!(text.contains("当前系统用户"), "{text}");
+        assert!(text.contains("/logs 查看 MCP 授权"), "{text}");
         assert!(text.contains("http://127.0.0.1:43123"), "{text}");
         assert!(
             !text.contains("本月剩余") && !text.contains("未登录"),
@@ -2962,12 +2984,18 @@ mod tests {
         state.image(rejected, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert!(
+            state.events.open(),
+            "explicitly expand the compact image preview"
+        );
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
         state.image(retained, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert!(
+            state.events.open(),
+            "explicitly expand the compact image preview"
+        );
         let before = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let mut media = images::Renderer::default();
@@ -3004,7 +3032,10 @@ mod tests {
         state.image(next, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert!(
+            state.events.open(),
+            "explicitly expand the compact image preview"
+        );
         let final_frame = state.frame(now);
         assert_eq!(state.media.len(), 2);
         let (_, upload) = media.update(
@@ -3146,7 +3177,10 @@ mod tests {
         state.image(image, "image/png");
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
-        assert!(!state.events.open(), "decoded images are already expanded");
+        assert!(
+            state.events.open(),
+            "explicitly expand the compact image preview"
+        );
         state.selection = true;
         let before = state.frame(now);
         let previous_cell = state.graphics.cell();

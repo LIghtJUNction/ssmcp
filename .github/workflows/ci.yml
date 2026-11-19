@@ -82,6 +82,11 @@ jobs:
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Verify the independent ztuio source contracts
+        run: |
+          cargo fmt --manifest-path crates/ztuio/Cargo.toml -- --check
+          cargo clippy --manifest-path crates/ztuio/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path crates/ztuio/Cargo.toml --locked
       - name: Render terminal transcript fixture
         if: matrix.runner == 'ubuntu-24.04'
         env:
@@ -141,7 +146,7 @@ jobs:
           fi
       - name: Exercise account WebSocket, OAuth, HTTP and PTY
         run: python3 scripts/e2e.py --bin-dir target/debug
-      - name: Exercise account login, device invitations, revocation and logout
+      - name: Exercise account login, allow lists, revocation and logout
         run: python3 scripts/e2e_account_relay.py --binary target/debug/ssmcp --report "$RUNNER_TEMP/ssmcp-account-relay-report.json"
       - name: Exercise session title, reload and output artifacts
         run: python3 scripts/e2e_session_features.py --bin-dir target/debug
@@ -251,8 +256,8 @@ jobs:
         run: cargo test --lib --locked runtime::plugins::tests::native_plugin_runtime_contract -- --ignored --exact
       - name: Check and test the zero-dependency TUI primitives
         run: |
-          cargo clippy --locked -p ztui-core --all-targets -- -D warnings
-          cargo test --locked -p ztui-core
+          cargo clippy --manifest-path crates/ztuio/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path crates/ztuio/Cargo.toml --locked
       - run: cargo build --locked --bin ssmcp
       - name: Check client startup
         shell: bash
