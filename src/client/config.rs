@@ -14,6 +14,8 @@ const HELP: &str = "\
 ssmcp config set server URL    Save the default HTTPS relay
 ssmcp config get server        Print the effective default relay
 ssmcp config unset server      Remove the configured override
+ssmcp config get git-fetch-interval       Print the background fetch interval
+ssmcp config set git-fetch-interval SECS  Set 60..86400 seconds; 0 disables fetch
 ssmcp config path              Print the client configuration path
 
 File: [client] server = \"https://relay.example.com\"
@@ -24,6 +26,30 @@ SSMCP_CLIENT_CONFIG selects another configuration file.";
 #[serde(default, deny_unknown_fields)]
 pub(super) struct ClientSettings {
     pub server: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct GitSettings {
+    pub fetch_interval_seconds: u64,
+}
+
+impl Default for GitSettings {
+    fn default() -> Self {
+        Self {
+            fetch_interval_seconds: 300,
+        }
+    }
+}
+
+impl GitSettings {
+    fn validate(&self) -> Result<()> {
+        if self.fetch_interval_seconds != 0 && !(60..=86_400).contains(&self.fetch_interval_seconds)
+        {
+            return Err("git fetch interval must be 0 (disabled) or 60..86400 seconds".into());
+        }
+        Ok(())
+    }
 }
 
 impl ClientSettings {
@@ -71,6 +97,7 @@ impl BrowserSettings {
 struct Document {
     client: ClientSettings,
     browser: BrowserSettings,
+    git: GitSettings,
 }
 
 pub(super) fn config_path() -> Result<PathBuf> {
@@ -119,7 +146,35 @@ fn parse_document(text: &str) -> Result<Document> {
         toml::from_str(text).map_err(|_| "invalid ssmcp client TOML configuration")?;
     doc.client.validate()?;
     doc.browser.validate()?;
+    doc.git.validate()?;
     Ok(doc)
+}
+
+pub(super) fn git() -> Result<GitSettings> {
+    let text = read_config(
+        &config_path()?,
+        std::env::var_os("SSMCP_CLIENT_CONFIG").is_some(),
+    )?;
+    Ok(parse_document(&text)?.git)
+}
+
+fn set_git_interval_at(path: &Path, seconds: u64) -> Result<()> {
+    GitSettings {
+        fetch_interval_seconds: seconds,
+    }
+    .validate()?;
+    let text = read_config(path, false)?;
+    let mut document: DocumentMut = text
+        .parse()
+        .map_err(|_| "invalid ssmcp client TOML configuration")?;
+    if !document.contains_key("git") {
+        document["git"] = Item::Table(Table::new());
+    }
+    document["git"]
+        .as_table_like_mut()
+        .ok_or("git configuration must be a TOML table")?
+        .insert("fetch_interval_seconds", value(seconds as i64));
+    save_document(path, &text, document)
 }
 
 fn parse(text: &str) -> Result<ClientSettings> {
@@ -248,6 +303,23 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool> {
         [] | ["--help"] | ["-h"] => println!("{HELP}"),
         ["path"] => println!("{}", config_path()?.display()),
         ["get", "server"] => println!("{}", super::account::resolve_server(None)?),
+        ["get", "git-fetch-interval"] => println!("{}", git()?.fetch_interval_seconds),
+        ["set", "git-fetch-interval", seconds] => {
+            let seconds = seconds
+                .parse::<u64>()
+                .map_err(|_| "git fetch interval must be an integer number of seconds")?;
+            let path = config_path()?;
+            set_git_interval_at(&path, seconds)?;
+            if seconds == 0 {
+                println!("Background Git fetch: disabled");
+            } else {
+                println!("Background Git fetch: every {seconds} seconds");
+            }
+            println!(
+                "Applies to new connections. Configuration: {}",
+                path.display()
+            );
+        }
         ["set", "server", server] => {
             let server = super::account::normalize_server(server)?;
             let path = config_path()?;
@@ -445,5 +517,43 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "# unchanged");
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod git_config_tests {
+    use super::*;
+
+    #[test]
+    fn periodic_fetch_config_is_bounded_disabled_with_zero_and_preserves_other_settings() {
+        assert_eq!(parse_document("").unwrap().git.fetch_interval_seconds, 300);
+        for seconds in [0, 60, 300, 86_400] {
+            assert_eq!(
+                parse_document(&format!("[git]\nfetch_interval_seconds = {seconds}"))
+                    .unwrap()
+                    .git
+                    .fetch_interval_seconds,
+                seconds
+            );
+        }
+        for value in ["-1", "1", "59", "86401", "'300'", "true"] {
+            assert!(parse_document(&format!("[git]\nfetch_interval_seconds = {value}")).is_err());
+        }
+        let mut random = [0u8; 8];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "ssmcp-fetch-config-{:x}.toml",
+            u64::from_ne_bytes(random)
+        ));
+        let original =
+            "# keep comment\n[ui]\ntheme='nord'\n[client]\nserver='https://relay.example'\n";
+        fs::write(&path, original).unwrap();
+        set_git_interval_at(&path, 0).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(original));
+        assert_eq!(parse_document(&text).unwrap().git.fetch_interval_seconds, 0);
+        assert!(set_git_interval_at(&path, 1).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        fs::remove_file(path).unwrap();
     }
 }

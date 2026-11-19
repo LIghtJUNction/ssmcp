@@ -1,7 +1,9 @@
-//! A bounded, read-only view of the repository rooted at the authorized startup cwd.
+//! A bounded repository view plus separately scheduled remote-tracking updates.
 //! Native porcelain-v2 format: https://git-scm.com/docs/git-status#_porcelain_format_version_2
 //! Native history fields and NUL terminators: https://git-scm.com/docs/pretty-formats
 use crate::backend::process::Managed;
+mod fetch;
+pub(crate) use fetch::{FetchSnapshot, FetchState};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -95,6 +97,7 @@ pub(crate) struct GitSnapshot {
     pub conflicts: usize,
     pub changed_files: Vec<GitChange>,
     pub history: GitHistory,
+    pub fetch: FetchSnapshot,
     pub checked_at: Option<Instant>,
     /// Last successful observation. Errors retain the old data and mark it stale.
     pub observed_at: Option<Instant>,
@@ -119,6 +122,7 @@ impl Default for GitSnapshot {
             conflicts: 0,
             changed_files: Vec::new(),
             history: GitHistory::default(),
+            fetch: FetchSnapshot::default(),
             checked_at: None,
             observed_at: None,
             stale: true,
@@ -132,20 +136,35 @@ pub(crate) struct GitStatus {
     refresh: Arc<Notify>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
+    fetch_task: Option<JoinHandle<()>>,
 }
 
 impl GitStatus {
     /// Returns immediately. Neither executable resolution nor Git blocks the UI.
-    pub(crate) fn start(cwd: PathBuf) -> Self {
-        let (sender, current) = watch::channel(Arc::new(GitSnapshot::default()));
+    pub(crate) fn start(cwd: PathBuf, settings: super::config::GitSettings) -> Self {
+        let initial = GitSnapshot {
+            fetch: FetchSnapshot::new(settings.fetch_interval_seconds),
+            ..GitSnapshot::default()
+        };
+        let (sender, current) = watch::channel(Arc::new(initial));
         let (stop, stopped) = watch::channel(false);
         let refresh = Arc::new(Notify::new());
+        let fetch_task = (settings.fetch_interval_seconds != 0).then(|| {
+            tokio::spawn(fetch::observe(
+                cwd.clone(),
+                settings.fetch_interval_seconds,
+                sender.clone(),
+                refresh.clone(),
+                stopped.clone(),
+            ))
+        });
         let task = tokio::spawn(observe(cwd, sender, refresh.clone(), stopped));
         Self {
             current,
             refresh,
             stop,
             task: Some(task),
+            fetch_task,
         }
     }
 
@@ -160,14 +179,18 @@ impl GitStatus {
 
     pub(crate) async fn shutdown(mut self) {
         let _ = self.stop.send(true);
-        if let Some(mut task) = self.task.take()
-            && tokio::time::timeout(Duration::from_secs(7), &mut task)
+        for mut task in [self.task.take(), self.fetch_task.take()]
+            .into_iter()
+            .flatten()
+        {
+            if tokio::time::timeout(Duration::from_secs(7), &mut task)
                 .await
                 .is_err()
-        {
-            // Managed's drop guard still owns and terminates any child tree.
-            task.abort();
-            let _ = task.await;
+            {
+                // Managed's drop guard still owns and terminates any child tree.
+                task.abort();
+                let _ = task.await;
+            }
         }
     }
 }
@@ -176,6 +199,9 @@ impl Drop for GitStatus {
     fn drop(&mut self) {
         let _ = self.stop.send(true);
         if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        if let Some(task) = self.fetch_task.take() {
             task.abort();
         }
     }
@@ -308,7 +334,7 @@ fn publish(
     result: Result<GitSnapshot, Failure>,
     now: Instant,
 ) {
-    let next = match result {
+    let mut next = match result {
         Ok(mut current) => {
             current.checked_at = Some(now);
             current.observed_at = Some(now);
@@ -343,7 +369,10 @@ fn publish(
         }
     };
     // This observer never prints. Repeated errors only replace the status view.
-    sender.send_replace(Arc::new(next));
+    sender.send_modify(|current| {
+        next.fetch = current.fetch.clone();
+        *current = Arc::new(next);
+    });
 }
 
 fn base_command(git: &Path, root: &Path) -> Result<Command, Failure> {

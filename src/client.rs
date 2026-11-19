@@ -1971,9 +1971,10 @@ async fn connect(
             return Err(error.into());
         }
     };
+    let git_settings = config::git()?;
     let git_status = display_session
         .as_ref()
-        .map(|_| git_status::GitStatus::start(PathBuf::from(&metadata.cwd)));
+        .map(|_| git_status::GitStatus::start(PathBuf::from(&metadata.cwd), git_settings));
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
