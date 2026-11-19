@@ -1430,6 +1430,7 @@ dependencies = [
  "base64 0.22.1",
  "cap-fs-ext",
  "cap-std",
+ "crc32fast",
  "futures-util",
  "getrandom 0.3.4",
  "image",
