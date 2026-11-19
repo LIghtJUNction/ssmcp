@@ -359,9 +359,24 @@ mod tests {
             state.conversation.composer.set_text("/wa");
             let rendered = screen(&mut state);
             assert!(
-                rendered.lines().last().unwrap().contains("Tab insert"),
+                rendered.contains("› /wait") && rendered.contains("查看用户等待"),
                 "{rendered}"
             );
+            assert!(
+                state
+                    .chat_contextual_hint("")
+                    .unwrap()
+                    .contains("Tab insert")
+            );
+            assert!(state.chat_user_wait_hint().is_none());
+            // A narrow footer may retain only the existing connection label;
+            // the selected command remains visible above it.
+            if width == 120 {
+                assert!(
+                    rendered.lines().last().unwrap().contains("Tab insert"),
+                    "{rendered}"
+                );
+            }
             assert!(
                 !rendered
                     .lines()
@@ -373,9 +388,19 @@ mod tests {
             state.conversation.content_focus = true;
             let rendered = screen(&mut state);
             assert!(
-                rendered.lines().last().unwrap().contains("Enter expand"),
-                "{rendered}"
+                state
+                    .chat_contextual_hint("")
+                    .unwrap()
+                    .contains("Enter expand")
             );
+            assert!(state.chat_user_wait_hint().is_none());
+            if width == 120 {
+                assert!(
+                    rendered.lines().last().unwrap().contains("Enter expand"),
+                    "{rendered}"
+                );
+            }
+            assert!(!rendered.contains("等待你确认是否结束"));
             assert_eq!(state.conversation.composer.text(), original);
         }
     }
