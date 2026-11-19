@@ -177,13 +177,24 @@ impl State {
     }
 
     pub(super) fn chat_user_wait_hint(&self) -> Option<String> {
-        if self.preview
-            || self.help
+        if self.help
+            || self.selection
             || self.conversation.logs_open
             || self.conversation.view != View::Activity
             || self.conversation.detail
-            || self.chat_contextual_hint("").is_some()
+            || self.conversation.content_focus
+            || self.chat_menu_visible()
+            || self.conversation.composer.completion_loading()
         {
+            return None;
+        }
+        // The real frame regression uses a local snapshot, never process-wide
+        // connection state that parallel tests could change.
+        #[cfg(test)]
+        if let Some(snapshot) = &self.conversation.wait_fixture {
+            return hint(snapshot);
+        }
+        if self.preview {
             return None;
         }
         hint(&waiting::snapshot())
@@ -300,5 +311,70 @@ mod tests {
         assert!(text.contains("消息已就绪，等待提交"));
         assert!(!text.contains("已收到") && !text.contains("用户已读"));
         assert!(unicode_width::UnicodeWidthStr::width(hint(&snapshot).unwrap().as_str()) <= 48);
+    }
+
+    #[test]
+    fn user_wait_real_frame_keeps_wait_visible_with_a_draft_and_preserves_specific_controls() {
+        fn screen(state: &mut State) -> String {
+            let frame = state.chat_frame(Instant::now());
+            let mut parser = vt100::Parser::new(frame.geometry.rows, frame.geometry.cols, 0);
+            parser.process(&frame.diff(None));
+            parser.screen().contents()
+        }
+        for width in [120, 48] {
+            let mut state = super::super::super::preview_state(28, width, &Ui::default());
+            state.events.clear();
+            state.notice = None;
+            state
+                .conversation
+                .composer
+                .set_text("Unsubmitted @file.txt\n    preserve indentation");
+            state.conversation.wait_fixture = Some(Snapshot {
+                connected: true,
+                active: vec![entry("real-frame-wait", "same-episode", Intent::Finish)],
+                ..Snapshot::default()
+            });
+            let original = state.conversation.composer.text().to_owned();
+            let rendered = screen(&mut state);
+            let footer = rendered.lines().last().unwrap();
+            assert!(
+                footer.contains("等待你确认是否结束") && footer.contains("/wait"),
+                "{rendered}"
+            );
+            assert_eq!(state.conversation.composer.text(), original);
+
+            state.notice = Some("Synthetic action failed".into());
+            let rendered = screen(&mut state);
+            assert!(
+                rendered
+                    .lines()
+                    .last()
+                    .unwrap()
+                    .contains("Synthetic action failed"),
+                "{rendered}"
+            );
+            state.notice = None;
+            state.conversation.composer.set_text("/wa");
+            let rendered = screen(&mut state);
+            assert!(
+                rendered.lines().last().unwrap().contains("Tab insert"),
+                "{rendered}"
+            );
+            assert!(
+                !rendered
+                    .lines()
+                    .last()
+                    .unwrap()
+                    .contains("等待你确认是否结束")
+            );
+            state.conversation.composer.set_text(&original);
+            state.conversation.content_focus = true;
+            let rendered = screen(&mut state);
+            assert!(
+                rendered.lines().last().unwrap().contains("Enter expand"),
+                "{rendered}"
+            );
+            assert_eq!(state.conversation.composer.text(), original);
+        }
     }
 }
