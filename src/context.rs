@@ -648,7 +648,10 @@ async fn scan_skills(root: &ContextRoot, args: &ScanArgs) -> Result<(Vec<Value>,
                     continue;
                 }
                 if entry["kind"] == "directory" {
-                    if package {
+                    // Automatic descent excludes discarded packages. An
+                    // explicit paths entry rooted inside .trash still scans
+                    // normally, and exact document reads remain available.
+                    if package || name == ".trash" {
                         continue;
                     }
                     if depth < args.max_depth {

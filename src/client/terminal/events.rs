@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod correlation;
 mod diff;
+mod read_activity;
 use correlation::{Kind, Meta, Status};
 pub(crate) use diff::DiffMode;
 
@@ -371,7 +372,12 @@ impl Event {
             && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
             && (query.is_empty()
                 || self.summary.to_lowercase().contains(query)
-                || self.text.to_lowercase().contains(query))
+                || self.text.to_lowercase().contains(query)
+                || self
+                    .meta
+                    .read
+                    .as_ref()
+                    .is_some_and(|read| read.path.to_lowercase().contains(query)))
     }
 
     fn summary_with_status(&self) -> String {
@@ -391,6 +397,7 @@ pub(super) struct EventPosition {
     reveal: bool,
     new_image: Option<u64>,
     chat_expanded: Vec<u64>,
+    read_expanded: Vec<u64>,
     panel_scroll: Vec<(u64, CommandPosition)>,
 }
 
@@ -403,6 +410,7 @@ impl Default for EventPosition {
             reveal: false,
             new_image: None,
             chat_expanded: Vec::new(),
+            read_expanded: Vec::new(),
             panel_scroll: Vec::new(),
         }
     }
@@ -429,6 +437,8 @@ pub(crate) struct EventView {
     level: u8,
     scope: EventScope,
     diff_mode: DiffMode,
+    read_boundary: read_activity::Boundary,
+    read_expanded: Vec<u64>,
 }
 
 impl EventView {
@@ -437,6 +447,70 @@ impl EventView {
             follow: true,
             ..Self::default()
         }
+    }
+
+    fn read_groups(&self) -> Vec<read_activity::Group> {
+        if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
+            return Vec::new();
+        }
+        let mut groups = read_activity::groups(&self.events);
+        for group in &mut groups {
+            group.expanded = self.read_expanded.contains(&group.head);
+        }
+        groups
+    }
+
+    fn visible_ids(&self) -> Vec<u64> {
+        let groups = self.read_groups();
+        self.events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.matches(&self.query, self.level, self.scope))
+            .filter(|(index, _)| {
+                groups
+                    .iter()
+                    .find(|group| group.contains(*index))
+                    .is_none_or(|group| group.expanded || *index == group.start)
+            })
+            .map(|(_, event)| event.id)
+            .collect()
+    }
+
+    fn read_group_for(&self, id: u64) -> Option<read_activity::Group> {
+        let index = self.events.iter().position(|event| event.id == id)?;
+        self.read_groups()
+            .into_iter()
+            .find(|group| group.contains(index))
+    }
+
+    fn preserve_read_selection(&mut self) {
+        if !self.follow
+            && let Some(group) = self.selected.and_then(|id| self.read_group_for(id))
+            && !group.expanded
+            && self.selected != Some(group.head)
+        {
+            // A newly formed run must not swallow the item the user selected.
+            self.read_expanded.push(group.head);
+            self.reveal = true;
+        }
+    }
+
+    fn set_read_expanded(&mut self, group: &read_activity::Group, expanded: bool) -> bool {
+        if group.expanded == expanded {
+            return false;
+        }
+        if expanded {
+            self.read_expanded.push(group.head);
+        } else {
+            self.read_expanded.retain(|id| *id != group.head);
+            self.selected = Some(group.head);
+        }
+        self.follow = false;
+        self.reveal = true;
+        self.hit_rows.clear();
+        self.panel_hit_rows.clear();
+        self.placements.clear();
+        true
     }
 
     pub(crate) fn diff_mode(&self) -> DiffMode {
@@ -478,19 +552,15 @@ impl EventView {
         self.total_rows = 0;
         self.page_rows = 0;
         self.scroll = 0;
-        if !self.events.iter().any(|event| {
-            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
-        }) {
-            let mut visible = self
-                .events
-                .iter()
-                .filter(|event| event.matches(&self.query, self.level, self.scope));
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self.selected.is_some_and(|id| visible.contains(&id)) {
             self.selected = if self.follow {
-                visible.next_back()
+                visible.last()
             } else {
-                visible.next()
+                visible.first()
             }
-            .map(|event| event.id);
+            .copied();
         }
         self.reveal = !self.follow;
     }
@@ -499,6 +569,7 @@ impl EventView {
     /// Plain log text, including a literal "[AGENT]", stays in the log pane.
     #[cfg(test)]
     pub(crate) fn ingest_conversation(&mut self, bytes: &[u8]) {
+        self.read_boundary.interrupt();
         let text = String::from_utf8_lossy(bytes);
         let user = text
             .lines()
@@ -522,6 +593,7 @@ impl EventView {
             follow: self.follow,
             reveal: self.reveal,
             new_image: self.new_image,
+            read_expanded: self.read_expanded.clone(),
             panel_scroll: self
                 .events
                 .iter()
@@ -560,6 +632,12 @@ impl EventView {
             event.panel.scroll = panel.scroll;
             event.panel.folded_scroll = panel.folded_scroll;
         }
+        self.read_expanded = position
+            .read_expanded
+            .iter()
+            .copied()
+            .filter(|id| self.events.iter().any(|event| event.id == *id))
+            .collect();
         // The deferred first-image anchor belongs to this column's reading
         // position. Switching columns is not an explicit request for latest.
         self.new_image = position.new_image.filter(|id| {
@@ -576,24 +654,21 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.placements.clear();
-        if !self.events.iter().any(|event| {
-            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
-        }) {
-            let mut visible = self
-                .events
-                .iter()
-                .filter(|event| event.matches(&self.query, self.level, self.scope));
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self.selected.is_some_and(|id| visible.contains(&id)) {
             self.selected = if self.follow {
-                visible.next_back()
+                visible.last()
             } else {
-                visible.next()
+                visible.first()
             }
-            .map(|event| event.id);
+            .copied();
             self.reveal = !self.follow;
         }
     }
 
     pub(crate) fn ingest(&mut self, bytes: &[u8]) {
+        self.read_boundary.interrupt();
         self.ingest_inner(bytes, Meta::default());
     }
 
@@ -603,6 +678,7 @@ impl EventView {
         &mut self,
         update: &super::super::render::DiagnosticUpdate,
     ) -> bool {
+        self.read_boundary.interrupt();
         let (text, truncated) = retained_text(update.text().as_bytes());
         let inserted = if let Some(event) = self
             .events
@@ -630,14 +706,10 @@ impl EventView {
             true
         };
         self.prune();
-        if !self.events.iter().any(|event| {
-            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
-        }) {
-            self.selected = self
-                .events
-                .iter()
-                .find(|event| event.matches(&self.query, self.level, self.scope))
-                .map(|event| event.id);
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self.selected.is_some_and(|id| visible.contains(&id)) {
+            self.selected = visible.first().copied();
             self.reveal = true;
         }
         inserted
@@ -646,6 +718,17 @@ impl EventView {
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
         let mut meta = Meta::from_event(label, event);
+        let read = if meta.command
+            || meta.diff
+            || meta
+                .status
+                .is_some_and(|status| status.failed() || status == Status::Running)
+        {
+            None
+        } else {
+            meta.read.as_mut()
+        };
+        self.read_boundary.observe(event, read);
         if meta.kind == Kind::Conversation
             && event["presentation"].is_null()
             && let Some(text) = event["text"].as_str()
@@ -806,22 +889,13 @@ impl EventView {
             });
         }
         self.prune();
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
         if follow {
-            self.selected = self
-                .events
-                .iter()
-                .rev()
-                .find(|event| event.matches(&self.query, self.level, self.scope))
-                .map(|event| event.id);
+            self.selected = visible.last().copied();
             self.follow = true;
-        } else if !self.events.iter().any(|event| {
-            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
-        }) {
-            self.selected = self
-                .events
-                .iter()
-                .find(|event| event.matches(&self.query, self.level, self.scope))
-                .map(|event| event.id);
+        } else if !self.selected.is_some_and(|id| visible.contains(&id)) {
+            self.selected = visible.first().copied();
             self.reveal = true;
         }
         // Updating a correlated row does not move a reader away from their viewport.
@@ -835,6 +909,9 @@ impl EventView {
                 self.dropped = self.dropped.saturating_add(1);
             }
         }
+        let events = &self.events;
+        self.read_expanded
+            .retain(|id| events.iter().any(|event| event.id == *id));
     }
 
     pub(crate) fn filter(&mut self, query: &str, level: u8) {
@@ -845,14 +922,10 @@ impl EventView {
         self.query = query;
         self.level = level;
         self.new_image = None;
-        if !self.events.iter().any(|event| {
-            Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
-        }) {
-            self.selected = self
-                .events
-                .iter()
-                .find(|event| event.matches(&self.query, self.level, self.scope))
-                .map(|event| event.id);
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self.selected.is_some_and(|id| visible.contains(&id)) {
+            self.selected = visible.first().copied();
         }
         self.reveal = true;
     }
@@ -939,12 +1012,7 @@ impl EventView {
     /// Negative selects an earlier event; positive selects a later event.
     pub(crate) fn select(&mut self, delta: isize) {
         self.new_image = None;
-        let visible = self
-            .events
-            .iter()
-            .filter(|event| event.matches(&self.query, self.level, self.scope))
-            .map(|event| event.id)
-            .collect::<Vec<_>>();
+        let visible = self.visible_ids();
         if visible.is_empty() {
             return;
         }
@@ -1007,16 +1075,14 @@ impl EventView {
         self.new_image = None;
         self.follow = true;
         self.reveal = false;
-        self.selected = self
-            .events
-            .iter()
-            .rev()
-            .find(|event| event.matches(&self.query, self.level, self.scope))
-            .map(|event| event.id);
+        self.selected = self.visible_ids().last().copied();
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
         self.new_image = None;
+        if let Some(group) = self.selected.and_then(|id| self.read_group_for(id)) {
+            return self.set_read_expanded(&group, !group.expanded);
+        }
         if let Some(event) = self.events.iter_mut().find(|event| {
             Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
         }) {
@@ -1049,6 +1115,9 @@ impl EventView {
 
     fn set_expanded(&mut self, expanded: bool) -> bool {
         self.new_image = None;
+        if let Some(group) = self.selected.and_then(|id| self.read_group_for(id)) {
+            return self.set_read_expanded(&group, expanded);
+        }
         let Some(event) = self.events.iter_mut().find(|event| {
             Some(event.id) == self.selected && event.matches(&self.query, self.level, self.scope)
         }) else {
@@ -1094,6 +1163,8 @@ impl EventView {
 
     pub(crate) fn clear(&mut self) {
         self.events.clear();
+        self.read_boundary.interrupt();
+        self.read_expanded.clear();
         self.bytes = 0;
         self.selected = None;
         self.scroll = 0;
@@ -1111,10 +1182,11 @@ impl EventView {
     }
 
     pub(crate) fn snapshot(&self) -> Value {
+        let groups = self.read_groups();
         json!({
-            "schema_version":1, "events":self.events.iter().map(|event| json!({
+            "schema_version":1, "events":self.events.iter().enumerate().map(|(index,event)| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
-                "bytes":event.text.len(),"expanded":event.expanded(self.scope),"truncated":event.truncated,
+                "bytes":event.text.len(),"expanded":groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded),"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
@@ -1124,6 +1196,11 @@ impl EventView {
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
             "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope)).count(),
+            "visible_cards":self.visible_ids().len(),
+            "read_groups":groups.iter().map(|group|json!({
+                "id":group.head,"count":group.end-group.start,"expanded":group.expanded,
+                "members":self.events.range(group.start..group.end).map(|event|event.id).collect::<Vec<_>>()
+            })).collect::<Vec<_>>(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
             "rows_below":self.rows_below(),"following":self.follow,
@@ -1139,6 +1216,13 @@ impl EventView {
         ui: &Ui,
         focused: bool,
     ) -> Vec<String> {
+        self.preserve_read_selection();
+        if let Some(group) = self.selected.and_then(|id| self.read_group_for(id))
+            && !group.expanded
+        {
+            self.selected = Some(group.head);
+        }
+        let groups = self.read_groups();
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.placements.clear();
@@ -1167,8 +1251,77 @@ impl EventView {
             self.scope.label(),
             self.diff_mode.name()
         );
-        for event in &mut self.events {
+        for (index, event) in self.events.iter_mut().enumerate() {
             if !event.matches(&self.query, self.level, self.scope) {
+                continue;
+            }
+            if let Some(group) = groups.iter().find(|group| group.contains(index)) {
+                if index == group.start {
+                    visible_events += 1;
+                    if !rows.is_empty() && !(previous_compact_tool && !group.expanded) {
+                        rows.push((group.head, String::new()));
+                    }
+                    previous_compact_tool = !group.expanded;
+                    let selected = self.selected == Some(group.head);
+                    if selected {
+                        selected_row = Some(rows.len());
+                    }
+                    let marker = if group.expanded { "▾" } else { "▸" };
+                    let prefix = clip_plain(
+                        &format!("{} {marker} ", if selected && focused { "›" } else { " " }),
+                        indent,
+                    );
+                    rows.push((
+                        group.head,
+                        format!(
+                            "{}{}",
+                            paint(&prefix, "muted", ui, selected && focused),
+                            paint(
+                                &clip_plain(&group.title(), body_width),
+                                "muted",
+                                ui,
+                                selected && focused
+                            )
+                        ),
+                    ));
+                }
+                if group.expanded {
+                    let selected = self.selected == Some(event.id);
+                    if selected && event.id != group.head {
+                        selected_row = Some(rows.len());
+                    }
+                    let detail_palette = format!("{palette}:read-activity");
+                    let inset = 2.min(body_width.saturating_sub(1));
+                    let detail_width = body_width.saturating_sub(inset).max(1);
+                    if event
+                        .cache
+                        .as_ref()
+                        .is_none_or(|(cached_width, cached_palette, _)| {
+                            *cached_width != detail_width || *cached_palette != detail_palette
+                        })
+                    {
+                        let detail = event.meta.read.as_ref().unwrap().details(&event.text);
+                        event.cache = Some((
+                            detail_width,
+                            detail_palette,
+                            styled_rows(&detail, detail_width, ui.color),
+                        ));
+                    }
+                    for (row, text) in event.cache.as_ref().unwrap().2.iter().enumerate() {
+                        let marker = if row == 0 && selected && focused {
+                            "› "
+                        } else {
+                            "  "
+                        };
+                        let marker = paint(
+                            &clip_plain(marker, inset),
+                            "accent",
+                            ui,
+                            selected && focused,
+                        );
+                        rows.push((event.id, format!("{}{marker}{text}", " ".repeat(indent))));
+                    }
+                }
                 continue;
             }
             visible_events += 1;
@@ -1459,7 +1612,18 @@ impl EventView {
                             super::markdown::rows(&event.text, body_width as u16, ui)
                         }
                     } else {
-                        let body = if chat {
+                        let read_detail = (chat || !self.query.is_empty())
+                            .then(|| {
+                                event
+                                    .meta
+                                    .read
+                                    .as_ref()
+                                    .map(|read| read.details(&event.text))
+                            })
+                            .flatten();
+                        let body = if let Some(detail) = &read_detail {
+                            detail.as_str()
+                        } else if chat {
                             conversation_body(&event.text)
                         } else if correlated {
                             event.text.split_once('\n').map_or("", |(_, body)| body)
