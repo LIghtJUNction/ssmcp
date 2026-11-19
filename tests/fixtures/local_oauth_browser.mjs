@@ -26,7 +26,7 @@ try {
     executablePath: process.env.SSMCP_E2E_CHROMIUM || "chromium",
     args: ["--disable-dev-shm-usage"],
   });
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(authorize.href, { waitUntil: "domcontentloaded" });
@@ -34,6 +34,10 @@ try {
   const cookie = cookies.find((item) => item.name === "ssmcp-local-oauth");
   if (!cookie || cookie.secure || !cookie.httpOnly || cookie.sameSite !== "Lax") {
     throw new Error("loopback cookie rejected");
+  }
+  if (input.preview_path) {
+    if (await page.locator("#login_code").inputValue()) throw new Error("prefilled secret");
+    await page.screenshot({ path: input.preview_path, fullPage: true });
   }
   await page.locator("#login_code").fill(input.login_code);
   await Promise.all([
@@ -43,6 +47,7 @@ try {
   process.stdout.write(JSON.stringify({
     callback_url: page.url(),
     cookie: { name: cookie.name, secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite },
+    browser: { engine: "chromium", version: browser.version(), headless: true, isolated_context: true, node_version: process.version },
   }) + "\n");
 } catch {
   // Browser errors may contain the authorization URL. Do not forward them.

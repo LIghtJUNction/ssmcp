@@ -92,10 +92,13 @@ class Callback:
 
 
 class Local(Harness):
-    def __init__(self, directory, binary_dir, decoder, browser):
+    def __init__(self, directory, binary_dir, decoder, browser, browser_preview=None):
         super().__init__(directory, binary_dir)
         self.decoder = decoder
         self.browser = browser
+        self.browser_preview = browser_preview
+        self.browser_details = None
+        self.cli_version = None
         self.front = None
         self.environments = {}
         self.workspace = directory / "workspace"
@@ -161,6 +164,12 @@ class Local(Harness):
         self.client = self.front.process
         self.client_id = self.front.client_id
         self.credentials = self.front.credentials
+        version = subprocess.run([str(self.binary_dir / "ssmcp"), "--version"],
+                                 env=self.environments["local-fixture"], cwd=self.workspace,
+                                 capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+        if not re.fullmatch(r"ssmcp [0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.]+)?", version):
+            raise AssertionError("candidate CLI returned an unexpected version string")
+        self.cli_version = version
         self.check(not self.account_gateway.prepared and self.account_gateway.process is None,
                    "the local CLI starts without an account-router fixture or GitHub provider")
 
@@ -218,6 +227,7 @@ class Local(Harness):
             result = subprocess.run([node, str(driver)], input=json.dumps({
                 "authorize_url": authorize, "login_code": credentials["login_code"],
                 "origin": self.origin, "callback_url": self.callback.url,
+                "preview_path": str(self.browser_preview.resolve()) if self.browser_preview else None,
             }), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             self.check(result.returncode == 0, "isolated real Chromium completed local authorization")
             reply = json.loads(result.stdout)
@@ -227,6 +237,7 @@ class Local(Harness):
                                   "httpOnly": True, "sameSite": "Lax"},
                        "real Chromium accepts the scoped HttpOnly loopback cookie and submits it")
             self.browser_cookie_verified = True
+            self.browser_details = reply["browser"]
         else:
             path = "/oauth/authorize?" + urlencode(params)
             status, body, headers = self.oauth_request(path)
@@ -241,7 +252,7 @@ class Local(Harness):
             status, _, headers = self.oauth_request("/oauth/authorize", "POST", {
                 "transaction_id": form.fields["transaction_id"], "login_code": credentials["login_code"],
             }, cookie=cookie, headers={"Origin": self.origin}, form=True)
-            self.check(status == 302, "one-use local connection code authorizes the actual session")
+            self.check(status == 303, "one-use local connection code authorizes the actual session")
             location = headers["location"]
         callback = urlsplit(location)
         expected = urlsplit(self.callback.url)
@@ -384,8 +395,13 @@ def main():
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--decoder", type=Path)
     parser.add_argument("--browser", action="store_true", help="require real installed Chromium/Playwright for OAuth")
+    parser.add_argument("--browser-preview", type=Path, help="save the isolated consent form before filling any login code")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
+    if args.browser_preview and not args.browser:
+        parser.error("--browser-preview requires --browser")
+    if args.browser_preview:
+        args.browser_preview.parent.mkdir(parents=True, exist_ok=True)
     if platform.system() != "Linux":
         parser.error("the local host first implementation is Linux-only")
     decoder = args.decoder or args.bin_dir / "vt_snapshot"
@@ -413,7 +429,7 @@ def main():
     signal.signal(signal.SIGALRM, interrupted)
     signal.alarm(120)
     with tempfile.TemporaryDirectory(prefix="ssmcp-local-e2e-") as directory:
-        harness = Local(Path(directory), args.bin_dir, decoder, args.browser)
+        harness = Local(Path(directory), args.bin_dir, decoder, args.browser, args.browser_preview)
         try:
             harness.run()
             report["status"] = "passed"
@@ -432,8 +448,11 @@ def main():
                 raise
             finally:
                 report.update(checks=harness.checks, browser_cookie_verified=harness.browser_cookie_verified,
+                              cli_version=harness.cli_version, browser=harness.browser_details,
                               wait_user_verified=harness.wait_user_verified, cleanup_verified=harness.cleanup_verified,
                               duration_seconds=round(time.monotonic() - started, 3))
+                if args.browser_preview and args.browser_preview.is_file():
+                    report["empty_consent_preview_sha256"] = sha256(args.browser_preview)
                 if args.report:
                     args.report.parent.mkdir(parents=True, exist_ok=True)
                     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
