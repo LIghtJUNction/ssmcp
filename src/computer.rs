@@ -1,6 +1,8 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
 mod host_control;
 mod isolated;
+mod zuse_backend;
+pub use zuse_backend::worker_entry;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -485,6 +487,27 @@ impl Computer {
         }
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
         let operation = async {
+            // zuse 0.1.0 lacks the partial-injection release and externally-held
+            // key guards provided by these native adapters. Keep their input
+            // semantics until the library exposes an equivalent receipt.
+            #[cfg(windows)]
+            if host_control::input_tool(name) || name == "ssmcp.computer.status" {
+                return windows::perform(&self.root, name, args).await;
+            }
+            #[cfg(target_os = "macos")]
+            if host_control::input_tool(name) || name == "ssmcp.computer.status" {
+                return macos::perform(&self.root, name, args).await;
+            }
+            if name == "ssmcp.computer.status" {
+                parse::<Empty>(args)?;
+                return Ok(result(zuse_backend::status(self).await));
+            }
+            if name != "ssmcp.computer.monitors" {
+                return zuse_backend::perform(self, name, args).await;
+            }
+            // Monitor topology stays with the existing platform adapters until
+            // zuse exposes a portable geometry API. Linux desktop effects use
+            // the fixed-environment library worker above.
             match std::env::consts::OS {
                 #[cfg(windows)]
                 "windows" => windows::perform(&self.root, name, args).await,
@@ -781,6 +804,34 @@ impl Computer {
             _ => Err("Window enumeration requires Hyprland or X11".into()),
         }
     }
+    async fn verify_hypr_focus(&self, id: &str) -> Result<(), String> {
+        // A successful dispatcher call only acknowledges the request. Confirm
+        // focus through read-only queries; never repeat the action on failure.
+        let mut active = "unavailable".to_owned();
+        tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                let window = self
+                    .hypr_json("activewindow")
+                    .await
+                    .map_err(|e| format!("Could not verify Hyprland focus for {id}: {e}"))?;
+                let address = window["address"].as_str().unwrap_or("");
+                if address == id {
+                    return Ok::<(), String>(());
+                }
+                active = if address.is_empty() {
+                    "none".into()
+                } else {
+                    bounded(address, 64)
+                };
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            format!("Hyprland did not focus window {id} within 500 ms (active window: {active})")
+        })??;
+        Ok(())
+    }
     async fn focus(&self, id: &str) -> Result<(), String> {
         if !valid_window_id(id) {
             return Err("window_id must be a numeric ID returned by computer.windows".into());
@@ -803,32 +854,7 @@ impl Computer {
                     &["dispatch", "focuswindow", &format!("address:{id}")],
                 )
                 .await?;
-                // A successful dispatcher call only acknowledges the request. Confirm
-                // focus through read-only queries; never repeat the action on failure.
-                let mut active = "unavailable".to_owned();
-                tokio::time::timeout(Duration::from_millis(500), async {
-                    loop {
-                        let window = self.hypr_json("activewindow").await.map_err(|e| {
-                            format!("Could not verify Hyprland focus for {id}: {e}")
-                        })?;
-                        let address = window["address"].as_str().unwrap_or("");
-                        if address == id {
-                            return Ok::<(), String>(());
-                        }
-                        active = if address.is_empty() {
-                            "none".into()
-                        } else {
-                            bounded(address, 64)
-                        };
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                })
-                .await
-                .map_err(|_| {
-                    format!(
-                        "Hyprland did not focus window {id} within 500 ms (active window: {active})"
-                    )
-                })??;
+                self.verify_hypr_focus(id).await?;
             }
             Session::X11 => {
                 let action = if self.environment.is_some() {
@@ -1435,10 +1461,45 @@ struct ReleaseTasks {
 #[derive(Default)]
 struct ReleaseState {
     tasks: Vec<std::thread::JoinHandle<Result<(), String>>>,
+    async_pending: usize,
     failure: Option<String>,
 }
 
 impl ReleaseTasks {
+    fn fail(&self, error: String) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .failure
+            .get_or_insert(error);
+    }
+
+    fn start_async(
+        self: &Arc<Self>,
+        cleanup: impl std::future::Future<Output = Result<(), String>> + Send + 'static,
+    ) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            self.fail("no runtime remains to confirm native input cleanup".into());
+            return;
+        };
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .async_pending += 1;
+        let keepalive = self.clone();
+        runtime.spawn(async move {
+            let result = cleanup.await;
+            let mut state = keepalive
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.async_pending -= 1;
+            if let Err(error) = result {
+                state.failure.get_or_insert(error);
+            }
+        });
+    }
+
     fn start(
         self: &Arc<Self>,
         program: PathBuf,
@@ -1483,7 +1544,10 @@ impl ReleaseTasks {
                         state.failure.get_or_insert(error);
                     }
                 }
-                (state.tasks.len(), state.failure.clone())
+                (
+                    state.tasks.len() + state.async_pending,
+                    state.failure.clone(),
+                )
             };
             if pending == 0 {
                 return failure.map_or(Ok(()), Err);
@@ -2031,15 +2095,13 @@ if root.exists():
             isolated: Mutex::new(None),
             host_control: host_control::HostControl::default(),
         };
-        // The fixture asserts its fake hyprctl path above; never grant a real desktop here.
-        computer.handoff_host_input_local(15).unwrap();
+        // Exercise the same readback used after zuse focus, without granting
+        // host input or connecting a native desktop inside this unit fixture.
         let start = std::time::Instant::now();
         let outcome = computer
-            .perform(
-                "ssmcp.computer.focus",
-                json!({"window_id":"0x123","desktop":"host"}),
-            )
-            .await;
+            .verify_hypr_focus("0x123")
+            .await
+            .map(|()| result(json!({"focused":"0x123"})));
         match case.as_str() {
             "immediate" | "delayed" => {
                 assert_eq!(outcome.unwrap()["structuredContent"]["focused"], "0x123");
@@ -2064,8 +2126,8 @@ if root.exists():
             .collect();
         assert_eq!(
             events.iter().filter(|args| args[0] == "eval").count(),
-            1,
-            "focus must be dispatched exactly once"
+            0,
+            "readback must never replay a focus operation"
         );
         let reads = events
             .iter()

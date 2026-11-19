@@ -160,10 +160,11 @@ include = [
 
 [workspace]
 members = ["crates/ztui"]
-exclude = ["crates/zharness", "crates/zplugin"]
+exclude = ["crates/zharness", "crates/zplugin", "crates/zuse"]
 resolver = "3"
 
 [dependencies]
+zuse = { package = "zuse-computer", version = "=0.1.0", path = "crates/zuse", default-features = false, features = ["std"] }
 ztui = { package = "ztui-core", version = "=0.1.2", path = "crates/ztui" }
 zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
 zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
