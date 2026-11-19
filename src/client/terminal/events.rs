@@ -873,10 +873,12 @@ impl EventView {
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
             event.meta.kind = Kind::Tool;
-            event.chat_expanded = true;
+            event.chat_expanded = false;
             if self.follow && event.matches(&self.query, self.level, self.scope) {
                 self.selected = Some(event.id);
-                self.new_image.get_or_insert(event.id);
+                if self.scope != EventScope::Conversation {
+                    self.new_image.get_or_insert(event.id);
+                }
             }
         }
         let mut bytes = self.image_bytes();
@@ -1345,8 +1347,9 @@ impl EventView {
                 }
                 continue;
             }
-            if expanded || !self.query.is_empty() {
+            if expanded || !self.query.is_empty() || (chat && event.image.is_some()) {
                 if let Some(image) = &event.image {
+                    let thumbnail = chat && !expanded;
                     let image_start = rows.len();
                     rows.push((
                         event.id,
@@ -1360,7 +1363,16 @@ impl EventView {
                     let image_width = body_width.saturating_sub(inset).max(1) as u16;
                     let native = self.image_cells.filter(|_| ui.color).and_then(|cell| {
                         let native = image.native.as_ref()?;
-                        Some((native.clone(), native.layout_width(image_width, cell)?))
+                        let area = if thumbnail {
+                            native.layout(
+                                image_width.min(32),
+                                page.saturating_sub(3).clamp(1, 6) as u16,
+                                cell,
+                            )?
+                        } else {
+                            native.layout_width(image_width, cell)?
+                        };
+                        Some((native.clone(), area))
                     });
                     let detail = match &native {
                         Some((native, area)) => {
@@ -1373,7 +1385,9 @@ impl EventView {
                                         native.width, native.height, image.width, image.height
                                     )
                                 };
-                            if usize::from(area.rows) > page.saturating_sub(2) {
+                            if thumbnail {
+                                format!("Click/Enter expands · {dimensions}")
+                            } else if usize::from(area.rows) > page.saturating_sub(2) {
                                 format!("{dimensions} · scroll to inspect")
                             } else {
                                 dimensions
@@ -1396,6 +1410,7 @@ impl EventView {
                     ));
                     if let Some((native, area)) = native {
                         if new_images
+                            && !thumbnail
                             && image_anchor.is_none()
                             && usize::from(area.rows) > page.saturating_sub(2)
                         {
@@ -1405,6 +1420,7 @@ impl EventView {
                         rows.extend((0..area.rows).map(|_| (event.id, String::new())));
                     } else {
                         if new_images
+                            && !thumbnail
                             && self.follow
                             && ui.color
                             && self.image_cells.is_none()
@@ -2904,13 +2920,15 @@ mod tests {
     }
 
     #[test]
-    fn decoded_conversation_image_starts_visible_and_respects_manual_folding() {
+    fn conversation_image_thumbnail_expands_and_reuses_original_pixels() {
         let mut view = EventView::new();
         view.set_scope(EventScope::Conversation);
         view.ingest(b"[IMAGE] screenshot.png\n");
         view.render(80, 18, &plain_ui(), true);
         assert!(view.image_placements(0).is_empty());
-        view.attach_image(image_preview(32, 32, true));
+        let preview = image_preview(400, 800, true);
+        let original = preview.native.clone().unwrap();
+        view.attach_image(preview);
         view.image_cells(Some(images::CellSize {
             width: 10,
             height: 20,
@@ -2919,30 +2937,97 @@ mod tests {
             color: true,
             ..Ui::default()
         };
-        view.render(80, 18, &ui, true);
+        let rows = view.render(80, 18, &ui, true);
+        assert!(unstyled(&rows.join("\n")).contains("Click/Enter expands"));
+        assert!(view.is_following());
+        assert_eq!(
+            view.total_rows, 8,
+            "two heading rows plus a six-row thumbnail"
+        );
         let initial = view.image_placements(0);
         assert_eq!(initial.len(), 1, "a decoded image is visible without Enter");
         let mut renderer = images::Renderer::default();
         let (_, output) = renderer.update(initial, (17, 0), false);
-        assert!(output.contains("a=t") && output.contains("a=p"));
+        assert!(output.contains("a=t") && output.contains("a=p") && output.contains(",r=6"));
 
-        assert!(view.toggle());
-        view.render(80, 18, &ui, true);
         assert!(
-            view.image_placements(0).is_empty(),
-            "manual folding hides native pixels"
+            view.mouse_select(3),
+            "the thumbnail body belongs to its image event"
         );
-        renderer.update(view.image_placements(0), (17, 0), false);
-
         assert!(view.toggle());
         view.render(80, 18, &ui, true);
         assert_eq!(
-            view.image_placements(0).len(),
-            1,
-            "reopening uses the retained image"
+            view.total_rows, 42,
+            "expansion retains the full original height"
         );
         let (_, output) = renderer.update(view.image_placements(0), (17, 0), false);
-        assert!(output.contains("a=p"));
+        assert!(output.contains("a=p") && !output.contains("a=t"));
+        assert!(
+            !view.is_following(),
+            "explicit inspection preserves its reading position"
+        );
+
+        assert!(view.toggle());
+        view.render(80, 18, &ui, true);
+        assert_eq!(view.total_rows, 8);
+        assert_eq!(
+            view.image_placements(0).len(),
+            1,
+            "folding keeps a thumbnail visible"
+        );
+        let (_, output) = renderer.update(view.image_placements(0), (17, 0), false);
+        assert!(output.contains("a=p") && !output.contains("a=t") && output.contains(",r=6"));
+        let retained = view
+            .events
+            .back()
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .native
+            .as_ref()
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(&original, retained));
+        assert_eq!((retained.width, retained.height), (400, 800));
+    }
+
+    #[test]
+    fn conversation_image_thumbnails_fit_narrow_pages_and_keep_following_streams() {
+        let ui = Ui {
+            color: true,
+            ..Ui::default()
+        };
+        for (width, page) in [(12, 4), (24, 8), (80, 18)] {
+            let mut view = EventView::new();
+            view.set_scope(EventScope::Conversation);
+            view.ingest(b"[IMAGE] synthetic.png\n");
+            view.attach_image(image_preview(400, 2400, true));
+            view.render(width, page, &ui, false);
+            assert!(view.is_following() && view.new_image.is_none());
+            let position = view.position();
+            view.restore_position(&EventPosition::default());
+            view.restore_position(&position);
+            view.image_cells(Some(images::CellSize {
+                width: 10,
+                height: 20,
+            }));
+            view.render(width, page, &ui, false);
+            assert!(view.is_following());
+            assert!(view.total_rows <= usize::from(page.saturating_sub(3).clamp(1, 6) + 2));
+            assert_eq!(view.image_placements(0).len(), 1);
+            for step in 0..4 {
+                let text = format!("{}\nEND{step}", "宽屏与窄屏".repeat(8));
+                view.ingest_event(
+                    "assistant",
+                    &json!({"type":"ssmcp.message","text":text}),
+                    b"",
+                );
+                let rows = view.render(width, page, &ui, false);
+                assert!(view.is_following());
+                assert_eq!(view.rows_below(), 0);
+                assert!(unstyled(&rows.join("\n")).contains(&format!("END{step}")));
+            }
+        }
     }
 
     #[test]
@@ -3007,6 +3092,7 @@ mod tests {
             ..Ui::default()
         };
         for scope in [EventScope::All, EventScope::Conversation] {
+            let expect_anchor = scope == EventScope::All;
             for explicit_latest in [false, true] {
                 let mut view = EventView::new();
                 view.set_scope(scope);
@@ -3026,7 +3112,7 @@ mod tests {
                 let fallback = view.render(66, 20, &ui, true).join("\n");
                 assert!(unstyled(&fallback).contains("Image attachment"));
                 let pending = view.position();
-                assert!(pending.new_image.is_some());
+                assert_eq!(pending.new_image.is_some(), expect_anchor);
                 view.latest();
                 let latest = view.position();
                 view.restore_position(&EventPosition::default());
@@ -3045,7 +3131,7 @@ mod tests {
                 let waiting = view.render(66, 20, &ui, true).join("\n");
                 assert!(unstyled(&waiting).contains("Later progress"));
                 assert!(view.is_following());
-                assert_eq!(view.new_image.is_some(), !explicit_latest);
+                assert_eq!(view.new_image.is_some(), expect_anchor && !explicit_latest);
                 let after_progress = view.position();
                 view.restore_position(&EventPosition::default());
                 view.restore_position(&after_progress);
@@ -3056,7 +3142,7 @@ mod tests {
                 }));
                 let measured = view.render(66, 20, &ui, true).join("\n");
                 assert!(view.new_image.is_none());
-                if explicit_latest {
+                if explicit_latest || !expect_anchor {
                     assert!(view.is_following());
                     assert_eq!(view.rows_below(), 0);
                     assert!(unstyled(&measured).contains("Later progress"));
