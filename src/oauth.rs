@@ -38,7 +38,6 @@ use subtle::ConstantTimeEq;
 
 const TRANSACTION_TTL: Duration = Duration::from_secs(crate::broker::LOGIN_LIFETIME);
 const CODE_TTL: Duration = Duration::from_secs(60);
-const PROVIDER_TTL: Duration = Duration::from_secs(600);
 const MAX_CLIENTS: usize = 1024;
 const MAX_TRANSACTIONS: usize = 2048;
 const MAX_CODES: usize = 4096;
@@ -175,7 +174,9 @@ impl Binding {
     }
 }
 
+#[derive(Clone)]
 struct ProviderLogin {
+    started: bool,
     transaction_id: String,
     provider: String,
     verifier: String,
@@ -187,21 +188,24 @@ struct ProviderLogin {
 // an interrupted exchange unlocks the form without accepting that state twice.
 struct ProviderAttempt {
     state: Arc<Mutex<Store>>,
+    key: Key,
     login: ProviderLogin,
     transaction: Transaction,
 }
 
 impl Drop for ProviderAttempt {
     fn drop(&mut self) {
-        if let Some(transaction) = self
-            .state
-            .lock()
-            .unwrap()
+        let mut state = self.state.lock().unwrap();
+        if let Some(transaction) = state
             .transactions
             .get_mut(&hash(&self.login.transaction_id))
         {
             transaction.provider_busy = false;
+            if transaction.identity.is_some() {
+                return;
+            }
         }
+        state.upstream.remove(&self.key);
     }
 }
 
@@ -1049,12 +1053,13 @@ impl OAuth {
         let state_value = random("idp_")?;
         let verifier = random("pkce_")?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let expires = (now + PROVIDER_TTL).min(transaction.expires);
+        let expires = transaction.expires;
         transaction.provider_busy = true;
         transaction.attempts += 1;
         state.upstream.insert(
             hash(&state_value),
             ProviderLogin {
+                started: false,
                 transaction_id: id.into(),
                 provider: provider.into(),
                 verifier,
@@ -1084,7 +1089,8 @@ impl OAuth {
             .upstream
             .get(&key)
             .filter(|login| {
-                now < login.expires
+                !login.started
+                    && now < login.expires
                     && login.provider == provider
                     && bool::from(login.csrf.ct_eq(&hash(csrf)))
             })
@@ -1104,12 +1110,40 @@ impl OAuth {
             })
             .cloned()
             .ok_or_else(|| OAuthError::invalid("Authorization form has expired"))?;
-        let login = state.upstream.remove(&key).unwrap();
+        let login = state.upstream.get_mut(&key).unwrap();
+        login.started = true;
+        let attempt_login = login.clone();
+        login.verifier.clear();
         Ok(ProviderAttempt {
             state: self.state.clone(),
-            login,
+            key,
+            login: attempt_login,
             transaction,
         })
+    }
+
+    fn resumed_provider_login(
+        &self,
+        raw: &str,
+        csrf: &str,
+        provider: &str,
+    ) -> Option<(String, Option<Transaction>)> {
+        let now = Instant::now();
+        let state = self.state.lock().unwrap();
+        let login = state.upstream.get(&hash(raw)).filter(|login| {
+            login.started
+                && now < login.expires
+                && login.provider == provider
+                && bool::from(login.csrf.ct_eq(&hash(csrf)))
+        })?;
+        let transaction = state
+            .transactions
+            .get(&hash(&login.transaction_id))
+            .filter(|t| now < t.expires && !t.busy && bool::from(t.csrf.ct_eq(&hash(csrf))))?;
+        Some((
+            login.transaction_id.clone(),
+            transaction.identity.is_some().then(|| transaction.clone()),
+        ))
     }
 
     fn finish_provider_login(
@@ -2058,7 +2092,28 @@ async fn provider_callback(
         let parameters = Parameters::parse(query.as_deref().unwrap_or(""))?;
         let csrf = cookie(&headers).ok_or_else(|| OAuthError::invalid(
             "Authorization cookie is missing; restart the connection in the same browser"))?;
-        let attempt = broker.oauth.take_provider_login(parameters.required("state")?, csrf, &provider)?;
+        let state = parameters.required("state")?;
+        let attempt = match broker.oauth.take_provider_login(state, csrf, &provider) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                let resumed = tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        match broker.oauth.resumed_provider_login(state, csrf, &provider) {
+                            Some((id, Some(transaction))) => return Some((id, transaction)),
+                            Some((_, None)) => tokio::time::sleep(Duration::from_millis(100)).await,
+                            None => return None,
+                        }
+                    }
+                }).await.ok().flatten();
+                let (id, transaction) = resumed.ok_or(error)?;
+                let identity = transaction.identity.clone().ok_or_else(OAuthError::grant)?;
+                let _policy_update = broker.user_policy_updates.lock().await;
+                let allowed = broker.clients(&transaction.user, &Authorization::Identity(identity)).await
+                    .map_err(|_| OAuthError::grant())?.len();
+                return Ok(consent_response(&id, &transaction, None, StatusCode::OK,
+                    &broker.identities.names(), Some(allowed)));
+            }
+        };
         if parameters.get("error").is_some() {
             return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
                 Some("第三方登录已取消或未成功。你可以重新登录。"), StatusCode::BAD_REQUEST,
@@ -2068,19 +2123,25 @@ async fn provider_callback(
         if code.is_empty() || code.len() > 2048 {
             return Err(OAuthError::invalid("Invalid identity-provider authorization code"));
         }
-        let identity = match broker.identities.exchange(&provider, code, &attempt.login.verifier).await {
-            Ok(identity) => identity,
-            Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
-                Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
-                StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
-        };
-        // A ban can occur during the upstream exchange. Validate and save the
-        // identity under the policy lock so its consent cannot outlive revocation.
-        let _policy_update = broker.user_policy_updates.lock().await;
-        let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
-            .map_err(|_| OAuthError::grant())?.len();
-        let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
-        Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        let code = code.to_owned();
+        let broker = broker.clone();
+        tokio::spawn(async move {
+            let identity = match broker.identities.exchange(&provider, &code, &attempt.login.verifier).await {
+                Ok(identity) => identity,
+                Err(_) => return Ok(consent_response(&attempt.login.transaction_id, &attempt.transaction,
+                    Some("未能验证第三方身份。请重试；若仍然失败，请让管理员检查应用配置与服务器网络。"),
+                    StatusCode::BAD_GATEWAY, &broker.identities.names(), None)),
+            };
+            // A ban can occur during the upstream exchange. Validate and save the
+            // identity under the policy lock so its consent cannot outlive revocation.
+            let _policy_update = broker.user_policy_updates.lock().await;
+            let allowed = broker.clients(&attempt.transaction.user, &Authorization::Identity(identity.clone())).await
+                .map_err(|_| OAuthError::grant())?.len();
+            let (id, transaction) = broker.oauth.finish_provider_login(attempt, identity)?;
+            Ok(consent_response(&id, &transaction, None, StatusCode::OK, &broker.identities.names(), Some(allowed)))
+        })
+        .await
+        .map_err(|_| OAuthError::internal())?
     }.await;
     match outcome {
         Ok(response) => response,
@@ -2226,6 +2287,16 @@ mod tests {
             ok(oauth.finish_provider_login(attempt, github_identity("42", "alice")));
         assert_eq!(id, form.id);
         assert_eq!(transaction.identity.unwrap().subject, "42");
+        let (resumed_id, resumed) = oauth
+            .resumed_provider_login(&state, &form.csrf, "github")
+            .unwrap();
+        assert_eq!(resumed_id, form.id);
+        assert_eq!(resumed.unwrap().identity.unwrap().subject, "42");
+        assert!(
+            oauth
+                .resumed_provider_login(&state, &ok(random("csrf_")), "github")
+                .is_none()
+        );
         assert!(
             oauth
                 .begin_provider_login(&form.id, &form.csrf, "github")

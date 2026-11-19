@@ -371,12 +371,11 @@ impl Fixture {
         assert!(html.contains("<meta http-equiv=refresh"));
         assert!(!html.contains(GITHUB_SECRET));
         let href = html
-            .split_once("<a href=\"")
-            .unwrap()
-            .1
-            .split('"')
-            .next()
-            .unwrap()
+            .split("<a href=\"")
+            .skip(1)
+            .filter_map(|link| link.split_once('"').map(|(href, _)| href))
+            .find(|href| href.starts_with(&self.upstream))
+            .expect("identity provider continuation link")
             .replace("&amp;", "&");
         let target = Url::parse(&href).unwrap();
         assert_eq!(target.origin().ascii_serialization(), self.upstream);
@@ -533,14 +532,13 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         query(&target, "code_challenge")
     );
     assert_ne!(verifier, VERIFIER);
-    assert_eq!(
-        fixture
-            .callback(&state, Some(&flow.cookie), "alice-code")
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
-    );
+    let retry = fixture
+        .callback(&state, Some(&flow.cookie), "alice-code")
+        .await;
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert!(retry.text().await.unwrap().contains("Alice@github"));
     assert_eq!(fixture.github.exchanges.load(Ordering::SeqCst), 1);
+    assert!(fixture.broker.oauth.state.lock().unwrap().codes.is_empty());
     // A stale consent page cannot have its already-verified identity replaced by another login.
     assert_eq!(
         fixture.action(&flow, "provider", "github").await.status(),
