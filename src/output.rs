@@ -29,7 +29,7 @@ use std::{
     fs::OpenOptions,
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
     },
 };
 #[cfg(unix)]
@@ -168,44 +168,63 @@ impl OutputStore {
         } else {
             None
         };
-        Self::at_restoring(Self::directory()?, Policy::default(), reload.as_deref())
-    }
-
-    fn directory() -> Result<PathBuf, String> {
         #[cfg(unix)]
         {
-            let base = Path::new("/tmp/ssmcp");
-            match std::fs::DirBuilder::new().mode(0o1777).create(base) {
-                Ok(()) => std::fs::set_permissions(base, std::fs::Permissions::from_mode(0o1777))
-                    .map_err(|e| format!("set shared output directory permissions: {e}"))?,
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("create shared output directory: {e}")),
-            }
-            let base_fd =
-                open_directory(base).map_err(|e| format!("open shared output directory: {e}"))?;
-            let metadata = base_fd
-                .metadata()
-                .map_err(|e| format!("inspect shared output directory: {e}"))?;
-            let uid = unsafe { libc::geteuid() };
-            if (metadata.uid() != 0 && metadata.uid() != uid)
-                || (metadata.mode() & 0o002 != 0 && metadata.mode() & 0o1000 == 0)
-            {
-                return Err(
-                    "output directory /tmp/ssmcp has unsafe ownership or permissions".into(),
-                );
-            }
-            Ok(base.join(uid.to_string()))
+            Self::connection_in(Path::new("/tmp"), reload.as_deref())
         }
         #[cfg(windows)]
         {
-            let base = std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("ssmcp");
-            std::fs::create_dir_all(&base)
-                .map_err(|e| format!("create output base directory: {e}"))?;
-            Ok(base.join("output"))
+            Self::at_restoring(Self::directory()?, Policy::default(), reload.as_deref())
         }
+    }
+
+    #[cfg(unix)]
+    fn connection_in(temporary: &Path, reload: Option<&str>) -> Result<Arc<Self>, String> {
+        // A shared parent created by one ordinary user cannot be trusted by a
+        // second user. Each UID instead creates its own private top-level root.
+        let uid = unsafe { libc::geteuid() };
+        let directory = temporary.join(format!("ssmcp-{uid}"));
+        if let Some(token) = reload {
+            validate_id(token).map_err(|_| "invalid output reload grant".to_owned())?;
+            if let Some(legacy) = Self::legacy_reload_directory(temporary, uid, token) {
+                // Keep live artifacts at their advertised paths during an
+                // acknowledged upgrade. Ordinary connections never use this root.
+                return Self::at_restoring(legacy, Policy::default(), Some(token));
+            }
+        }
+        Self::at_restoring(directory, Policy::default(), reload)
+    }
+
+    #[cfg(unix)]
+    fn legacy_reload_directory(temporary: &Path, uid: u32, token: &str) -> Option<PathBuf> {
+        let base = temporary.join("ssmcp");
+        let parent = open_directory(&base).ok()?;
+        let metadata = parent.metadata().ok()?;
+        if (metadata.uid() != 0 && metadata.uid() != uid)
+            || (metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0)
+        {
+            return None;
+        }
+        let directory = base.join(uid.to_string());
+        let private = open_directory(&directory).ok()?;
+        let metadata = private.metadata().ok()?;
+        if metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return None;
+        }
+        // Only the existing private one-use grant selects legacy storage. Its
+        // file type, ownership, contents and expiry are checked by consume_reload.
+        std::fs::symlink_metadata(directory.join(format!("reload-{token}.json"))).ok()?;
+        Some(directory)
+    }
+
+    #[cfg(windows)]
+    fn directory() -> Result<PathBuf, String> {
+        let base = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("ssmcp");
+        std::fs::create_dir_all(&base).map_err(|e| format!("create output base directory: {e}"))?;
+        Ok(base.join("output"))
     }
 
     #[cfg(test)]
@@ -1415,6 +1434,184 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_user_directory_bypasses_and_preserves_the_legacy_parent() {
+        let fixture = Fixture::new(Policy::default());
+        let legacy = fixture.path.join("ssmcp");
+        crate::platform::private_directory(&legacy).unwrap();
+        std::fs::write(legacy.join("keep"), b"existing data").unwrap();
+        let before = std::fs::metadata(&legacy).unwrap();
+        let store = OutputStore::connection_in(&fixture.path, None).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        assert_eq!(store.directory, fixture.path.join(format!("ssmcp-{uid}")));
+        let private = std::fs::metadata(&store.directory).unwrap();
+        assert_eq!(private.uid(), uid);
+        assert_eq!(private.mode() & 0o777, 0o700);
+        let after = std::fs::metadata(&legacy).unwrap();
+        assert_eq!(
+            (after.dev(), after.ino(), after.uid(), after.mode()),
+            (before.dev(), before.ino(), before.uid(), before.mode())
+        );
+        assert_eq!(
+            std::fs::read(legacy.join("keep")).unwrap(),
+            b"existing data"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_user_directory_rejects_symlinks_and_public_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = Fixture::new(Policy::default());
+        let directory = fixture
+            .path
+            .join(format!("ssmcp-{}", unsafe { libc::geteuid() }));
+        let target = fixture.path.join("keep-target");
+        crate::platform::private_directory(&target).unwrap();
+        std::fs::write(target.join("keep"), b"untouched").unwrap();
+        std::os::unix::fs::symlink(&target, &directory).unwrap();
+        assert!(OutputStore::connection_in(&fixture.path, None).is_err());
+        assert_eq!(std::fs::read_link(&directory).unwrap(), target);
+        assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"untouched");
+        std::fs::remove_file(&directory).unwrap();
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = OutputStore::connection_in(&fixture.path, None)
+            .err()
+            .unwrap();
+        assert!(error.contains("private permissions"), "{error}");
+        assert_eq!(std::fs::metadata(&directory).unwrap().mode() & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_user_reload_retains_legacy_paths_and_consumes_the_grant_once() {
+        let fixture = Fixture::new(Policy::default());
+        let legacy = fixture.path.join("ssmcp");
+        crate::platform::private_directory(&legacy).unwrap();
+        let directory = legacy.join(unsafe { libc::geteuid() }.to_string());
+        let previous = OutputStore::at(
+            directory.clone(),
+            Policy {
+                inline_bytes: 1,
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+        let mut capture = previous.capture("legacy-reload");
+        capture.push(b"keep advertised output path").unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        let mut command = std::process::Command::new("ssmcp");
+        let ticket = previous.prepare_reload(&mut command).unwrap();
+        let token = command
+            .get_envs()
+            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
+            .unwrap()
+            .1
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let restored = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
+        assert_eq!(restored.directory, directory);
+        assert_eq!(restored.owner, previous.owner);
+        let result = restored
+            .perform_sync("ssmcp.output.read", json!({"id": metadata.id}))
+            .unwrap();
+        assert_eq!(result["text"], "keep advertised output path");
+        assert!(Path::new(&metadata.path).exists());
+        assert!(!directory.join(&ticket.name).exists());
+        let replay = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
+        assert_ne!(replay.directory, directory);
+        assert_ne!(replay.owner, previous.owner);
+        assert!(
+            replay
+                .perform_sync("ssmcp.output.stat", json!({"id": metadata.id}))
+                .is_err()
+        );
+        assert!(Path::new(&metadata.path).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn per_user_reload_does_not_follow_a_legacy_parent_symlink() {
+        let fixture = Fixture::new(Policy::default());
+        let target = fixture.path.join("legacy-target");
+        crate::platform::private_directory(&target).unwrap();
+        let previous = OutputStore::at(
+            target.join(unsafe { libc::geteuid() }.to_string()),
+            Policy::default(),
+        )
+        .unwrap();
+        let mut command = std::process::Command::new("ssmcp");
+        let ticket = previous.prepare_reload(&mut command).unwrap();
+        let token = command
+            .get_envs()
+            .find(|(key, _)| key.to_str() == Some(RELOAD_ENV))
+            .unwrap()
+            .1
+            .unwrap()
+            .to_str()
+            .unwrap();
+        std::os::unix::fs::symlink(&target, fixture.path.join("ssmcp")).unwrap();
+        let current = OutputStore::connection_in(&fixture.path, Some(token)).unwrap();
+        assert_ne!(current.owner, previous.owner);
+        assert!(previous.directory.join(&ticket.name).exists());
+        assert!(fixture.path.join("ssmcp").is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires an isolated temporary root and unprivileged UID from the multi-user fixture"]
+    fn per_user_output_fixture() {
+        let base = PathBuf::from(std::env::var_os("SSMCP_TEST_OUTPUT_BASE").expect("fixture base"));
+        assert!(base.is_absolute());
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "fixture must drop privileges"
+        );
+        let result = OutputStore::connection_in(&base, None);
+        if std::env::var_os("SSMCP_TEST_OUTPUT_REJECT").is_some() {
+            assert!(result.is_err(), "another UID must not open this directory");
+            return;
+        }
+        let store = result.unwrap();
+        let mut capture = store.capture("multi-user-fixture");
+        let content = vec![b'x'; INLINE_BYTES + 1];
+        capture.push(&content).unwrap();
+        capture.finish().unwrap();
+        let metadata = capture.metadata().unwrap();
+        assert_eq!(std::fs::read(&metadata.path).unwrap(), content);
+        assert_eq!(
+            std::fs::metadata(&store.directory).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&metadata.path).unwrap().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            store
+                .perform_sync(
+                    "ssmcp.output.read",
+                    json!({"id": metadata.id, "max_bytes": 8})
+                )
+                .unwrap()["text"],
+            "xxxxxxxx"
+        );
+        if let Some(forbidden) = std::env::var_os("SSMCP_TEST_OUTPUT_FORBIDDEN") {
+            assert_eq!(
+                std::fs::read(forbidden).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        println!("per-user output fixture passed for uid {}", unsafe {
+            libc::geteuid()
+        });
     }
 
     #[test]
