@@ -1,0 +1,280 @@
+{
+  "schema": "ssmcp.unified-acceptance.v1",
+  "status": "passed",
+  "revision": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "transport": "real local account WebSocket + OAuth PKCE + HTTP MCP + independent processes + PTY",
+  "model_calls_attempted": 0,
+  "installed_harnesses_exposed": [],
+  "scope": "no-Harness unified runtime; installed native Harness discovery/approval needs its separate acceptance runs",
+  "binaries": {
+    "ssmcp": {
+      "path": "<BUILD_CHECKOUT>/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/ssmcp",
+      "sha256": "c80da3aa112d25d9228dfe7a860ed02ceb3aa04cd545eb904d1ebad448bf85f7"
+    },
+    "ssmcpd": {
+      "path": "<BUILD_CHECKOUT>/target/zuse-validation/b49da12ac890f4d2b00c42d9dcf05b97e2054bac/frozen/debug/ssmcpd",
+      "sha256": "c657bd9216b2ca4e3a89548f5565c44da14a48b14f5b5d6684616e8489f96518"
+    }
+  },
+  "remaining_observed_processes": [],
+  "checks": [
+    "the owned account router keeps its credentials in a private ready record",
+    "the isolated account has the expected stable provider identity and handle",
+    "the real production account router is healthy",
+    "the account connection advertises its exact identity-scoped MCP resource",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact account endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "the account OAuth endpoint requires provider consent instead of a connection login code",
+    "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+    "OAuth pages cannot be cached and bind same-origin form submission",
+    "real identity exchange validates provider PKCE and requires explicit consent",
+    "OAuth consent preserves the registered callback, state and issuer",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the account relay credential cannot authenticate as an MCP access token",
+    "a client without any Harness starts its interactive shell",
+    "public MCP exposes exactly list/code_mode/collab (modern=False)",
+    "public MCP exposes exactly list/code_mode/collab (modern=True)",
+    "all optional providers have independent lazy state records",
+    "native startup lists optional providers without probing executables or versions",
+    "native startup and observation execute no external fixture programs",
+    "list preserves the connection title and authorized workspace",
+    "list and code_mode tools return one identical collision-free full-schema catalog",
+    "unloaded Harnesses and the optional Playwright provider contribute no invented native tools",
+    "two starts return distinct active processes without claiming command success",
+    "reported supervisor PID owns the separately observed live command PID",
+    "alpha runs in the authorized cwd with its explicit environment",
+    "alpha emits live stdout/stderr while blocked behind the release gate",
+    "reported supervisor PID owns the separately observed live command PID",
+    "beta runs in the authorized cwd with its explicit environment",
+    "beta emits live stdout/stderr while blocked behind the release gate",
+    "the terminal displays each live job/stdout/stderr marker once before any wait completes",
+    "final exit codes distinguish a successful command from a started command that exits 7",
+    "alpha read-back exactly matches ordered, nonduplicated live events per stream",
+    "beta read-back exactly matches ordered, nonduplicated live events per stream",
+    "the environment value is absent from audit events and the terminal transcript",
+    "UTF-8 command output completes with exit zero and both streams at EOF",
+    "UTF-8 stdout preserves the exact byte-52 delimiter fixture",
+    "UTF-8 stderr preserves the exact byte-52 delimiter fixture",
+    "UTF-8 stdout and stderr remain exact in ordered audit event bytes",
+    "a subsequent native call succeeds on the same live connection after UTF-8 output",
+    "each bounded output chunk is acknowledged only after exact live event verification",
+    "output spilling does not stop live events and active capture remains explicitly incomplete",
+    "long stdout retains its complete prefix/body/tail in both stored bytes and live events",
+    "long-output metadata truthfully reports full integrity, SHA-256, lines and 24-hour retention",
+    "outputs.read reconstructs the exact artifact across bounded WSS pages",
+    "600 short lines independently trigger the existing line threshold",
+    "a large structured result is archived with its native result format",
+    "retrieval preserves the complete structured result and native MCP fields",
+    "explicit cleanup preserves fresh output and retains the existing quota policy",
+    "only successful committed writes produce file change events; stale edits leave bytes unchanged",
+    "file read and queryable Diff reflect actual bytes without claiming external audit coverage",
+    "sensitive-file audit records metadata without storing its contents or a diff preview",
+    "skill discovery emits discovery metadata without claiming that a skill was read or invoked",
+    "explicit skill reading is recorded separately and never relabeled as invocation",
+    "the account connection advertises its exact identity-scoped MCP resource",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact account endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "the account OAuth endpoint requires provider consent instead of a connection login code",
+    "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+    "OAuth pages cannot be cached and bind same-origin form submission",
+    "real identity exchange validates provider PKCE and requires explicit consent",
+    "OAuth consent preserves the registered callback, state and issuer",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the account relay credential cannot authenticate as an MCP access token",
+    "the sibling is authorized and online before testing its per-client resource boundary",
+    "a separate client cannot list or address the first client's tasks",
+    "ssmcp.exec.events on another client does not expose the first client's audit stream",
+    "ssmcp.fs.events on another client does not expose the first client's audit stream",
+    "ssmcp.audit.events on another client does not expose the first client's audit stream",
+    "another client's cleanup leaves the first client's retained artifact intact",
+    "reported supervisor PID owns the separately observed live command PID",
+    "cancel starts an actual double-fork daemon in a detached session",
+    "cancel returns a final cancellation state",
+    "explicit cancellation reaps every observed supervisor, command and daemon instance",
+    "reported supervisor PID owns the separately observed live command PID",
+    "timeout starts an actual double-fork daemon in a detached session",
+    "an execution timeout terminates the job and reports timeout",
+    "execution timeout reaps every observed supervisor, command and daemon instance",
+    "reported supervisor PID owns the separately observed live command PID",
+    "native-exit starts an actual double-fork daemon in a detached session",
+    "native exit 17 is preserved and detached stdout/stderr holders are closed without a drain timeout",
+    "native parent exit reaps every observed supervisor, command and daemon instance",
+    "expiration fixture is finalized before its timestamp is aged",
+    "automatic expiration removes aged completed output while keeping fresh output",
+    "reported supervisor PID owns the separately observed live command PID",
+    "reload starts an actual double-fork daemon in a detached session",
+    "reload acknowledgement arrives over WSS before the connection is replaced",
+    "reload reconnects the same client process with a new connection ID and preserved metadata",
+    "reload reaps every observed supervisor, command and daemon instance",
+    "the independent account grant remains valid after the device reloads",
+    "the disconnected client ID cannot survive as a live route",
+    "reload starts with no inherited background job handles",
+    "reload rebuilds the full no-Harness catalog through the new registry",
+    "acknowledged reload preserves owned output through the private one-use handoff",
+    "reported supervisor PID owns the separately observed live command PID",
+    "disconnect starts an actual double-fork daemon in a detached session",
+    "connection shutdown reaps every observed supervisor, command and daemon instance",
+    "account authorization survives one device disconnect",
+    "disconnect cleanup leaves the independently authorized sibling client usable"
+  ],
+  "sections": {
+    "account_oauth": {
+      "status": "passed",
+      "duration_seconds": 0.825
+    },
+    "catalog_no_harness": {
+      "status": "passed",
+      "duration_seconds": 0.301
+    },
+    "concurrent_execution": {
+      "status": "passed",
+      "duration_seconds": 1.139
+    },
+    "utf8_transport": {
+      "status": "passed",
+      "duration_seconds": 0.846
+    },
+    "output_storage": {
+      "status": "passed",
+      "duration_seconds": 16.802
+    },
+    "file_skill_audit": {
+      "status": "passed",
+      "duration_seconds": 5.567
+    },
+    "client_isolation": {
+      "status": "passed",
+      "duration_seconds": 2.763
+    },
+    "cancel_timeout": {
+      "status": "passed",
+      "duration_seconds": 3.275
+    },
+    "native_parent_exit": {
+      "status": "passed",
+      "duration_seconds": 0.256
+    },
+    "automatic_expiration": {
+      "status": "passed",
+      "duration_seconds": 0.914
+    },
+    "reload": {
+      "status": "passed",
+      "duration_seconds": 1.586
+    },
+    "disconnect": {
+      "status": "passed",
+      "duration_seconds": 0.236
+    }
+  },
+  "evidence": [
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/catalog.json",
+      "bytes": 161853,
+      "sha256": "6ef728d236c23147ff25958742016d5e11d88538be8b8a178517db7333b7003f"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/concurrent-commands.json",
+      "bytes": 8756,
+      "sha256": "6ecac3ebf9ea432a1cc3b2e5aae3b0153ee29c0903d8038ff7d4d288dcbcddbe"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/utf8-transport.json",
+      "bytes": 478,
+      "sha256": "477a0a111af0921600f05d641c378773796bc3c0a361489a10f6e66eab3a7470"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/execution-events.jsonl",
+      "bytes": 403195,
+      "sha256": "fa3d1c9cafe59e5af5037edfd4b5491ce74bfa715d448b6476971a4b2772b55e"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/long-stdout.log",
+      "bytes": 163920,
+      "sha256": "c980067038b5e63ab9256bdd436002aea8943bb54263efe424046747c56fba86"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/long-output.json",
+      "bytes": 5824,
+      "sha256": "5882ed5af13bbe1e06c30b4c24d873fcaedb032da0ab2830efe8c0d442a6cf7a"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/structured-result.json",
+      "bytes": 687,
+      "sha256": "7929b27a059255fe9b43be4e0b4dcca6cd73c804772d3d05988238610d41bb28"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/file-events.jsonl",
+      "bytes": 5341,
+      "sha256": "2858131ba7a35e79cf2f0eefddc1e0898f75eeade9d5bf15184b98b819ba11b4"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/skill-events.jsonl",
+      "bytes": 183066,
+      "sha256": "9e1b9aed31f259f9102dfc164d5fddf723d987bcabab6afaccd20a5762ed1947"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/file-results.json",
+      "bytes": 1474,
+      "sha256": "f34cdb36277b1a66c658995c77b53ea6e0b47f12d80f4f14f9a2d78a31d805eb"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/client-isolation.json",
+      "bytes": 568,
+      "sha256": "47977c3447b6fa34165a098c1b1ea7300e136665f7a7a5dde5bf80de62e80750"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/cancel-timeout.json",
+      "bytes": 5469,
+      "sha256": "47aa073fbc6c0f805c962b29f48f11d625212a91ede56487872a30cd8adaa698"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/native-parent-exit.json",
+      "bytes": 4837,
+      "sha256": "bf8c021209b664eed59b343bf8f5b01f0058b8910d5c03719d3686eb7c6a62dc"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/automatic-expiration.json",
+      "bytes": 827,
+      "sha256": "c6689047ca598eeabd18e613be01395e380436a64e5918ce8b95b7bb0f6319ba"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/reload.json",
+      "bytes": 1953,
+      "sha256": "8f280dde8acea4e5cf976be28c41859fdcc4d269387aa4065be8c4879b472052"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/disconnect.json",
+      "bytes": 2800,
+      "sha256": "84b65fd9dfe9cdbcadd6fafa78386b518b5775716eb7745cdffe727422451d0f"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/terminal-account-router.log",
+      "bytes": 65549,
+      "sha256": "7112ddf0cb3b8ffe91550b29c9c9db8b24bf33880b3e266e7360ec424eec18c5"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/terminal-unified-primary.log",
+      "bytes": 182264,
+      "sha256": "be0b36e751edcfaa824d3c9f4136056144f94d181954adac5b4f35d387f11751"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/terminal-unified-sibling.log",
+      "bytes": 722,
+      "sha256": "d3bb89550794364636fdcff22f5e692e88dbb83a6d6b4badf6d97ffd09d7a4db"
+    },
+    {
+      "path": "<FIXTURE_CHECKOUT>/.local/release-e2e-catalog-20261120/unified-evidence/terminal-unified-retention.log",
+      "bytes": 377,
+      "sha256": "d3da0d2d5b1ce4620477abb8ed0affc6958d4730307eb49bd5a8f938b1d35435"
+    }
+  ],
+  "duration_seconds": 35.212
+}
