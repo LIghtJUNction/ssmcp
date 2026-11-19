@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-19",
+  "scope": "Read-only live installation preflight; no stop, start, image replacement or live reconnection attempted",
+  "source": "21ea0acc365b413dfa237387960b7441ab1ba529",
+  "cli_sha256": "354c1a7697f346cadc1f90428b0ce8fb1ba0fb6dd531873b3a38b7f16f3bf6ec",
+  "command": "ssmcp 007 upgrade --dry-run --json",
+  "exit_code": 0,
+  "result": {
+    "configuration_preserved": true,
+    "dry_run": true,
+    "previous_pid": 1302,
+    "previous_version": "0.7.4",
+    "sessions_preserved": true,
+    "source": "current executable",
+    "source_version": "0.10.11",
+    "source_wire_version": 7,
+    "success": true,
+    "unit": "ssmcp-007.service",
+    "unit_definition_preserved": true
+  }
+}

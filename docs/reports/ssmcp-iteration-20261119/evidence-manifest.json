@@ -1,11 +1,52 @@
 {
   "schema_version": 1,
-  "status": "checkpoint; waiting and local mode still in progress",
+  "generated_at": "2026-11-19T20:07:33.011983+00:00",
+  "status": "checkpoint: functional acceptance complete; v0.10.12 blocked by Windows fixture tests; PR99 validation and subsequent formal release/live007 migration pending",
   "files": [
     {
       "path": "README.md",
-      "sha256": "128d2ee4121bc725ba9e02634e2aeb35ab876524ca779e191dc152d30d06bd97",
-      "bytes": 16608
+      "sha256": "951a73437694c8b0e06246a32c04837b5b4f0be340b346a60c459415e866c9bf",
+      "bytes": 28258
+    },
+    {
+      "path": "checks/007-live-baseline-20261119.json",
+      "sha256": "c0bf88386dc94947d1ad98df07f948aba7c6b58f1a0e3531a5fb187e0135ccdc",
+      "bytes": 1411
+    },
+    {
+      "path": "checks/007-main-merge-validation.json",
+      "sha256": "5cc9e1e50ef008c2e33c1e66c59b4752b3b8ecfbe1a0917d9cd3573f5fcbedf5",
+      "bytes": 1155
+    },
+    {
+      "path": "checks/007-protocol-diagnosis-20261119.json",
+      "sha256": "3c62d05a5676259b34118de0daad83f8fb44781066c360daf77915fbd079e70a",
+      "bytes": 3187
+    },
+    {
+      "path": "checks/007-upgrade-build-20261119.json",
+      "sha256": "8fbc46dda610af21ab9fd6ba87eac11d62215ef6ad779c168a7d2289514f63c2",
+      "bytes": 3230
+    },
+    {
+      "path": "checks/007-upgrade-live-preflight-20261119.json",
+      "sha256": "7391868a4623be93f7226b81ed75ab042c7046cb08ef8edf9c10e166bbf8dd77",
+      "bytes": 713
+    },
+    {
+      "path": "checks/007-upgrade-root-review-20261119.json",
+      "sha256": "d98b88311875574d73abdbba0c01cfbbe60cdb6737701cc57aa325ae037091d3",
+      "bytes": 2557
+    },
+    {
+      "path": "checks/007-upgrade-source-review-92e6c83.json",
+      "sha256": "48efa294bfcd33a4e4a063a9ba49f70f00f11f29f275775e17cdeadb1e117bfd",
+      "bytes": 2946
+    },
+    {
+      "path": "checks/007-upgrade-validation-20261119.json",
+      "sha256": "2f29c6dd1f0f24bf81199111812d3a961a505c5ef2266704784c96db59e0b379",
+      "bytes": 17289
     },
     {
       "path": "checks/at-reference-mouse-validation-20261119.json",
@@ -13,9 +54,19 @@
       "bytes": 7271
     },
     {
+      "path": "checks/branch-closeout-audit-20261119.json",
+      "sha256": "08bbffb0922d74470020eb6b843f6a74e90d7f11a9dad4934a704680f70ec5a4",
+      "bytes": 19897
+    },
+    {
       "path": "checks/cc-fixture-directory-validation-20261119.json",
       "sha256": "aa8c712353f35de8bf9f86132e2ae1a02802a1c998cfcad6c527f8d02d7c42b4",
       "bytes": 2161
+    },
+    {
+      "path": "checks/context-helper-explicit-validation-20261119.json",
+      "sha256": "f27f4d39cc354737a77e89da732d26e6842180aa9a5f4de2c2358737f8063a43",
+      "bytes": 2185
     },
     {
       "path": "checks/daemon-account-wss-validation-20261119.json",
@@ -41,6 +92,11 @@
       "path": "checks/final-account-acceptance-20261119.json",
       "sha256": "4e08e197b52a466295e92b2529033dfe04cde9dc3e43d559b04460940e9c4755",
       "bytes": 5799
+    },
+    {
+      "path": "checks/final-main-source-equivalence.json",
+      "sha256": "0ab73a5b97ad36e74e77650052d3251e5a68a70e96daa4cd8e1c156a8fe18aef",
+      "bytes": 1047
     },
     {
       "path": "checks/force-send-build-validation-20261119.json",
@@ -88,6 +144,46 @@
       "bytes": 271608
     },
     {
+      "path": "checks/local-consent-visual-review-20261119.json",
+      "sha256": "8dfc1f77cb4c923bee4567bf8bfb4ec940a21006dcfe9ddf6807509325eb13d0",
+      "bytes": 761
+    },
+    {
+      "path": "checks/local-mode-9d7ed0-validation.json",
+      "sha256": "74f2af6faa9538151cfd067c9df6a4b9b41695bee6adeade62d3bf3f8460b813",
+      "bytes": 4719
+    },
+    {
+      "path": "checks/local-mode-a7f9077-validation.json",
+      "sha256": "652f65cd6a9303d7d576b9a47e8b06a980128cab163cad4eca433452314dc6e1",
+      "bytes": 5540
+    },
+    {
+      "path": "checks/local-mode-fixture-history.json",
+      "sha256": "a814c692316cb6c36f60f89ebdfcc449c17b1d42e32c40f1a7c4c653c765e1ac",
+      "bytes": 2272
+    },
+    {
+      "path": "checks/local-mode-independent-review-20261119.json",
+      "sha256": "c95dd7e10ab0f4b028be4c5db78ad8b0e8d3b4a6f50c51bf272dcb54c58ad3be",
+      "bytes": 5259
+    },
+    {
+      "path": "checks/local-mode-main-merge-validation.json",
+      "sha256": "940de3474ae247df303cc2ec6acce0b0b6f2d520b21a379a06755e44d8ad4649",
+      "bytes": 1156
+    },
+    {
+      "path": "checks/merged-branch-closeout-20261119.json",
+      "sha256": "5c4706dd3841d5de670101d6942202ab1133a91bd8b5933cbd54e6b0c18b163e",
+      "bytes": 1579
+    },
+    {
+      "path": "checks/native-notification-smoke-20261119.json",
+      "sha256": "1406ad7fbcfef2e3115b268708dead1eff711581a6d46bc5ff17861ae60fa242",
+      "bytes": 638
+    },
+    {
       "path": "checks/native-plugin-source-review-20261119.json",
       "sha256": "fd24219f1d4985b52203754d80ce7cc0548220154a0d7e2d9da667d0ebb9ff78",
       "bytes": 5582
@@ -128,6 +224,26 @@
       "bytes": 6472
     },
     {
+      "path": "checks/release-0.10.12-final-failure.json",
+      "sha256": "f3b646dd394d0997216c05156a1877ad6b53214458456404c570238721711465",
+      "bytes": 10955
+    },
+    {
+      "path": "checks/release-0.10.12-first-failure.json",
+      "sha256": "5aff722e0adc86392660b4f40b63f48dc30b59c24d3266ff7463a944facedc3c",
+      "bytes": 3406
+    },
+    {
+      "path": "checks/release-0.10.12-preparation.json",
+      "sha256": "c0bd740ba33ae72394c1f7aa9ab6651fe937a7d3746ec69c93e075bcc4300cf2",
+      "bytes": 3108
+    },
+    {
+      "path": "checks/stable-release-0.10.12-started.json",
+      "sha256": "6501aed3af24a818b3d791040656f0da1cc329e00338c21879b553fa15022b52",
+      "bytes": 2698
+    },
+    {
       "path": "checks/stable-ui-validation-20261119.json",
       "sha256": "f14f0b85f9bf925106424a15d892dfa7f5ce82bea004dcaf2b886c61fa504c2f",
       "bytes": 3389
@@ -141,6 +257,81 @@
       "path": "checks/terminal-readability-preview-provenance.json",
       "sha256": "a9f0ef61101dcc16205af4b6cf1331fddc43f1ae324c342fe354a525255c12c9",
       "bytes": 2765
+    },
+    {
+      "path": "checks/user-wait-acceptance-history-20261119.json",
+      "sha256": "a01dbbdf1c7e81edcf972abb11c952c6e8844057fc8ee59e2ea2dfc244767a57",
+      "bytes": 9548
+    },
+    {
+      "path": "checks/user-wait-coordinator-source-review-20261119.json",
+      "sha256": "7675340cc3f2263c482f1ed08fee2967e059532f5e7104f87aa8f5eb01d2ab66",
+      "bytes": 4607
+    },
+    {
+      "path": "checks/user-wait-final-visual-review-20261119.json",
+      "sha256": "b997f54a31e10e34d9b916b9a3782f5c835d7c6c474b09b69b45bd32cb6ad481",
+      "bytes": 1243
+    },
+    {
+      "path": "checks/user-wait-footer-final-review-20261119.json",
+      "sha256": "9664cdb880996f66d96b103a213372fc8aafe29f9c473380896d68f9f71ab1d8",
+      "bytes": 5669
+    },
+    {
+      "path": "checks/user-wait-main-merge-equivalence.json",
+      "sha256": "6c13777cd747538e98770e07998499c4f6efa7ddc9f55b2ee03b1c74e7e229fe",
+      "bytes": 2475
+    },
+    {
+      "path": "checks/user-wait-pty-provenance-20261119.json",
+      "sha256": "fcdd19e3b15806d8d96c2a3d0279db9b30924e6a156d2cf1b25ea1726d36dc9c",
+      "bytes": 1294
+    },
+    {
+      "path": "checks/user-wait-pty-report-20261119.json",
+      "sha256": "8850f9ed93958df335eb968b78a2ef30b4ff7d2d7280d8dc7afe8139ea644f1d",
+      "bytes": 8950
+    },
+    {
+      "path": "checks/user-wait-pty-result-20261119.json",
+      "sha256": "12329d74a302356d252c1af7823991b6822d6d40a7f527615e9712e816f31661",
+      "bytes": 49
+    },
+    {
+      "path": "checks/wait-coordinator-validation-20261119.json",
+      "sha256": "1cfce0a7911a85c975775e8c77df3055bdfcfc1fc5334ce2e0d4654fd41c1201",
+      "bytes": 1263
+    },
+    {
+      "path": "checks/wait-local-final-build-20261119.json",
+      "sha256": "9685467cb52c40ea90cb7341e402cc2a97a03e5f74b23d8b039f55b3d35a6294",
+      "bytes": 8907
+    },
+    {
+      "path": "checks/wait-local-initial-validation-20261119.json",
+      "sha256": "8b368a01968894ad39ddfc6a5fbc0fda33473b096081dcd16c2c13fb94352b6d",
+      "bytes": 7151
+    },
+    {
+      "path": "checks/wait-local-pre-final-validation-20261119.json",
+      "sha256": "ce90fb3eabdfa939c41bdf8005d0e887c9bf7c0171bf7ba0e8048f89993f8871",
+      "bytes": 8057
+    },
+    {
+      "path": "checks/wait-ui-observation-regression-20261119.json",
+      "sha256": "65fa96bba394e86c5ba1ea45bf9b96b37aeb69d24c954222b4ace1ecf10160de",
+      "bytes": 434
+    },
+    {
+      "path": "checks/wait-user-build-compatibility-20261119.json",
+      "sha256": "918b85b529a17ac4a4ac566adb8c824a37d3bdc1e75e51c895fd05a524584c7a",
+      "bytes": 2174
+    },
+    {
+      "path": "checks/wait-user-main-merge-20261119.json",
+      "sha256": "cf3d36f05ff535a592ce488a916f66629cae84621906f672fcfe2bb193dddb44",
+      "bytes": 3522
     },
     {
       "path": "checks/ztui-frame-benchmark-20261119.json",
@@ -226,6 +417,26 @@
       "path": "images/read-activity-expanded-48.png",
       "sha256": "ad96d7f86192946b7f53afd553f5d8c11eee8bcfed8ef6b14ab02056064f4b97",
       "bytes": 82641
+    },
+    {
+      "path": "images/user-wait-active-120.png",
+      "sha256": "6d067c6906f9bfe327159e35be984fad5077677a259142307bf220b5bec53cb5",
+      "bytes": 32480
+    },
+    {
+      "path": "images/user-wait-inspect-120.png",
+      "sha256": "dd965544b7369c1fc44ee8ca88fa54e9921fe0465a311270f1588003dda0e2a0",
+      "bytes": 121200
+    },
+    {
+      "path": "images/user-wait-reconnected-48.png",
+      "sha256": "46d3f8610c3ca1116bdb1be30e6b610f0bfc82765542d2dd8fee72be869d504c",
+      "bytes": 20567
+    },
+    {
+      "path": "images/user-wait-timeout-48.png",
+      "sha256": "faad46f3d4991bfe01b77aceef6c589b26d32dbb65437b670e933ff020213260",
+      "bytes": 80657
     },
     {
       "path": "multi-session-routing-design.md",

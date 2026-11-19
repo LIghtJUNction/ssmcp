@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "status": "prepared_waiting_for_final_main_authorization",
+  "repository": "LIghtJUNction/ssmcp",
+  "target_tag": "v0.10.12",
+  "reviewed_source": {
+    "reviewed_source": "606ab07638352cf8e2bcb58aff3512ceeb0af757",
+    "package_version": "0.10.11",
+    "lock_versions": {
+      "ssmcp": "0.10.11",
+      "ztui-core": "0.1.2"
+    },
+    "files": {
+      ".github/workflows/bump.yml": "ee807b713dc3e73ab8f9eb1776bd0deb92acafcaed7e0708d926ff483ada4f9b",
+      ".github/workflows/release.yml": "2e833bff6ba26d73c9d0c305dd733044b32275e71e3abf884cad2491ee3699c7",
+      ".github/workflows/deploy-server.yml": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c",
+      ".github/workflows/ci.yml": "11c309d2117af7074cd7e6aceff7ccbc3a3fdea321ac5ae30600d95d33bf87f8",
+      "scripts/release.py": "8064e0e1784382f9e39abdfe3183d381171bf821b8c3c033fde3682847e2c721",
+      "scripts/deploy_release.py": "694e9d1cf7d4a77e80440f00d32c126acaf6c953540e832eb68058604c3bf5f2",
+      "scripts/deploy_entry.py": "c0ea157b0cdbca6732ad936803d96feb50398e05f55e4ce6c14fdff9289bf195"
+    }
+  },
+  "planned_workflow": {
+    "file": "bump.yml",
+    "ref": "main",
+    "inputs": {
+      "level": "patch",
+      "dry_run": "false",
+      "publish": "true"
+    },
+    "dispatch_count": 0,
+    "dispatch_transport": "Existing native gh authentication; currently exposed GitHub connector has no workflow-dispatch operation."
+  },
+  "expected_release_flow": [
+    "Bump Cargo.toml and Cargo.lock together on main",
+    "Create immutable v0.10.12 tag and dispatch release.yml for that exact tag",
+    "Run six-platform build and reusable CI checks",
+    "Verify both installed Linux server runtimes",
+    "Finalize manifests, checksums and workspace source packages",
+    "Publish GitHub release and crates as distinct jobs",
+    "Invoke deploy-server.yml with validated tag and source commit"
+  ],
+  "production_helper_readonly": {
+    "read_only": true,
+    "files": [
+      {
+        "component": "deploy-release",
+        "sha256": "694e9d1cf7d4a77e80440f00d32c126acaf6c953540e832eb68058604c3bf5f2",
+        "uid": 0,
+        "gid": 0,
+        "mode": "0o755"
+      },
+      {
+        "component": "deploy-entry",
+        "sha256": "c0ea157b0cdbca6732ad936803d96feb50398e05f55e4ce6c14fdff9289bf195",
+        "uid": 0,
+        "gid": 0,
+        "mode": "0o755"
+      }
+    ]
+  },
+  "publication_and_deployment_are_separate_results": true,
+  "final_source_head_authorized": false,
+  "ordinary_ci_dispatched": false,
+  "production_modified": false,
+  "old_failed_tag_unchanged": "v0.10.11",
+  "retries_performed": 0,
+  "post_deploy_verification": [
+    "Official deployment receipt: completed, version, commit, running_sha256 equals target_sha256",
+    "Published immutable manifest and archive identity",
+    "Independent running server executable version and SHA-256",
+    "Direct and public health plus fingerprinted portal asset SHA-256, size and MIME",
+    "No secrets, authorization codes or private server addresses in public report"
+  ],
+  "production_helper_matches_reviewed_source": true
+}

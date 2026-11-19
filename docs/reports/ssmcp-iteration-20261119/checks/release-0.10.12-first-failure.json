@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "status": "official_release_blocked",
+  "tag": "v0.10.12",
+  "source_commit": "c57fb6d7a25cb5967811180cfc77214ade63c0d2",
+  "source_parent": "571a9879d804b406d699e3f06ee439833922f5d0",
+  "run_id": 44601683739,
+  "run_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44601683739",
+  "job": {
+    "id": 135834772125,
+    "name": "checks / Client (windows-2025)",
+    "step": "Run cargo test --locked --lib --bin ssmcp --test release_client",
+    "passed": 899,
+    "failed": 2,
+    "ignored": 3
+  },
+  "failures": [
+    {
+      "test": "runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants",
+      "file": "src/runtime/native_plugins/files.rs",
+      "line": 285,
+      "error": "automatic private paste files are not supported on this platform yet",
+      "assessment": "Fixture assumes Unix-only automatic input import succeeds on Windows; common frontend and ACL assertions must remain covered."
+    },
+    {
+      "test": "runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener",
+      "file": "src/runtime/native_plugins/files.rs",
+      "line": 363,
+      "error": "Elapsed(())",
+      "assessment": "The post-shutdown TCP connection rejection did not complete within the fixture's one-second deadline on Windows. Source shows this is the network assertion, not the shutdown future."
+    }
+  ],
+  "source_blob": "b18c7c3ec2d05399b529bcc1d1780bffe30827c9",
+  "log_excerpt": [
+    "2026-11-19T19:50:24.9924639Z ---- runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener stdout ----",
+    "2026-11-19T19:50:24.9925164Z ",
+    "2026-11-19T19:50:24.9925846Z thread 'runtime::native_plugins::files::tests::native_files_cancellation_and_shutdown_release_owned_listener' (1604) panicked at src\\runtime\\native_plugins\\files.rs:363:14:",
+    "2026-11-19T19:50:24.9926629Z called `Result::unwrap()` on an `Err` value: Elapsed(())",
+    "2026-11-19T19:50:24.9927121Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+    "2026-11-19T19:50:24.9927472Z ",
+    "2026-11-19T19:50:24.9927833Z ---- runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants stdout ----",
+    "2026-11-19T19:50:24.9927833Z ---- runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants stdout ----",
+    "2026-11-19T19:50:24.9928168Z ",
+    "2026-11-19T19:50:24.9929258Z thread 'runtime::native_plugins::files::tests::native_files_frontends_share_state_without_extending_context_grants' (1732) panicked at src\\runtime\\native_plugins\\files.rs:285:14:",
+    "2026-11-19T19:50:24.9930902Z called `Result::unwrap()` on an `Err` value: \"Could not save the private input in .ssmcp/inputs: automatic private paste files are not supported on this platform yet; save the text inside the workspace and reference it with @path\"",
+    "2026-11-19T19:50:24.9931801Z ",
+    "2026-11-19T19:50:24.9931808Z ",
+    "2026-11-19T19:50:24.9931881Z failures:"
+  ],
+  "other_jobs_still_running": true,
+  "linux_release_builds": "Both completed successfully; these are Actions build artifacts, not a published release.",
+  "github_release_published": false,
+  "production_deployed": false,
+  "workflow_retried": false,
+  "tag_moved": false
+}

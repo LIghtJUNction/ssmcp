@@ -1,0 +1,224 @@
+{
+  "source": "ee0d5eb3adca945b26150fecfeb95e4935699351",
+  "input_heads": [
+    "27279596347871f5e15654770da1d7635a1a78fc",
+    "aa28385d325432af5e55606de44bad8e1793665d",
+    "fe7bb3e9e643985039b2fa64eddef90e1ee359be"
+  ],
+  "steps": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.101,
+      "test_results": []
+    },
+    {
+      "name": "lib-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 146.08,
+      "test_results": []
+    },
+    {
+      "name": "user-wait-coordinator",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "user_wait_",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 2.315,
+      "test_results": [
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 1337 filtered out; finished in 2.30s"
+      ]
+    },
+    {
+      "name": "steering",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "steering::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.731,
+      "test_results": [
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 1332 filtered out; finished in 0.73s"
+      ]
+    },
+    {
+      "name": "interface-all",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "client::interface::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 5.938,
+      "test_results": [
+        "test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 1295 filtered out; finished in 5.93s"
+      ]
+    },
+    {
+      "name": "notification",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "client::notification::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.051,
+      "test_results": [
+        "test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 1354 filtered out; finished in 0.04s"
+      ]
+    },
+    {
+      "name": "local-host",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "client::local::tests::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.016,
+      "test_results": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1360 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "name": "local-options",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "client::tests::local_options_do_not_select_or_persist_a_remote_account",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "oauth",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "oauth::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.624,
+      "test_results": [
+        "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 1330 filtered out; finished in 0.62s"
+      ]
+    },
+    {
+      "name": "http",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "http::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 2.073,
+      "test_results": [
+        "test result: ok. 29 passed; 0 failed; 1 ignored; 0 measured; 1333 filtered out; finished in 2.07s"
+      ]
+    },
+    {
+      "name": "terminal-all",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "client::terminal::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 16.095,
+      "test_results": [
+        "test result: ok. 232 passed; 0 failed; 1 ignored; 0 measured; 1130 filtered out; finished in 16.08s"
+      ]
+    },
+    {
+      "name": "runtime-all",
+      "command": [
+        "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+        "runtime::",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 0.555,
+      "test_results": [
+        "test result: ok. 41 passed; 0 failed; 1 ignored; 0 measured; 1321 filtered out; finished in 0.55s"
+      ]
+    },
+    {
+      "name": "client-build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "vt_snapshot"
+      ],
+      "exit_code": 0,
+      "seconds": 194.973,
+      "test_results": []
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 101,
+      "seconds": 81.491,
+      "test_results": []
+    }
+  ],
+  "binaries": {
+    "ssmcp-lib-tests": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/ssmcp-lib-tests",
+      "sha256": "6db030a3e92ee289022a2131c13661eb92bf29352bd1beb405ea54cb3fe2a077",
+      "size": 261354120
+    },
+    "bin/ssmcp": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/bin/ssmcp",
+      "sha256": "bacaf6d922223a50e559829ed71b7a0dca4b8cb986e67730d0ab8a791b5df39d",
+      "size": 180649952
+    },
+    "bin/ssmcpd": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/bin/ssmcpd",
+      "sha256": "a0adea19a5966589d9c1b3a5fdd5f634e3b0cc802217f313a403b3ecc6c65696",
+      "size": 134877280
+    },
+    "bin/examples/vt_snapshot": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/bin/examples/vt_snapshot",
+      "sha256": "de98418dd3f8c5c7f1b2b6861689e497517f3a9b3d827e7160990314d12e4a28",
+      "size": 6472160
+    },
+    "bin/code-mode.js": {
+      "path": "<native-repository>/.worktrees/plugin-two-layer-20261119/.local/frozen-user-wait-local-ee0d5eb3adca/bin/code-mode.js",
+      "sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+      "size": 41662
+    }
+  },
+  "scope": "Combined user wait, native UI and notification, Linux local host; no model calls",
+  "all_planned_gates_passed": false
+}

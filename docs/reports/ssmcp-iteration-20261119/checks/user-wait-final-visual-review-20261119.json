@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-19",
+  "source": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "method": "Root directly viewed all four actual ANSI/PTY rendered screenshots",
+  "images": [
+    {
+      "name": "user-wait-active-120.png",
+      "sha256": "6d067c6906f9bfe327159e35be984fad5077677a259142307bf220b5bec53cb5"
+    },
+    {
+      "name": "user-wait-inspect-120.png",
+      "sha256": "dd965544b7369c1fc44ee8ca88fa54e9921fe0465a311270f1588003dda0e2a0"
+    },
+    {
+      "name": "user-wait-timeout-48.png",
+      "sha256": "faad46f3d4991bfe01b77aceef6c589b26d32dbb65437b670e933ff020213260"
+    },
+    {
+      "name": "user-wait-reconnected-48.png",
+      "sha256": "46d3f8610c3ca1116bdb1be30e6b610f0bfc82765542d2dd8fee72be869d504c"
+    }
+  ],
+  "observations": [
+    "Active waiting footer remains visible beside a nonempty multiline draft",
+    "The /wait detail displays reason, exact IDs and notification results on real separate lines, without literal backslash-n text",
+    "Long exact IDs and timeout wording wrap at 48 columns; the complete status remains present",
+    "After reconnect, the unsubmitted draft and indentation remain visible"
+  ],
+  "synthetic_data": true,
+  "models_invoked": false,
+  "os_notifications_requested": false
+}

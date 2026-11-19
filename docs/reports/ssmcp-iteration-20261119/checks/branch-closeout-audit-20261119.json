@@ -1,0 +1,448 @@
+{
+  "schema_version": 2,
+  "repository": "LIghtJUNction/ssmcp",
+  "purpose": "Read-only branch closeout evidence; parent decides and performs any cleanup",
+  "observed_at": "2026-11-19T18:18:10.082624+00:00",
+  "read_only_audit": true,
+  "cargo_started": false,
+  "refs_deleted": [],
+  "worktrees_deleted": [],
+  "requires_matching_expected_head_at_action": true,
+  "cleanup_candidates": [
+    {
+      "branch": "feat/readable-request-queue-20261119",
+      "expected_head": "7d6a0036734621c9cb231c002b59570662247e52",
+      "pr": 82,
+      "merge_commit": "59136a02bd1859592c5ea6aff255d61d7b1c0f7e",
+      "evidence": "stable patch-id, binary full-index diff and every changed file blob match the actual squash; current head equals merged PR head; merge is in observed main"
+    },
+    {
+      "branch": "fix/reference-menu-mouse-20261119",
+      "expected_head": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa",
+      "pr": 88,
+      "merge_commit": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+      "evidence": "stable patch-id, binary full-index diff and every changed file blob match the actual squash; current head equals merged PR head; merge is in observed main"
+    },
+    {
+      "branch": "fix/owner-unlimited-quota-20261119",
+      "expected_head": "db1113208176b512fafd59e0f14b711b1cd29165",
+      "pr": 89,
+      "merge_commit": "d60ef8d29f8aa949d8fc90063148f8a76caaf7ba",
+      "evidence": "stable patch-id, binary full-index diff and every changed file blob match the actual squash; current head equals merged PR head; merge is in observed main"
+    },
+    {
+      "branch": "fix/cc-fixture-unique-directories-20261119",
+      "expected_head": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+      "pr": 92,
+      "merge_commit": "7438e615e2a5f4d777a499adffbda275ac09067b",
+      "evidence": "stable patch-id, binary full-index diff and every changed file blob match the actual squash; current head equals merged PR head; merge is in observed main"
+    },
+    {
+      "branch": "feat/force-send-listener-20261119",
+      "expected_head": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+      "pr": 93,
+      "merge_commit": "80e534c8aee62a5b77bc1816b95a0e33722ffc5f",
+      "evidence": "stable patch-id, binary full-index diff and every changed file blob match the actual squash; current head equals merged PR head; merge is in observed main"
+    },
+    {
+      "branch": "refactor/desktop-zplugin-20261119",
+      "expected_head": "f399425966bfeee6b147a9391ec440ecd0a51610",
+      "integrated_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+      "evidence": "exact ancestor of PR91 integration head; no component commits outside integration; current head unchanged; integration is an exact ancestor of main"
+    },
+    {
+      "branch": "refactor/native-plugin-core-20261119",
+      "expected_head": "455de1e0d96816026543b31e00be207c1d8922ed",
+      "integrated_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+      "evidence": "exact ancestor of PR91 integration head; no component commits outside integration; current head unchanged; integration is an exact ancestor of main"
+    },
+    {
+      "branch": "refactor/zplugin-native-host-20261119",
+      "expected_head": "bd9efdcd379b79594f15d7d6720f6bfea7d5477b",
+      "integrated_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+      "evidence": "exact ancestor of PR91 integration head; no component commits outside integration; current head unchanged; integration is an exact ancestor of main"
+    }
+  ],
+  "already_absent": [
+    {
+      "branch": "refactor/zplugin-files-20261119",
+      "last_reviewed_head": "43841f10ec50b34fc74ae7d3de57a9223ee6db4a",
+      "action": "none"
+    }
+  ],
+  "preserve": [
+    {
+      "branch": "integrate/native-plugins-20261119",
+      "head": "d4b0558a2cc89fee6cb8b314161a947073cc717f"
+    },
+    {
+      "branch": "perf/exec-guardian-address-space",
+      "head": "d45aa226b857a29efa41a3b46c36b78c73ecddda",
+      "reason": "PR87 rejected memory experiment; preserve evidence and branch"
+    },
+    {
+      "branch": "test/event-cache-memory-20261119",
+      "head": "31a923db11ed209fb308a055585b974908cf95ce",
+      "reason": "diagnostic only; preserve evidence and branch"
+    },
+    {
+      "scope": "all existing worktrees",
+      "action": "preserve"
+    }
+  ],
+  "pr91_explanation": {
+    "actual_merge_type": "two-parent merge",
+    "parents": [
+      "bbd43d5f77da833bb22e34c20a67b311de606fae",
+      "d4b0558a2cc89fee6cb8b314161a947073cc717f"
+    ],
+    "integrated_head_is_exact_ancestor_of_main": true,
+    "source_vs_first_parent_diff_difference": "Files implementation was already independently merged in PR90; source and landed PR91 first-parent diffs therefore need not have the same patch-id.",
+    "changed_file_blob_comparison": "All PR91 implementation file blobs agree; only Cargo.toml differs.",
+    "cargo_toml_difference": "diff --git a/Cargo.toml b/Cargo.toml\nindex 1060bc7..4fb21cc 100644\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1,6 +1,6 @@\n [package]\n name = \"ssmcp\"\n-version = \"0.10.10\"\n+version = \"0.10.11\"\n edition = \"2024\"\n rust-version = \"1.100\"\n description = \"Connect local tools and remote terminals through authenticated MCP sessions\""
+  },
+  "original_evidence": {
+    "schema_version": 1,
+    "observed_at": "2026-11-19T18:08:00.790737+00:00",
+    "repository": "LIghtJUNction/ssmcp",
+    "read_only": true,
+    "cargo_started": false,
+    "deleted_refs": [],
+    "deleted_worktrees": [],
+    "current_main": "ab416efb063674e53d70aefcbc86c1a7c23d21e5",
+    "pull_requests": [
+      {
+        "number": 82,
+        "branch": "feat/readable-request-queue-20261119",
+        "pr_head": "7d6a0036734621c9cb231c002b59570662247e52",
+        "merge_commit": "59136a02bd1859592c5ea6aff255d61d7b1c0f7e",
+        "merged_at": "2026-11-19T15:16:35Z",
+        "remote_head": "7d6a0036734621c9cb231c002b59570662247e52",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "dbacc142adbf226459cf920ee503090e94390415",
+        "source_merge_base": "8699401e6d595809d30781322dc4705c0559459b",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "a4cf8f1f85a6b3cab5d276742e8bc95edf00019f",
+          "diff_sha256": "df268961623f2bdde0c0119927626d3f0c6be7be9a09ddb7143f1993c6f830cf",
+          "diff_bytes": 41486
+        },
+        "landed_diff": {
+          "patch_id": "a4cf8f1f85a6b3cab5d276742e8bc95edf00019f",
+          "diff_sha256": "df268961623f2bdde0c0119927626d3f0c6be7be9a09ddb7143f1993c6f830cf",
+          "diff_bytes": 41486
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "scripts/e2e_canvas_logs.py",
+          "scripts/e2e_client_ui.py",
+          "scripts/e2e_composer.py",
+          "scripts/e2e_terminal_logout.py",
+          "src/client.rs",
+          "src/client/terminal/conversation.rs",
+          "src/client/terminal/conversation/queue.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      },
+      {
+        "number": 88,
+        "branch": "fix/reference-menu-mouse-20261119",
+        "pr_head": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa",
+        "merge_commit": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+        "merged_at": "2026-11-19T15:48:31Z",
+        "remote_head": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "59136a02bd1859592c5ea6aff255d61d7b1c0f7e",
+        "source_merge_base": "59136a02bd1859592c5ea6aff255d61d7b1c0f7e",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "fdab6fa658b3ac8ff66c91257298cc6b29f3409f",
+          "diff_sha256": "f1e2125091a1080de05bf53f7f7534264f8842e809be2145c01fa060e04c9aac",
+          "diff_bytes": 17562
+        },
+        "landed_diff": {
+          "patch_id": "fdab6fa658b3ac8ff66c91257298cc6b29f3409f",
+          "diff_sha256": "f1e2125091a1080de05bf53f7f7534264f8842e809be2145c01fa060e04c9aac",
+          "diff_bytes": 17562
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "scripts/e2e_at_completion.py",
+          "src/client/composer.rs",
+          "src/client/terminal/conversation.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      },
+      {
+        "number": 89,
+        "branch": "fix/owner-unlimited-quota-20261119",
+        "pr_head": "db1113208176b512fafd59e0f14b711b1cd29165",
+        "merge_commit": "d60ef8d29f8aa949d8fc90063148f8a76caaf7ba",
+        "merged_at": "2026-11-19T16:07:13Z",
+        "remote_head": "db1113208176b512fafd59e0f14b711b1cd29165",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "5c923c162815a2d4e9fe7e98bb524c8686d12970",
+        "source_merge_base": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "6573b880728a5069867ef240fa51fa01eaabb34f",
+          "diff_sha256": "6ba5940dbad412970741b49e7a7c9ddc64f933a49c03fecdeef1c8db12d85a2b",
+          "diff_bytes": 5897
+        },
+        "landed_diff": {
+          "patch_id": "6573b880728a5069867ef240fa51fa01eaabb34f",
+          "diff_sha256": "6ba5940dbad412970741b49e7a7c9ddc64f933a49c03fecdeef1c8db12d85a2b",
+          "diff_bytes": 5897
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "src/client/account/status.rs",
+          "src/client/account/status/tests.rs",
+          "src/portal/dashboard_view.rs",
+          "src/portal/view.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      },
+      {
+        "number": 92,
+        "branch": "fix/cc-fixture-unique-directories-20261119",
+        "pr_head": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+        "merge_commit": "7438e615e2a5f4d777a499adffbda275ac09067b",
+        "merged_at": "2026-11-19T16:35:44Z",
+        "remote_head": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "d312cfa8036e433d7861782b4d928cee2320bc85",
+        "source_merge_base": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "fa62d6943c9e1ea53571fae935a1f0f652fe9c56",
+          "diff_sha256": "6302e86ee40c97b8b58cf56e7d8c266d39970d854aa1d36dccddb114665790ad",
+          "diff_bytes": 2073
+        },
+        "landed_diff": {
+          "patch_id": "fa62d6943c9e1ea53571fae935a1f0f652fe9c56",
+          "diff_sha256": "6302e86ee40c97b8b58cf56e7d8c266d39970d854aa1d36dccddb114665790ad",
+          "diff_bytes": 2073
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "tests/cc_backend.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      },
+      {
+        "number": 93,
+        "branch": "feat/force-send-listener-20261119",
+        "pr_head": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+        "merge_commit": "80e534c8aee62a5b77bc1816b95a0e33722ffc5f",
+        "merged_at": "2026-11-19T17:27:02Z",
+        "remote_head": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "7438e615e2a5f4d777a499adffbda275ac09067b",
+        "source_merge_base": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "c309936c8f90e78ea5196a35649d1ff442b8edc1",
+          "diff_sha256": "ff14e8ee0a394fdeb269817423453384510383e11f10947abd1397178ff7aa68",
+          "diff_bytes": 86995
+        },
+        "landed_diff": {
+          "patch_id": "c309936c8f90e78ea5196a35649d1ff442b8edc1",
+          "diff_sha256": "ff14e8ee0a394fdeb269817423453384510383e11f10947abd1397178ff7aa68",
+          "diff_bytes": 86995
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "docs/force-send-listener.md",
+          "scripts/e2e.py",
+          "scripts/e2e_force_send.py",
+          "src/client/composer.rs",
+          "src/client/interface.rs",
+          "src/client/interface/listener.rs",
+          "src/client/steering.rs",
+          "src/client/terminal/conversation.rs",
+          "src/client/terminal/conversation/listener.rs",
+          "src/code_mode.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      },
+      {
+        "number": 91,
+        "branch": "integrate/native-plugins-20261119",
+        "pr_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+        "merge_commit": "d312cfa8036e433d7861782b4d928cee2320bc85",
+        "merged_at": "2026-11-19T16:26:57Z",
+        "remote_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+        "head_lease_matches_pr": true,
+        "post_pr_head_commits": 0,
+        "merge_parent": "bbd43d5f77da833bb22e34c20a67b311de606fae",
+        "source_merge_base": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+        "merge_parent_count": 2,
+        "source_diff": {
+          "patch_id": "4d9e966a028898f3dec8bd1fae8a73c9166240fc",
+          "diff_sha256": "e44e54f6fba7ac0a01c395120009c31aaaa657e736bf9ed8dfff5172f3a3b81b",
+          "diff_bytes": 141506
+        },
+        "landed_diff": {
+          "patch_id": "8f2e171dd885eb07aa65a69a79d1fc0a3902df30",
+          "diff_sha256": "b48d15bf80435eb124f00df0cfd2789ab60080c06f1c0d0d90e2d0edcceadd1a",
+          "diff_bytes": 128307
+        },
+        "stable_patch_id_equal": false,
+        "source_changed_paths": [
+          "Cargo.toml",
+          "docs/native-plugins.md",
+          "src/backend.rs",
+          "src/backend/rpc.rs",
+          "src/registry.rs",
+          "src/runtime.rs",
+          "src/runtime/capabilities.rs",
+          "src/runtime/native_host.rs",
+          "src/runtime/native_host/abi.rs",
+          "src/runtime/native_host/tests.rs",
+          "src/runtime/native_plugins/desktop.rs",
+          "src/runtime/native_plugins/files.rs",
+          "src/runtime/native_plugins/mod.rs",
+          "src/runtime/native_plugins/process.rs",
+          "src/runtime/native_plugins/process/lazy.rs"
+        ],
+        "scoped_tree_diff": [
+          {
+            "path": "Cargo.toml",
+            "head_blob": "1060bc779f2604f4bd60831dd98bfbf16a04651a",
+            "merged_blob": "4fb21cc2ca4edc6f93a4ed8f55fabc185d9c3cef"
+          }
+        ],
+        "scoped_tree_diff_count": 1
+      },
+      {
+        "number": 90,
+        "branch": "refactor/zplugin-files-20261119",
+        "pr_head": "43841f10ec50b34fc74ae7d3de57a9223ee6db4a",
+        "merge_commit": "2bb4f4ed9c959118ff8f7b1e0c21062ddb38ba53",
+        "merged_at": "2026-11-19T16:04:10Z",
+        "remote_head": null,
+        "head_lease_matches_pr": null,
+        "post_pr_head_commits": null,
+        "merge_parent": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+        "source_merge_base": "6510c2a2624ca0a656c3d14cd46e6771620d5955",
+        "merge_parent_count": 1,
+        "source_diff": {
+          "patch_id": "be6f7f4d2a02adeb3463178534b976bedd5f61cb",
+          "diff_sha256": "441c4e48c0e4c240363bdbf45fc6c886a368ab7e801880c81987b9de90e8f39c",
+          "diff_bytes": 13199
+        },
+        "landed_diff": {
+          "patch_id": "be6f7f4d2a02adeb3463178534b976bedd5f61cb",
+          "diff_sha256": "441c4e48c0e4c240363bdbf45fc6c886a368ab7e801880c81987b9de90e8f39c",
+          "diff_bytes": 13199
+        },
+        "stable_patch_id_equal": true,
+        "source_changed_paths": [
+          "src/runtime/native_plugins/files.rs"
+        ],
+        "scoped_tree_diff": [],
+        "scoped_tree_diff_count": 0
+      }
+    ],
+    "integration_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+    "integration_current_remote_head": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+    "integration_preserve": true,
+    "components": [
+      {
+        "branch": "refactor/desktop-zplugin-20261119",
+        "remote_head": "f399425966bfeee6b147a9391ec440ecd0a51610",
+        "branch_exists": true,
+        "examined_head": "f399425966bfeee6b147a9391ec440ecd0a51610",
+        "exact_ancestor_of_integrated_head": true,
+        "commits_not_in_integration": 0
+      },
+      {
+        "branch": "refactor/native-plugin-core-20261119",
+        "remote_head": "455de1e0d96816026543b31e00be207c1d8922ed",
+        "branch_exists": true,
+        "examined_head": "455de1e0d96816026543b31e00be207c1d8922ed",
+        "exact_ancestor_of_integrated_head": true,
+        "commits_not_in_integration": 0
+      },
+      {
+        "branch": "refactor/zplugin-native-host-20261119",
+        "remote_head": "bd9efdcd379b79594f15d7d6720f6bfea7d5477b",
+        "branch_exists": true,
+        "examined_head": "bd9efdcd379b79594f15d7d6720f6bfea7d5477b",
+        "exact_ancestor_of_integrated_head": true,
+        "commits_not_in_integration": 0
+      },
+      {
+        "branch": "refactor/zplugin-files-20261119",
+        "remote_head": null,
+        "branch_exists": false,
+        "examined_head": "43841f10ec50b34fc74ae7d3de57a9223ee6db4a",
+        "exact_ancestor_of_integrated_head": true,
+        "commits_not_in_integration": 0
+      }
+    ],
+    "preserve": [
+      "integrate/native-plugins-20261119",
+      "PR87 rejected guardian experiment branch",
+      "event-cache diagnostic branch",
+      "all existing worktrees"
+    ]
+  },
+  "final_remote_refresh": {
+    "observed_at": "2026-11-19T18:18:10.082624+00:00",
+    "heads": {
+      "main": "ab416efb063674e53d70aefcbc86c1a7c23d21e5",
+      "feat/readable-request-queue-20261119": "7d6a0036734621c9cb231c002b59570662247e52",
+      "fix/reference-menu-mouse-20261119": "302bd2b3e02b593aa6f6c04195fd26376b0c9ffa",
+      "fix/owner-unlimited-quota-20261119": "db1113208176b512fafd59e0f14b711b1cd29165",
+      "fix/cc-fixture-unique-directories-20261119": "0060b69d7f7b6feec47124794b390e375bcc33ab",
+      "feat/force-send-listener-20261119": "5d6f213298279716ca1e81eb04e44f3e63322fed",
+      "integrate/native-plugins-20261119": "d4b0558a2cc89fee6cb8b314161a947073cc717f",
+      "refactor/desktop-zplugin-20261119": "f399425966bfeee6b147a9391ec440ecd0a51610",
+      "refactor/native-plugin-core-20261119": "455de1e0d96816026543b31e00be207c1d8922ed",
+      "refactor/zplugin-native-host-20261119": "bd9efdcd379b79594f15d7d6720f6bfea7d5477b",
+      "refactor/zplugin-files-20261119": null,
+      "perf/exec-guardian-address-space": "d45aa226b857a29efa41a3b46c36b78c73ecddda",
+      "test/event-cache-memory-20261119": "31a923db11ed209fb308a055585b974908cf95ce",
+      "feat/native-wait-notifications-20261119": "ee39b59df4326f21be09abf85a57e06702e75411",
+      "feat/user-wait-ui-20261119": "4de90fd73c05c56e83b8533a532f7a04471e60a3"
+    },
+    "merges_in_main": {
+      "82": true,
+      "88": true,
+      "89": true,
+      "91": true,
+      "92": true,
+      "93": true
+    },
+    "pr91_parents": [
+      "bbd43d5f77da833bb22e34c20a67b311de606fae",
+      "d4b0558a2cc89fee6cb8b314161a947073cc717f"
+    ],
+    "pr91_integrated_exact_ancestor": true,
+    "pr91_cargo_toml_diff": "diff --git a/Cargo.toml b/Cargo.toml\nindex 1060bc7..4fb21cc 100644\n--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1,6 +1,6 @@\n [package]\n name = \"ssmcp\"\n-version = \"0.10.10\"\n+version = \"0.10.11\"\n edition = \"2024\"\n rust-version = \"1.100\"\n description = \"Connect local tools and remote terminals through authenticated MCP sessions\"",
+    "notification": {
+      "pr94_blob": "467085d70d6ac570a99dd54592924e379fc5d856",
+      "pr95_blob": "467085d70d6ac570a99dd54592924e379fc5d856",
+      "exists_in_main": false,
+      "pr94_is_ancestor_of95": true
+    },
+    "own_merge": {
+      "head": "6c6911a8479057a9f26d1a3f3a806830d2808539",
+      "index_tree": "9786176d3721f50dfb76d42eddc2f96e14cc921c",
+      "status": "M  README.md",
+      "merge_head": "ab416efb063674e53d70aefcbc86c1a7c23d21e5"
+    }
+  }
+}

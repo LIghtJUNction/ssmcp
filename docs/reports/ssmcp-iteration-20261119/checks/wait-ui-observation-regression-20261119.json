@@ -1,0 +1,8 @@
+{
+  "source": "ee0d5eb3adca945b26150fecfeb95e4935699351",
+  "lib_sha256": "6db030a3e92ee289022a2131c13661eb92bf29352bd1beb405ea54cb3fe2a077",
+  "exit_code": 0,
+  "seconds": 0.97,
+  "stdout": "\nrunning 1 test\ntest code_mode::tests::ui_observation_retains_source_audit_without_claiming_user_requirements ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1362 filtered out; finished in 0.02s\n\n",
+  "stderr": ""
+}

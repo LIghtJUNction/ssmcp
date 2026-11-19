@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-19",
+  "candidate_source": "a7f9077d92b093dbc90d1cd09cfb666fa55468af",
+  "image_sha256": "c9c260b3dd1e69ef27aa111b17c7a8f756d8b7f6caf0d835b029a8f6851365e1",
+  "method": "Root directly inspected the actual Chromium empty consent screenshot",
+  "observations": [
+    "Local-session title and readable line wrapping",
+    "Points to the current terminal /logs and one-use code",
+    "Explicitly requires no remote account or GitHub sign-in",
+    "No broken portal navigation in the footer",
+    "Empty form contains no live code or access token"
+  ],
+  "publication": "Screenshot kept out of the public report because it contains an actual OS username and local endpoint values; this review records the image hash without reproducing them."
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "repository": "LIghtJUNction/ssmcp",
+  "pr": 97,
+  "branch": "feat/wait-user-primitive-20261119",
+  "functional_checkpoint": "27279596347871f5e15654770da1d7635a1a78fc",
+  "head": "4f35eebc8f7fb18d25b2fde863b454ef3deb4c70",
+  "tree": "e8e4ea4380d49f6de48ef15c9701b178c85c520d",
+  "changes": [
+    {
+      "commit": "90813e22cb54fbf9f676597eff7dcb670febb921",
+      "path": "src/http.rs",
+      "scope": "pure syntax",
+      "description": "Combine nested binding if into an if-let chain; retain the exact owner/bind Boolean expression and rejection result."
+    },
+    {
+      "commit": "6c6911a8479057a9f26d1a3f3a806830d2808539",
+      "path": "tests/context_helpers.rs",
+      "scope": "test host compatibility",
+      "description": "Exhaustive HostRequest match explicitly rejects WaitUser with a contextual fixture error; no fake success or todo."
+    },
+    {
+      "commit": "0b0d6fa10cfde20176f28f9830c7e82422c56ced",
+      "parents": [
+        "6c6911a8479057a9f26d1a3f3a806830d2808539",
+        "ab416efb063674e53d70aefcbc86c1a7c23d21e5"
+      ],
+      "scope": "main synchronization",
+      "changed_paths": [
+        "README.md"
+      ],
+      "description": "Preserve owner's Chinese and English demo video links; no source changes."
+    },
+    {
+      "commit": "4f35eebc8f7fb18d25b2fde863b454ef3deb4c70",
+      "path": "src/http/user_wait.rs",
+      "scope": "test-only lint",
+      "description": "Remove exactly one redundant clone of Copy SteeringState from test Host::state()."
+    }
+  ],
+  "checks": {
+    "primary_rustfmt_check": "passed for the edited Rust files",
+    "host_request_match_scan": "Whole-repository native rg found the context helper fixture as the only missing explicit exhaustive WaitUser arm; production HTTP host and code_mode mocks already handle it.",
+    "native_merge_tree_verified": "0b0d6fa native index/tree matched GitHub 9786176d3721f50dfb76d42eddc2f96e14cc921c and worktree finalized clean before the last one-line test lint follow-up.",
+    "cargo_started_by_this_agent": false,
+    "final_parent_integration_validation": "pending; do not treat syntax checks as executed integration tests"
+  }
+}
