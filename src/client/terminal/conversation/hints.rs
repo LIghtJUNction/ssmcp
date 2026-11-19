@@ -57,12 +57,12 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
             "Loading… · Esc close",
         ],
         Hint::EmptyInput => [
-            "@ files · $ skills · / commands · Alt+↑/↓ input height · F1 help",
+            "↑ edit queued · @ files · $ skills · / commands · Alt+↑/↓ input height · F1 help",
             "@ files · $ skills · / commands",
             "@ files · $ skills · F1 help",
         ],
         Hint::Draft => [
-            "Enter send · Ctrl+J newline · Alt+↑/↓ input height · Tab browse",
+            "Enter send · Ctrl+J newline · Ctrl+C clear · Alt+↑/↓ input height · Tab browse",
             "Enter send · Ctrl+J newline · Tab browse",
             "Enter send · Tab browse",
         ],
