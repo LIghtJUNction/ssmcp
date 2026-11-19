@@ -153,6 +153,69 @@ class DeploymentContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "original_runners_changed"):
                 deploy.verify_original_runners(saved)
 
+    def asset_fixture(self, brand="favicon.svg", corrupt=False, legacy=False, wrong_mime=False):
+        bodies = {name: ("fixture " + name).encode() for name in deploy.CORE_ASSET_NAMES | {brand}}
+        urls = {name: "/account/assets/" + hashlib.sha256(body).hexdigest() + "/" + name for name, body in bodies.items()}
+        tags = [('<link rel="stylesheet" href="' + urls[name] + '">') if name.endswith(".css") else
+                ('<script src="' + urls[name] + '"></script>') for name in sorted(deploy.CORE_ASSET_NAMES)]
+        tags.append('<link rel="icon" href="' + urls[brand] + '">')
+        if legacy:
+            tags.append('<script src="/copy-command.js"></script>')
+        html = ("<body>" + "".join(tags) + "</body>").encode()
+        request = {"public_url": "https://example.test", "assets": {
+            name: {"sha256": hashlib.sha256(bodies[name]).hexdigest(), "bytes": len(bodies[name]),
+                   "content_types": deploy.asset_types(name)} for name in deploy.CORE_ASSET_NAMES}}
+        def http(_base, path, **options):
+            if path == "/":
+                return 200, html
+            if path == "/mcp":
+                return 401, b""
+            if path == "/account/admin":
+                return 303, b""
+            if path == "/.well-known/oauth-authorization-server":
+                return 200, b'{"issuer":"https://example.test"}'
+            name = next(name for name, url in urls.items() if url == path)
+            body = bodies[name]
+            if corrupt and name == brand:
+                body = b"x" + body[1:]
+            mime = "text/plain" if wrong_mime and name == brand else deploy.asset_types(name)[0]
+            return 200, body, {"content-type": mime}
+        return request, http
+
+    def test_brand_image_types_are_discovered_from_candidate_html(self):
+        for brand in ["favicon.svg", "favicon.png", "brand-mark.png", "brand-symbol.webp"]:
+            with self.subTest(brand=brand):
+                request, http = self.asset_fixture(brand)
+                with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=http):
+                    result = deploy.checks("http://127.0.0.1:8080", request)
+                self.assertIn(brand, request["assets"])
+                self.assertTrue(result["assets"][brand]["html_url_verified"])
+
+    def test_same_length_corrupt_brand_image_is_rejected(self):
+        request, http = self.asset_fixture("brand-mark.png", corrupt=True)
+        with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=http), \
+             self.assertRaisesRegex(RuntimeError, "asset_sha256_brand-mark.png"):
+            deploy.checks("http://127.0.0.1:8080", request)
+
+    def test_brand_image_mime_must_match(self):
+        request, http = self.asset_fixture("brand-mark.png", wrong_mime=True)
+        with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=http), \
+             self.assertRaisesRegex(RuntimeError, "asset_content_type_brand-mark.png"):
+            deploy.checks("http://127.0.0.1:8080", request)
+
+    def test_legacy_resource_is_rejected_even_with_all_fingerprinted_assets(self):
+        request, http = self.asset_fixture(legacy=True)
+        with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=http), \
+             self.assertRaisesRegex(RuntimeError, "unversioned_page_resource"):
+            deploy.checks("http://127.0.0.1:8080", request)
+
+    def test_asset_set_cannot_expand_after_stage(self):
+        request, http = self.asset_fixture("brand-mark.png")
+        request["assets_frozen"] = True
+        with mock.patch.object(deploy, "health"), mock.patch.object(deploy, "request", side_effect=http), \
+             self.assertRaisesRegex(RuntimeError, "page_asset_set_changed_after_stage"):
+            deploy.checks("http://127.0.0.1:8080", request)
+
     def simulate_switch(self, *, had_managed_unit, public_failure):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

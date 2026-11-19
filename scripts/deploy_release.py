@@ -28,7 +28,7 @@ SERVICE = "ssmcpd.service"
 BASE = Path("/var/lib/ssmcp-deployments")
 MANAGED_DROPIN = Path("/etc/systemd/system/ssmcpd.service.d/zzz-release.conf")
 REPOSITORY = "LIghtJUNction/ssmcp"
-ASSET_NAMES = {"favicon.svg", "portal.css", "portal-refresh.css", "traffic-meter.js", "client-install-copy.js", "copy-command.js"}
+CORE_ASSET_NAMES = {"portal.css", "portal-refresh.css", "traffic-meter.js", "client-install-copy.js", "copy-command.js"}
 LEGAL_PATHS = ("/legal/terms", "/legal/privacy", "/legal/refund")
 PROXY_CONFIG = "/etc/nginx/conf.d/ssmcp.lmm.best.conf"
 SANDBOX_PROPERTIES = ("User", "Group", "NoNewPrivileges", "PrivateTmp", "PrivateDevices", "ProtectKernelTunables", "ProtectControlGroups", "ProtectHome", "ProtectSystem", "ReadWritePaths", "RestrictAddressFamilies", "PrivateNetwork", "UMask")
@@ -37,6 +37,14 @@ SANDBOX_PROPERTIES = ("User", "Group", "NoNewPrivileges", "PrivateTmp", "Private
 def require(ok, name):
     if not ok:
         raise RuntimeError(name)
+
+
+def asset_types(name):
+    if name in CORE_ASSET_NAMES:
+        return ["text/css"] if name.endswith(".css") else ["text/javascript", "application/javascript"]
+    image = re.fullmatch(r"(?:brand|favicon)(?:-[a-z0-9]+)*\.(svg|png|webp)", name)
+    require(image is not None, "unexpected_asset_reference")
+    return [{"svg": "image/svg+xml", "png": "image/png", "webp": "image/webp"}[image[1]]]
 
 
 class StageCleanupDeferred(RuntimeError):
@@ -148,8 +156,8 @@ def request(base, path, payload=None, *, timeout=12, include_headers=False):
                      headers={"Content-Type": "application/json", "Cache-Control": "no-cache",
                               "Accept-Encoding": "identity"})
         response = conn.getresponse()
-        body = response.read(2_000_001)
-        require(len(body) <= 2_000_000, "response_exceeds_probe_limit")
+        body = response.read(8_388_609)
+        require(len(body) <= 8_388_608, "response_exceeds_probe_limit")
         if include_headers:
             return response.status, body, {key.lower(): value for key, value in response.getheaders()}
         return response.status, body
@@ -177,7 +185,7 @@ class Page(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
         self.assets, self.footers, self.pricing, self.policy_navs = {}, 0, 0, 0
-        self.links = set()
+        self.links, self.unversioned_resources = set(), set()
         self.feed(html.decode("utf-8"))
 
     def handle_starttag(self, tag, attributes):
@@ -191,10 +199,15 @@ class Page(HTMLParser):
                 self.links.add(value)
             if value.startswith("/account/assets/"):
                 match = re.fullmatch(r"/account/assets/([0-9a-f]{64})/([a-z0-9.-]+)", value)
-                require(match is not None and match[2] in ASSET_NAMES, "unexpected_asset_reference")
+                require(match is not None, "unexpected_asset_reference")
                 name = match[2]
+                asset_types(name)
                 require(name not in self.assets or self.assets[name] == value, "conflicting_asset_reference")
                 self.assets[name] = value
+            elif value and ((key == "src" and tag in ["script", "img"]) or
+                            (key == "href" and tag == "link" and
+                             set(attributes.get("rel", "").split()) & {"stylesheet", "icon"})):
+                self.unversioned_resources.add(value)
 
 
 def proxy_fragment(html):
@@ -226,13 +239,21 @@ def checks(base, r, *, public=False):
     status, html = request(base, "/")
     require(status == 200, "homepage")
     page = Page(html)
-    require(set(page.assets) == ASSET_NAMES, "six_fingerprinted_assets_required")
+    require(not page.unversioned_resources, "unversioned_page_resource")
+    require(CORE_ASSET_NAMES.issubset(page.assets) and set(page.assets) - CORE_ASSET_NAMES,
+            "core_and_brand_assets_required")
+    if r.get("assets_frozen"):
+        require(set(page.assets) == set(r["assets"]), "page_asset_set_changed_after_stage")
     asset_checks = {}
     for name, url in sorted(page.assets.items()):
-        expected = r["assets"][name]
-        require(url == "/account/assets/" + expected["sha256"] + "/" + name, "html_asset_digest_" + name)
         status, body, headers = request(base, url, include_headers=True)
         require(status == 200, "asset_status_" + name)
+        if name not in r["assets"]:
+            require(not public and not r.get("assets_frozen") and name not in CORE_ASSET_NAMES,
+                    "asset_not_verified_in_stage")
+            r["assets"][name] = {"sha256": url.split("/")[3], "bytes": len(body), "content_types": asset_types(name)}
+        expected = r["assets"][name]
+        require(url == "/account/assets/" + expected["sha256"] + "/" + name, "html_asset_digest_" + name)
         require(len(body) == expected["bytes"], "asset_length_" + name)
         require(hashlib.sha256(body).hexdigest() == expected["sha256"], "asset_sha256_" + name)
         mime = headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -436,6 +457,7 @@ def apply(path):
         receipt.update(target_created=created)
         checkpoint("isolated_stage")
         receipt["stage_checks"] = stage(new, r)
+        r["assets_frozen"] = True
         checkpoint("recheck_production_lease")
         require(same_lease(r["before"], snapshot()), "production_changed_after_stage")
         require(all(Path(p).name < dropin.name for p in r["before"]["units"]
@@ -635,10 +657,9 @@ def prepare(intent, folder):
     source_runner = fetch("https://raw.githubusercontent.com/" + REPOSITORY + "/" + commit + "/src/code_mode.js", 2_097_152)
     require(sha(folder / "runner.js") == hashlib.sha256(source_runner).hexdigest(), "release_runner_source_mismatch")
     assets = {}
-    for name in sorted(ASSET_NAMES):
+    for name in sorted(CORE_ASSET_NAMES):
         data = fetch("https://raw.githubusercontent.com/" + REPOSITORY + "/" + commit + "/src/portal/" + name, 2_097_152)
-        types = ["image/svg+xml"] if name.endswith(".svg") else ["text/css"] if name.endswith(".css") else ["text/javascript", "application/javascript"]
-        assets[name] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "content_types": types}
+        assets[name] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "content_types": asset_types(name)}
     before = snapshot()
     current_version = run([before["exe"], "--version"])
     match = re.fullmatch(r"ssmcpd ([0-9]+)\.([0-9]+)\.([0-9]+)", current_version)
