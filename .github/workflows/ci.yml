@@ -78,7 +78,6 @@ jobs:
           shellcheck scripts/install.sh
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
-          python3 scripts/test_portal_ssh.py
           python3 scripts/test_installer_download_bounds.py
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode

@@ -161,8 +161,6 @@ def apply(changes, base, checkpoint_root, runner=run, health=probe, public_healt
         health(base)
         if public_health:
             public_health()
-        runner(['systemctl', 'enable', '--now', 'ssmcp-portal-ssh.timer'])
-        runner(['systemctl', 'start', 'ssmcp-portal-ssh.service'])
         disable_legacy(runner)
         return 'unchanged'
     checkpoint_root.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -191,8 +189,6 @@ def apply(changes, base, checkpoint_root, runner=run, health=probe, public_healt
             runner(['systemctl', 'enable', '--now', 'nginx.service'])
         if public_health:
             public_health()
-        runner(['systemctl', 'enable', '--now', 'ssmcp-portal-ssh.timer'])
-        runner(['systemctl', 'start', 'ssmcp-portal-ssh.service'])
         disable_legacy(runner)
         return 'configured'
     except Exception:

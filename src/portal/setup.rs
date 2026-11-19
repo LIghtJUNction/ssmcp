@@ -3,8 +3,8 @@
 //! are exposed, persisted in grants, or accepted by the setup API.
 
 use super::{
-    DigestKey, LOGIN_TTL, Portal, Problem, Session, digest, form, only, parameters, parse_key,
-    random, set_cookie, start_login, store::Account, valid_secret, view,
+    DigestKey, LOGIN_TTL, Portal, Problem, Session, digest, form, only, parameters, random,
+    set_cookie, start_login, store::Account, valid_secret, view,
 };
 use crate::broker::Broker;
 use axum::{
@@ -48,9 +48,6 @@ struct Grant {
     expires: Instant,
     decision: Decision,
     last_poll: Option<Instant>,
-    registered_fingerprint: Option<String>,
-    registration_saved: bool,
-    client_login: bool,
     login_issued: bool,
 }
 #[derive(Clone)]
@@ -80,7 +77,7 @@ impl ReturnTo {
         };
         if let Some(grant) = grant {
             let mut grant = grant.lock().await;
-            if grant.client_login && matches!(grant.decision, Decision::Pending) {
+            if matches!(grant.decision, Decision::Pending) {
                 grant.decision = Decision::Failed(problem);
             }
         }
@@ -158,9 +155,6 @@ impl SetupState {
                     expires,
                     decision: Decision::Pending,
                     last_poll: None,
-                    registered_fingerprint: None,
-                    registration_saved: false,
-                    client_login: false,
                     login_issued: false,
                 })),
             },
@@ -171,7 +165,7 @@ impl SetupState {
     fn by_device(&mut self, secret: &str) -> Result<Option<Arc<AsyncMutex<Grant>>>, ApiError> {
         if !valid_secret(secret) {
             return Err(ApiError::invalid(
-                "device_code must be the secret returned by setup/start",
+                "device_code must be the secret returned by client/login/start",
             ));
         }
         self.prune();
@@ -202,23 +196,6 @@ impl Grant {
             Err(ApiError::expired())
         } else {
             Ok(())
-        }
-    }
-    fn owner(&self) -> Result<String, ApiError> {
-        self.alive()?;
-        match &self.decision {
-            Decision::Failed(problem) => Err((*problem).into()),
-            Decision::Authorized(owner) => Ok(owner.clone()),
-            Decision::Pending => Err(ApiError::new(
-                StatusCode::UNAUTHORIZED,
-                "authorization_required",
-                "Approve this computer in the browser before registering a key.",
-            )),
-            Decision::Denied => Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "access_denied",
-                "The browser denied this setup request.",
-            )),
         }
     }
     fn decide(&mut self, owner: &str, allow: bool) -> Result<(), ApiError> {
@@ -354,12 +331,15 @@ impl From<Problem> for ApiError {
                 "key_limit",
                 "This account has reached its SSH public key limit.",
             ),
+            #[cfg(test)]
             Problem::Duplicate => Self::new(
                 StatusCode::CONFLICT,
                 "key_already_registered",
                 "This setup request already registered another public key.",
             ),
-            Problem::NotFound | Problem::SessionNotFound => Self::expired(),
+            #[cfg(test)]
+            Problem::NotFound => Self::expired(),
+            Problem::SessionNotFound => Self::expired(),
             Problem::Storage
             | Problem::Disabled
             | Problem::ManagementDisabled
@@ -444,25 +424,9 @@ async fn body<T: serde::de::DeserializeOwned>(
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Start {
-    client_name: String,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Device {
     device_code: String,
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Register {
-    device_code: String,
-    public_key: String,
-    label: String,
-}
-fn public_account(account: Account) -> Value {
-    json!({"github_login":account.github_login,"username":account.username,"keys":account.keys})
-}
-
 pub(super) fn routes() -> Router<Arc<Broker>> {
     Router::new()
         .route(
@@ -479,16 +443,6 @@ pub(super) fn routes() -> Router<Arc<Broker>> {
         )
         .route("/setup", get(page))
         .route("/setup/authorize", post(authorize))
-        .route("/api/setup/start", post(start).fallback(method_not_allowed))
-        .route("/api/setup/poll", post(poll).fallback(method_not_allowed))
-        .route(
-            "/api/setup/key",
-            post(register).fallback(method_not_allowed),
-        )
-        .route(
-            "/api/setup/cancel",
-            post(cancel).fallback(method_not_allowed),
-        )
 }
 
 async fn method_not_allowed() -> ApiError {
@@ -499,174 +453,6 @@ async fn method_not_allowed() -> ApiError {
     )
 }
 
-async fn start(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    enabled(&broker)?;
-    let request: Start = body(request, &broker.public_url).await?;
-    let name = request.client_name.trim();
-    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
-        return Err(ApiError::invalid(
-            "client_name must contain 1–80 UTF-8 bytes without control characters.",
-        ));
-    }
-    let (device_code, user_code) = {
-        let mut state = lock(&broker.portal)?;
-        state.charge("start", 60)?;
-        state.issue(name.into())?
-    };
-    let uri = format!(
-        "{}/setup?code={user_code}",
-        broker.public_url.trim_end_matches('/')
-    );
-    Ok(Json(json!({
-        "device_code":device_code,"user_code":user_code,
-        "verification_uri_complete":uri,"expires_in":TTL.as_secs(),"interval":POLL_INTERVAL.as_secs()
-    })))
-}
-async fn poll(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    enabled(&broker)?;
-    let request: Device = body(request, &broker.public_url).await?;
-    let grant = {
-        let mut state = lock(&broker.portal)?;
-        state.charge("poll", 18000)?;
-        state.by_device(&request.device_code)?
-    };
-    let Some(grant) = grant else {
-        return Ok(Json(json!({"status":"expired"})));
-    };
-    let mut grant = grant.lock().await;
-    if grant.client_login {
-        return Err(ApiError::invalid("This grant is only for client login."));
-    }
-    if grant.alive().is_err() {
-        return Ok(Json(json!({"status":"expired"})));
-    }
-    let now = Instant::now();
-    if grant
-        .last_poll
-        .is_some_and(|previous| now.saturating_duration_since(previous) < POLL_INTERVAL)
-    {
-        return Err(ApiError::rate(POLL_INTERVAL.as_secs()));
-    }
-    grant.last_poll = Some(now);
-    match &grant.decision {
-        Decision::Failed(problem) => Err((*problem).into()),
-        Decision::Pending => Ok(Json(json!({"status":"pending"}))),
-        Decision::Denied => Ok(Json(json!({"status":"denied"}))),
-        Decision::Authorized(owner) => {
-            let owner = owner.clone();
-            let account = broker
-                .portal
-                .storage(move |store| store.account(&owner))
-                .await?;
-            Ok(Json(
-                json!({"status":"authorized","account":public_account(account)}),
-            ))
-        }
-    }
-}
-async fn register(
-    State(broker): State<Arc<Broker>>,
-    request: Request,
-) -> Result<Json<Value>, ApiError> {
-    enabled(&broker)?;
-    let request: Register = body(request, &broker.public_url).await?;
-    let key = parse_key(&request.public_key, &request.label)?;
-    let grant = {
-        let mut state = lock(&broker.portal)?;
-        state.charge("key", 1000)?;
-        state
-            .by_device(&request.device_code)?
-            .ok_or_else(ApiError::expired)?
-    };
-    let mut grant = grant.lock().await;
-    if grant.client_login {
-        return Err(ApiError::invalid("This grant is only for client login."));
-    }
-    let owner = grant.owner()?;
-    if grant
-        .registered_fingerprint
-        .as_ref()
-        .is_some_and(|existing| existing != &key.fingerprint)
-    {
-        return Err(Problem::Duplicate.into());
-    }
-    if grant.registered_fingerprint.is_none() {
-        broker
-            .portal
-            .browser
-            .lock()
-            .map_err(|_| ApiError::unavailable())?
-            .charge(format!("setup:key:{owner}"), 20)?;
-        // Reserve before storage I/O. Cancellation/ambiguous durability never
-        // grants permission to try a second different public key.
-        grant.registered_fingerprint = Some(key.fingerprint.clone());
-    }
-    // The per-grant async mutex serializes registration with cancel/consent.
-    // The store closure rechecks the owner's keys atomically with persistence.
-    let already_saved = grant.registration_saved;
-    let identity = broker.portal.identity_for_subject(owner.clone()).await?;
-    if !already_saved {
-        broker
-            .portal
-            .record_audit(
-                Some(&identity),
-                crate::history::AuditAction::KeyAdded,
-                crate::history::AuditOutcome::Pending,
-            )
-            .await?;
-    }
-    let result = broker
-        .portal
-        .storage(move |store| {
-            let account = store.account(&owner)?;
-            if let Some(existing) = account
-                .keys
-                .iter()
-                .find(|stored| stored.fingerprint == key.fingerprint)
-            {
-                if existing.public_key != key.public_key {
-                    return Err(Problem::Invalid);
-                }
-                return Ok(account);
-            }
-            if already_saved {
-                return Err(Problem::NotFound);
-            }
-            store.add(&owner, key)?;
-            store.account(&owner)
-        })
-        .await;
-    if result.is_ok() {
-        // Preserve idempotency even if the completion audit cannot be written.
-        grant.registration_saved = true;
-    }
-    if !already_saved {
-        broker
-            .portal
-            .record_audit(
-                Some(&identity),
-                crate::history::AuditAction::KeyAdded,
-                match &result {
-                    Ok(_) => crate::history::AuditOutcome::Success,
-                    Err(Problem::Storage | Problem::Busy) => crate::history::AuditOutcome::Error,
-                    Err(_) => crate::history::AuditOutcome::Denied,
-                },
-            )
-            .await?;
-    }
-    let account = result.map_err(|problem| if problem == Problem::NotFound {
-        ApiError::new(StatusCode::CONFLICT, "key_registration_revoked", "This grant already saved its key, which has since been removed. Start a new setup request to register it again.")
-    } else { problem.into() })?;
-    Ok(Json(
-        json!({"status":"saved","account":public_account(account)}),
-    ))
-}
 async fn cancel(
     State(broker): State<Arc<Broker>>,
     request: Request,
@@ -723,46 +509,6 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
-fn consent_page(name: &str, code: &str, csrf: &str, account: &Account) -> String {
-    view::page(
-        "连接这台电脑",
-        &format!(
-            "<section class=card><p class=eyebrow>SSMCP · COMPUTER USE</p><h1>连接这台电脑</h1>\
-        <p>正在为 <strong>{}</strong> 设置连接。</p><p>请确认下面的代码与你刚启动的终端一致：</p>\
-        <pre aria-label=\"连接确认代码\">{}</pre><p>GitHub 账户：<strong>{}</strong></p>\
-        <p>允许后，这台电脑可以读取你账户中的 SSH 公钥，并登记一把新的 Ed25519 公钥。私钥始终保留在电脑上。</p>\
-        <p>只批准你自己刚发起的请求。不要批准聊天、邮件或其他人发来的代码。</p>\
-        <form method=post action=\"/setup/authorize\"><input type=hidden name=\"csrf\" value=\"{}\">\
-        <input type=hidden name=\"code\" value=\"{}\">\
-        <button class=button type=submit name=\"decision\" value=\"allow\">允许连接并登记公钥</button>\
-        <button class=secondary type=submit name=\"decision\" value=\"deny\">拒绝</button></form></section>",
-            escape(name),
-            escape(code),
-            escape(&account.github_login),
-            escape(csrf),
-            escape(code)
-        ),
-    )
-}
-fn completed_page(allowed: bool) -> String {
-    let (title, message) = if allowed {
-        (
-            "已允许这台电脑",
-            "请返回终端继续。客户端会检查已有 SSH 公钥，完成本机连接配置。",
-        )
-    } else {
-        (
-            "已拒绝连接",
-            "这次请求不能再读取账户信息或登记公钥。需要连接时，请从终端重新开始。",
-        )
-    };
-    view::page(
-        title,
-        &format!(
-            "<section class=card><p class=eyebrow>SSMCP · COMPUTER USE</p><h1>{title}</h1><p>{message}</p><a class=button href=/>查看账户</a></section>"
-        ),
-    )
-}
 async fn page(
     State(broker): State<Arc<Broker>>,
     RawQuery(query): RawQuery,
@@ -786,13 +532,12 @@ async fn page_inner(
         state.charge("page", 600)?;
         state.by_code(&values["code"])?
     };
-    let (name, decision, client_login, requested_username) = {
+    let (name, decision, requested_username) = {
         let grant = grant.lock().await;
         grant.alive()?;
         (
             grant.client_name.clone(),
             grant.decision.clone(),
-            grant.client_login,
             grant.requested_username.clone(),
         )
     };
@@ -800,12 +545,7 @@ async fn page_inner(
         return Err((*problem).into());
     }
     if matches!(decision, Decision::Denied) {
-        return Ok(Html(if client_login {
-            client_completed_page(false)
-        } else {
-            completed_page(false)
-        })
-        .into_response());
+        return Ok(Html(client_completed_page(false)).into_response());
     }
     let (browser, csrf, subject, new_cookie) = browser_session(&broker.portal, headers)?;
     if let Decision::Authorized(owner) = decision {
@@ -816,12 +556,7 @@ async fn page_inner(
                 "This setup request has already been approved by its account owner.",
             ));
         }
-        return Ok(Html(if client_login {
-            client_completed_page(true)
-        } else {
-            completed_page(true)
-        })
-        .into_response());
+        return Ok(Html(client_completed_page(true)).into_response());
     }
     if subject.is_none() {
         let mut response = start_login(broker, browser, Some(return_to))?;
@@ -844,17 +579,13 @@ async fn page_inner(
             return Err(problem.into());
         }
     };
-    Ok(Html(if client_login {
-        client_consent_page(
-            &name,
-            &values["code"],
-            &csrf,
-            &account,
-            requested_username.as_deref(),
-        )
-    } else {
-        consent_page(&name, &values["code"], &csrf, &account)
-    })
+    Ok(Html(client_consent_page(
+        &name,
+        &values["code"],
+        &csrf,
+        &account,
+        requested_username.as_deref(),
+    ))
     .into_response())
 }
 async fn authorize(State(broker): State<Arc<Broker>>, request: Request) -> Response {
@@ -954,7 +685,6 @@ async fn client_start(
     };
     {
         let mut grant = grant.lock().await;
-        grant.client_login = true;
         grant.requested_username = username.clone();
     }
     let base = broker.public_url.trim_end_matches('/');
@@ -981,9 +711,6 @@ async fn client_poll(
         return Ok(Json(json!({"status":"expired"})));
     };
     let mut grant = grant.lock().await;
-    if !grant.client_login {
-        return Err(ApiError::invalid("This grant is only for SSH setup."));
-    }
     if grant.alive().is_err() || grant.login_issued {
         return Ok(Json(json!({"status":"expired"})));
     }
