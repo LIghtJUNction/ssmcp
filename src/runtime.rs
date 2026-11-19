@@ -1,18 +1,18 @@
 //! Registry-driven native calls and utilities scoped to one authenticated connection.
 mod capabilities;
 pub mod hooks;
-mod plugins;
 pub(crate) mod native_host;
 pub(crate) mod native_plugins;
+mod plugins;
 use crate::catalog::{self, ToolDescriptor};
-use native_host::{ConstructorContext, Definition, NativeHost, NativePlugin};
-use native_plugins::{desktop::Desktop, files::Files};
 use crate::{
     backend::{self, Backend, events::EventLog},
     output::OutputStore,
     registry::{Provider, RegisteredTool, Registry},
     wire::Operation,
 };
+use native_host::{ConstructorContext, Definition, NativeHost, NativePlugin};
+use native_plugins::{desktop::Desktop, files::Files};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -308,11 +308,14 @@ impl Runtime {
         };
         let files = Files::new(&constructor)?;
         let desktop = Desktop::new(&constructor)?;
-        let native = NativeHost::new(registry.clone(), vec![
-            Definition::new(backend.clone()),
-            Definition::new(files.clone()),
-            Definition::new(desktop.clone()),
-        ])?;
+        let native = NativeHost::new(
+            registry.clone(),
+            vec![
+                Definition::new(backend.clone()),
+                Definition::new(files.clone()),
+                Definition::new(desktop.clone()),
+            ],
+        )?;
         let plugins = plugins::Plugins::new(root, registry.clone());
         registry.replace(Provider::Client, capabilities::tools())?;
         for (provider, tools) in native.catalogs()? {
@@ -692,15 +695,16 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        let (native, plugins) = tokio::join!(
-            self.native.shutdown(),
-            self.plugins.shutdown(),
-        );
+        let (native, plugins) = tokio::join!(self.native.shutdown(), self.plugins.shutdown(),);
         for (plugin, outcome) in native {
             if let Err(error) = outcome {
                 // Keep the established Computer cleanup category while retaining
                 // the exact plugin identity for other failures.
-                let provider = if plugin == Desktop::ID { "computer" } else { &plugin };
+                let provider = if plugin == Desktop::ID {
+                    "computer"
+                } else {
+                    &plugin
+                };
                 self.audit.push(json!({
                     "type":"ssmcp.control.cleanup_failed",
                     "provider":provider,
@@ -1090,4 +1094,3 @@ mod tests {
         );
     }
 }
-
