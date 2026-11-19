@@ -16,6 +16,7 @@ const MAX_SOURCE_BYTES: usize = 64 * 1024;
 #[derive(Clone, Debug)]
 struct Call {
     tool: String,
+    attribution: Option<crate::wire::ControlAttribution>,
     finished: bool,
     success: Option<bool>,
     error: Option<String>,
@@ -67,6 +68,10 @@ impl Entry {
                 .values()
                 .map(|call| {
                     call.tool.len()
+                        + call
+                            .attribution
+                            .as_ref()
+                            .map_or(0, crate::wire::ControlAttribution::bytes)
                         + call.error.as_ref().map_or(0, String::len)
                         + call.job_id.as_ref().map_or(0, String::len)
                         + call.state.as_ref().map_or(0, String::len)
@@ -80,7 +85,7 @@ impl Entry {
             "run_id":self.run_id,"controller":self.controller,"timestamp_ms":self.timestamp_ms,"status":self.status(),
             "success":self.success,"error":self.error,"duration_ms":self.duration_ms,"timed_out":self.timed_out,
             "code_bytes":self.code.len(),"truncated":self.truncated,
-            "calls":self.calls.iter().map(|(id,call)| json!({"request_id":id,"tool":call.tool,"finished":call.finished,"success":call.success,"error":call.error,"duration_ms":call.duration_ms,"exit_code":call.exit_code,"job_id":call.job_id,"state":call.state})).collect::<Vec<_>>()
+            "calls":self.calls.iter().map(|(id,call)| json!({"request_id":id,"tool":call.tool,"attribution":call.attribution,"finished":call.finished,"success":call.success,"error":call.error,"duration_ms":call.duration_ms,"exit_code":call.exit_code,"job_id":call.job_id,"state":call.state})).collect::<Vec<_>>()
         })
     }
 }
@@ -219,6 +224,13 @@ impl AuditView {
                 {
                     let call = entry.calls.entry(request_id).or_insert_with(|| Call {
                         tool: String::new(),
+                        // The first event fixes attribution for this operation;
+                        // later agent binding in the run cannot rewrite old calls.
+                        attribution: serde_json::from_value::<crate::wire::ControlAttribution>(
+                            value["attribution"].clone(),
+                        )
+                        .ok()
+                        .filter(|attribution| attribution.validate().is_ok()),
                         finished: false,
                         success: None,
                         error: None,
@@ -372,6 +384,7 @@ impl AuditView {
                     "model":controller.and_then(|controller|controller.model.as_deref()).unwrap_or("Model unknown"),
                     "role":"observed call","status":entry.status(),"source":source,
                     "tool":call.map(|call|call.tool.as_str()).unwrap_or("code_mode"),
+                    "attribution":call.and_then(|call|call.attribution.as_ref()),
                     "active":entry.running
                 })
             })
@@ -554,7 +567,38 @@ impl AuditView {
             width,
             ui,
         ));
-        let lines = source_rows(&entry.code, width);
+        let mut lines = Vec::new();
+        for (id, call) in &entry.calls {
+            lines.push(vec![(format!("#{id} · {}", call.tool), "heading")]);
+            if let Some(attribution) = &call.attribution {
+                lines.push(vec![(
+                    format!("Account · {}", attribution.account.label()),
+                    "foreground",
+                )]);
+                lines.push(vec![(
+                    match &attribution.agent {
+                        Some(agent) => format!("Agent · {} · {}", agent.id, agent.name),
+                        None => "Agent · not bound for this operation".into(),
+                    },
+                    "muted",
+                )]);
+                if let Some(owner) = &attribution.owner {
+                    lines.push(vec![(
+                        format!("Registered owner · {}", owner.label()),
+                        "muted",
+                    )]);
+                }
+            } else {
+                lines.push(vec![(
+                    "Account · unverified; agent unavailable".into(),
+                    "muted",
+                )]);
+            }
+        }
+        if !entry.calls.is_empty() {
+            lines.push(vec![("Source".into(), "heading")]);
+        }
+        lines.extend(source_rows(&entry.code, width));
         let body = height.saturating_sub(rows.len());
         self.scroll_limit
             .set(lines.len().saturating_sub(body.max(1)));
@@ -698,6 +742,34 @@ fn source_rows(code: &str, width: usize) -> Vec<Spans> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_attribution_is_per_operation_and_survives_completion() {
+        let mut view = AuditView::default();
+        let attribution = json!({"account":{"provider":"github","subject":"456","login":"bob"},
+            "owner":{"provider":"github","subject":"123","login":"alice"},
+            "agent":{"id":format!("agent_{}", "a".repeat(32)),"name":"worker"}});
+        view.ingest(
+            &json!({"type":"ssmcp.code_mode","phase":"started","run_id":"run","code":"return 1;"}),
+        );
+        view.ingest(&json!({"type":"ssmcp.code_mode","phase":"call-started","run_id":"run","request_id":1,"tool":"ssmcp.exec.start","attribution":attribution}));
+        view.ingest(&json!({"type":"ssmcp.code_mode","phase":"call-finished","run_id":"run","request_id":1,"job_id":"job-fixture","success":true}));
+        view.ingest(&json!({"type":"ssmcp.code_mode","phase":"call-started","run_id":"run","request_id":2,"tool":"ssmcp.exec.read","attribution":null}));
+        let snapshot = view.snapshot();
+        assert_eq!(
+            snapshot["selected"]["calls"][0]["attribution"]["account"]["subject"],
+            "456"
+        );
+        assert_eq!(snapshot["selected"]["calls"][0]["job_id"], "job-fixture");
+        assert!(snapshot["selected"]["calls"][1]["attribution"].is_null());
+        // A later record cannot turn a previously unbound operation into this agent.
+        view.ingest(&json!({"type":"ssmcp.code_mode","phase":"call-finished","run_id":"run","request_id":2,"attribution":attribution,"success":true}));
+        assert!(view.snapshot()["selected"]["calls"][1]["attribution"].is_null());
+        let text = view.detail_rows(120, 30, &Ui::default()).join("\n");
+        assert!(text.contains("bob@github #456") && text.contains("alice@github #123"));
+        assert!(text.contains("ssmcp.exec.start") && text.contains("agent_"));
+    }
+
     #[test]
     fn run_and_call_updates_keep_source_and_final_failure() {
         let mut view = AuditView::default();

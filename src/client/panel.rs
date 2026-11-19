@@ -89,6 +89,8 @@ pub(super) struct ProgressView {
 pub(super) struct ControllerView {
     pub request_id: String,
     pub identity: Option<crate::wire::Controller>,
+    pub attribution: Option<crate::wire::ControlAttribution>,
+    pub operation: String,
     pub started: Instant,
 }
 
@@ -218,6 +220,38 @@ fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
         return rows;
     }
     for controller in controllers {
+        if let Some(attribution) = &controller.attribution {
+            rows.push(line(
+                format!("Account · {}", attribution.account.label()),
+                PanelTone::Accent,
+            ));
+            rows.push(line(
+                match &attribution.agent {
+                    Some(agent) => format!(
+                        "Agent · {} · {}",
+                        agent.name,
+                        &agent.id[..agent.id.len().min(14)]
+                    ),
+                    None => "Agent · not bound".into(),
+                },
+                PanelTone::Normal,
+            ));
+            rows.push(line(
+                match &attribution.owner {
+                    Some(owner) => format!("Owner · {}", owner.label()),
+                    None => "Owner · unavailable".into(),
+                },
+                PanelTone::Muted,
+            ));
+        } else {
+            rows.push(line("Account · unverified", PanelTone::Muted));
+        }
+        if !controller.operation.is_empty() {
+            rows.push(line(
+                format!("Op · {}", controller.operation),
+                PanelTone::Normal,
+            ));
+        }
         let identity = controller.identity.as_ref();
         rows.push(line(
             identity
@@ -761,6 +795,8 @@ mod tests {
                 model: Some("model-a".into()),
                 source: crate::wire::ControllerSource::CallerReported,
             }),
+            attribution: None,
+            operation: String::new(),
             started: now,
         };
         let mut snapshot = PanelSnapshot {
