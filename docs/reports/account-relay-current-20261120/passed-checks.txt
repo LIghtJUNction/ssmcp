@@ -1,0 +1,48 @@
+PASS A --ssh exits as expected
+PASS legacy SSH stops before any transport starts
+PASS A invite exits as expected
+PASS retired invite cannot enter a nonexistent invitation flow
+PASS A join exits as expected
+PASS retired join cannot enter a nonexistent invitation flow
+PASS retired commands never contact the relay
+PASS A login exits as expected
+PASS device login stores the verified identity and registered server username
+PASS login output excludes account and polling credentials
+PASS account credentials have owner-only file permissions
+PASS A whoami exits as expected
+PASS whoami verifies identity without exposing the login token
+PASS B --server exits as expected
+PASS an allow target from another relay is rejected before network access
+PASS B --server exits as expected
+PASS provider-style allow labels cannot replace a same-origin account target
+PASS A whoami exits as expected
+PASS selecting another origin never borrows the saved account credential
+PASS A whoami exits as expected
+PASS account API redirects never forward credentials to another origin
+PASS A --no-watchdog exits as expected
+PASS a changed stable identity cannot connect or replace the saved credential
+PASS A other@<loopback-origin> exits as expected
+PASS a requested username must match the account registered on this relay
+PASS signed-in A binds its own username and origin with its saved account token
+PASS controlled session exits cleanly
+PASS unsigned B uses explicit same-origin allow and a supported WebSocket protocol
+PASS unsigned B never saves or receives A's account credential
+PASS A list exits as expected
+PASS A lists its currently controllable unsigned B session
+PASS B exposes a real terminal through the relay
+PASS real shell round-trip succeeds without relay credentials reaching native tools
+PASS watchdog reconnects the unsigned device without acquiring a credential
+PASS server access revocation terminates B with an error
+PASS revoked active sessions stop watchdog retries
+PASS revocation immediately after Ready also stops startup retries
+PASS HTTP 401 policy failures stop default watchdog retries
+PASS HTTP 403 policy failures stop default watchdog retries
+PASS controlled session exits cleanly
+PASS Ctrl-C cleans up an unsigned session without leaving credentials on B
+PASS the current lifecycle never depends on invitation or enrollment endpoints
+PASS A logout exits as expected
+PASS logout revokes its live session and declined authorization cannot reconnect it
+PASS a foreground account session offers at most one fresh authorization after revocation
+PASS logout revokes and removes the selected origin's account credential
+PASS gateways observed no malformed client protocol frames
+{"status": "passed", "checks": 47, "passed_checks": ["A --ssh exits as expected", "legacy SSH stops before any transport starts", "A invite exits as expected", "retired invite cannot enter a nonexistent invitation flow", "A join exits as expected", "retired join cannot enter a nonexistent invitation flow", "retired commands never contact the relay", "A login exits as expected", "device login stores the verified identity and registered server username", "login output excludes account and polling credentials", "account credentials have owner-only file permissions", "A whoami exits as expected", "whoami verifies identity without exposing the login token", "B --server exits as expected", "an allow target from another relay is rejected before network access", "B --server exits as expected", "provider-style allow labels cannot replace a same-origin account target", "A whoami exits as expected", "selecting another origin never borrows the saved account credential", "A whoami exits as expected", "account API redirects never forward credentials to another origin", "A --no-watchdog exits as expected", "a changed stable identity cannot connect or replace the saved credential", "A other@<loopback-origin> exits as expected", "a requested username must match the account registered on this relay", "signed-in A binds its own username and origin with its saved account token", "controlled session exits cleanly", "unsigned B uses explicit same-origin allow and a supported WebSocket protocol", "unsigned B never saves or receives A's account credential", "A list exits as expected", "A lists its currently controllable unsigned B session", "B exposes a real terminal through the relay", "real shell round-trip succeeds without relay credentials reaching native tools", "watchdog reconnects the unsigned device without acquiring a credential", "server access revocation terminates B with an error", "revoked active sessions stop watchdog retries", "revocation immediately after Ready also stops startup retries", "HTTP 401 policy failures stop default watchdog retries", "HTTP 403 policy failures stop default watchdog retries", "controlled session exits cleanly", "Ctrl-C cleans up an unsigned session without leaving credentials on B", "the current lifecycle never depends on invitation or enrollment endpoints", "A logout exits as expected", "logout revokes its live session and declined authorization cannot reconnect it", "a foreground account session offers at most one fresh authorization after revocation", "logout revokes and removes the selected origin's account credential", "gateways observed no malformed client protocol frames"], "transport": "loopback WebSocket", "oauth": "synthetic GitHub provider", "device": "unsigned explicit same-origin allow", "ssh": false, "models_started": false, "binary_sha256": "e8f80ea13c0a2ba156e4a6c0628904859fe9c2228933bca224758822b3c910ec", "script_sha256": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b"}

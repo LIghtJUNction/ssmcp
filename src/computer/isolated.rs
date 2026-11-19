@@ -155,14 +155,7 @@ struct Launch {
 
 fn required_helpers() -> Value {
     let mut helpers = serde_json::Map::new();
-    for name in [
-        "Xvfb",
-        "xdotool",
-        "magick",
-        "xprop",
-        "dbus-run-session",
-        "dbus-daemon",
-    ] {
+    for name in ["Xvfb", "xdotool", "dbus-run-session", "dbus-daemon"] {
         helpers.insert(
             name.into(),
             match crate::program::executable(name) {
@@ -908,7 +901,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    #[ignore = "requires installed Xvfb, xdotool, magick, xprop, dbus-run-session and true; private display only"]
+    #[ignore = "requires installed Xvfb, xdotool, dbus-run-session and true; private display only"]
     async fn app_launch_auto_starts_private_display_and_releases_owned_state() {
         use std::os::unix::fs::MetadataExt;
         let host_environment: Vec<_> = [
@@ -987,7 +980,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    #[ignore = "requires installed Xvfb, xdotool, magick, xprop and dbus-run-session"]
+    #[ignore = "requires installed Xvfb, xdotool, wish and dbus-run-session; private display only"]
     async fn private_display_input_capture_and_cleanup() {
         let host_display = std::env::var_os("DISPLAY");
         let computer = Computer::new(std::env::temp_dir()).unwrap();
@@ -1057,6 +1050,13 @@ mod tests {
             .perform("ssmcp.computer.focus", json!({"window_id":window}))
             .await
             .unwrap();
+        assert!(
+            computer
+                .perform("ssmcp.computer.key", json!({"key":"DefinitelyNotAKey"}))
+                .await
+                .unwrap_err()
+                .contains("unknown X11 keysym")
+        );
         computer
             .perform("ssmcp.computer.type", json!({"text":"isolated input"}))
             .await

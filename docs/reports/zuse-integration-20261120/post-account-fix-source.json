@@ -1,0 +1,20 @@
+{
+  "schema": "ssmcp.account-fix-source-delta.v1",
+  "previous_complete_library_source": "fab35e11425cdd147434de6d2eaa20510bf6db1e",
+  "earlier_component_product_source": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "current_frozen_product_source": "78442aa0849cc1a168db039ff7427ea076594409",
+  "version": "0.10.14",
+  "changed_source_files_since_previous_complete_library_gate": [
+    "src/client.rs"
+  ],
+  "source_delta": "diff --git a/src/client.rs b/src/client.rs\nindex 4313870..261cce7 100644\n--- a/src/client.rs\n+++ b/src/client.rs\n@@ -1959,6 +1959,8 @@ async fn connect_inner(\n             .as_ref()\n             .map(|credential| (credential.server.as_str(), credential.token.as_str()))\n     });\n+    // Explicit --allow uses the same relay transport without an account token.\n+    // Preserve its final authorization outcome even when the child exits first.\n     let mut incoming = Incoming::start(reader);\n     let _link_metrics = display_session\n         .as_ref()\n@@ -1973,7 +1975,7 @@ async fn connect_inner(\n         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(relay::failure(error)); },\n         status = ssh.wait() => {\n             let mut error = ssh_ended(status);\n-            if options.relay.is_some() { error = incoming.after_relay_exit(error).await; }\n+            if matches!(&transport, Transport::Account { .. }) { error = incoming.after_relay_exit(error).await; }\n             return Err(relay::failure(error));\n         },\n         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },\n@@ -2018,7 +2020,7 @@ async fn connect_inner(\n         error = incoming.disconnected() => Err(error),\n         status = ssh.wait() => {\n             let error = ssh_ended(status);\n-            Err(if options.relay.is_some() { incoming.after_relay_exit(error).await } else { error })\n+            Err(if matches!(&transport, Transport::Account { .. }) { incoming.after_relay_exit(error).await } else { error })\n         },\n         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },\n         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },\n@@ -2026,7 +2028,7 @@ async fn connect_inner(\n     };\n     let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));\n     if let Err(mut error) = readiness {\n-        if options.relay.is_some() && ssh.try_wait()?.is_some() {\n+        if matches!(&transport, Transport::Account { .. }) && ssh.try_wait()?.is_some() {\n             error = incoming.after_relay_exit(error).await;\n         }\n         let _ = ssh.start_kill();",
+  "dependency_manifests_and_gitlinks_equal_to_earlier_component_product": true,
+  "computer_source_equal_to_earlier_component_product": true,
+  "account_evidence_commit": "4ff1596fdaa35b69621a73c5a8f6c70267d353fc",
+  "account_evidence_directory": "../account-relay-current-20261120",
+  "account_script_matches_frozen_source": true,
+  "early_cli_matches_final_frozen_cli": true,
+  "implementation_inputs_after_evidence_merge_equal_to_frozen_source": true,
+  "earlier_component_evidence_scope": "The b49 and fab reports retain their original source and artifact hashes; they are not relabeled as runs of the new 78442 binaries.",
+  "release_access_status": "Pre-CD audit found ordinary v12/v13 Hello.allow incompatible with the v14 strict schema. Account whoami and the compatible 007 special entry do not establish CD readiness for legacy ordinary clients."
+}

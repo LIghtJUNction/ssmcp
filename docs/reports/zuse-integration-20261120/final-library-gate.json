@@ -1,0 +1,38 @@
+{
+  "schema": "ssmcp.library-gate.v1",
+  "source_commit": "78442aa0849cc1a168db039ff7427ea076594409",
+  "product_source_commit": "78442aa0849cc1a168db039ff7427ea076594409",
+  "version": "0.10.14",
+  "command": [
+    "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "--test-threads=2"
+  ],
+  "exit_code": 0,
+  "duration_seconds": 123.255,
+  "status": "passed",
+  "results": {
+    "passed": 1498,
+    "failed": 0,
+    "ignored": 18,
+    "measured": 0,
+    "filtered_out": 0
+  },
+  "libtest": {
+    "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+    "sha256": "ad49e14e27370eef593ee61ad42eed0268bc3d617b22581034911f8ac5d04c51",
+    "bytes": 282348128
+  },
+  "log": {
+    "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/library-default-suite-final.log",
+    "sha256": "bb1c739624b9223f9fb0b15d14ec04c46a5664bfb1566463fd58141244ac005c"
+  },
+  "all_frozen_artifacts_unchanged": true,
+  "finished_at_utc": "2026-11-19T23:39:02.152553+00:00",
+  "previous_attempt": {
+    "log": "library-default-suite.log",
+    "product_test_summary": "1498 passed; 0 failed; 18 ignored",
+    "receipt_generator_exit_code": 1,
+    "reason": "The first receipt parser incorrectly expected only one summary and also matched nested fixture subprocesses; the complete frozen suite was rerun with the final top-level summary selected."
+  }
+}

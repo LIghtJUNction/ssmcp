@@ -1,0 +1,113 @@
+{
+  "schema": "ssmcp.frozen-validation.v1",
+  "source_commit": "78442aa0849cc1a168db039ff7427ea076594409",
+  "version": "0.10.14",
+  "source_tree": "7929e3dac9faf3d4201320360ff0871d5883956d",
+  "submodules": {
+    "zuse": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41",
+    "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "zplugin": "3e758b5c21af1bad1cfaf10264b43fe15440e69c",
+    "zharness": "84e370450f1d047d43119bf81caf73f742ba6b0a"
+  },
+  "profile": "debug",
+  "files": {
+    "native_plugin_fixture": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/examples/libnative_plugin_fixture.so",
+      "source": "$WORKTREE/target/debug/examples/libnative_plugin_fixture.so",
+      "sha256": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a",
+      "bytes": 5450784
+    },
+    "ssmcp-frontend": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/ssmcp-frontend",
+      "source": "$WORKTREE/target/debug/ssmcp-frontend",
+      "sha256": "309927b850cdf34ff5be3d00faa4c6bc4a5f7b70d2dd0a61d94f75053749ce2a",
+      "bytes": 86490464,
+      "version_receipt": "ssmcp-frontend 0.10.14"
+    },
+    "ssmcp": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/ssmcp",
+      "source": "$WORKTREE/target/debug/ssmcp",
+      "sha256": "e8f80ea13c0a2ba156e4a6c0628904859fe9c2228933bca224758822b3c910ec",
+      "bytes": 187385136,
+      "version_receipt": "ssmcp 0.10.14"
+    },
+    "ssmcpd": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/ssmcpd",
+      "source": "$WORKTREE/target/debug/ssmcpd",
+      "sha256": "043c6bbfdbe46300ba223ab24da7a7f4cdec4391bfa2865cfa3064842cd116f0",
+      "bytes": 144854392,
+      "version_receipt": "ssmcpd 0.10.14"
+    },
+    "zuse_worker_entry": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+      "source": "$WORKTREE/target/debug/build/ssmcp/72862e0bc409e9ff/out/zuse_worker_entry-72862e0bc409e9ff",
+      "sha256": "feba9ffb85ac8699df2421ae8eaeb6cc2a18bcc6024f7198dc7c94ffef5449af",
+      "bytes": 90007472
+    },
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "ad49e14e27370eef593ee61ad42eed0268bc3d617b22581034911f8ac5d04c51",
+      "bytes": 282348128
+    }
+  },
+  "build_stages": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/fmt.log"
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/clippy.log"
+    },
+    {
+      "stage": "binaries",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "native_plugin_fixture",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/binaries.log"
+    },
+    {
+      "stage": "libtest",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run",
+        "--lib",
+        "--test",
+        "zuse_worker_entry",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/78442aa0849cc1a168db039ff7427ea076594409/libtest.log"
+    }
+  ]
+}
