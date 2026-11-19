@@ -116,10 +116,16 @@ class LocalFrontend(Frontend):
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         os.set_blocking(self.master, False)
         environment = harness.client_environment(label)
-        git = shutil.which("git")
-        if not git:
-            raise RuntimeError("local terminal E2E requires installed Git")
-        (Path(environment["PATH"]) / "git").symlink_to(Path(git).absolute())
+        # Unlike the account fixture, this process also owns the real MCP host
+        # and its code-mode runner. Expose those two installed prerequisites in
+        # the otherwise restricted utility PATH; no model binary is added.
+        for name in ("git", "node"):
+            binary = shutil.which(name)
+            if not binary:
+                raise RuntimeError(f"local terminal E2E requires installed {name}")
+            target = Path(environment["PATH"]) / name
+            if not target.exists():
+                target.symlink_to(Path(binary).absolute())
         environment.update(harness.safe_git_env)
         environment.update({"SSMCP_UI_CONFIG": str(config), "TERM": "xterm-256color", "NO_COLOR": "1", "COLUMNS": str(cols), "LINES": str(rows)})
 
