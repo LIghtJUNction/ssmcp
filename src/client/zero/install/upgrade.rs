@@ -1,7 +1,7 @@
 //! Explicit replacement of the recovery image, independent of saved sessions.
 use super::*;
 use sha2::{Digest, Sha256};
-use tokio::time::{Instant, sleep};
+use tokio::time::sleep;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(65);
 
