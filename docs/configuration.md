@@ -390,6 +390,33 @@ ssmcp --ssh --name ssmcp-project my-ssmcp
 
 默认不启用开机或登录自启。Windows 原生进程崩溃恢复最少间隔 60 秒、最多配置 255 次；存活客户端内的 SSH 重连仍使用所设秒数。`sessions stop` 会抑制自动恢复；`sessions start` 才会再次启动保存的会话。后台版本升级须 remove 后重新创建，普通 `restart` 或 MCP `reload` 不替换保存的可执行文件。[平台与状态目录](session-control.md#平台状态与版本)
 
+<a id="background-git-fetch"></a>
+
+### 定时 Git fetch
+
+每条已建立的工作区连接都会启动 Git 观察与 fetch 调度，独立于界面。交互式 TUI、`--log-format jsonl`、重定向输出以及后台会话使用相同设置；结束连接时停止调度并回收本连接启动的 fetch 进程。
+
+```sh
+ssmcp config get git-fetch-interval
+ssmcp config set git-fetch-interval 300
+ssmcp config set git-fetch-interval 0
+```
+
+`git-fetch-interval` 的默认值为 **300 秒**，允许 **60–86400 秒**，**0** 关闭后台 fetch。也可在 `ssmcp config path` 指向的 TOML 文件中设置：
+
+```toml
+[git]
+fetch_interval_seconds = 300
+```
+
+客户端在**建立新连接时**读取此设置。已有连接继续使用启动时的值；重连或重新启动后采用新值，F5 的界面配置重载不会修改 fetch 间隔。`SSMCP_CLIENT_CONFIG` 可指定另一份配置文件。
+
+调度启动后先检查一次，再按所设间隔检查。每次读取当前分支的已配置 upstream，只获取该远端分支并更新其远端跟踪引用。分离 HEAD、未配置 upstream 或 upstream 指向本地分支时跳过。fetch 保留本地 HEAD、索引、工作区、标签及手动操作的 `FETCH_HEAD`。
+
+同一仓库及其 linked worktree 通过 Git 公共目录内的锁与时间记录协调，跳过同一目标尚未到期的重复请求。单次 fetch 最多 30 秒，失败后按次数增加等待时间；达到 `max(所设间隔, 1800 秒)` 后保持该等待上限。它使用已有的非交互式凭据，凭据失效或网络失败会结束本次尝试；交互界面的 Git 面板显示等待、获取中、已更新或失败状态。
+
+实现与本地回归：[连接生命周期](../src/client.rs) · [fetch 调度与锁](../src/client/git_status/fetch.rs) · [无终端账户连接测试](../scripts/e2e_periodic_git_fetch.py)。
+
 ## 5. 排查问题
 
 | 现象 | 检查与处理 |

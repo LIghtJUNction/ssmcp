@@ -1971,9 +1971,10 @@ async fn connect(
             return Err(error.into());
         }
     };
-    let git_status = display_session
-        .as_ref()
-        .map(|_| git_status::GitStatus::start(PathBuf::from(&metadata.cwd)));
+    let git_settings = config::git()?;
+    // Git refresh belongs to the connected workspace, including JSONL and
+    // background sessions. The display only consumes its optional snapshot.
+    let git_status = git_status::GitStatus::start(PathBuf::from(&metadata.cwd), git_settings);
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
@@ -2039,21 +2040,19 @@ async fn connect(
                     break Ok(());
                 }
             },
-            _ = ui_updates.tick(), if git_status.is_some() => {
+            _ = ui_updates.tick(), if display_session.is_some() => {
                 if terminal::exit_requested() {
                     intentionally_stopped = true;
                     break Ok(());
                 }
-                if let Some(observer) = &git_status {
-                    render::set_git_status(observer.snapshot());
-                }
+                render::set_git_status(git_status.snapshot());
             },
             frame = incoming.frames.recv() => match frame {
                 Some(Ok(Some(Frame::Call {id,operation,controller,code_context}))) => {
                     while let Some(completed) = requests.try_join_next() {
                         match completed {
                             Ok(Ok(was_tool)) => {
-                                if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                                if was_tool { git_status.refresh(); }
                             },
                             Ok(Err(error)) => break 'connected Err(error.into()),
                             Err(error) => break 'connected Err(error.into()),
@@ -2158,7 +2157,7 @@ async fn connect(
             },
             response = requests.join_next(), if !requests.is_empty() => match response {
                 Some(Ok(Ok(was_tool))) => {
-                    if was_tool && let Some(observer) = &git_status { observer.refresh(); }
+                    if was_tool { git_status.refresh(); }
                 },
                 Some(Ok(Err(error))) => break Err(error.into()),
                 Some(Err(error)) => break Err(error.into()),
@@ -2181,9 +2180,7 @@ async fn connect(
         reload_requested = false;
         result = Ok(());
     }
-    if let Some(observer) = git_status {
-        observer.shutdown().await;
-    }
+    git_status.shutdown().await;
     incoming.stop().await;
     drop(writer);
     let _ = ssh.start_kill();
