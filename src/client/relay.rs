@@ -33,7 +33,7 @@ fn quota_rejection(server: &str, _body: Option<&[u8]>) -> crate::Result<String> 
     // explanation and recharge link locally, including for older bodyless replies.
     let origin = super::account::normalize_server(server)?;
     Ok(format!(
-        "traffic_quota_exceeded: 本月剩余流量不足。请求未发送到客户端，未执行。充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{origin}/account/traffic"
+        "traffic_quota_exceeded: 本月剩余流量不足。请求未发送到客户端，未执行。补充流量后可继续发起新请求，或等待下月额度恢复；本次请求不会自动重放。流量与充值：{origin}/account/traffic"
     ))
 }
 
