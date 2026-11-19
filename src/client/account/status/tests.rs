@@ -53,7 +53,9 @@ fn absent_and_partial_traffic_never_mean_unlimited_or_zero() {
         json!({"traffic":{"limit_bytes":100,"remaining_bytes":-1}}),
         json!({"traffic":{"limit_bytes":100,"remaining_bytes":"0"}}),
     ] {
-        assert_eq!(Traffic::from_reply(&value), Traffic::Unknown, "{value}");
+        let traffic = Traffic::from_reply(&value);
+        assert_eq!(traffic, Traffic::Unknown, "{value}");
+        assert_ne!(traffic.label(), "∞");
     }
     assert_eq!(
         Traffic::from_reply(&json!({"traffic":{"limit_bytes":null,"remaining_bytes":null}})),
@@ -83,10 +85,10 @@ fn remaining_uses_decimal_gb_without_rounding_positive_traffic_to_zero() {
     ] {
         assert_eq!(Traffic::Remaining(bytes).label(), expected);
     }
-    assert_eq!(Traffic::Unlimited.label(), "无限");
+    assert_eq!(Traffic::Unlimited.label(), "∞");
     for status in [Status::Loading, Status::SignedOut, Status::Unavailable] {
         let rows = status.rows().join("\n");
-        assert!(!rows.contains("GB") && !rows.contains("无限"));
+        assert!(!rows.contains("GB") && !rows.contains('∞'));
     }
 }
 
@@ -97,6 +99,12 @@ fn public_identity_must_match_the_saved_principal_and_subject() {
     assert_eq!(
         status.rows(),
         [" 账号  alice (alice-dev)", " 本月剩余  0.75 GB"]
+    );
+    let mut unlimited = reply();
+    unlimited["traffic"] = json!({"limit_bytes":null, "remaining_bytes":null});
+    assert_eq!(
+        Status::from_reply(&unlimited, &saved).rows(),
+        [" 账号  alice (alice-dev)", " 本月剩余  ∞"]
     );
     let mut other = reply();
     other["identity"]["subject"] = json!("456");
