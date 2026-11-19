@@ -8,6 +8,7 @@ pub mod control;
 pub mod install;
 pub(crate) mod ipc;
 pub mod service;
+mod storage;
 #[cfg(windows)]
 pub mod windows_service;
 
@@ -268,11 +269,15 @@ fn prepare(root: &Path, mut spec: SessionSpec, supervised: bool) -> Result<(Path
                 .into(),
         );
     }
+    let remaining = storage::remaining_bytes(root)?;
     let temporary = root.join(format!(".prepare-{}", random_suffix()?));
     platform::private_directory(&temporary)?;
     let prepared = (|| -> Result<Manifest> {
-        let executable_sha256 =
-            snapshot_executable(&std::env::current_exe()?, &executable(&temporary))?;
+        let executable_sha256 = snapshot_executable(
+            &std::env::current_exe()?,
+            &executable(&temporary),
+            remaining,
+        )?;
         let mut environment = BTreeMap::new();
         for &key in INHERITED_ENVIRONMENT {
             if let Some(value) = std::env::var_os(key) {
@@ -430,7 +435,7 @@ pub async fn list() -> Result<Vec<Value>> {
         {
             continue;
         }
-        if definitions.len() >= 1024 {
+        if definitions.len() >= storage::MAX_DIRECTORIES {
             return Err("too many saved sessions to enumerate safely".into());
         }
         let manifest: Manifest = read_json(&entry.path().join("manifest.json"))?;
@@ -1189,9 +1194,13 @@ fn append_log(directory: &Path, observation: &Observation) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_executable(source: &Path, destination: &Path) -> Result<String> {
+fn snapshot_executable(source: &Path, destination: &Path, max_bytes: u64) -> Result<String> {
     let mut input = File::open(source)?;
+    if input.metadata()?.len() > max_bytes {
+        return Err(storage::BYTE_LIMIT_ERROR.into());
+    }
     let mut output = private_open(destination, true, true, false)?;
+    let mut remaining = max_bytes;
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 65_536];
     loop {
@@ -1199,6 +1208,11 @@ fn snapshot_executable(source: &Path, destination: &Path) -> Result<String> {
         if read == 0 {
             break;
         }
+        // Bound the stream too: a changing source cannot exceed the allowance
+        // computed under manage.lock. prepare removes its own partial output.
+        remaining = remaining
+            .checked_sub(read as u64)
+            .ok_or(storage::BYTE_LIMIT_ERROR)?;
         output.write_all(&buffer[..read])?;
         digest.update(&buffer[..read]);
     }
