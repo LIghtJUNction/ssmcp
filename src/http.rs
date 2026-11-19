@@ -947,6 +947,7 @@ async fn execute(
         run: audit_run.clone(),
         delivered: false,
     };
+    let runner = broker.code_mode_runner.clone();
     let host_run = audit_run.clone();
     let host: Host = Arc::new(move |request| {
         let request_id = request_id.clone();
@@ -1025,7 +1026,9 @@ async fn execute(
             Ok(result)
         }))
     });
-    let result = code_mode::execute(arguments.code, arguments.timeout_ms, clients, host).await;
+    let result =
+        code_mode::execute_with_runner(arguments.code, arguments.timeout_ms, clients, host, runner)
+            .await;
     audit_report.finish(&result).await;
     let response =
         append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);

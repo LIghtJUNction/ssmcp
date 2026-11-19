@@ -462,10 +462,17 @@ fn node_arguments(command: &mut Command) {
 }
 
 fn sandbox_command() -> Result<Command, String> {
+    sandbox_command_with_runner(None)
+}
+
+fn sandbox_command_with_runner(local_runner: Option<PathBuf>) -> Result<Command, String> {
     let node = executable("node")?;
     let bwrap = executable("bwrap")?;
     let prlimit = executable("prlimit")?;
-    let runner = runner_path()?;
+    let runner = match local_runner {
+        Some(path) => path,
+        None => runner_path()?,
+    };
     let mut command = Command::new(bwrap);
     command.env_clear().args([
         "--unshare-all",
@@ -571,6 +578,22 @@ pub async fn execute(
     host: Host,
 ) -> Result<Value, String> {
     let command = prepare_command(sandbox_command).await?;
+    execute_process(command, code, timeout_ms, clients, host).await
+}
+
+/// Local hosts supply their private, version-matched runner. Remote execution
+/// keeps the established installed-runtime path, sandbox and resource limits.
+pub(crate) async fn execute_with_runner(
+    code: String,
+    timeout_ms: u64,
+    clients: Value,
+    host: Host,
+    local_runner: Option<PathBuf>,
+) -> Result<Value, String> {
+    let Some(runner) = local_runner else {
+        return execute(code, timeout_ms, clients, host).await;
+    };
+    let command = prepare_command(move || sandbox_command_with_runner(Some(runner))).await?;
     execute_process(command, code, timeout_ms, clients, host).await
 }
 

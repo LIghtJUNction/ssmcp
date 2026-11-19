@@ -367,6 +367,9 @@ pub struct Broker {
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
     pub client_downloads: Option<crate::client_downloads::Publisher>,
+    /// The foreground local host owns a private runner from the same binary.
+    /// Remote servers keep their installed runner and existing runtime checks.
+    pub(crate) code_mode_runner: Option<std::path::PathBuf>,
     management: Option<crate::management::State>,
     traffic_utc_offset_minutes: std::sync::atomic::AtomicI32,
     pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
@@ -423,6 +426,7 @@ impl Broker {
             bridges: Arc::new(crate::bridge::Bridges::default()),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
+            code_mode_runner: None,
             management: None,
             user_policies: Arc::default(),
             traffic_utc_offset_minutes: std::sync::atomic::AtomicI32::new(

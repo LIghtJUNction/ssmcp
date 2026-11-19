@@ -2,9 +2,10 @@
 //! account connections. The Unix transport is private to this effective UID.
 use crate::broker::Broker;
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -88,6 +89,7 @@ struct SocketDirectory {
     path: PathBuf,
     dev: u64,
     ino: u64,
+    runner: Option<(u64, u64)>,
 }
 
 impl SocketDirectory {
@@ -115,6 +117,7 @@ impl SocketDirectory {
                         path,
                         dev: metadata.dev(),
                         ino: metadata.ino(),
+                        runner: None,
                     };
                     validate_directory(&directory.path)?;
                     return Ok(directory);
@@ -128,6 +131,22 @@ impl SocketDirectory {
 
     fn socket(&self) -> PathBuf {
         self.path.join("relay.sock")
+    }
+
+    fn install_runner(&mut self) -> io::Result<PathBuf> {
+        let path = self.path.join("code-mode.js");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        // Record ownership before writing, so a failed startup also removes a
+        // partially written file. Never replace a pre-existing runner path.
+        self.runner = Some((metadata.dev(), metadata.ino()));
+        file.write_all(include_bytes!("../code_mode.js"))?;
+        Ok(path)
     }
 }
 
@@ -150,6 +169,17 @@ impl Drop for SocketDirectory {
             metadata.file_type().is_socket() && metadata.uid() == effective_uid()
         }) {
             let _ = fs::remove_file(socket);
+        }
+        if let Some((dev, ino)) = self.runner {
+            let path = self.path.join("code-mode.js");
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata.uid() == effective_uid()
+                    && metadata.dev() == dev
+                    && metadata.ino() == ino
+            }) {
+                let _ = fs::remove_file(path);
+            }
         }
         let _ = fs::remove_dir(&self.path);
     }
@@ -210,8 +240,11 @@ impl Host {
             .public_url
             .clone()
             .unwrap_or_else(|| format!("http://{}", tcp.local_addr().expect("bound listener")));
-        let broker = Arc::new(Broker::local(origin.clone())?);
-        let directory = SocketDirectory::create()?;
+        let mut directory = SocketDirectory::create()?;
+        let runner = directory.install_runner()?;
+        let mut broker = Broker::local(origin.clone())?;
+        broker.code_mode_runner = Some(runner);
+        let broker = Arc::new(broker);
         let unix = UnixListener::bind(directory.socket())?;
         fs::set_permissions(directory.socket(), fs::Permissions::from_mode(0o600))?;
         validate_socket(&directory.socket())?;
@@ -323,6 +356,53 @@ pub(super) async fn relay() -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_runner_is_private_and_removed_after_failed_startup() {
+        fn fail_after_runner(path: &mut PathBuf) -> crate::Result<()> {
+            let mut directory = SocketDirectory::create()?;
+            *path = directory.path.clone();
+            let runner = directory.install_runner()?;
+            let metadata = fs::symlink_metadata(&runner)?;
+            assert!(metadata.is_file());
+            assert_eq!(metadata.uid(), effective_uid());
+            assert_eq!(metadata.mode() & 0o777, 0o600);
+            assert_eq!(fs::read(runner)?, include_bytes!("../code_mode.js"));
+            Err("injected failure after local runner creation".into())
+        }
+
+        let mut path = PathBuf::new();
+        assert!(fail_after_runner(&mut path).is_err());
+        assert!(!path.as_os_str().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn bundled_runner_never_overwrites_or_removes_a_replaced_file() {
+        let mut directory = SocketDirectory::create().unwrap();
+        let path = directory.path.join("code-mode.js");
+        fs::write(&path, b"pre-existing fixture").unwrap();
+        assert_eq!(
+            directory.install_runner().unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        let root = directory.path.clone();
+        drop(directory);
+        assert_eq!(fs::read(&path).unwrap(), b"pre-existing fixture");
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(root).unwrap();
+
+        let mut directory = SocketDirectory::create().unwrap();
+        let path = directory.install_runner().unwrap();
+        let replacement = directory.path.join("replacement");
+        fs::write(&replacement, b"replacement fixture").unwrap();
+        fs::rename(replacement, &path).unwrap();
+        let root = directory.path.clone();
+        drop(directory);
+        assert_eq!(fs::read(&path).unwrap(), b"replacement fixture");
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn settings_require_loopback_and_explicit_https_local_proxy() {
