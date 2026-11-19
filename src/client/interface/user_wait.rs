@@ -65,6 +65,8 @@ struct Finish {
     wait_id: String,
     finished: bool,
     status: Option<Outcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notification: Option<Report>,
 }
 
 struct Spec {
@@ -292,12 +294,13 @@ impl Hub {
         let expired = state.expire(Instant::now());
         let key = state.active.get(id).map(|value| value.key.clone());
         let finished = key.is_some_and(|key| state.finish(&key, outcome));
-        let status = state
+        let completed = state
             .completed
             .iter()
             .rev()
-            .find(|value| value.wait_id == id)
-            .map(|value| value.status);
+            .find(|value| value.wait_id == id);
+        let status = completed.map(|value| value.status);
+        let notification = completed.and_then(|value| value.notification);
         drop(state);
         if expired || finished {
             changed();
@@ -306,6 +309,7 @@ impl Hub {
             wait_id: id.into(),
             finished,
             status,
+            notification,
         })
     }
 
@@ -509,4 +513,244 @@ pub(crate) fn tool() -> Value {
             "timeout_ms":{"type":"integer","minimum":1000,"maximum":25000},
             "notify":{"type":"boolean","default":true},"outcome":{"enum":["ready","timed_out","cancelled","disconnected","authorization_revoked","binding_invalid","superseded"]}}},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hub() -> Arc<Hub> {
+        let hub = Arc::new(Hub::default());
+        hub.connect(Some("synthetic-connection"));
+        hub
+    }
+
+    fn spec(id: &str) -> Spec {
+        Spec {
+            wait_id: id.into(),
+            episode_id: "a".repeat(64),
+            intent: Intent::NeedUser,
+            recipient: "next".into(),
+            reason: None,
+            timeout_ms: 25_000,
+            notify: false,
+        }
+    }
+
+    fn result(receiver: &watch::Receiver<Option<Completion>>) -> Completion {
+        receiver
+            .borrow()
+            .clone()
+            .expect("wait should have a final result")
+    }
+
+    #[tokio::test]
+    async fn user_wait_capacity_and_busy_do_not_replace_existing_requests() {
+        let hub = hub();
+        let started = (0..MAX_ACTIVE)
+            .map(|index| hub.begin(&spec(&format!("slot-{index}"))).unwrap())
+            .collect::<Vec<_>>();
+        for id in ["slot-0", "fifth"] {
+            let reply = hub.wait(spec(id)).await.unwrap();
+            assert_eq!(reply["wait_id"], id);
+            assert_eq!(reply["status"], "busy");
+        }
+        assert_eq!(hub.snapshot().active.len(), MAX_ACTIVE);
+        assert!(
+            started
+                .iter()
+                .all(|(_, receiver, _)| receiver.borrow().is_none())
+        );
+        drop(started);
+        assert!(hub.snapshot().active.is_empty());
+    }
+
+    #[test]
+    fn user_wait_exact_cancel_and_finish_ack_keep_the_first_terminal_result() {
+        let hub = hub();
+        let (_alpha, alpha, _) = hub.begin(&spec("wait-alpha")).unwrap();
+        let (_alpine, alpine, _) = hub.begin(&spec("wait-alpine")).unwrap();
+        let (beta_registration, beta, _) = hub.begin(&spec("wait-beta")).unwrap();
+        hub.notification(
+            &beta_registration.key,
+            Report {
+                status: crate::client::notification::Status::Sent,
+                reason: crate::client::notification::Reason::Submitted,
+                deduplicated: true,
+                user_seen: None,
+            },
+        );
+        assert!(hub.cancel("wait-al").unwrap_err().contains("不唯一"));
+        assert_eq!(hub.snapshot().active.len(), 3);
+        assert!(alpha.borrow().is_none() && alpine.borrow().is_none());
+        assert_eq!(hub.cancel("wait-b").unwrap(), "wait-beta");
+        assert_eq!(result(&beta).status, Outcome::Cancelled);
+        let finish = hub.finish("wait-beta", Outcome::Ready).unwrap();
+        assert!(!finish.finished);
+        assert_eq!(finish.wait_id, "wait-beta");
+        assert_eq!(finish.status, Some(Outcome::Cancelled));
+        let notification = finish.notification.expect("cached notification report");
+        assert!(matches!(
+            notification.status,
+            crate::client::notification::Status::Sent
+        ));
+        assert!(notification.deduplicated);
+        assert_eq!(notification.user_seen, None);
+        assert_eq!(hub.cancel("wait-alpha").unwrap(), "wait-alpha");
+        assert_eq!(result(&alpha).status, Outcome::Cancelled);
+        assert!(alpine.borrow().is_none());
+        let ready = hub.finish("wait-alpine", Outcome::Ready).unwrap();
+        assert!(ready.finished);
+        assert_eq!(result(&alpine).status, Outcome::Ready);
+        assert!(hub.cancel("wait-alpine").is_err());
+        let unknown = hub.finish("never-registered", Outcome::Ready).unwrap();
+        assert!(!unknown.finished);
+        assert_eq!(unknown.status, None);
+    }
+
+    #[test]
+    fn user_wait_old_drop_cannot_cancel_a_reused_id_after_reconnect() {
+        let hub = hub();
+        let (old, old_result, _) = hub.begin(&spec("same-id")).unwrap();
+        hub.connect(Some("replacement-connection"));
+        assert_eq!(result(&old_result).status, Outcome::Disconnected);
+        let (replacement, new_result, _) = hub.begin(&spec("same-id")).unwrap();
+        assert_ne!(old.key.generation, replacement.key.generation);
+        drop(old);
+        assert!(new_result.borrow().is_none());
+        assert_eq!(hub.snapshot().active.len(), 1);
+        drop(replacement);
+        assert_eq!(result(&new_result).status, Outcome::Cancelled);
+        hub.connect(None);
+        assert!(!hub.snapshot().connected);
+        assert!(hub.snapshot().recent.is_empty());
+    }
+
+    #[test]
+    fn user_wait_deadline_prevents_late_ready_and_completed_metadata_is_bounded() {
+        let hub = hub();
+        let (_registration, receiver, _) = hub.begin(&spec("expired")).unwrap();
+        hub.state
+            .lock()
+            .unwrap()
+            .active
+            .get_mut("expired")
+            .unwrap()
+            .deadline = Instant::now() - Duration::from_millis(1);
+        let late = hub.finish("expired", Outcome::Ready).unwrap();
+        assert!(!late.finished);
+        assert_eq!(late.status, Some(Outcome::TimedOut));
+        assert_eq!(result(&receiver).status, Outcome::TimedOut);
+        assert!(matches!(hub.begin(&spec("expired")), Err(BeginError::Busy)));
+        assert_eq!(
+            hub.finish("expired", Outcome::Cancelled).unwrap().status,
+            Some(Outcome::TimedOut)
+        );
+        for index in 0..MAX_COMPLETED + 3 {
+            let id = format!("completed-{index}");
+            let (_registration, receiver, _) = hub.begin(&spec(&id)).unwrap();
+            assert!(hub.finish(&id, Outcome::Ready).unwrap().finished);
+            assert_eq!(result(&receiver).status, Outcome::Ready);
+        }
+        assert_eq!(hub.snapshot().recent.len(), MAX_COMPLETED);
+        assert_eq!(hub.finish("expired", Outcome::Ready).unwrap().status, None);
+        assert_eq!(
+            hub.finish("completed-0", Outcome::Ready).unwrap().status,
+            None
+        );
+    }
+
+    #[test]
+    fn user_wait_concurrent_ready_and_local_cancel_have_one_winner() {
+        let hub = hub();
+        let (_registration, receiver, _) = hub.begin(&spec("racing-wait")).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let ready_hub = hub.clone();
+        let ready_barrier = barrier.clone();
+        let ready = std::thread::spawn(move || {
+            ready_barrier.wait();
+            ready_hub.finish("racing-wait", Outcome::Ready).unwrap()
+        });
+        let cancel_hub = hub.clone();
+        let cancel_barrier = barrier.clone();
+        let cancel = std::thread::spawn(move || {
+            cancel_barrier.wait();
+            cancel_hub.cancel("racing-wait")
+        });
+        barrier.wait();
+        let ready = ready.join().unwrap();
+        let cancel = cancel.join().unwrap();
+        let outcome = result(&receiver).status;
+        assert!(matches!(outcome, Outcome::Ready | Outcome::Cancelled));
+        assert_eq!(ready.finished, outcome == Outcome::Ready);
+        assert_eq!(cancel.is_ok(), outcome == Outcome::Cancelled);
+        assert_eq!(
+            hub.finish("racing-wait", Outcome::Ready).unwrap().status,
+            Some(outcome)
+        );
+        assert_eq!(hub.snapshot().recent.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn user_wait_cancelled_future_and_local_deadline_clear_the_real_wait() {
+        let hub = hub();
+        let worker_hub = hub.clone();
+        let worker = tokio::spawn(async move { worker_hub.wait(spec("aborted-future")).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub.snapshot().active.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        assert!(hub.snapshot().active.is_empty());
+        assert_eq!(
+            hub.finish("aborted-future", Outcome::Ready).unwrap().status,
+            Some(Outcome::Cancelled)
+        );
+        let mut short = spec("local-deadline");
+        short.timeout_ms = 1000;
+        let reply = tokio::time::timeout(Duration::from_secs(3), hub.wait(short))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply["wait_id"], "local-deadline");
+        assert_eq!(reply["status"], "timed_out");
+        assert!(reply.get("notification").is_none());
+        assert!(hub.snapshot().active.is_empty());
+    }
+
+    #[test]
+    fn user_wait_request_accepts_null_reason_but_never_native_received_or_authority_fields() {
+        let value = json!({"op":"wait","wait_id":"synthetic","episode_id":"a".repeat(64),
+            "intent":"finish","recipient":"agent:exact.id","reason":null,"timeout_ms":1000,"notify":false});
+        assert!(matches!(
+            serde_json::from_value::<Request>(value.clone()).unwrap(),
+            Request::Wait {
+                reason: None,
+                notify: false,
+                ..
+            }
+        ));
+        let mut forged = value;
+        forged["owner"] = json!("forged-principal");
+        assert!(serde_json::from_value::<Request>(forged).is_err());
+        assert!(
+            serde_json::from_value::<Request>(
+                json!({"op":"finish","wait_id":"synthetic","outcome":"received"})
+            )
+            .is_err()
+        );
+        let mut valid = spec("validated");
+        valid.recipient = "agent:exact.id".into();
+        assert!(valid.validate().is_ok());
+        let mut invalid = spec("validated");
+        invalid.reason = Some("unsafe\u{1b}[2J".into());
+        assert!(invalid.validate().is_err());
+        let mut invalid = spec("validated");
+        invalid.timeout_ms = 999;
+        assert!(invalid.validate().is_err());
+    }
 }
