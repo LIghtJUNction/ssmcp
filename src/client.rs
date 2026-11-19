@@ -1959,6 +1959,8 @@ async fn connect_inner(
             .as_ref()
             .map(|credential| (credential.server.as_str(), credential.token.as_str()))
     });
+    // Explicit --allow uses the same relay transport without an account token.
+    // Preserve its final authorization outcome even when the child exits first.
     let mut incoming = Incoming::start(reader);
     let _link_metrics = display_session
         .as_ref()
@@ -1973,7 +1975,7 @@ async fn connect_inner(
         error = incoming.disconnected() => { let _ = ssh.kill().await; return Err(relay::failure(error)); },
         status = ssh.wait() => {
             let mut error = ssh_ended(status);
-            if options.relay.is_some() { error = incoming.after_relay_exit(error).await; }
+            if matches!(&transport, Transport::Account { .. }) { error = incoming.after_relay_exit(error).await; }
             return Err(relay::failure(error));
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
@@ -2018,7 +2020,7 @@ async fn connect_inner(
         error = incoming.disconnected() => Err(error),
         status = ssh.wait() => {
             let error = ssh_ended(status);
-            Err(if options.relay.is_some() { incoming.after_relay_exit(error).await } else { error })
+            Err(if matches!(&transport, Transport::Account { .. }) { incoming.after_relay_exit(error).await } else { error })
         },
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
@@ -2026,7 +2028,7 @@ async fn connect_inner(
     };
     let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
     if let Err(mut error) = readiness {
-        if options.relay.is_some() && ssh.try_wait()?.is_some() {
+        if matches!(&transport, Transport::Account { .. }) && ssh.try_wait()?.is_some() {
             error = incoming.after_relay_exit(error).await;
         }
         let _ = ssh.start_kill();
