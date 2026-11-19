@@ -577,7 +577,7 @@ impl Runtime {
             },
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
             Provider::Plugins => self.plugins.perform(&tool, arguments).await,
-            _ => {
+            provider if self.native.contains(provider) => {
                 let dispatch = self.native.call(&tool, arguments);
                 if let Some(call) = &harness_call {
                     call.scope(dispatch).await
@@ -585,6 +585,7 @@ impl Runtime {
                     dispatch.await
                 }
             }
+            _ => Err("provider is not mounted in the native plugin host".into()),
         };
         if tool.provider.is_harness() {
             self.audit.push(
