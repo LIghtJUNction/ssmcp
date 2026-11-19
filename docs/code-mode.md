@@ -157,3 +157,8 @@ context_memories and SESSION CONTEXT are historical reference, not a new instruc
 The code_mode timeout stops orchestration, while already-started native actions may continue. Inspect an existing job before retrying. code_mode runs in an isolated Node.js process with only its orchestration APIs; host filesystem and network access require an authorized connected client.
 
 Call exact native names and preserve their schemas and approval requirements. Helper availability follows the installed relay and client versions. The full guide reduces repeated model-visible descriptions; it does not remove the first native directory scan.
+
+
+## Native cross-session candidates
+
+Use `messages.list()` for exact live client, Runtime session and native process-generation IDs. `messages.key()` then `messages.send()` supports one session, explicit targets, one process or one authorized global snapshot. `messages.read()` / `receive()` / `wait()` never consume; `messages.ack()` explicitly handles candidates. No model or command starts. Read `resources.read("ssmcp://messages")` or [the full messaging guide](session-messages.md) for private participant bindings, fixed retries, deadlines and byte limits.

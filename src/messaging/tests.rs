@@ -238,3 +238,23 @@ fn typed_envelopes_cannot_supply_user_roles_or_private_agent_tokens() {
     msg.text = "\u{1b}[2J".into();
     assert!(msg.validate().is_err());
 }
+
+#[tokio::test]
+async fn encoded_pages_include_envelope_bytes_in_the_public_read_budget() {
+    for text_bytes in (1024..=2048).step_by(16) {
+        let inbox = Inbox::new().unwrap();
+        let mut target = None;
+        for id in 0..MAX_READ_MESSAGES {
+            let mut msg = message(&inbox, 2000 + id as u32);
+            msg.text = "x".repeat(text_bytes);
+            target = Some(msg.target.clone());
+            inbox.deliver(msg).unwrap();
+        }
+        let page = inbox.read(&target.unwrap(), 0, MAX_READ_MESSAGES).unwrap();
+        assert!(
+            serde_json::to_vec(&page).unwrap().len() <= MAX_READ_BYTES,
+            "page overflow at text length {text_bytes}"
+        );
+        inbox.close();
+    }
+}

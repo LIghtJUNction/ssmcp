@@ -470,6 +470,12 @@ const bootstrap = `(() => {
   freeze(tools);
 
   const builtin = (name, args = {}) => dispatch('builtin', '_', name, args);
+  const messages = freeze(Object.fromEntries(
+    ['key','list','send','read','receive','wait','ack','status'].map(action => [action, (args = {}) => {
+      if (!args || typeof args !== 'object' || isArray(args)) throw new Failure('messages arguments must be an object');
+      return builtin('messages.' + action, args);
+    }])
+  ));
   const collab = freeze(Object.fromEntries(
     ['join', 'list', 'update', 'send', 'receive', 'ack', 'leave', 'bind'].map(action => [
       action, (clientId, args = {}) => {
@@ -787,6 +793,7 @@ const bootstrap = `(() => {
     sessions: { value: sessions, enumerable: true },
     history: { value: history, enumerable: true },
     collab: { value: collab, enumerable: true },
+    messages: { value: messages, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },

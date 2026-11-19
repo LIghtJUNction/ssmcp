@@ -111,6 +111,7 @@ impl Inbox {
             "limits":limits()})
     }
 
+    #[cfg(test)]
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -154,7 +155,8 @@ impl Inbox {
         self.target(&message.target)?;
         let encoded = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
         let fingerprint: [u8; 32] = Sha256::digest(&encoded).into();
-        let bytes = encoded.len() + 64;
+        // Reserve the Candidate envelope and per-record metadata, not only its text.
+        let bytes = encoded.len() + 256;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.purge();
         if state.closed {
@@ -243,7 +245,8 @@ impl Inbox {
             return Err("peer cursor is ahead of this session".into());
         }
         let mut messages = Vec::new();
-        let mut bytes = 0usize;
+        // Include fixed page fields within the public 64 KiB response bound.
+        let mut bytes = 512usize;
         let mut next = after;
         let mut has_more = false;
         for record in &state.candidates {
@@ -399,7 +402,16 @@ impl Inbox {
     pub async fn perform(self: &Arc<Self>, request: NativeRequest) -> Result<Value, String> {
         request.validate()?;
         match request {
-            NativeRequest::Deliver { message } => self.deliver(*message),
+            NativeRequest::Deliver { message } => {
+                let delivery_id = message.delivery_id.clone();
+                // A native refusal is distinct from a missing transport acknowledgement.
+                Ok(match self.deliver(*message) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        json!({"delivery_id":delivery_id,"state":"rejected","accepted":false,"error":error})
+                    }
+                })
+            }
             NativeRequest::Read {
                 target,
                 after,

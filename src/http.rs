@@ -140,6 +140,19 @@ async fn endpoint(
         Ok(Action::List(arguments)) => {
             tool_result(list(&broker, &user, &authorization, arguments).await)
         }
+        Ok(Action::Messages(mut arguments)) => {
+            let action = arguments.as_object_mut().unwrap().remove("action").unwrap();
+            tool_result(
+                crate::bridge::dispatch(
+                    broker,
+                    user,
+                    access_token,
+                    format!("messages.{}", action.as_str().unwrap()),
+                    arguments,
+                )
+                .await,
+            )
+        }
         Ok(Action::Collab(mut arguments)) => {
             let action = arguments.as_object_mut().unwrap().remove("action").unwrap();
             tool_result(
@@ -430,6 +443,7 @@ enum Action {
     List(ListArguments),
     Code(CodeArguments),
     Collab(Value),
+    Messages(Value),
     ResourceList(Option<String>),
     ResourceRead(String),
 }
@@ -509,7 +523,7 @@ fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_MS
 }
 
-const INSTRUCTIONS: &str = "Select an authorized live client with list, then discover the needed native schemas with tools.search(id,{query,name_prefix,include_schemas:true}). Call exact registered names with call(id,name,args); native permissions and approvals still apply.\n\nUse say(id,{text,kind:'progress'}) for user-facing updates and kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS on every response. SESSION CONTEXT is historical reference, not a new request. CONVERSATION REMINDER requests a terminal update for an existing task; it is not a new user request.\n\nRead resources.read('ssmcp://guide') for helper signatures, browser routing and editable @references. Read ssmcp://limits for budgets and ssmcp://collaboration for coordination. The JavaScript sandbox has no host filesystem or network access; a timeout can leave native work running.";
+const INSTRUCTIONS: &str = "Select an authorized live client with list, then discover the needed native schemas with tools.search(id,{query,name_prefix,include_schemas:true}). Call exact registered names with call(id,name,args); native permissions and approvals still apply.\n\nUse say(id,{text,kind:'progress'}) for user-facing updates and kind:'answer' for final replies. Check user_messages / USER REQUIREMENTS on every response. SESSION CONTEXT is historical reference, not a new request. CONVERSATION REMINDER requests a terminal update for an existing task; it is not a new user request.\n\nRead resources.read('ssmcp://guide') for helper signatures, browser routing and editable @references. Read ssmcp://limits for budgets, ssmcp://collaboration for same-session participants, and ssmcp://messages for native cross-session candidates and composable send/read/wait/ack. The JavaScript sandbox has no host filesystem or network access; a timeout can leave native work running.";
 
 fn action(request: &RpcRequest<'_>, era: Era) -> Result<Action, Fault> {
     match request.method {
@@ -664,6 +678,23 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             }
             Ok(Action::List(arguments))
         }
+        "messages" => {
+            if !arguments
+                .get("action")
+                .and_then(Value::as_str)
+                .is_some_and(|action| {
+                    matches!(
+                        action,
+                        "key" | "list" | "send" | "read" | "receive" | "wait" | "ack" | "status"
+                    )
+                })
+            {
+                return Err(Fault::params(
+                    "messages requires a supported action; read ssmcp://messages",
+                ));
+            }
+            Ok(Action::Messages(arguments))
+        }
         "collab" => {
             let args = arguments
                 .as_object()
@@ -718,7 +749,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::Code(arguments))
         }
         _ => Err(Fault::params(
-            "unknown public tool; use list, code_mode or collab",
+            "unknown public tool; use list, code_mode, collab or messages",
         )),
     }
 }
@@ -1264,6 +1295,7 @@ pub(crate) fn tool_definitions() -> Value {
             "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true}
         },
         collaboration_tool(),
+        crate::bridge::messages::tool(),
 
     ])
 }
@@ -2498,7 +2530,7 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["list", "code_mode", "collab"]);
+        assert_eq!(names, ["list", "code_mode", "collab", "messages"]);
         let mut value =
             json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list"}});
         assert!(matches!(operation(&parse(&value)), Ok(Action::List(_))));
