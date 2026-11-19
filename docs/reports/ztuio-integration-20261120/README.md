@@ -15,7 +15,7 @@ SSMCP 已在源码候选 `631fc9f9078fd6173d28f9efb204d587e741ba56` 中改为消
 | 消费者格式 | `cargo fmt --package ssmcp -- --check` | 通过 |
 | 消费者打包 | `cargo package --locked --no-verify --package ssmcp` | 通过，634 个文件，8,805,421 字节压缩包 |
 
-13 项契约覆盖首帧精确 ANSI 序列、等内容不同分配地址不重绘、单行更新、仅光标和模式变化、窗口几何与分区边界、Unicode 与 SGR 透明传递、固定缓冲区错误传播、空帧不写入、填充边界以及所有 u16 坐标十进制位数边界。完整测试名称见 [core-contracts.log](core-contracts.log)。
+13 项契约覆盖首帧精确 ANSI 序列、等内容不同分配地址不重绘、单行更新、仅光标和模式变化、窗口几何与分区边界、Unicode 与 SGR 透明传递、固定缓冲区错误传播、空帧不写入、填充边界以及所有 u16 坐标十进制位数边界。完整测试名称见 [core-contracts.txt](core-contracts.txt)。
 
 本地产生的 `ztuio-0.1.0.crate` SHA256：
 

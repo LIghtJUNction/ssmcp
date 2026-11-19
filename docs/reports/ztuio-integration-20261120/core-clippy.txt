@@ -1,0 +1,6 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking ztuio v0.1.0 (<canonical-checkout>)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 53s
