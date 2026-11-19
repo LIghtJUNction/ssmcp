@@ -194,6 +194,12 @@ impl Broker {
         actor: &Identity,
     ) -> Result<management::TrafficBalances, ManagementError> {
         let state = self.management_access(actor, Scope::All)?;
+        if !self.portal.has_storage() {
+            return Ok(management::TrafficBalances {
+                period: String::new(),
+                remaining: Default::default(),
+            });
+        }
         let policy = state.policy.clone();
         let offset = self.traffic_utc_offset_minutes.load(Ordering::Acquire);
         self.portal
