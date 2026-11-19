@@ -1,0 +1,37 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling ztuio v0.1.0 (<canonical-checkout>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 18s
+     Running unittests src/lib.rs (<shared-target>/debug/build/ztuio/c53304ff1b758143/out/ztuio-c53304ff1b758143)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (<shared-target>/debug/build/ztuio/503867bc09af21a5/out/contracts-503867bc09af21a5)
+
+running 13 tests
+test caller_fixed_buffers_receive_output_errors_without_allocation_or_panics ... ok
+test cursor_and_mode_only_changes_do_not_repaint_rows ... ok
+test equal_rows_in_distinct_allocations_emit_nothing ... ok
+test first_frame_has_exact_ansi_mode_and_cursor_sequence ... ok
+test geometry_change_and_layout_key_force_a_full_row_redraw ... ok
+test one_row_change_uses_absolute_position_without_repainting_other_rows ... ok
+test padding_crosses_chunk_boundaries_without_losing_spaces ... ok
+test rectangles_reject_overflow_and_clip_hidden_panes ... ok
+test pane_splits_conserve_cells_and_never_overlap ... ok
+test unchanged_and_empty_frames_do_not_touch_caller_output ... ok
+test unicode_and_sgr_rows_are_forwarded_without_hidden_width_guessing ... ok
+test width_rejection_happens_before_any_output_and_keeps_utf8_intact ... ok
+test all_coordinate_digit_boundaries_match_the_ansi_reference ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+   Doc-tests ztuio
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
