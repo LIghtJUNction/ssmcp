@@ -583,6 +583,26 @@ impl Broker {
             .ok_or_else(|| "client is unavailable; call list to refresh connected clients".into())
     }
 
+    /// Test fixtures may close one existing wire connection without revoking
+    /// its account credential or disturbing other connections.
+    #[cfg(all(test, unix))]
+    pub(crate) async fn test_disconnect_client(&self, id: &str) -> bool {
+        let session = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .find_map(|sessions| sessions.get(id))
+            .filter(|session| session.is_alive())
+            .cloned();
+        if let Some(session) = session {
+            session.disconnect.notify_one();
+            true
+        } else {
+            false
+        }
+    }
+
     pub async fn disconnect_all(&self) {
         self.bridges.shutdown().await;
         let active: Vec<_> = self
