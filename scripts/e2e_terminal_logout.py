@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import struct
@@ -94,6 +95,13 @@ def login_count(state):
     return state.requests.count(('POST', '/api/client/login/start'))
 
 
+def submit_logout(front):
+    front.send('/logout')
+    front.until(lambda shot: '/logout' in '\n'.join(shot['rows'][-4:-1]),
+                'logout command in the active composer')
+    front.send('\r')
+
+
 args.output.mkdir(parents=True, exist_ok=True)
 relay.Handler = LogoutHandler
 results = []
@@ -129,6 +137,8 @@ for scenario in ['remote_success', 'remote_unconfirmed', 'newer_saved_login']:
             front = Frontend(harness, config)
             front.until(lambda s: 'conversation' in text(s).lower(), 'conversation screen')
             relay.wait_for(lambda: state.sessions, 'authenticated account WebSocket')
+            front.until(lambda s: re.search(r'(?<![a-z])connected(?:\s|·|$)', text(s).lower()),
+                        'native tools and local input connected')
             credential = harness.root / 'A/auth' / (hashlib.sha256(state.origin.encode()).hexdigest() + '.json')
             harness.check(json.loads(credential.read_text()).get('username') is None,
                           'the authenticated account has no server username')
@@ -140,7 +150,7 @@ for scenario in ['remote_success', 'remote_unconfirmed', 'newer_saved_login']:
                 data['token'] = replacement
                 credential.write_text(json.dumps(data))
                 credential.chmod(0o600)
-                front.send('/logout\r')
+                submit_logout(front)
                 front.until(lambda s: 'Logout failed' in text(s), 'connection snapshot mismatch')
                 harness.check(front.process.poll() is None, 'snapshot mismatch keeps the current UI open')
                 harness.check(json.loads(credential.read_text())['token'] == replacement,
@@ -148,8 +158,9 @@ for scenario in ['remote_success', 'remote_unconfirmed', 'newer_saved_login']:
                 harness.check(state.logout_calls == 0, 'snapshot mismatch sends no logout HTTP request')
                 front.disconnect()
             else:
-                front.send('/logout\r')
-                relay.wait_for(state.logout_seen.is_set, 'logout closes WebSocket before its response')
+                submit_logout(front)
+                front.until(lambda _s: state.logout_seen.is_set(),
+                            'logout closes WebSocket before its response')
                 deadline = time.monotonic() + 1.3
                 while time.monotonic() < deadline:
                     front.pump(0.05)
