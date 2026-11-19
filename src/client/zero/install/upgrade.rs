@@ -156,7 +156,7 @@ async fn service() -> Result<Value> {
     let output = systemctl(&[
         "show",
         UNIT,
-        "--property=LoadState,ActiveState,SubState,MainPID,ExecMainStatus",
+        "--property=LoadState,ActiveState,SubState,MainPID,ExecMainStatus,FragmentPath,DropInPaths,NeedDaemonReload",
     ])
     .await?;
     let mut value = serde_json::Map::new();
@@ -173,6 +173,42 @@ fn pid(service: &Value) -> u64 {
         .as_str()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0)
+}
+
+fn verify_loaded(root: &Path, definition: &str, service: &Value, image: Identity) -> Result<()> {
+    if service["LoadState"] != "loaded"
+        || service["DropInPaths"] != ""
+        || service["NeedDaemonReload"] != "no"
+    {
+        return Err(
+            "007 upgrade requires the matching loaded service without drop-ins or pending reloads"
+                .into(),
+        );
+    }
+    let fragment = service["FragmentPath"]
+        .as_str()
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .ok_or("007 service manager did not identify its loaded unit file")?;
+    // A caller's XDG directory does not select the user manager's installation.
+    // Verify the manager's actual file, including its root and exact ExecStart.
+    if read_unit(fragment, root)?.as_deref() != Some(definition) {
+        return Err(
+            "the loaded 007 service belongs to another installation; nothing was stopped".into(),
+        );
+    }
+    let current_pid = pid(service);
+    if current_pid != 0 {
+        let actual = fs::metadata(format!("/proc/{current_pid}/exe"))?;
+        if Identity::of(&actual) != image {
+            return Err("the loaded 007 process is not this installation's recovery image; nothing was stopped".into());
+        }
+    } else if service["ActiveState"] == "active" {
+        return Err(
+            "007 service is active without a verifiable process; nothing was stopped".into(),
+        );
+    }
+    Ok(())
 }
 
 fn connected_observation(
@@ -246,6 +282,8 @@ pub(super) async fn run(root: &Path, unit: &Path, dry_run: bool) -> Result<Value
     if before["LoadState"] != "loaded" {
         return Err("007 user service is not loaded".into());
     }
+    let original = Identity::of(&private_image(&root.join("ssmcp"))?.metadata()?);
+    verify_loaded(root, &definition, &before, original)?;
     let previous_pid = pid(&before);
     let was_active = matches!(
         before["ActiveState"].as_str(),
@@ -274,10 +312,13 @@ pub(super) async fn run(root: &Path, unit: &Path, dry_run: bool) -> Result<Value
         if read_unit(unit, root)?.as_deref() != Some(definition.as_str()) {
             return Err("007 service definition changed before upgrade".into());
         }
+        verify_loaded(root, &definition, &service().await?, prepared.original)?;
         systemctl(&["stop", UNIT]).await?;
         prepared.activate()?;
         systemctl(&["start", UNIT]).await?;
-        connected(root, prepared.candidate, previous_pid, since).await
+        let health = connected(root, prepared.candidate, previous_pid, since).await?;
+        verify_loaded(root, &definition, &health["service"], prepared.candidate)?;
+        Ok(health)
     };
     let result: Result<Value> = tokio::select! {
         result = activation => result,
@@ -304,6 +345,12 @@ pub(super) async fn run(root: &Path, unit: &Path, dry_run: bool) -> Result<Value
                             .into(),
                     );
                 }
+                let image = if prepared.activated {
+                    prepared.candidate
+                } else {
+                    prepared.original
+                };
+                verify_loaded(root, &definition, &service().await?, image)?;
                 let stop = systemctl(&["stop", UNIT]).await;
                 let image = prepared.restore()?;
                 rollback["binary_restored"] = json!(true);
@@ -410,6 +457,36 @@ mod tests {
             b"another operator's image"
         );
         assert_eq!(fs::read(&prepared.backup).unwrap(), b"old");
+    }
+
+    #[test]
+    fn upgrade_binds_the_manager_fragment_and_rejects_other_installations() {
+        let directory = Directory::new();
+        let image = directory.executable("ssmcp", b"owned image");
+        let identity = Identity::of(&fs::metadata(&image).unwrap());
+        let definition =
+            super::super::definition(&directory.0, &directory.0, "/usr/bin", &[]).unwrap();
+        let fragment = directory.0.join("owned.service");
+        fs::write(&fragment, &definition).unwrap();
+        let mut service = json!({"LoadState":"loaded","ActiveState":"inactive","MainPID":"0",
+            "FragmentPath":fragment,"DropInPaths":"","NeedDaemonReload":"no"});
+        assert!(verify_loaded(&directory.0, &definition, &service, identity).is_ok());
+        service["NeedDaemonReload"] = json!("yes");
+        assert!(verify_loaded(&directory.0, &definition, &service, identity).is_err());
+        service["NeedDaemonReload"] = json!("no");
+        service["DropInPaths"] = json!("another.service.d/override.conf");
+        assert!(verify_loaded(&directory.0, &definition, &service, identity).is_err());
+        service["DropInPaths"] = json!("");
+        let other = Directory::new();
+        let other_definition =
+            super::super::definition(&other.0, &other.0, "/usr/bin", &[]).unwrap();
+        let other_fragment = other.0.join("other.service");
+        fs::write(&other_fragment, other_definition).unwrap();
+        service["FragmentPath"] = json!(other_fragment);
+        assert!(verify_loaded(&directory.0, &definition, &service, identity).is_err());
+        service["FragmentPath"] = json!(fragment);
+        service["MainPID"] = json!(std::process::id().to_string());
+        assert!(verify_loaded(&directory.0, &definition, &service, identity).is_err());
     }
 
     #[test]
