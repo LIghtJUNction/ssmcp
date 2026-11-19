@@ -150,7 +150,7 @@ impl TrafficError {
         };
         if self == Self::Exhausted {
             format!(
-                "traffic_quota_exceeded: 本月剩余流量不足。{outcome}充值后请重新连接客户端，或等待下月额度恢复。流量与充值：{}",
+                "traffic_quota_exceeded: 本月剩余流量不足。{outcome}补充流量后可继续发起新请求，或等待下月额度恢复；本次请求不会自动重放。流量与充值：{}",
                 traffic_recharge_url(public_url)
             )
         } else {
