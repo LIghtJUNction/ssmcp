@@ -27,6 +27,7 @@ const MAX_RETAINED: usize = 128;
 const MAX_OUTPUT: usize = 64 * 1024;
 const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
+const MAX_TITLE_CHARS: usize = 160;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
 const MAX_INPUT: usize = 32 * 1024;
@@ -143,6 +144,7 @@ struct Job {
     id: String,
     pid: u32,
     command: Vec<String>,
+    title: Option<String>,
     cwd: PathBuf,
     started: Instant,
     state: Mutex<State>,
@@ -160,7 +162,7 @@ impl Job {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
     fn snapshot_locked(&self, state: &State) -> Value {
-        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"cwd":self.cwd,
+        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"title":self.title,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
@@ -250,8 +252,9 @@ impl Shell {
         vec![
             tool(
                 "ssmcp.exec.start",
-                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
+                "Start an independent argv command immediately and return job_id. Supply a short title describing the purpose of complex inline scripts; it labels the command without changing execution. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
+                    "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
@@ -509,6 +512,7 @@ impl Shell {
         #[serde(deny_unknown_fields)]
         struct Start {
             command: Vec<String>,
+            title: Option<String>,
             cwd: Option<PathBuf>,
             env: Option<HashMap<String, String>>,
             #[serde(default)]
@@ -517,6 +521,7 @@ impl Shell {
             timeout_ms: u64,
         }
         let args: Start = parse(args)?;
+        let title = job_title(args.title)?;
         if args.command.is_empty()
             || args.command.len() > MAX_COMMAND_ARGS
             || args.command[0].is_empty()
@@ -649,6 +654,7 @@ impl Shell {
             id: id.clone(),
             pid,
             command: args.command,
+            title,
             cwd,
             started: Instant::now(),
             state: Mutex::new(State {
@@ -679,7 +685,7 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"cwd":job.cwd}));
+        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"title":job.title,"cwd":job.cwd}));
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -914,6 +920,23 @@ fn tool(
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, String> {
     serde_json::from_value(args).map_err(|e| format!("invalid execution arguments: {e}"))
 }
+fn job_title(title: Option<String>) -> Result<Option<String>, String> {
+    title
+        .map(|title| {
+            if title.chars().count() > MAX_TITLE_CHARS
+                || title
+                    .chars()
+                    .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+                || title.trim().is_empty()
+            {
+                return Err(format!(
+                    "title must contain 1..={MAX_TITLE_CHARS} Unicode characters, with non-whitespace text and no control or line-separator characters"
+                ));
+            }
+            Ok(title.trim().to_owned())
+        })
+        .transpose()
+}
 fn empty(args: Value) -> Result<(), String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1007,6 +1030,7 @@ mod tests {
             id,
             pid: 0,
             command: vec!["completed fixture".into()],
+            title: None,
             cwd: std::env::current_dir().unwrap(),
             started: Instant::now(),
             state: Mutex::new(State {
