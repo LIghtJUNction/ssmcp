@@ -67,6 +67,26 @@ impl Session {
         title: Option<&str>,
         endpoint: Option<&str>,
     ) -> io::Result<Option<Self>> {
+        Self::start_with_account(ui, cwd, title, endpoint, true)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn start_local(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+    ) -> io::Result<Option<Self>> {
+        Self::start_with_account(ui, cwd, title, endpoint, false)
+    }
+
+    fn start_with_account(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+        account: bool,
+    ) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
             || !io::stdin().is_terminal()
@@ -85,10 +105,18 @@ impl Session {
         let mut state = State::new(rows, cols, &options);
         state.set_context(cwd, title);
         state.server_origin = endpoint.and_then(footer::Origin::parse);
-        let guide = endpoint.and_then(guide::Guide::from_endpoint);
+        if !account {
+            state.account = AccountStatus::Local;
+            #[cfg(target_os = "linux")]
+            {
+                state.server_origin = endpoint.and_then(footer::Origin::parse_local);
+            }
+        }
+        let account_endpoint = endpoint.filter(|_| account);
+        let guide = account_endpoint.and_then(guide::Guide::from_endpoint);
         let guide_url = guide.as_ref().map(|guide| guide.url().to_owned());
         state.guide = guide.map(guide::Guide::portal);
-        let account_server = endpoint
+        let account_server = account_endpoint
             .and_then(account_status::server_from_endpoint)
             .filter(|_| tokio::runtime::Handle::try_current().is_ok());
         if account_server.is_some() {
@@ -2671,6 +2699,30 @@ mod tests {
             sidebar_width: 30,
             ..Ui::default()
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_frame_shows_connection_authorization_without_cloud_account_quota() {
+        let ui = Ui {
+            layout: Layout::Chat,
+            sidebar: false,
+            ..Ui::default()
+        };
+        let mut state = preview_state(30, 120, &ui);
+        state.preview = false;
+        state.guide = None;
+        state.account = AccountStatus::Local;
+        state.server_origin = footer::Origin::parse_local("http://127.0.0.1:43123/alice");
+        let frame = physical(&state.frame(Instant::now()));
+        let text = frame.screen().contents();
+        assert!(text.contains("本地会话"), "{text}");
+        assert!(text.contains("一次性登录码"), "{text}");
+        assert!(text.contains("http://127.0.0.1:43123"), "{text}");
+        assert!(
+            !text.contains("本月剩余") && !text.contains("未登录"),
+            "{text}"
+        );
     }
 
     fn physical(frame: &Frame) -> vt100::Parser {
