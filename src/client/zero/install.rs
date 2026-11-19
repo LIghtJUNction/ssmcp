@@ -1,4 +1,6 @@
 //! Independent user service for the small recovery connection.
+mod upgrade;
+
 use super::read_bounded;
 use super::{Config, load_config, state_root};
 use crate::Result;
@@ -19,7 +21,7 @@ const MARKER: &str = "# ssmcp-007 managed user service\n";
 const OUTPUT_LIMIT: u64 = 32 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
-const HELP: &str = "Usage: ssmcp 007 install [--server URL] [--name NAME] [--cwd DIR]\n                   [--client ABSOLUTE_PATH] [--dry-run] [--json]\n       ssmcp 007 start|stop|status|uninstall [--json]\nInstalls an independent systemd user service. Existing recovery executables\nare preserved. Uninstall retains recovery files and saved sessions.\nFor startup before login and survival after logout, enable user lingering.";
+const HELP: &str = "Usage: ssmcp 007 install [--server URL] [--name NAME] [--cwd DIR]\n                   [--client ABSOLUTE_PATH] [--dry-run] [--json]\n       ssmcp 007 upgrade [--dry-run] [--json]\n       ssmcp 007 start|stop|status|uninstall [--json]\nInstall preserves the recovery image. Upgrade explicitly replaces it with the\ncurrent CLI, retains a backup and verifies a fresh connected 007 process.\nUninstall retains recovery files and saved sessions.\nFor startup before login and survival after logout, enable user lingering.";
 
 #[derive(Default)]
 struct Options {
@@ -41,7 +43,9 @@ fn parse(args: Vec<OsString>) -> Result<(String, Options)> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--json") => {}
-            Some("--dry-run") if operation == "install" => options.dry_run = true,
+            Some("--dry-run") if matches!(operation.as_str(), "install" | "upgrade") => {
+                options.dry_run = true
+            }
             Some("--server" | "--name" | "--cwd" | "--client") if operation == "install" => {
                 let value = args.next().ok_or("007 option requires a value")?;
                 match arg.to_str().unwrap() {
@@ -62,9 +66,9 @@ fn parse(args: Vec<OsString>) -> Result<(String, Options)> {
     }
     if !matches!(
         operation.as_str(),
-        "install" | "start" | "stop" | "status" | "uninstall"
+        "install" | "upgrade" | "start" | "stop" | "status" | "uninstall"
     ) {
-        return Err("expected 007 install, start, stop, status or uninstall".into());
+        return Err("expected 007 install, upgrade, start, stop, status or uninstall".into());
     }
     Ok((operation, options))
 }
@@ -290,7 +294,31 @@ async fn state(root: &Path, unit: &Path) -> Result<Value> {
         value["cwd"] = json!(config.cwd);
         value["client"] = json!(config.client);
     }
+    value["versions"] = json!({
+        "command":env!("CARGO_PKG_VERSION"),
+        "running":observation.as_ref().and_then(|value| value["version"].as_str()),
+        "running_wire":observation.as_ref().and_then(|value| value["wire_version"].as_u64()),
+        "saved":program_version(&root.join("ssmcp")).await,
+    });
     Ok(value)
+}
+
+async fn program_version(executable: &Path) -> Option<String> {
+    let output = timeout(
+        Duration::from_secs(3),
+        capture(executable.to_str()?, &["--version"]),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let version = output.stdout.trim().strip_prefix("ssmcp ")?;
+    (output.status.success()
+        && !version.is_empty()
+        && version.len() <= 128
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-+_".contains(&byte)))
+    .then(|| version.to_owned())
 }
 
 fn snapshot(source: &Path, target: &Path) -> Result<bool> {
@@ -430,17 +458,29 @@ async fn install(root: &Path, unit: &Path, home: &Path, options: Options) -> Res
         }));
     }
     systemctl(&["show", "--property=Version"]).await?;
+    let created_root = state_root(true)?;
+    if created_root != root {
+        return Err("007 state directory changed during installation".into());
+    }
+    let _lock = crate::session::lock(&root.join("install.lock"), true)?;
+    if read_unit(unit, root)? != previous_unit
+        || (root
+            .join("config.json")
+            .try_exists()?
+            .then(|| load_config(root))
+            .transpose()?)
+            != existing
+    {
+        return Err(
+            "007 installation changed; inspect its state before repeating installation".into(),
+        );
+    }
     if changed && previous_unit.is_some() {
         let active = capture("systemctl", &["--user", "is-active", UNIT]).await?;
         if active.status.success() || active.stdout.trim() == "activating" {
             return Err("stop 007 before changing its installation; the running recovery executable will be preserved".into());
         }
     }
-    let created_root = state_root(true)?;
-    if created_root != root {
-        return Err("007 state directory changed during installation".into());
-    }
-    let _lock = crate::session::lock(&root.join("install.lock"), true)?;
     let preserved = snapshot(&std::env::current_exe()?, &root.join("ssmcp"))?;
     crate::session::write_json(&root.join("config.json"), &config)?;
     write_unit(unit, &definition)?;
@@ -469,8 +509,10 @@ pub(super) async fn manage(args: Vec<OsString>) -> Result<()> {
     let unit = unit_path(&home)?;
     let value = match operation.as_str() {
         "install" => install(&root, &unit, &home, options).await?,
+        "upgrade" => upgrade::run(&root, &unit, options.dry_run).await?,
         "status" => state(&root, &unit).await?,
         "start" | "stop" => {
+            let _lock = crate::session::lock(&root.join("install.lock"), true)?;
             if read_unit(&unit, &root)?.is_none() {
                 return Err("007 user service is not installed".into());
             }
@@ -478,6 +520,11 @@ pub(super) async fn manage(args: Vec<OsString>) -> Result<()> {
             state(&root, &unit).await?
         }
         "uninstall" => {
+            let _lock = if root.is_dir() {
+                Some(crate::session::lock(&root.join("install.lock"), true)?)
+            } else {
+                None
+            };
             if read_unit(&unit, &root)?.is_some() {
                 systemctl(&["disable", "--now", UNIT]).await?;
                 fs::remove_file(&unit)?;
@@ -491,6 +538,12 @@ pub(super) async fn manage(args: Vec<OsString>) -> Result<()> {
         _ => unreachable!(),
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
+    if operation == "upgrade" && value["success"] == false {
+        return Err(
+            "007 upgrade failed; the JSON result reports backup, restoration and connection state"
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -545,5 +598,21 @@ mod tests {
         assert!(parse(["stop", "--dry-run"].map(OsString::from).to_vec()).is_err());
         assert!(parse(["install", "--server"].map(OsString::from).to_vec()).is_err());
         assert!(parse(["status", "--json"].map(OsString::from).to_vec()).is_ok());
+        assert!(
+            parse(
+                ["upgrade", "--dry-run", "--json"]
+                    .map(OsString::from)
+                    .to_vec()
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                ["upgrade", "--client", "/bin/sh"]
+                    .map(OsString::from)
+                    .to_vec()
+            )
+            .is_err()
+        );
     }
 }
