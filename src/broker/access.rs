@@ -55,7 +55,7 @@ impl Session {
                 let principal = canonical_github_principal(&principal)?;
                 // A login is a lookup key. Only GitHub's verified numeric subject grants access.
                 let identity = providers
-                    .resolve_allow(&[principal.clone()])
+                    .resolve_allow(std::slice::from_ref(&principal))
                     .await?
                     .into_iter()
                     .next()
