@@ -161,6 +161,10 @@ impl Process {
         self.shell.observe_projection()
     }
 
+    pub(crate) fn recovery_jobs(&self, limit: usize) -> Value {
+        self.shell.recovery_index(limit)
+    }
+
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }

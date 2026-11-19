@@ -375,7 +375,10 @@ fn prepare(
         };
         let allowed = match provider {
             Provider::Client => {
-                id == "ssmcp.client.capabilities" || id.starts_with("ssmcp.resources.")
+                matches!(
+                    id.as_str(),
+                    "ssmcp.client.capabilities" | "ssmcp.client.recover"
+                ) || id.starts_with("ssmcp.resources.")
             }
             Provider::Terminal => id.starts_with("terminal."),
             Provider::Ui => id.starts_with("ssmcp.ui."),

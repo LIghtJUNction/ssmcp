@@ -5,6 +5,7 @@ pub mod hooks;
 pub(crate) mod native_host;
 pub(crate) mod native_plugins;
 mod plugins;
+mod recovery;
 use crate::catalog::{self, ToolDescriptor};
 use crate::{
     backend::{self, Backend, events::EventLog},

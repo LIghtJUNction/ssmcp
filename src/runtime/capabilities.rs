@@ -23,7 +23,7 @@ pub(super) fn tools() -> Vec<Value> {
         }
         json!({"name":name,"description":description,"inputSchema":schema,
             "annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}})
-    }).collect()
+    }).chain(std::iter::once(super::recovery::tool())).collect()
 }
 
 #[derive(Default, Deserialize)]
@@ -326,6 +326,7 @@ impl Runtime {
             "delivery":"one shared lease, cursor and ACK state; no automatic replay"
         });
         manifest["peer_messages"] = self.peer_inbox.capability();
+        manifest["recovery"] = json!({"tool":"ssmcp.client.recover","helper":"history.recover(clientId)","read_only":true,"max_response_bytes":32768});
         manifest["resources"] = json!({
             "list":"ssmcp.resources.list","templates":"ssmcp.resources.templates","read":"ssmcp.resources.read",
             "max_response_bytes":MAX_BYTES,"page_size":PAGE_SIZE,"guide":"ssmcp-client://guide","skill":"ssmcp-client://skill",
@@ -352,6 +353,7 @@ impl Runtime {
                 }
                 self.client_capabilities()
             }
+            "ssmcp.client.recover" => self.recover(arguments).await,
             "ssmcp.resources.list" => paginate(resource_catalog(), "resources", arguments),
             "ssmcp.resources.templates" => {
                 paginate(resource_templates(), "resourceTemplates", arguments)
@@ -640,8 +642,8 @@ mod tests {
             .replace(crate::registry::Provider::Client, tools())
             .unwrap();
         let first = registry.capabilities().unwrap();
-        assert_eq!(first["tool_count"], 4);
-        assert_eq!(first["providers"]["client"], 4);
+        assert_eq!(first["tool_count"], 5);
+        assert_eq!(first["providers"]["client"], 5);
         registry
             .replace(
                 crate::registry::Provider::Exec,
@@ -650,7 +652,7 @@ mod tests {
             .unwrap();
         let next = registry.capabilities().unwrap();
         assert!(next["generation"].as_u64() > first["generation"].as_u64());
-        assert_eq!(next["tool_count"], 5);
+        assert_eq!(next["tool_count"], 6);
         registry.close();
         assert!(registry.capabilities().is_err());
     }

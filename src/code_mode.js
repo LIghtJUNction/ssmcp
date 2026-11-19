@@ -515,7 +515,9 @@ const bootstrap = `(() => {
     ['list', 'status', 'create', 'restart', 'close'].map(name =>
       [name, (id, args = {}) => workspaceResult(id, 'ssmcp.session.' + name, args)])
   ));
-  const history = freeze(Object.fromEntries(
+  const history = freeze({
+    recover: (id, args = {}) => workspaceResult(id, 'ssmcp.client.recover', args),
+    ...Object.fromEntries(
     ['list', 'metadata', 'read', 'search'].map(action =>
       [action, (id, args = {}) => {
         if (!args || typeof args !== 'object' || isArray(args) || Object.hasOwn(args, 'action')) {
@@ -523,7 +525,8 @@ const bootstrap = `(() => {
         }
         return workspaceResult(id, 'ssmcp.ui.history', {...args, action});
       }])
-  ));
+    ),
+  });
   const outputs = freeze({
     search: (id, args) => workspaceResult(id, 'ssmcp.output.search', args),
     read: (id, args) => workspaceResult(id, 'ssmcp.output.read', args),

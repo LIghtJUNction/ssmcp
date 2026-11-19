@@ -904,6 +904,78 @@ pub(crate) fn remember_delivered_request(
 }
 
 /// Read only the active local JSONL conversation; never select or resume another.
+/// A small source index, not another persisted conversation or an automatic resume.
+pub(crate) fn recovery(workspace: &str, limit: usize) -> Result<Value, String> {
+    if limit > 16 {
+        return Err("history recovery limit must be 0..=16".into());
+    }
+    // Unlike ordinary history operations, observation must not initialize a
+    // directory or choose a new history handle in a fresh/headless Runtime.
+    let state = HISTORY
+        .get()
+        .ok_or("conversation history has not been initialized by this client")?
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let history = state
+        .as_ref()
+        .ok_or("conversation history has not been initialized by this client")?;
+    if history.workspace != workspace {
+        return Err("conversation history belongs to a different workspace".into());
+    }
+    recovery_view(history.current()?, limit)
+}
+
+fn recovery_view(conversation: Option<Conversation>, limit: usize) -> Result<Value, String> {
+    const MAX_RECOVERY_BYTES: usize = 12 * 1024;
+    let Some(conversation) = conversation else {
+        return Ok(
+            json!({"schema":SCHEMA,"active":false,"conversation_id":null,
+            "note":"This process has no active local conversation. Use history.list for retained workspace conversations; none was automatically selected."}),
+        );
+    };
+    let total = conversation.messages.len();
+    let mut recent = Vec::new();
+    for (index, message) in conversation
+        .messages
+        .iter()
+        .enumerate()
+        .skip(total.saturating_sub(limit))
+    {
+        let mut end = message.content.len().min(512);
+        while !message.content.is_char_boundary(end) {
+            end -= 1;
+        }
+        recent.push(json!({"message_id":message.id,"message_index":index,
+            "role":message.role,"kind":message.kind,"created_at_ms":message.created_at_ms,
+            "source_utf8_bytes":message.content.len(),"source_truncated":message.truncated,
+            "sha256":format!("{:x}", Sha256::digest(message.content.as_bytes())),
+            "preview":&message.content[..end],"preview_truncated":end<message.content.len()}));
+    }
+    let mut value = json!({"schema":SCHEMA,"active":true,
+        "conversation_id":conversation.metadata.id,"created_at_ms":conversation.metadata.created_at_ms,
+        "retained_messages":total,"truncated_messages":conversation.metadata.truncated_messages,
+        "last_message_id":conversation.messages.last().map(|message| &message.id),
+        "recent":recent,"earlier_messages":total.saturating_sub(limit),
+        "full_read":{"tool":"ssmcp.ui.history","arguments":{"action":"read",
+            "id":conversation.metadata.id,"offset":total.saturating_sub(limit),"limit":16}},
+        "snapshot_note":"Record offsets may move after retention; verify message IDs and hashes when following a source."});
+    while serde_json::to_vec(&value)
+        .map_err(|_| "cannot encode history recovery index")?
+        .len()
+        > MAX_RECOVERY_BYTES - 256
+    {
+        let recent = value["recent"].as_array_mut().expect("recent records");
+        if recent.is_empty() {
+            return Err("history recovery index exceeds 12 KiB".into());
+        }
+        recent.remove(0);
+    }
+    let shown = value["recent"].as_array().expect("recent records").len();
+    value["earlier_messages"] = json!(total - shown);
+    value["full_read"]["arguments"]["offset"] = json!(total - shown);
+    Ok(value)
+}
+
 pub(crate) fn current() -> Result<Option<Conversation>, String> {
     with(|history| history.current())
 }
@@ -1925,5 +1997,90 @@ mod tests {
         text = text.replace(SCHEMA, "ssmcp.conversation.v99");
         fs::write(&path, text).unwrap();
         assert!(history.read(&id).is_err());
+    }
+
+    #[test]
+    fn recovery_source_index_keeps_recent_ids_hashes_and_json_budget_without_rewriting() {
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        for index in 0..16 {
+            history
+                .record("assistant", &format!("{index}: {}", "\"\\界".repeat(400)))
+                .unwrap();
+        }
+        let conversation = history.current().unwrap().unwrap();
+        let original = history
+            .directory
+            .open(
+                &session_name(&conversation.metadata.id).unwrap(),
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+        let mut before = Vec::new();
+        let mut reader = original;
+        reader.read_to_end(&mut before).unwrap();
+        let view = recovery_view(Some(conversation.clone()), 16).unwrap();
+        assert!(serde_json::to_vec(&view).unwrap().len() <= 12 * 1024);
+        let recent = view["recent"].as_array().unwrap();
+        assert!(!recent.is_empty() && recent.len() < 16);
+        assert_eq!(
+            view["last_message_id"],
+            conversation.messages.last().unwrap().id
+        );
+        assert_eq!(
+            view["earlier_messages"].as_u64().unwrap() as usize,
+            16 - recent.len()
+        );
+        for item in recent {
+            let source = &conversation.messages[item["message_index"].as_u64().unwrap() as usize];
+            assert_eq!(item["message_id"], source.id);
+            assert_eq!(
+                item["sha256"],
+                format!("{:x}", Sha256::digest(source.content.as_bytes()))
+            );
+            assert!(
+                source
+                    .content
+                    .starts_with(item["preview"].as_str().unwrap())
+            );
+            assert!(item["preview"].as_str().unwrap().len() <= 512);
+            assert_eq!(item["preview_truncated"], true);
+        }
+        let mut after = Vec::new();
+        history
+            .directory
+            .open(
+                &session_name(&conversation.metadata.id).unwrap(),
+                false,
+                false,
+                false,
+            )
+            .unwrap()
+            .read_to_end(&mut after)
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(
+            history.current().unwrap().unwrap().metadata.id,
+            conversation.metadata.id
+        );
+    }
+
+    #[test]
+    fn recovery_has_no_invented_current_conversation_and_preserves_retention_count() {
+        let empty = recovery_view(None, 8).unwrap();
+        assert_eq!(empty["active"], false);
+        assert!(empty["conversation_id"].is_null());
+        let temporary = Temporary::new();
+        let mut history = temporary.history();
+        history.record("assistant", "retained source").unwrap();
+        let mut conversation = history.current().unwrap().unwrap();
+        conversation.metadata.truncated_messages = 41;
+        let view = recovery_view(Some(conversation), 0).unwrap();
+        assert_eq!(view["retained_messages"], 1);
+        assert_eq!(view["truncated_messages"], 41);
+        assert!(view["recent"].as_array().unwrap().is_empty());
+        assert_eq!(view["earlier_messages"], 1);
     }
 }

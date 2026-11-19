@@ -13,6 +13,7 @@ use std::{
 const SCHEMA: &str = "ssmcp.context-memory.v1";
 const FILE: &str = "state.json";
 const MAX_BRANCHES: usize = 8;
+const MAX_WORKSPACES: usize = 256;
 const MAX_BRANCH_BYTES: usize = 24 * 1024;
 const MAX_STATE_BYTES: usize = 256 * 1024;
 const MAX_SUMMARY: usize = 8 * 1024;
@@ -340,7 +341,24 @@ impl Store {
         {
             return Err("context workspace must be a bounded absolute path".into());
         }
-        let directory = SafeDirectory::at(base.join(digest(&workspace)))?;
+        // Serialize new workspace admission across processes. Existing documents
+        // remain readable/writable at capacity; no workspace is silently pruned.
+        let root = SafeDirectory::at(base.clone())?;
+        let _admission = root.lock()?;
+        let id = digest(&workspace);
+        let path = base.join(&id);
+        let exists = match std::fs::symlink_metadata(&path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => return Err("cannot inspect context workspace directory".into()),
+        };
+        // Reopening a known workspace must also work if old installations have
+        // already exceeded the directory scan limit. SafeDirectory still rejects
+        // a linked/nonprivate existing entry before opening its document.
+        if !exists && root.names()?.iter().filter(|name| hex(name, 64)).count() >= MAX_WORKSPACES {
+            return Err("context memory already retains 256 workspaces; archive an unused workspace explicitly before creating another; existing records were preserved".into());
+        }
+        let directory = SafeDirectory::at(path)?;
         let lock = directory.lock()?;
         let restored = directory.names()?.iter().any(|name| name == FILE);
         let store = Self {
@@ -777,6 +795,7 @@ pub(crate) fn record_delivered_history(
 
 fn limits() -> Value {
     json!({"branches":MAX_BRANCHES,"branch_bytes":MAX_BRANCH_BYTES,"workspace_bytes":MAX_STATE_BYTES,
+        "workspace_directories":MAX_WORKSPACES,"workspace_admission":"existing workspaces preserved; new directories refused at capacity",
         "summary_utf8_bytes":MAX_SUMMARY,"recent_records":MAX_RECENT,
         "recent_text_utf8_bytes":MAX_RECENT_TEXT,"tool_snapshot_bytes":MAX_SNAPSHOT})
 }
@@ -847,6 +866,16 @@ fn snapshot(store: &Store, document: &Document) -> Result<Value, String> {
         }
         return Err("context snapshot cannot fit its 12 KiB budget".into());
     }
+}
+
+/// Explicit recovery keeps storage errors visible and checks the Runtime scope.
+pub(crate) fn recovery(workspace: &str) -> Result<Value, String> {
+    with_store(|store| {
+        if store.workspace != workspace {
+            return Err("context memory belongs to a different workspace".into());
+        }
+        snapshot(store, &store.read()?)
+    })
 }
 
 /// Optional side metadata; never routed through user_messages or interpreted as a command.
@@ -1528,5 +1557,71 @@ mod tests {
         assert!(parse::<SwitchRequest>(json!({"id":"x","path":"/tmp/escape"})).is_err());
         assert!(parse::<CompactRequest>(json!({"expected_revision":-1})).is_err());
         assert!(parse::<ForkRequest>(json!({"activate":"true"})).is_err());
+    }
+
+    #[test]
+    fn recovery_workspace_admission_is_bounded_and_existing_memory_is_preserved() {
+        let temporary = Temporary::new();
+        let base = temporary.0.join("memory");
+        let workspace = temporary.workspace_path("kept");
+        let store = Store::at(base.clone(), workspace.clone()).unwrap();
+        let before = std::fs::read(temporary.state_path("kept")).unwrap();
+        for index in 0..MAX_WORKSPACES - 1 {
+            crate::platform::private_directory(&base.join(format!("{index:064x}"))).unwrap();
+        }
+        let next = temporary.workspace_path("new-workspace");
+        assert!(
+            Store::at(base.clone(), next.clone())
+                .err()
+                .unwrap()
+                .contains("256 workspaces")
+        );
+        assert!(!base.join(digest(&next)).exists());
+        // Existing installations can already be over capacity; reopening one
+        // must not prune or rewrite it.
+        crate::platform::private_directory(&base.join(format!("{MAX_WORKSPACES:064x}"))).unwrap();
+        let reopened = Store::at(base, workspace).unwrap();
+        assert_eq!(
+            reopened.read().unwrap().active_id,
+            store.read().unwrap().active_id
+        );
+        assert_eq!(std::fs::read(temporary.state_path("kept")).unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_workspace_admission_serializes_two_creators_at_the_last_slot() {
+        let temporary = Temporary::new();
+        let base = temporary.0.join("memory");
+        crate::platform::private_directory(&base).unwrap();
+        for index in 0..MAX_WORKSPACES - 1 {
+            crate::platform::private_directory(&base.join(format!("{index:064x}"))).unwrap();
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let workers: Vec<_> = ["one", "two"]
+            .into_iter()
+            .map(|name| {
+                let base = base.clone();
+                let workspace = temporary.workspace_path(name);
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Store::at(base, workspace).is_ok()
+                })
+            })
+            .collect();
+        barrier.wait();
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|passed| *passed)
+                .count(),
+            1
+        );
+        let names = SafeDirectory::at(base).unwrap().names().unwrap();
+        assert_eq!(
+            names.iter().filter(|name| hex(name, 64)).count(),
+            MAX_WORKSPACES
+        );
     }
 }
