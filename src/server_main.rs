@@ -38,6 +38,8 @@ Configuration:
   Precedence: command line > environment > TOML > built-in defaults.
   Portal: --portal-state-dir PATH overrides [portal] state_dir (private persistent directory).
   --portal-only runs the account HTTP portal without running the gateway management service.
+  Public UI: [portal] frontend_socket connects an independent ssmcp-frontend renderer.
+  Only public guide/assets use it; OAuth, accounts, traffic and device connections stay in the core.
   --gateway-socket PATH overrides [portal] gateway_socket (private gateway management socket).
   Management: [portal] admin_usernames = ["your-ssmcp-username"] after registering that name.
   Relay bandwidth: [portal] default_rate_limit_bps = 8388608 (8 MiB/s in each direction per user).
@@ -63,7 +65,8 @@ Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
   TOML: [oauth] client_registry = "/var/lib/ssmcpd/oauth-clients.toml".
   Installed systemd service defaults to its StateDirectory automatically.
   Parent directory must exist, be daemon-owned and mode 0700; files use 0600.
-  Registrations survive restart; tokens and unfinished logins still require reauthorization.
+  Registrations and account grants survive restart with their original expiry and revocations.
+  Only hashes are stored; unfinished logins and legacy connection-bound grants do not survive.
   Login codes and authorization forms last 30 minutes.
 
 Run serve in the foreground under systemd.
@@ -99,10 +102,13 @@ struct FileConfig {
 struct PortalConfig {
     state_dir: Option<PathBuf>,
     gateway_socket: Option<PathBuf>,
+    frontend_socket: Option<PathBuf>,
     admin_github_ids: Vec<String>,
     admin_github_users: Vec<String>,
     admin_usernames: Vec<String>,
     default_rate_limit_bps: u64,
+    free_user_monthly_traffic_bytes: u64,
+    paid_user_monthly_traffic_bytes: u64,
     owner_mappings: HashMap<String, String>,
     audit_dir: Option<PathBuf>,
     audit_retention_days: u32,
@@ -115,10 +121,13 @@ impl Default for PortalConfig {
         Self {
             state_dir: None,
             gateway_socket: None,
+            frontend_socket: None,
             admin_github_ids: Vec::new(),
             admin_github_users: Vec::new(),
             admin_usernames: Vec::new(),
             default_rate_limit_bps: ssmcp::user_policy::DEFAULT_RATE_LIMIT_BPS,
+            free_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
+            paid_user_monthly_traffic_bytes: ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES,
             owner_mappings: HashMap::new(),
             audit_dir: None,
             audit_retention_days: audit.retention_days,
@@ -443,6 +452,9 @@ fn absolute_path(path: &Path, label: &str) -> ssmcp::Result<()> {
 
 fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
     let portal = &config.portal;
+    if let Some(socket) = &portal.frontend_socket {
+        absolute_path(socket, "portal.frontend_socket")?;
+    }
     config.commerce.validate()?;
     if config.commerce.enabled && (config.portal_only || portal.state_dir.is_none()) {
         return Err("commerce requires the gateway process with portal.state_dir; --portal-only cannot own billing".into());
@@ -451,6 +463,12 @@ fn validate_portal_config(config: &Config) -> ssmcp::Result<()> {
         return Err(
             "portal.default_rate_limit_bps must be in 1..=1073741824 bytes per second".into(),
         );
+    }
+    if portal.state_dir.is_none()
+        && (portal.free_user_monthly_traffic_bytes != ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES
+            || portal.paid_user_monthly_traffic_bytes != ssmcp::user_policy::FREE_MONTHLY_TRAFFIC_BYTES)
+    {
+        return Err("custom monthly traffic allowances require portal.state_dir".into());
     }
     if !portal.admin_usernames.is_empty() && portal.state_dir.is_none() {
         return Err(
@@ -588,7 +606,7 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         ssmcp::observability::log(
             "info",
             "persistence",
-            &[("event", "durable_client_registry_enabled".into())],
+            &[("event", "durable_oauth_state_enabled".into())],
         );
     } else {
         ssmcp::observability::log(
@@ -602,9 +620,17 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
             return Err("portal.state_dir requires the existing auth.github configuration".into());
         }
         broker.portal = ssmcp::portal::Portal::open(path)?;
+        broker.portal.configure_monthly_allowances(ssmcp::user_policy::MonthlyTrafficAllowances {
+            free_user_bytes: config.portal.free_user_monthly_traffic_bytes,
+            paid_user_bytes: config.portal.paid_user_monthly_traffic_bytes,
+        })?;
         if let Some(socket) = &config.portal.gateway_socket {
             broker.portal.configure_management(socket.clone());
         }
+    }
+
+    if let Some(socket) = &config.portal.frontend_socket {
+        broker.portal.configure_public_frontend(socket.clone())?;
     }
 
     broker
@@ -770,6 +796,20 @@ mod tests {
             commerce: ssmcp::commerce::CommerceConfig::default(),
             portal_only: false,
         }
+    }
+
+    #[test]
+    fn public_frontend_is_optional_and_does_not_open_a_second_account_store() {
+        assert!(parse_file_config("").unwrap().portal.frontend_socket.is_none());
+        let parsed = parse_file_config("[portal]\nfrontend_socket = '/run/ssmcp-frontend/render.sock'\n").unwrap();
+        let mut config = portal_config_fixture();
+        config.portal = parsed.portal;
+        assert!(config.portal.state_dir.is_none());
+        assert!(validate_portal_config(&config).is_ok());
+        config.portal.frontend_socket = Some("relative.sock".into());
+        assert!(validate_portal_config(&config).is_err());
+        config.portal.frontend_socket = Some("/run/../tmp/render.sock".into());
+        assert!(validate_portal_config(&config).is_err());
     }
 
     #[test]
@@ -992,4 +1032,28 @@ client_secret = "example-test-secret"
             assert!(normalize_origin(bad).is_err(), "{bad}");
         }
     }
+
+    #[test]
+    fn monthly_tier_configuration_is_optional_explicit_and_requires_accounts() {
+        let old = parse_file_config("[portal]\n").unwrap();
+        assert_eq!(old.portal.free_user_monthly_traffic_bytes, 1_000_000_000);
+        assert_eq!(old.portal.paid_user_monthly_traffic_bytes, 1_000_000_000);
+        let file = parse_file_config("[portal]\nfree_user_monthly_traffic_bytes = 0\npaid_user_monthly_traffic_bytes = 10000000000\n").unwrap();
+        assert_eq!(file.portal.free_user_monthly_traffic_bytes, 0);
+        assert_eq!(file.portal.paid_user_monthly_traffic_bytes, 10_000_000_000);
+        let mut config = portal_config_fixture();
+        config.portal = file.portal;
+        assert!(validate_portal_config(&config).unwrap_err().to_string().contains("portal.state_dir"));
+        config.portal.state_dir = Some("/tmp/accounts".into());
+        validate_portal_config(&config).unwrap();
+        for bad in [
+            "[portal]\nfree_user_monthly_traffic_bytes = -1\n",
+            "[portal]\npaid_user_monthly_traffic_bytes = 1.5\n",
+            "[portal]\npaid_user_monthly_traffic_bytes = 'unlimited'\n",
+            "[portal]\npaid_user_monthly_traffic_byte = 123\n",
+        ] {
+            assert!(parse_file_config(bad).is_err());
+        }
+    }
+
 }

@@ -319,6 +319,12 @@ impl Runtime {
         manifest["schema"] = json!("ssmcp.client.capabilities.v1");
         manifest["client_version"] = json!(env!("CARGO_PKG_VERSION"));
         manifest["wire_version"] = json!(crate::wire::VERSION);
+        manifest["thread_scope"] = json!(1);
+        manifest["listener"] = json!({
+            "tool":"ssmcp.ui.listener", "scope":"authenticated account and bound thread",
+            "transports":["authenticated_mcp_longpoll", "private_unix_socket_on_linux"],
+            "delivery":"one shared lease, cursor and ACK state; no automatic replay"
+        });
         manifest["resources"] = json!({
             "list":"ssmcp.resources.list","templates":"ssmcp.resources.templates","read":"ssmcp.resources.read",
             "max_response_bytes":MAX_BYTES,"page_size":PAGE_SIZE,"guide":"ssmcp-client://guide","skill":"ssmcp-client://skill",
@@ -539,9 +545,7 @@ display unknown. list reports controller_metadata; v4 clients require an update 
 Use await reload(clientId) after installing an updated client binary. The client acknowledges \
 the request, waits for the server's receipt, stops local background work, and executes its \
 installed entry point with the original arguments, cwd and environment. In-flight requests \
-must finish first. Call list again for the new ID. Account sessions reconnect using saved login \
-credentials; GitHub --allow access persists. Login-code connections need new OAuth login. \
-Temporary joined sessions cannot reload; create a new invitation. Both client and server must support reload.\n\n\
+must finish first. Call list again for the new ID. Connections reconnect using the same login or server-qualified --allow policy. Both client and server must support reload.\n\n\
 Long command output is streamed to the client's private ssmcp storage \
 (normally /tmp/ssmcp-<uid> on Unix or LOCALAPPDATA/ssmcp/output on Windows). Read the \
 returned artifact metadata, including SHA-256, bytes, lines, complete and expiry. Use \

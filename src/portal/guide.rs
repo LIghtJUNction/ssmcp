@@ -1,14 +1,21 @@
 //! Public, script-free documentation. It never creates an account session.
 use crate::broker::Broker;
-use axum::{Router, extract::State, http::header, response::Html, routing::get};
+use axum::{
+    Router,
+    extract::State,
+    http::header,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+};
 use std::sync::Arc;
 
 const ENGLISH: &str = include_str!("guide/en.html");
 const CHINESE: &str = include_str!("guide/zh.html");
-const CSS: &str = include_str!("guide/style.css");
+pub(super) const CSS: &str = include_str!("guide/style.css");
 
-#[derive(Clone, Copy)]
-enum Language {
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Language {
     English,
     Chinese,
 }
@@ -20,21 +27,54 @@ pub(super) fn routes() -> Router<Arc<Broker>> {
         .route("/guide/", get(english))
         .route("/guide/en", get(english))
         .route("/guide/zh", get(chinese))
-        .route(
-            "/guide/style.css",
-            get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], CSS) }),
-        )
+        .route("/guide/style.css", get(style))
 }
 
 async fn english(State(broker): State<Arc<Broker>>) -> Html<String> {
-    Html(page(Language::English, &broker.public_url))
+    Html(render(&broker, Language::English).await)
 }
 
 async fn chinese(State(broker): State<Arc<Broker>>) -> Html<String> {
-    Html(page(Language::Chinese, &broker.public_url))
+    Html(render(&broker, Language::Chinese).await)
 }
 
-fn page(language: Language, public_url: &str) -> String {
+async fn render(broker: &Broker, language: Language) -> String {
+    if let Some(endpoint) = &broker.portal.frontend
+        && let Some(rendered) = endpoint
+            .render(
+                super::frontend::Request::Guide {
+                    language,
+                    public_url: broker.public_url.clone(),
+                },
+                "text/html; charset=utf-8",
+                None,
+            )
+            .await
+        && let Ok(html) = String::from_utf8(rendered.body)
+    {
+        return html;
+    }
+    page(language, &broker.public_url)
+}
+
+async fn style(State(broker): State<Arc<Broker>>) -> Response {
+    let body = if let Some(endpoint) = &broker.portal.frontend
+        && let Some(rendered) = endpoint
+            .render(
+                super::frontend::Request::GuideCss {},
+                "text/css; charset=utf-8",
+                None,
+            )
+            .await
+    {
+        rendered.body
+    } else {
+        CSS.as_bytes().to_vec()
+    };
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], body).into_response()
+}
+
+pub(super) fn page(language: Language, public_url: &str) -> String {
     let origin = reqwest::Url::parse(public_url)
         .ok()
         .filter(|url| {
@@ -47,9 +87,8 @@ fn page(language: Language, public_url: &str) -> String {
         })
         .map(|url| url.origin().ascii_serialization())
         .unwrap_or_else(|| "https://relay.example".into());
-    let authority = origin
-        .split_once("://")
-        .map_or("relay.example", |(_, host)| host);
+    // Account targets omit HTTPS, but loopback HTTP must keep its scheme.
+    let authority = origin.strip_prefix("https://").unwrap_or(&origin);
     let template = match language {
         Language::English => ENGLISH,
         Language::Chinese => CHINESE,
@@ -79,15 +118,20 @@ mod tests {
                 "tools.search",
                 "/handoff",
                 "/resume",
-                "ssmcp invite --shell powershell",
-                "--no-bootstrap",
-                "session_ttl_secs",
+                "ssmcp --server https://relay.example:8443 --allow yourname@relay.example:8443",
+                "collab.join",
                 r#"desktop: "host""#,
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }
             assert!(!html.contains("{{"));
             assert!(!html.contains("<script"));
+        }
+        for language in [Language::English, Language::Chinese] {
+            let html = page(language, "http://127.0.0.1:4123");
+            assert!(html.contains(
+                "ssmcp --server http://127.0.0.1:4123 --allow yourname@http://127.0.0.1:4123"
+            ));
         }
         for origin in [
             "https://user:secret@relay.example",

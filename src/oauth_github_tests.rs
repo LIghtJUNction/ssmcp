@@ -35,6 +35,7 @@ use tokio::{
 
 const PUBLIC: &str = "https://ssmcp.example.test";
 const RESOURCE: &str = "https://ssmcp.example.test/mcp";
+const OTHER_RESOURCE: &str = "https://ssmcp.example.test/retired";
 const CALLBACK: &str = "https://consumer.example.test/callback";
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
@@ -154,6 +155,7 @@ struct Fixture {
     http: Client,
     servers: Vec<JoinHandle<()>>,
     clients: Vec<WireClient>,
+    directory: std::path::PathBuf,
 }
 
 impl Drop for Fixture {
@@ -165,6 +167,7 @@ impl Drop for Fixture {
         for server in &self.servers {
             server.abort();
         }
+        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 
@@ -190,6 +193,27 @@ impl Fixture {
             &upstream,
         )
         .unwrap();
+        // Qualified allow targets name existing server accounts, not a provider lookup.
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-oauth-http-{}",
+            super::random("fixture").unwrap_or_else(|_| panic!("random fixture directory"))
+        ));
+        broker.portal = crate::portal::Portal::open(&directory).unwrap();
+        broker
+            .portal
+            .storage(|store| {
+                for (subject, login, handle) in [("42", "Alice", "alice"), ("7", "bob", "bob")] {
+                    store.login(&crate::identity::Identity {
+                        provider: "github".into(),
+                        subject: subject.into(),
+                        login: login.into(),
+                    })?;
+                    store.claim_handle(subject, handle)?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
         let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -207,12 +231,25 @@ impl Fixture {
                 .unwrap(),
             servers: vec![provider_task, http_task],
             clients: Vec::new(),
+            directory,
         }
     }
 
     async fn attach(&mut self, name: &str, allow: &[&str]) -> usize {
         let (server, client) = UnixStream::pair().unwrap();
-        let attachment = tokio::spawn(self.broker.clone().attach(server));
+        assert!(
+            !allow.is_empty(),
+            "unsigned controlled fixtures require explicit account access"
+        );
+        let attachment = tokio::spawn(self.broker.clone().attach_device(
+            server,
+            crate::device::DevicePeer {
+                account: None,
+                session_access: true,
+                control_attribution: true,
+            },
+            crate::user_policy::TrafficFailureState::default(),
+        ));
         let (reader, mut writer) = client.into_split();
         let mut reader = BufReader::new(reader);
         wire::write_frame(
@@ -245,15 +282,9 @@ impl Fixture {
         else {
             panic!("wire registration did not return Ready");
         };
-        if allow.is_empty() {
-            assert_eq!(login_code.len(), 64);
-            assert_eq!(login_expires_in, 1800);
-            assert_ne!(url, RESOURCE);
-        } else {
-            assert!(login_code.is_empty());
-            assert_eq!(login_expires_in, 0);
-            assert_eq!(url, RESOURCE);
-        }
+        assert!(login_code.is_empty());
+        assert_eq!(login_expires_in, 0);
+        assert_eq!(url, RESOURCE);
         let catalog_calls = Arc::new(AtomicUsize::new(0));
         let recorded = catalog_calls.clone();
         let worker = tokio::spawn(async move {
@@ -488,10 +519,13 @@ fn visible_clients(value: &Value) -> Vec<String> {
 async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_acl_and_rotates_refresh()
  {
     let mut fixture = Fixture::start().await;
-    let alice = fixture.attach("alice-project", &["alice@github"]).await;
-    let bob = fixture.attach("bob-project", &["bob@github"]).await;
-    let legacy = fixture.attach("legacy-project", &[]).await;
-    assert_eq!(fixture.github.lookups.load(Ordering::SeqCst), 2);
+    let alice = fixture
+        .attach("alice-project", &["alice@ssmcp.example.test"])
+        .await;
+    let bob = fixture
+        .attach("bob-project", &["bob@ssmcp.example.test"])
+        .await;
+    assert_eq!(fixture.github.lookups.load(Ordering::SeqCst), 0);
     let flow = fixture.begin(RESOURCE).await;
     assert_eq!(
         fixture.action(&flow, "decision", "allow").await.status(),
@@ -578,25 +612,13 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         fixture.clients[alice].catalog_calls.load(Ordering::SeqCst),
         1
     );
-    for denied in [bob, legacy] {
-        let (status, _, result) = fixture
-            .list(
-                "/mcp",
-                access,
-                json!({"client_id":fixture.clients[denied].id}),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(result["result"]["isError"], true);
-        assert_eq!(
-            fixture.clients[denied].catalog_calls.load(Ordering::SeqCst),
-            0
-        );
-    }
-    let owner_path = Url::parse(&fixture.clients[legacy].resource)
-        .unwrap()
-        .path()
-        .to_owned();
+    let (status, _, result) = fixture
+        .list("/mcp", access, json!({"client_id":fixture.clients[bob].id}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["result"]["isError"], true);
+    assert_eq!(fixture.clients[bob].catalog_calls.load(Ordering::SeqCst), 0);
+    let owner_path = Url::parse(OTHER_RESOURCE).unwrap().path().to_owned();
     assert_eq!(
         fixture.list(&owner_path, access, json!({})).await.0,
         StatusCode::UNAUTHORIZED
@@ -615,7 +637,7 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
             ("grant_type", "refresh_token"),
             ("client_id", &flow.client_id),
             ("refresh_token", refresh),
-            ("resource", &fixture.clients[legacy].resource),
+            ("resource", OTHER_RESOURCE),
         ])
         .await;
     assert_eq!(wrong_resource.status(), StatusCode::BAD_REQUEST);
@@ -623,7 +645,7 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         wrong_resource.json::<Value>().await.unwrap()["error"],
         "invalid_grant"
     );
-    // Identity grants remain renewable while the permitted SSH connection is offline.
+    // Identity grants remain renewable while the controlled connection is offline.
     fixture.clients[alice].worker.abort();
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
@@ -645,7 +667,9 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
     assert_ne!(renewed["refresh_token"], tokens["refresh_token"]);
     let renewed_access = renewed["access_token"].as_str().unwrap();
     assert!(visible_clients(&fixture.list("/mcp", renewed_access, json!({})).await.2).is_empty());
-    let reconnected = fixture.attach("alice-reconnected", &["alice@github"]).await;
+    let reconnected = fixture
+        .attach("alice-reconnected", &["alice@ssmcp.example.test"])
+        .await;
     assert_eq!(
         visible_clients(&fixture.list("/mcp", renewed_access, json!({})).await.2),
         vec![fixture.clients[reconnected].id.clone()]
@@ -706,40 +730,36 @@ async fn github_http_denial_consumes_consent_without_issuing_an_mcp_grant() {
 }
 
 #[tokio::test]
-async fn legacy_http_login_remains_ssh_scoped_and_cannot_reach_identity_acl_sessions() {
+async fn anonymous_http_allow_is_not_an_oauth_credential_or_login_code() {
     let mut fixture = Fixture::start().await;
-    let alice = fixture.attach("alice-project", &["alice@github"]).await;
-    let bob = fixture.attach("bob-project", &["bob@github"]).await;
-    let legacy = fixture.attach("legacy-project", &[]).await;
-    let client = &fixture.clients[legacy];
-    let flow = fixture.begin(&client.resource).await;
-    let response = fixture
-        .action(&flow, "login_code", &client.login_code)
+    let alice = fixture
+        .attach("alice-project", &["alice@ssmcp.example.test"])
         .await;
-    let tokens = fixture.exchange_code(&flow, response).await;
-    let access = tokens["access_token"].as_str().unwrap();
-    let path = Url::parse(&client.resource).unwrap().path().to_owned();
-    let (status, _, result) = fixture.list(&path, access, json!({})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(visible_clients(&result), vec![client.id.clone()]);
-    for denied in [alice, bob] {
-        let (status, _, result) = fixture
-            .list(
-                &path,
-                access,
-                json!({"client_id":fixture.clients[denied].id}),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(result["result"]["isError"], true);
+    let client = &fixture.clients[alice];
+    assert!(client.login_code.is_empty());
+    assert_eq!(client.resource, RESOURCE);
+    let flow = fixture.begin(RESOURCE).await;
+    for code in ["", "alice@ssmcp.example.test", client.id.as_str()] {
         assert_eq!(
-            fixture.clients[denied].catalog_calls.load(Ordering::SeqCst),
-            0
+            fixture.action(&flow, "login_code", code).await.status(),
+            StatusCode::BAD_REQUEST,
         );
     }
     assert_eq!(
-        fixture.list("/mcp", access, json!({})).await.0,
-        StatusCode::UNAUTHORIZED
+        fixture.action(&flow, "decision", "allow").await.status(),
+        StatusCode::BAD_REQUEST,
     );
+    for token in ["alice@ssmcp.example.test", client.id.as_str()] {
+        assert_eq!(
+            fixture
+                .list("/mcp", token, json!({"client_id":client.id}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED,
+        );
+    }
+    assert_eq!(client.catalog_calls.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.github.exchanges.load(Ordering::SeqCst), 0);
+    let store = fixture.broker.oauth.state.lock().unwrap();
+    assert!(store.codes.is_empty() && store.access.is_empty() && store.refresh.is_empty());
 }

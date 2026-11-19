@@ -1,5 +1,5 @@
 //! Dashboard input belongs to its composer and navigation; fallback input uses the selected PTY.
-//! Ctrl-C disconnects outside bracketed paste; pasted binary bytes remain intact.
+//! The dashboard owns editing keys; bracketed paste keeps binary bytes intact.
 use crate::{
     pty::Terminal,
     terminals::Terminals,
@@ -994,12 +994,17 @@ mod platform {
                 io::Error::last_os_error()
             ));
         }
-        let local = (saved | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT)
-            & !(ENABLE_ECHO_INPUT
-                | ENABLE_LINE_INPUT
-                | ENABLE_QUICK_EDIT_MODE
-                | ENABLE_VIRTUAL_TERMINAL_INPUT);
-        // ENABLE_PROCESSED_INPUT keeps Ctrl-C on the client's existing signal path.
+        let mut local =
+            (saved | ENABLE_PROCESSED_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT)
+                & !(ENABLE_ECHO_INPUT
+                    | ENABLE_LINE_INPUT
+                    | ENABLE_QUICK_EDIT_MODE
+                    | ENABLE_VIRTUAL_TERMINAL_INPUT);
+        // The dashboard interprets Ctrl-C as editing input. Without a dashboard,
+        // keep the console's existing interrupt path.
+        if crate::client::terminal::active() {
+            local &= !ENABLE_PROCESSED_INPUT;
+        }
         // SAFETY: handle is open and local contains supported console input mode flags.
         if unsafe { SetConsoleMode(handle.as_raw_handle(), local) } == 0 {
             return Err(format!(

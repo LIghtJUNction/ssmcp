@@ -27,10 +27,14 @@ pub(super) struct Task {
 }
 
 impl Task {
-    fn start(stamp: InputStamp, source: String) -> Result<Self, String> {
+    fn start(
+        stamp: InputStamp,
+        source: String,
+        selected_thread: Option<&str>,
+    ) -> Result<Self, String> {
         // Check before file preparation, then recheck the same epoch/lease when
         // committing the delivery. A replacement listener cannot inherit it.
-        let target = receiver::target()?;
+        let target = receiver::target(selected_thread)?;
         let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
         let (sender, result) = oneshot::channel();
         let task_source = source.clone();
@@ -103,23 +107,21 @@ impl State {
         if self.conversation.editing.is_some() || self.conversation.submitting.is_some() {
             return Err("发送失败：请先完成当前队列消息的编辑或提交，草稿已保留".into());
         }
-        if self
+        if let Some(target) = self
             .conversation
             .target
             .as_deref()
-            .is_some_and(|target| target != "next")
+            .filter(|target| *target != "next")
+            && receiver::snapshot()["listener"]["thread_id"].as_str() != Some(target)
         {
-            return Err(
-                "发送失败：不能把指定 agent 的消息改投监听程序；请先选择 Next caller，草稿已保留"
-                    .into(),
-            );
+            return Err("发送失败：没有对应指定 agent 的监听程序；草稿已保留".into());
         }
         if self.conversation.force_task.is_some() {
             return Err("正在等待监听程序确认，草稿已保留".into());
         }
         steering::validate_text(text)?;
         let stamp = self.chat_input_stamp().ok_or("发送失败：当前输入不可用")?;
-        let task = Task::start(stamp, text.into())?;
+        let task = Task::start(stamp, text.into(), self.conversation.target.as_deref())?;
         self.conversation.force_task = Some(task);
         self.notice = Some("正在发送给监听程序…等待接收确认，草稿已保留".into());
         self.dirty = true;
@@ -195,6 +197,7 @@ mod tests {
     fn completed(status: Status) -> Result<Completed, String> {
         Ok(Completed {
             receipt: Receipt {
+                cursor: 1,
                 delivery_id: "synthetic-delivery".into(),
                 connection_id: "synthetic-connection".into(),
                 listener_id: "synthetic-listener".into(),

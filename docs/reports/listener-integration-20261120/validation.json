@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "recorded_at_utc": "2026-11-19T21:40:18.108830+00:00",
+  "source_commit": "70aebd09d56cfa21cd0229da6c0e3c3cdaae2200",
+  "fixture_commit": "9989076d5ede9fd4959fc2b5c269c36909e6ab76",
+  "branch": "integrate/listener-main-20261120",
+  "ancestry": {
+    "main_base": {
+      "commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+      "ancestor_of_frozen_source": true
+    },
+    "historical_listener": {
+      "commit": "57d3065ed2d65f579371e3cde170ebc6186f0ed0",
+      "ancestor_of_frozen_source": true
+    },
+    "scroll_fix": {
+      "commit": "4efc04486bb210f5b3861d43eba7d766aa888d69",
+      "ancestor_of_frozen_source": true
+    }
+  },
+  "post_freeze_changes": [
+    "scripts/e2e_local.py",
+    "scripts/e2e_user_wait.py"
+  ],
+  "binary_sha256": {
+    "library-tests": "24f7805a9831b7dcd0124edef0518a55a2d231b9ac9848edc0cbd3f5c152f5a0",
+    "ssmcp": "00f46b4daaaecf4ed7ce9b416b22b75cd6a33b1426f0e0df0225957ddb28b2b6",
+    "ssmcp-frontend": "c1ccd43f295b3f5033f8919ad84e47eae40cc097a0eb79684f787ddf7c248ba8",
+    "ssmcpd": "28dfca57645181fd1130ad020c57d8e943d6ce145e1a7e02cf0bcfd80c2e5f95",
+    "vt_snapshot": "70ba4cb707cb572e9b1754dc673c0d57c04973e59fde6e6e6001b1e610a207a8"
+  },
+  "build": {
+    "locked": true,
+    "jobs": 1,
+    "rustc_serial_preserved": true,
+    "commands": [
+      [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      [
+        "cargo",
+        "test",
+        "--locked",
+        "--lib",
+        "--no-run",
+        "--jobs",
+        "1",
+        "--message-format=json"
+      ],
+      [
+        "cargo",
+        "build",
+        "--locked",
+        "--bin",
+        "ssmcp",
+        "--bin",
+        "ssmcpd",
+        "--bin",
+        "ssmcp-frontend",
+        "--example",
+        "vt_snapshot",
+        "--jobs",
+        "1",
+        "--message-format=json"
+      ]
+    ],
+    "all_exit_codes": 0
+  },
+  "clippy": {
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "--all-targets",
+      "--jobs",
+      "1",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log_sha256": "696a26dcaa6f6f7fef703787db4510da9dcd9b6524ed50c1592d8e54f5dafc04",
+    "cargo_manifest_warning": "unused dependency qrcodegen; Cargo warning, not a Clippy failure"
+  },
+  "unit_tests": {
+    "passed": 56,
+    "unique_test_names": 56,
+    "groups": [
+      {
+        "filter": "client::interface::listener",
+        "passed": 12,
+        "result": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1490 filtered out; finished in 0.08s",
+        "tests": [
+          "client::interface::listener::scope_tests::listener_credentials_do_not_cross_accounts_or_registered_threads",
+          "client::interface::listener::scope_tests::listener_local_delegation_shares_cursors_ack_and_unknown_state_without_replay",
+          "client::interface::listener::scope_tests::listener_open_idempotency_is_caller_scoped_and_does_not_resume_closed_leases",
+          "client::interface::listener::scope_tests::listener_status_is_atomic_with_connection_generation",
+          "client::interface::listener::scope_tests::listener_wait_rechecks_generation_and_session_after_connection_change",
+          "client::interface::listener::tests::force_listener_ack_racing_timeout_commits_one_terminal_receipt",
+          "client::interface::listener::tests::force_listener_cancelled_read_releases_the_exclusive_waiter",
+          "client::interface::listener::tests::force_listener_reconnect_and_expiry_reject_old_tokens_and_targets",
+          "client::interface::listener::tests::force_listener_registration_is_exclusive_and_audit_redacts_the_credential",
+          "client::interface::listener::tests::force_listener_repeated_reads_and_ack_keep_one_delivery_identity",
+          "client::interface::listener::tests::force_listener_unknown_failure_and_rejection_never_replay_automatically",
+          "client::interface::listener::transport::tests::unix_listener_uses_the_shared_lease_and_releases_cancelled_reads"
+        ],
+        "log_sha256": "b9655bb8910013ec1106d5577a2e003216c3c9b4b67423dc31ae34e84a384aa2"
+      },
+      {
+        "filter": "runtime::call_scope",
+        "passed": 5,
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1497 filtered out; finished in 0.01s",
+        "tests": [
+          "runtime::call_scope::tests::call_scope_background_work_requires_explicit_propagation",
+          "runtime::call_scope::tests::call_scope_cancellation_drops_only_the_active_scope",
+          "runtime::call_scope::tests::call_scope_is_immutable_and_isolated_across_interleaved_requests",
+          "runtime::call_scope::tests::call_scope_thread_requires_the_same_verified_agent_and_preserves_session",
+          "runtime::call_scope::tests::call_scope_validates_wire_metadata_and_connection_generations"
+        ],
+        "log_sha256": "f35c56e3b2f9a7a9a94c446e98ddc4305df86ece538065dfa4be48c3d7d37df2"
+      },
+      {
+        "filter": "client::protocol_tests",
+        "passed": 7,
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1495 filtered out; finished in 0.84s",
+        "tests": [
+          "client::protocol_tests::authentication_errors_and_untyped_failures_never_retry_registration",
+          "client::protocol_tests::cancelled_registration_does_not_start_a_transport",
+          "client::protocol_tests::current_protocol_preserves_allow_checks_and_login_requirements",
+          "client::protocol_tests::current_protocol_preserves_metadata_for_login_and_allow",
+          "client::protocol_tests::handshake_deadline_stops_the_single_current_protocol_attempt",
+          "client::protocol_tests::initial_allow_requires_capability_and_reaps_an_unacknowledged_transport",
+          "client::protocol_tests::protocol_rejection_is_terminal_without_downgrade_and_reaps_transport"
+        ],
+        "log_sha256": "2ebeb062c7d5326303fd253f6496385e8bea1177c23bd1f6dde911805180265e"
+      },
+      {
+        "filter": "http::user_wait",
+        "passed": 5,
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1497 filtered out; finished in 1.06s",
+        "tests": [
+          "http::user_wait::tests::user_wait_answer_hook_uses_real_reauthorized_host_replies",
+          "http::user_wait::tests::user_wait_final_decision_rechecks_revocation_ban_and_agent_after_eligible_collection",
+          "http::user_wait::tests::user_wait_real_host_blocks_and_only_final_http_response_commits",
+          "http::user_wait::tests::user_wait_real_host_cancel_wins_after_reservation_without_losing_user_input",
+          "http::user_wait::tests::user_wait_real_host_rejects_native_forged_ready_and_does_not_claim_after_timeout"
+        ],
+        "log_sha256": "94ebf2bdf15225a09ceb97bba7223cbe395811ce9d26e33f729b31daf553fa90"
+      },
+      {
+        "filter": "client::interface::user_wait",
+        "passed": 7,
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1495 filtered out; finished in 1.01s",
+        "tests": [
+          "client::interface::user_wait::tests::user_wait_cancelled_future_and_local_deadline_clear_the_real_wait",
+          "client::interface::user_wait::tests::user_wait_capacity_and_busy_do_not_replace_existing_requests",
+          "client::interface::user_wait::tests::user_wait_concurrent_ready_and_local_cancel_have_one_winner",
+          "client::interface::user_wait::tests::user_wait_deadline_prevents_late_ready_and_completed_metadata_is_bounded",
+          "client::interface::user_wait::tests::user_wait_exact_cancel_and_finish_ack_keep_the_first_terminal_result",
+          "client::interface::user_wait::tests::user_wait_old_drop_cannot_cancel_a_reused_id_after_reconnect",
+          "client::interface::user_wait::tests::user_wait_request_accepts_null_reason_but_never_native_received_or_authority_fields"
+        ],
+        "log_sha256": "b42439f7971ce2a673b1f956754947f5bb58ccbb04eadf2eea5d8fec82374b00"
+      },
+      {
+        "filter": "client::local::tests",
+        "passed": 5,
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1497 filtered out; finished in 0.01s",
+        "tests": [
+          "client::local::tests::bundled_runner_is_private_and_removed_after_failed_startup",
+          "client::local::tests::bundled_runner_never_overwrites_or_removes_a_replaced_file",
+          "client::local::tests::gateway_checks_all_origins_and_has_no_portal_routes",
+          "client::local::tests::private_socket_rejects_symlinks_and_exposed_permissions",
+          "client::local::tests::settings_require_loopback_and_explicit_https_local_proxy"
+        ],
+        "log_sha256": "0d747d96b01490e5181582d97969a112ba42ff22b669108935745c7b72309e1f"
+      },
+      {
+        "filter": "client::account::status",
+        "passed": 10,
+        "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1492 filtered out; finished in 0.02s",
+        "tests": [
+          "client::account::status::tests::absent_and_partial_traffic_never_mean_unlimited_or_zero",
+          "client::account::status::tests::failed_api_calls_never_reuse_or_invent_account_quota",
+          "client::account::status::tests::public_identity_must_match_the_saved_principal_and_subject",
+          "client::account::status::tests::refresh_uses_selected_server_even_when_another_account_is_default",
+          "client::account::status::tests::selected_endpoint_retains_only_a_valid_server_origin",
+          "client::account::status::traffic::tests::quota_decimal_units_do_not_hide_tiny_counts_or_overflow_large_counts",
+          "client::account::status::traffic::tests::quota_missing_usage_is_unknown_and_zero_or_over_limit_stays_finite",
+          "client::account::status::traffic::tests::quota_reset_uses_explicit_server_timestamp_and_offset_at_year_and_leap_boundaries",
+          "client::account::status::traffic::tests::quota_unlimited_requires_both_explicit_nulls_and_retains_unknown_usage",
+          "client::account::status::traffic::tests::quota_uses_authoritative_usage_limit_and_does_not_sum_directional_counters"
+        ],
+        "log_sha256": "12766bfb19a19187ae45649a017f94e7ce0a32392f58db12a96f2feefe6077a0"
+      },
+      {
+        "filter": "command_panels_use_left_half_for_output_and_right_half_for_conversation",
+        "passed": 1,
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1501 filtered out; finished in 0.06s",
+        "tests": [
+          "client::terminal::conversation::tests::command_panels_use_left_half_for_output_and_right_half_for_conversation"
+        ],
+        "log_sha256": "7317426db64682c14e0b123cc7d0fa3117f5b559affaf54060f7bf7fa80a0669"
+      },
+      {
+        "filter": "client::terminal::conversation::listener::tests",
+        "passed": 4,
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1498 filtered out; finished in 0.00s",
+        "tests": [
+          "client::terminal::conversation::listener::tests::force_listener_does_not_reroute_an_exact_agent_or_edit_a_queued_request",
+          "client::terminal::conversation::listener::tests::force_listener_failure_and_unknown_preserve_references_and_draft_revision",
+          "client::terminal::conversation::listener::tests::force_listener_command_parser_preserves_the_body_and_reports_empty_input",
+          "client::terminal::conversation::listener::tests::force_listener_accepted_receipt_clears_only_the_unchanged_draft"
+        ],
+        "log_sha256": "022aa313d747ceb2fe8d5ad865f7517d871b7a7a190bfcad41a123ba3ee95b91"
+      }
+    ]
+  },
+  "e2e": {
+    "force-send": {
+      "status": "passed",
+      "checks": 118,
+      "report": "force-send.json",
+      "report_sha256": "0017fbcbe42bf5d0cb0d2eb9083cbe60da9cf2331c1a5decaa149c67b20b876c"
+    },
+    "transports": {
+      "status": "passed",
+      "checks": 73,
+      "report": "transports.json",
+      "report_sha256": "ed318ce2df6f51e3d661cffdfc570327cabc03e3a351313ed48f733db3f65164"
+    },
+    "user-wait": {
+      "status": "passed",
+      "checks": 121,
+      "report": "user-wait.json",
+      "report_sha256": "0c49b75071e37ce2ecc07c6104e1d3272b3307cd9fee2a6c5235048b02c6be9b"
+    },
+    "local": {
+      "status": "passed",
+      "checks": 44,
+      "report": "local.json",
+      "report_sha256": "a6062368fcf90da7658098e99b82f7b9ad9e072d74e4258734b4f7a996451e1b"
+    }
+  },
+  "browser_environment": {
+    "playwright": "1.65.1",
+    "chromium": "157.0.8103.38",
+    "used_existing_installation": true
+  },
+  "resolved_validation_failures": [
+    {
+      "phase": "first integration compile",
+      "cause": "main OAuth revoke_subject test expected unit after historical source changed API to Result",
+      "resolution": "unwrap the successful revocation in the existing test; rebuilt frozen candidate successfully"
+    },
+    {
+      "phase": "initial user-wait E2E",
+      "passed_checks_before_failure": 118,
+      "cause": "old fixture expected one Ctrl-C to exit despite the existing clear/remind/exit contract",
+      "resolution": "assert draft clearing preserves queue, assert reminder preserves live process, then confirm exit",
+      "final_passed_checks": 121
+    },
+    {
+      "phase": "initial local E2E",
+      "passed_checks_before_failure": 19,
+      "cause": "bare playwright import unavailable from isolated worktree",
+      "resolution": "select existing Playwright 1.65.1 and system Chromium; also align local fixture with confirmed exit",
+      "final_passed_checks": 44
+    }
+  ],
+  "scroll_previews": [
+    {
+      "file": "scroll-zones-left-120.png",
+      "bytes": 51951,
+      "sha256": "f1c20c49a785b33003b0be8ae16cf6e9405fa292df580966629ce01895ef33b1"
+    },
+    {
+      "file": "scroll-zones-left-48.png",
+      "bytes": 42499,
+      "sha256": "21c4119d394600eaa884947f9807bb3fb86855ef045ddc37ae3b1c6c5b5cc181"
+    },
+    {
+      "file": "scroll-zones-left-49.png",
+      "bytes": 42500,
+      "sha256": "ed1f3886e6ba1b82ca39b8ce0bdb3271fb538d13c97a17449220ef4cdb4e4d8f"
+    },
+    {
+      "file": "scroll-zones-page-120.png",
+      "bytes": 49433,
+      "sha256": "ad2e8b93378714783e769d7e2824c10a664d8fa414f80220c11f11e0d8e0f1af"
+    },
+    {
+      "file": "scroll-zones-page-48.png",
+      "bytes": 39969,
+      "sha256": "8dec529f0e1f26e950d467dae9b649409168eeaab39bb3475cfa3ebfc06ee3d2"
+    },
+    {
+      "file": "scroll-zones-page-49.png",
+      "bytes": 40037,
+      "sha256": "a7f7347dba480b3191af446413bbb3178de13d1570129a57374ca53f36d0408e"
+    }
+  ],
+  "visual_review": {
+    "reviewer": "coordinating agent using native image reading",
+    "reviewed": [
+      "scroll-zones-left-120.png",
+      "scroll-zones-page-48.png"
+    ],
+    "result": "No observed truncation or overlap; command panel, later messages and draft remain clear; redundant hints hidden on narrow viewport.",
+    "behavior_asserted_separately": true
+  },
+  "execution_boundaries": {
+    "platform": "Linux",
+    "deployed": false,
+    "installed": false,
+    "services_restarted": false,
+    "routine_ci_triggered_or_waited": false,
+    "models_started": false,
+    "external_account_used_for_e2e": false,
+    "historical_89_checks_recounted": false
+  },
+  "limitations": [
+    "Only the listed targeted Rust groups were rerun, not the complete library test suite.",
+    "No macOS or Windows runtime acceptance or production relay deployment is claimed.",
+    "Later zuse/ztuio/zsys/zplugin integrations require their own immutable candidate verification."
+  ]
+}

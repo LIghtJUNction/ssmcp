@@ -16,7 +16,7 @@ pub(crate) const TOOL: &str = "ssmcp.client.reload";
 pub(crate) fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Acknowledge and restart this foreground client from its installed executable, preserving startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. The client reconnects with a new ID; use list again. Login-code connections require new OAuth login; --allow GitHub access persists.",
+        "description": "Acknowledge and restart this foreground client from its installed executable, preserving startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
         "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
         "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })

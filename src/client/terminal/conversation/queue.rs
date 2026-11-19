@@ -20,9 +20,16 @@ fn age(entry: &Value, now: u64) -> Option<String> {
 }
 
 fn metadata(entry: &Value, data: &Value, now: u64) -> String {
+    let receipt = Receipt::from_entry(entry);
+    let edit = if receipt.editable() {
+        " · Enter edit"
+    } else {
+        ""
+    };
     let mut detail = format!(
-        "{} · #{}",
-        field(entry, "status"),
+        "{} {}{edit} · #{}",
+        receipt.marker(),
+        receipt.label(),
         short_id(message_id(entry))
     );
     if let Some(age) = age(entry, now) {
@@ -122,7 +129,11 @@ impl State {
                     usize::from(width.saturating_sub(2))
                 )
             ),
-            PanelTone::Muted,
+            if Receipt::from_entry(entry) == Receipt::Read {
+                PanelTone::Success
+            } else {
+                PanelTone::Muted
+            },
             width,
         ));
         rows
@@ -152,13 +163,17 @@ impl State {
             .min(entries.len().saturating_sub(1));
         let pending = entries
             .iter()
-            .filter(|entry| matches!(field(entry, "status"), "queued" | "sending" | "editing"))
+            .filter(|entry| Receipt::from_entry(entry).pending())
             .count();
+        let edit = entries
+            .get(self.conversation.selected)
+            .is_some_and(|entry| Receipt::from_entry(entry).editable());
+        let action = if edit { "Enter edit" } else { "Enter inspect" };
         let heading = if self.conversation.detail {
             "  Requests · Esc back".into()
         } else if width >= 100 {
             format!(
-                "  Requests · {pending} pending · {} total    Enter edit · i inspect · Del cancel · R resend",
+                "  Requests · {pending} pending · {} total    {action} · i inspect · Del cancel · R resend",
                 entries.len()
             )
         } else if width >= 60 {
@@ -193,6 +208,17 @@ impl State {
                 width,
                 &self.ui,
             ));
+            if Receipt::from_entry(entry) == Receipt::Read {
+                detail.extend(markdown::rows(
+                    "● Read means delivered with a tool response; it does not confirm understanding or execution.",
+                    width, &self.ui,
+                ));
+                detail.extend(markdown::rows(
+                    &format!("Delivery run: {}", field(&entry["delivery"], "run_id")),
+                    width,
+                    &self.ui,
+                ));
+            }
             detail.push(self.chat_line("", PanelTone::Normal, width));
             detail.extend(markdown::rows(
                 references::source(field(entry, "text")),
@@ -270,7 +296,7 @@ impl State {
             return None;
         }
         let relative = row.checked_sub(body_top(self.geometry.rows))?;
-        if relative >= body_rows(self.geometry.rows) {
+        if relative >= self.geometry.log_rows {
             return None;
         }
         let id = self
@@ -315,8 +341,8 @@ mod tests {
             let selected = state.conversation.selected;
             let mut frame = state.chat_frame(Instant::now());
             state.conversation.selected = selected;
-            let body = state.queue_rows_at(data, body_rows(state.geometry.rows), NOW);
-            for index in 0..usize::from(body_rows(state.geometry.rows)) {
+            let body = state.queue_rows_at(data, state.geometry.log_rows, NOW);
+            for index in 0..usize::from(state.geometry.log_rows) {
                 frame.rows[usize::from(body_top(state.geometry.rows)) + index] = body
                     .get(index)
                     .cloned()
@@ -339,13 +365,13 @@ mod tests {
             let mut state = state(cols);
             save_preview(&mut state, &data, "requests");
             state.ui.color = false;
-            let rows = state.queue_rows_at(&data, body_rows(state.geometry.rows), NOW);
+            let rows = state.queue_rows_at(&data, state.geometry.log_rows, NOW);
             let shown = rows.join("\n");
             assert!(shown.contains("› Keep the request list"), "{shown}");
             assert!(!shown.contains(FIRST) && !shown.contains(SECOND));
             let meta = rows
                 .iter()
-                .position(|row| row.contains("queued · #e917ab23"))
+                .position(|row| row.contains("○ Waiting · Enter edit"))
                 .unwrap();
             assert!(
                 rows[meta.saturating_sub(2)..meta]
@@ -372,7 +398,7 @@ mod tests {
 
             state.conversation.detail = true;
             let detail = state
-                .queue_rows_at(&data, body_rows(state.geometry.rows), NOW)
+                .queue_rows_at(&data, state.geometry.log_rows, NOW)
                 .join("\n");
             assert!(
                 detail.contains(SECOND) && detail.contains("保留完整身份"),
@@ -406,7 +432,49 @@ mod tests {
         let entry = json!({"id":FIRST,"status":"queued","target":"missing-agent","updated_at_ms":NOW-120_000});
         assert_eq!(
             metadata(&entry, &json!({}), NOW),
-            "queued · #a194f219 · 2m · → agent missing-"
+            "○ Waiting · Enter edit · #a194f219 · 2m · → agent missing-"
         );
+    }
+    #[test]
+    fn receipt_request_cards_keep_read_proof_and_edit_hints_distinct_at_narrow_widths() {
+        let delivered = json!({"id":FIRST,"text":"Unicode 回执 🙂 stays readable",
+            "status":"delivered","target":"next","updated_at_ms":NOW,
+            "delivery":{"run_id":"run_confirmed","agent_id":null,"included_at_ms":NOW}});
+        for cols in [12, 24, 48, 120] {
+            let mut state = state(cols);
+            state.ui.color = false;
+            state.conversation.selected = 0;
+            let cursor = state.conversation.composer.cursor();
+            let data = json!({"queue":[delivered.clone()]});
+            let rows = state.queue_rows_at(&data, state.geometry.log_rows, NOW);
+            let shown = rows.join("\n");
+            assert!(shown.contains("● Read"), "{cols}: {shown}");
+            assert!(!shown.contains("Enter edit"), "{cols}: {shown}");
+            assert!(
+                rows.iter()
+                    .all(|row| row.width() <= usize::from(state.geometry.left))
+            );
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            assert_eq!(state.conversation.composer.text(), "Keep this draft");
+            let mut waiting = delivered.clone();
+            waiting["status"] = json!("queued");
+            let rows =
+                state.queue_rows_at(&json!({"queue":[waiting]}), state.geometry.log_rows, NOW);
+            let shown = rows.join("\n");
+            assert!(shown.contains("○ Waiting"), "{cols}: {shown}");
+            assert!(!shown.contains("● Read"), "{cols}: {shown}");
+            if cols >= 48 {
+                assert!(shown.contains("Enter edit"));
+            }
+        }
+        let mut state = state(120);
+        state.ui.color = false;
+        state.conversation.selected = 0;
+        state.conversation.detail = true;
+        let detail = state
+            .queue_rows_at(&json!({"queue":[delivered]}), state.geometry.log_rows, NOW)
+            .join("\n");
+        assert!(detail.contains("tool response") && detail.contains("execution"));
+        assert!(detail.contains("run_confirmed"));
     }
 }
