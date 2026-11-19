@@ -208,7 +208,10 @@ class Composer(Dashboard):
                              if agent["agent_id"] == member["agent_id"])
             label = roster[index - 1]["name"]
         front.send(HOME + DOWN * index + ENTER)
-        front.until(lambda shot: f"To · {label}" in text(shot)
+        # The default recipient is shown in the compact footer; exact agents
+        # retain the explicit recipient label above the input.
+        visible_recipient = "To Next caller" if member is None else f"To · {label}"
+        front.until(lambda shot: visible_recipient in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         self.check(self.ui("/display/conversation")["target"]
