@@ -12,15 +12,15 @@ use std::sync::LazyLock;
 struct Asset {
     name: &'static str,
     content_type: &'static str,
-    body: &'static str,
+    body: &'static [u8],
     fingerprint: String,
     path: String,
     legacy_path: String,
 }
 
 impl Asset {
-    fn new(name: &'static str, content_type: &'static str, body: &'static str) -> Self {
-        let fingerprint = format!("{:x}", Sha256::digest(body.as_bytes()));
+    fn new(name: &'static str, content_type: &'static str, body: &'static [u8]) -> Self {
+        let fingerprint = format!("{:x}", Sha256::digest(body));
         let path = format!("/account/assets/{fingerprint}/{name}");
         let legacy_path = format!("/{name}");
         Self {
@@ -50,29 +50,42 @@ impl Asset {
     }
 }
 
-static ASSETS: LazyLock<[Asset; 6]> = LazyLock::new(|| {
+static ASSETS: LazyLock<[Asset; 7]> = LazyLock::new(|| {
     [
-        Asset::new("favicon.svg", "image/svg+xml", include_str!("favicon.svg")),
-        Asset::new("portal.css", "text/css; charset=utf-8", super::view::CSS),
+        Asset::new(
+            "favicon.svg",
+            "image/svg+xml",
+            include_bytes!("favicon.svg"),
+        ),
+        Asset::new(
+            "brand-mark.png",
+            "image/png",
+            include_bytes!("brand-mark.png"),
+        ),
+        Asset::new(
+            "portal.css",
+            "text/css; charset=utf-8",
+            super::view::CSS.as_bytes(),
+        ),
         Asset::new(
             "portal-refresh.css",
             "text/css; charset=utf-8",
-            include_str!("portal-refresh.css"),
+            include_bytes!("portal-refresh.css"),
         ),
         Asset::new(
             "traffic-meter.js",
             "text/javascript; charset=utf-8",
-            include_str!("traffic-meter.js"),
+            include_bytes!("traffic-meter.js"),
         ),
         Asset::new(
             "client-install-copy.js",
             "text/javascript; charset=utf-8",
-            include_str!("client-install-copy.js"),
+            include_bytes!("client-install-copy.js"),
         ),
         Asset::new(
             "copy-command.js",
             "text/javascript; charset=utf-8",
-            include_str!("copy-command.js"),
+            include_bytes!("copy-command.js"),
         ),
     ]
 });
@@ -108,7 +121,7 @@ where
 }
 
 #[cfg(test)]
-pub(super) fn preview_files() -> impl Iterator<Item = (&'static str, &'static str)> {
+pub(super) fn preview_files() -> impl Iterator<Item = (&'static str, &'static [u8])> {
     ASSETS.iter().flat_map(|asset| {
         [
             (asset.path.as_str(), asset.body),
@@ -141,7 +154,7 @@ mod tests {
                     .unwrap()
                     .to_owned();
                 let bytes = response.bytes().await.unwrap();
-                assert_eq!(bytes.as_ref(), asset.body.as_bytes());
+                assert_eq!(bytes.as_ref(), asset.body);
                 let actual = format!("{:x}", Sha256::digest(&bytes));
                 assert_eq!(advertised, actual);
                 assert_eq!(

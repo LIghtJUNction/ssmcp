@@ -17,7 +17,7 @@ pub(super) fn escape(s: &str) -> String {
 }
 
 pub(super) fn page(title: &str, body: &str) -> String {
-    let favicon_url = super::assets::url("favicon.svg");
+    let favicon_url = super::assets::url("brand-mark.png");
     let base_css_url = super::assets::url("portal.css");
     let portal_css_url = super::assets::url("portal-refresh.css");
     let traffic_script_url = super::assets::url("traffic-meter.js");
@@ -31,7 +31,7 @@ pub(super) fn page(title: &str, body: &str) -> String {
   <meta name="theme-color" content="#eeefeb">
   <meta name="description" content="使用用户名连接本机工具。GitHub 自动登录绑定，HTTPS 接入，管理账户与在线连接。">
   <title>{} · ssmcp</title>
-  <link rel="icon" href="{favicon_url}" type="image/svg+xml">
+  <link rel="icon" href="{favicon_url}" type="image/png">
   <link rel="stylesheet" href="{base_css_url}">
   <link rel="stylesheet" href="{portal_css_url}">
   <script defer src="{traffic_script_url}"></script>
@@ -283,7 +283,7 @@ const GUIDE: &str = r#"<section class="guide" id="guide" aria-labelledby="guide-
 const PRODUCT_SCENE: &str = r#"<figure class="product-scene" aria-labelledby="scene-caption">
 <div class="scene-topline"><span>FROM PROMPT TO LOCAL TOOLS</span><span>连接示意 / 非实时状态</span></div>
 <div class="scene-flow">
-  <div class="scene-client"><span class="scene-symbol" aria-hidden="true">✳</span><strong>你的 AI</strong><span>ChatGPT · MCP 客户端</span></div>
+  <div class="scene-client"><span class="scene-symbol" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="2"><path d="M40 7v66M7 40h66M17 17l46 46m0-46L17 63"/><circle cx="40" cy="40" r="16"/></svg></span><strong>你的 AI</strong><span>ChatGPT · MCP 客户端</span></div>
   <span class="scene-wire" aria-hidden="true">→</span>
   <div class="scene-terminal"><div class="scene-terminal-bar"><span><i></i><i></i><i></i></span><span>~/your-project</span><span>本机执行</span></div><div class="scene-terminal-body"><div class="scene-command"><span>$</span> ssmcp<span class="scene-cursor" aria-hidden="true">_</span></div><p>把项目目录连接到对话。</p><div class="scene-tool-row"><span>01</span><span>终端命令</span><span>exec</span></div><div class="scene-tool-row"><span>02</span><span>文件与代码</span><span>files</span></div><div class="scene-tool-row"><span>03</span><span>已启用的本机工具</span><span>tools</span></div></div></div>
   <span class="scene-wire" aria-hidden="true">→</span>
@@ -306,7 +306,7 @@ pub(super) fn home(
         )
     } else {
         String::from(
-            r##"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><div class="hero-kicker"><p class="eyebrow">本地工具 · 开放连接</p><span>SSMCP / 01</span></div><h1 id="hero-title">让 AI，<br><span>在你的电脑上动手。</span></h1><div class="hero-bottom"><p class="hero-description">从对话到终端、文件与项目。<br>用一个用户名，连接你已经在用的工作环境。</p><div class="hero-actions"><a class="button" href="#install">安装客户端 <span class="arrow" aria-hidden="true">↗</span></a><a class="text-link" href="#guide">查看连接步骤 <span aria-hidden="true">↓</span></a></div></div></div>"##,
+            r##"<div class="portal-home"><section class="hero" aria-labelledby="hero-title"><div class="hero-copy"><div class="hero-kicker"><p class="eyebrow">本地工具 · 开放连接</p><span>SSMCP / 01</span></div><h1 id="hero-title">让 AI，<br><span>在你的电脑上动手。</span></h1><div class="hero-bottom"><p class="hero-description">从对话到终端、文件与项目。<br>用一个用户名，连接你已经在用的工作环境。</p><div class="hero-actions"><a class="button" href="#install">安装客户端 <span class="arrow" aria-hidden="true">↗</span></a><a class="button secondary source-link" href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">源代码仓库 <span class="arrow" aria-hidden="true">↗</span></a></div></div></div>"##,
         )
     };
     if let Some(traffic) = traffic.filter(|_| account.is_some()) {
