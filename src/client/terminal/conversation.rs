@@ -2693,19 +2693,24 @@ mod tests {
             "Run both checks and keep their logs easy to inspect.",
             b"",
         );
-        for (id, command) in [("build", "cargo check"), ("tests", "cargo test --lib")] {
+        for (id, command) in [("build", "python3 -c · 3 lines"), ("tests", "cargo test --lib")] {
+            let details = if id == "build" {
+                "    cwd /workspace/demo\n    script · python3 · 3 lines\n    1 import pathlib\n    2 root = pathlib.Path.cwd()\n    3 print(root.name)\n"
+            } else {
+                ""
+            };
             state.log_event(
                 "preview",
                 &json!({"type":"exec.started","job_id":id}),
-                format!("[RUN] preview {id} {command} started\n").as_bytes(),
+                format!("[RUN] preview {id} {command} started\n{details}").as_bytes(),
             );
+            let output = (0..40)
+                .map(|n| format!("{id} step {n:02} · complete\n"))
+                .collect::<String>();
             state.log_event(
                 "preview",
                 &json!({"type":"exec.stdout","job_id":id}),
-                (0..40)
-                    .map(|n| format!("{id} step {n:02} · complete\n"))
-                    .collect::<String>()
-                    .as_bytes(),
+                format!("[STDOUT] preview {id}\n{output}").as_bytes(),
             );
         }
         state.log_event(
@@ -2794,9 +2799,12 @@ mod tests {
                     .as_bool()
                     .unwrap()
             );
-            state.chat_key(Key::Home);
             let expanded = display(&mut state).screen().contents();
-            assert!(expanded.contains("build step 00"), "{expanded}");
+            assert!(
+                expanded.contains("Command") && expanded.contains("1 import pathlib"),
+                "{expanded}"
+            );
+            assert_eq!(state.events.snapshot()["events"][1]["panel"]["scroll"], 0);
             assert_eq!(state.events.snapshot()["events"][2]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "expanded");
             state.chat_key(Key::Down);

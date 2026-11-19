@@ -50,8 +50,15 @@ struct Event {
 #[derive(Default)]
 struct CommandPanel {
     scroll: Option<usize>,
+    folded_scroll: Option<Option<usize>>,
     rows: usize,
     page: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CommandPosition {
+    scroll: Option<usize>,
+    folded_scroll: Option<Option<usize>>,
 }
 
 impl CommandPanel {
@@ -69,6 +76,24 @@ impl CommandPanel {
 }
 
 impl Event {
+    fn set_chat_expanded(&mut self, expanded: bool) -> bool {
+        if self.chat_expanded == expanded {
+            return false;
+        }
+        if self.meta.command && !self.meta.diff && self.image.is_none() {
+            if expanded {
+                // Details start with the command, while folding returns to the
+                // exact log position (including following live output).
+                self.panel.folded_scroll = Some(self.panel.scroll);
+                self.panel.scroll = Some(0);
+            } else if let Some(scroll) = self.panel.folded_scroll.take() {
+                self.panel.scroll = scroll;
+            }
+        }
+        self.chat_expanded = expanded;
+        true
+    }
+
     fn expanded(&self, scope: EventScope) -> bool {
         match scope {
             EventScope::Conversation => self.meta.kind == Kind::Conversation || self.chat_expanded,
@@ -366,7 +391,7 @@ pub(super) struct EventPosition {
     reveal: bool,
     new_image: Option<u64>,
     chat_expanded: Vec<u64>,
-    panel_scroll: Vec<(u64, Option<usize>)>,
+    panel_scroll: Vec<(u64, CommandPosition)>,
 }
 
 impl Default for EventPosition {
@@ -500,7 +525,12 @@ impl EventView {
             panel_scroll: self
                 .events
                 .iter()
-                .map(|event| (event.id, event.panel.scroll))
+                .map(|event| {
+                    (event.id, CommandPosition {
+                        scroll: event.panel.scroll,
+                        folded_scroll: event.panel.folded_scroll,
+                    })
+                })
                 .collect(),
             chat_expanded: self
                 .events
@@ -518,11 +548,14 @@ impl EventView {
         self.reveal = position.reveal;
         for event in &mut self.events {
             event.chat_expanded = position.chat_expanded.contains(&event.id);
-            event.panel.scroll = position
+            let panel = position
                 .panel_scroll
                 .iter()
                 .find(|(id, _)| *id == event.id)
-                .and_then(|(_, scroll)| *scroll);
+                .map(|(_, panel)| *panel)
+                .unwrap_or_default();
+            event.panel.scroll = panel.scroll;
+            event.panel.folded_scroll = panel.folded_scroll;
         }
         // The deferred first-image anchor belongs to this column's reading
         // position. Switching columns is not an explicit request for latest.
@@ -988,7 +1021,7 @@ impl EventView {
                 if event.meta.kind == Kind::Conversation {
                     return false;
                 }
-                event.chat_expanded = !event.chat_expanded;
+                event.set_chat_expanded(!event.chat_expanded);
             } else {
                 if event.meta.diff {
                     return false;
@@ -1022,9 +1055,7 @@ impl EventView {
             if event.meta.kind == Kind::Conversation {
                 return false;
             }
-            let changed = event.chat_expanded != expanded;
-            event.chat_expanded = expanded;
-            changed
+            event.set_chat_expanded(expanded)
         } else {
             if event.meta.diff && !expanded {
                 return false;
@@ -1249,7 +1280,10 @@ impl EventView {
                     })
                 {
                     let body = if expanded {
-                        conversation_body(&event.text).to_owned()
+                        // This is the retained, already-redacted display text,
+                        // including full command/script details. Never read raw
+                        // event metadata to reconstruct the command.
+                        format!("Command\n{}", event.text.trim_end())
                     } else {
                         event.command_output()
                     };
@@ -1285,16 +1319,15 @@ impl EventView {
                         offset + event.panel.page,
                         content.len()
                     );
-                    let detail = if width >= 70 {
-                        format!(
-                            "{range} · wheel / PgUp/PgDn · Enter {action}{}",
-                            if event.truncated { " · partial" } else { "" }
-                        )
+                    let partial = if event.truncated { " · partial" } else { "" };
+                    let detail = if expanded && width >= 70 {
+                        format!("{range} · wheel/PgUp/PgDn · Home command · Enter fold{partial}")
+                    } else if expanded && width >= 48 {
+                        format!("{range} · Home cmd · Enter fold{partial}")
+                    } else if width >= 70 {
+                        format!("{range} · wheel / PgUp/PgDn · Enter {action}{partial}")
                     } else {
-                        format!(
-                            "{range} · {action}{}",
-                            if event.truncated { " · partial" } else { "" }
-                        )
+                        format!("{range} · {action}{partial}")
                     };
                     rows.push((
                         event.id,
@@ -2404,9 +2437,10 @@ mod tests {
         view.render(80, 24, &plain_ui(), true);
         assert_eq!(view.events[0].panel.page, 12);
         assert_eq!(view.total_rows, 14);
-        assert!(view.scroll_selected_panel(isize::MIN));
+        assert_eq!(view.events[0].panel.offset(), 0);
         let head = view.render(80, 24, &plain_ui(), true).join("\n");
-        assert!(head.contains("case-00") && head.contains("case-11"));
+        assert!(head.contains("Command") && head.contains("[RUN] cargo test started"));
+        assert!(head.contains("case-00") && head.contains("case-09"));
         let position = view.position();
         assert!(view.scroll_selected_panel(isize::MAX));
         let tail = view.render(80, 24, &plain_ui(), true).join("\n");
@@ -2433,6 +2467,70 @@ mod tests {
             view.events[0].text, text,
             "folding and scrolling never discard the retained source"
         );
+    }
+
+    #[test]
+    fn command_details_open_at_the_script_and_restore_each_columns_folded_log_position() {
+        for manual_scroll in [false, true] {
+            let mut view = EventView::new();
+            let text = format!(
+                "[RUN] shell script python3 -c · 3 lines started\n\
+                 cwd /workspace/demo\n\
+                 script · python3 · 3 lines\n\
+                 1 import pathlib\n\
+                 2 token = '<redacted>'\n\
+                 3 print(pathlib.Path.cwd())\n\
+                 [STDOUT] shell script\n{}",
+                (0..40)
+                    .map(|n| format!("output-{n:02}\n"))
+                    .collect::<String>()
+            );
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.started","job_id":"script",
+                    "command":["python3","-c","raw-metadata-secret"]}),
+                text.as_bytes(),
+            );
+            view.set_scope(EventScope::Conversation);
+            view.render(100, 24, &plain_ui(), true);
+            if manual_scroll {
+                assert!(view.scroll_selected_panel(-9));
+            }
+            let folded = view.events[0].panel.scroll;
+            assert!(view.open());
+            let details = view.render(100, 24, &plain_ui(), true).join("\n");
+            assert!(details.contains("Command") && details.contains("1 import pathlib"));
+            assert!(details.contains("token = '<redacted>'"));
+            assert!(!details.contains("raw-metadata-secret"));
+            assert_eq!(view.events[0].panel.offset(), 0);
+            assert!(view.scroll_selected_panel(3));
+            let scrolled = view.events[0].panel.scroll;
+            assert!(!view.open(), "opening an already-open panel keeps its position");
+            assert_eq!(view.events[0].panel.scroll, scrolled);
+            let column = view.position();
+            assert!(view.scroll_selected_panel(isize::MAX));
+            assert!(view.back());
+            view.render(100, 24, &plain_ui(), true);
+            assert_eq!(view.events[0].panel.scroll, folded);
+
+            view.restore_position(&column);
+            view.render(100, 24, &plain_ui(), true);
+            assert_eq!(view.events[0].panel.scroll, scrolled);
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"script"}),
+                b"output-40\n",
+            );
+            assert!(view.back());
+            let folded_rows = view.render(100, 24, &plain_ui(), true).join("\n");
+            assert_eq!(view.events.len(), 1, "reads remain in the same command");
+            assert_eq!(view.events[0].panel.scroll, folded);
+            assert_eq!(folded_rows.contains("output-40"), !manual_scroll);
+            assert!(view.open());
+            let reopened = view.render(48, 24, &plain_ui(), true).join("\n");
+            assert!(reopened.contains("1 import pathlib") && reopened.contains("Home cmd"));
+            assert_eq!(view.events[0].text, format!("{text}output-40\n"));
+        }
     }
 
     #[test]
