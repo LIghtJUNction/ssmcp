@@ -1471,6 +1471,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn history_helpers_route_metadata_search_and_reject_action_overrides() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const list = await history.list('work',{limit:8});
+            const metadata = await history.metadata('work',{id:'conversation_fixture'});
+            const read = await history.read('work',{id:'conversation_fixture',offset:4,limit:1});
+            const search = await history.search('work',{query:'登录',role:'user',case_sensitive:true,offset:2,limit:3});
+            const rejected = [];
+            for (const args of [null, [], 'bad', {action:'list'}]) {
+                try { await history.search('work',args); }
+                catch (error) { rejected.push(error.message); }
+            }
+            return {list,metadata,read,search,rejected,frozen:Object.isFrozen(history)};
+        "#).await.unwrap();
+        let result = &output["result"];
+        for action in ["list", "metadata", "read", "search"] {
+            assert_eq!(result[action]["name"], "ssmcp.ui.history");
+            assert_eq!(result[action]["id"], "work");
+            assert_eq!(result[action]["arguments"]["action"], action);
+        }
+        assert_eq!(
+            result["metadata"]["arguments"]["id"],
+            "conversation_fixture"
+        );
+        assert_eq!(result["read"]["arguments"]["offset"], 4);
+        assert_eq!(
+            result["search"]["arguments"],
+            json!({
+                "action":"search","query":"登录","role":"user","case_sensitive":true,"offset":2,"limit":3
+            })
+        );
+        assert_eq!(result["rejected"].as_array().unwrap().len(), 4);
+        assert_eq!(result["frozen"], true);
+    }
+
+    #[tokio::test]
     async fn ui_helpers_dispatch_atomic_client_operations_without_rewriting_arguments() {
         let _guard = TESTS.lock().await;
         let output = run_code(
