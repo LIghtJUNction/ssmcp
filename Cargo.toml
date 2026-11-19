@@ -168,10 +168,10 @@ exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
 resolver = "3"
 
 [dependencies]
-zuse = { package = "zuse-computer", version = "=0.1.0", path = "crates/zuse", default-features = false, features = ["std"] }
+zuse = { package = "zuse-computer", version = "=0.2.0", path = "crates/zuse", default-features = false, features = ["std"] }
 ztuio = { version = "=0.1.0", path = "crates/ztuio" }
-zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
-zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
+zharness = { version = "=0.5.1", path = "crates/zharness", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.1", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"
