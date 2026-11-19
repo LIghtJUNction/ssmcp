@@ -53,6 +53,17 @@ class UserWait(InputHistory):
         self.draft(front, "")
         self.agents(front)
         roster = self.queue()["agents"]
+        # A successful join is authoritative on the server; the terminal sees
+        # it after its next asynchronous steering snapshot. Observe only the
+        # exact joined identity and never substitute another recipient.
+        deadline = time.monotonic() + 8
+        while member is not None and not any(
+            entry["agent_id"] == member["agent_id"] for entry in roster
+        ):
+            if time.monotonic() >= deadline:
+                raise AssertionError("the exact joined agent did not reach the terminal roster")
+            front.pump(0.05)
+            roster = self.queue()["agents"]
         index = 0 if member is None else 1 + next(
             index for index, entry in enumerate(roster)
             if entry["agent_id"] == member["agent_id"]
