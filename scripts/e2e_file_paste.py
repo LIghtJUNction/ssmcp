@@ -29,6 +29,7 @@ import zlib
 
 from e2e_dashboard import Frontend, sha256, text
 from e2e_input_history import InputHistory, png_fixture
+from e2e_client_ui import empty_composer_ready
 
 
 PASTE_READER = r"""#!/usr/bin/python3
@@ -509,7 +510,7 @@ class FilePaste(InputHistory):
         self.last_frontend = front
         self.client_id = front.client_id
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the independent native-graphics composer")
         self.check(front.probes == 1 and front.cell_queries >= 1,
                    "native graphics starts only after the real PTY capability and cell-size queries")

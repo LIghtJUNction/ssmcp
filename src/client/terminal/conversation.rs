@@ -2401,9 +2401,9 @@ impl State {
                             "← / Esc  back to agents".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "↑↓ select · Enter latest call · ←/→ panels · Esc back".into()
+                                "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
                             } else {
-                                "↑↓ select · Enter message · ←/→ panels · Esc back".into()
+                                "Esc back · ↑↓ select · Enter message · ←/→ panels".into()
                             }
                         };
                     }
@@ -3046,7 +3046,11 @@ mod tests {
             "controller":{"name":"Repeated caller","model":"Model","source":"caller-reported"}
         }));
         let rows = state.chat_agent_rows(&data, 24).join("\n");
-        assert_eq!(rows.matches("Repeated caller").count(), 1);
+        assert_eq!(
+            rows.matches("↳ Repeated caller").count(),
+            1,
+            "the roster groups calls; details may repeat the selected name"
+        );
         assert!(rows.contains("4 calls"));
         assert_eq!(state.conversation.selected_agent, selected);
         assert_eq!(state.chat_selected().unwrap()["calls"], 4);
@@ -3217,7 +3221,7 @@ mod tests {
                 if rows >= 10 && cols >= 80 {
                     let visible = shot.screen().contents();
                     assert!(visible.contains("Agents"));
-                    assert!(visible.contains("Esc back"));
+                    assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }
             }

@@ -23,7 +23,7 @@ import tempfile
 import time
 
 from e2e_dashboard import Dashboard, sha256, text
-from e2e_client_ui import column
+from e2e_client_ui import column, empty_composer_ready
 
 
 ESC = b"\x1b"
@@ -264,7 +264,7 @@ class Composer(Dashboard):
                        stderr=subprocess.PIPE, check=True, timeout=5)
         front = self.frontend("composer", self.config("composer"))
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the live chat composer in the owned terminal")
         self.command(front, "/queue")
         self.check(self.queue()["supported"], "SSH negotiated the request-queue wire protocol")
@@ -392,7 +392,7 @@ class Composer(Dashboard):
                                   if item["agent_id"] == members[0]["agent_id"])
         front.send(HOME + DOWN * selected_index + RIGHT)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8)
-                                 and "To · next caller" in text(shot) and not shot["hide_cursor"],
+                                 and navigation_draft in input_text(shot) and not shot["hide_cursor"],
                     "Right moving to the conversation without choosing a member")
         navigated = self.ui("/display/conversation")
         self.check(navigated["target"] is None and navigated["draft"] == before_choice["draft"],

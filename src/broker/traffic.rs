@@ -151,20 +151,20 @@ mod tests {
     }
 
     async fn use_until(broker: &Broker, subject: &str, remaining: u64) {
-        let available = broker
-            .traffic_quota(subject)
-            .await
-            .unwrap()
-            .remaining_bytes
-            .unwrap();
-        let reserve = available
-            .checked_sub(remaining)
-            .expect("target allowance cannot increase");
         let period = broker.traffic_period();
         let subject = subject.to_owned();
         broker
             .portal
             .storage(move |store| {
+                // Seed ordinary allowance usage even when the broker exposes an
+                // unlimited quota for a server-configured administrator.
+                let available = store
+                    .traffic_quota(&subject, &period, DEFAULT_TRAFFIC_UTC_OFFSET_MINUTES, false)?
+                    .remaining_bytes
+                    .expect("ordinary account allowance is finite");
+                let reserve = available
+                    .checked_sub(remaining)
+                    .expect("target allowance cannot increase");
                 store.reserve_traffic(
                     &subject,
                     &period,

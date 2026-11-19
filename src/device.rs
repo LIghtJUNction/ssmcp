@@ -1803,13 +1803,16 @@ mod tests {
                     Some(wire::Frame::Reject { message }) => {
                         // A terminal authorization explanation may precede EOF;
                         // no application message may pass after the durable ban.
-                        assert!(
-                            matches!(
-                                message.as_str(),
-                                "account is banned" | "ssmcp authorization expired or revoked"
-                            ),
-                            "unexpected termination reason: {message}"
-                        );
+                        if message != "ssmcp authorization expired or revoked" {
+                            let (reason, notice) = message.split_once("; ").expect(
+                                "a ban rejection includes the interrupted-connection notice",
+                            );
+                            assert_eq!(reason, "account is banned");
+                            assert_eq!(
+                                notice,
+                                "连接已中断；已发送的请求可能已经执行，重试前请先检查实际状态。"
+                            );
+                        }
                         assert!(receive(socket).await.is_none());
                     }
                     None => {}

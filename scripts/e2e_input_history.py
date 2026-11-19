@@ -26,7 +26,7 @@ import time
 import zlib
 
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
-from e2e_client_ui import column
+from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
@@ -204,7 +204,7 @@ class InputHistory(Composer):
     def start_front(self, label):
         front = self.frontend(label, self.config(label))
         self.oauth_login(front.credentials)
-        front.until(lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+        front.until(empty_composer_ready,
                     "the isolated live composer")
         return front
 

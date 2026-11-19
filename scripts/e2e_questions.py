@@ -21,7 +21,7 @@ import tempfile
 import time
 
 from e2e_composer import Composer, DELETE, DOWN, ENTER, ESC, HOME, LEFT
-from e2e_client_ui import column
+from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
@@ -125,7 +125,7 @@ class Questions(Composer):
         front = self.frontend("questions", self.config("questions"))
         self.oauth_login(front.credentials)
         front.until(
-            lambda shot: shot["alternate_screen"] and "To · next caller" in text(shot),
+            empty_composer_ready,
             "the live chat composer in the isolated terminal",
         )
         member = self.public_call("collab", {
