@@ -1896,7 +1896,10 @@ mod tests {
                         save_at(&root, &replacement).unwrap();
                     }
                     // A server error may reflect a secret. Logout's output must not.
-                    (status, axum::Json(json!({"status":"logged_out","error":"a".repeat(64)})))
+                    (
+                        status,
+                        axum::Json(json!({"status":"logged_out","error":"a".repeat(64)})),
+                    )
                 }
             }),
         );
@@ -1930,7 +1933,10 @@ mod tests {
             assert!(!outcome.json().to_string().contains(&selected.token));
             assert!(load_at(&root, Some(&server), true).unwrap().is_none());
             assert_eq!(
-                load_at(&root, Some(&other.server), true).unwrap().unwrap().token,
+                load_at(&root, Some(&other.server), true)
+                    .unwrap()
+                    .unwrap()
+                    .token,
                 other.token
             );
             assert_eq!(selected_server(&root, None).unwrap(), other.server);
@@ -1949,7 +1955,11 @@ mod tests {
         save_at(&root, &credential(&server)).unwrap();
         let outcome = logout_at(&root, &server).await.unwrap();
         assert_eq!(outcome.status, LogoutStatus::LocalOnly);
-        assert!(outcome.message().contains("Remote revocation could not be confirmed"));
+        assert!(
+            outcome
+                .message()
+                .contains("Remote revocation could not be confirmed")
+        );
         assert!(!credential_path(&root, &server).exists());
         assert_eq!(selected_server(&root, None).unwrap(), server);
         let repeated = logout_at(&root, &server).await.unwrap();
