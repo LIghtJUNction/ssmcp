@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise native-only startup and explicit harness loading through local SSH/MCP/OAuth.
+"""Exercise native-only startup and explicit harness loading through local WSS/MCP/OAuth.
 
 Shell uses a real PTY. Harnesses use deterministic local protocol fixtures;
-no installed agent, model account, existing SSH identity or paid API is used.
-Run after cargo build --locked, on Linux with an OpenSSH server available.
+no installed agent, model account, real identity or paid API is used.
+Run after cargo build --locked, with SSMCP_E2E_FIXTURE_BINARY set to the lib test binary.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import tempfile
 import threading
 import time
 
-from e2e import BUILTIN_TOOLS, SHELL_TOOLS, Harness, PUBLIC_URL, process_running, wait_for
+from e2e import BUILTIN_TOOLS, SHELL_TOOLS, Harness, process_running, wait_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -446,7 +446,7 @@ def check_cc(harness, label, tools, directory):
         "structuredContent": {"future": {"arguments": arguments}},
         "isError": False, "_meta": {"vendor/result": [1, 2, 3]},
         "futureResultField": {"keep": "this too"},
-    }, "cc: full native MCP content, image, resource, metadata and future fields survive SSH")
+    }, "cc: full native MCP content, image, resource, metadata and future fields survive WSS")
     error = full_call(harness, "claude.NativeFutureTool", {"error": True}, expect_error=True)
     harness.check(error["structuredContent"]["future"]["arguments"] == {"error": True},
                   "cc: native tool errors retain their structured result")
@@ -897,8 +897,8 @@ def run(harness):
         harness.client = client
         harness.client_id = credentials["client_id"]
         harness.check(credentials.get("type") == "shell"
-                      and credentials["url"] == f"{PUBLIC_URL}/{harness.user}",
-                      f"{mode}: SSH registers shell and discovered tools at its authenticated user path")
+                      and credentials["url"] == f"{harness.issuer}/{harness.user}",
+                      f"{mode}: WSS registers shell and discovered tools at its authenticated account endpoint")
         harness.oauth_login(credentials)
         tools, pages = catalog(harness, mode, label)
         services.check_no_launch()
@@ -913,15 +913,18 @@ def run(harness):
                       f"{mode}: the shell, native provider and test jobs are alive before disconnect")
         transcript = local_log(harness, label) + (harness.directory / "daemon.log").read_text(errors="replace")
         harness.check(not any(value and value in transcript for value in harness.sensitive),
-                      f"{mode}: login codes and OAuth tokens never enter activity or daemon logs")
-        old_access = harness.secret
+                      f"{mode}: account credentials and OAuth tokens never enter activity or daemon logs")
+        old_access, old_client = harness.secret, harness.client_id
         harness.stop(client)
-        wait_for(lambda: harness.request(body={}, secret=old_access)[0] == 401,
-                 description=f"{mode} OAuth access revocation")
-        harness.check(True, f"{mode}: disconnect immediately revokes the access token")
+        harness.check(harness.rpc("ping", modern=True, secret=old_access)[0] == 200,
+                      f"{mode}: device disconnect preserves independent account authorization")
+        wait_for(lambda: all(item["id"] != old_client for item in harness.public_call("list")["clients"]),
+                 description=f"{mode} disconnected client route removal")
+        harness.check(True, f"{mode}: the disconnected client ID is no longer routable")
         status, result, _ = harness.oauth_refresh()
-        harness.check(status == 400 and result.get("error") == "invalid_grant",
-                      f"{mode}: disconnect also prevents refresh-token renewal")
+        harness.check(status == 200 and result.get("access_token") and result.get("refresh_token"),
+                      f"{mode}: account refresh remains valid independently of device connectivity")
+        harness.sensitive.extend((result["access_token"], result["refresh_token"]))
         wait_for(lambda: all(not process_running(pid) for pid in owned_pids),
                  description=f"{mode} backend and child cleanup")
         harness.check(True, f"{mode}: owned backend and child processes exit on disconnect")
@@ -961,7 +964,7 @@ def main():
         report = {
             "status": "passed", "checks": harness.checks, "modes": modes,
             "duration_seconds": round(time.monotonic() - started, 3),
-            "transport": "real OpenSSH public-key + OAuth Authorization Code/S256 + HTTP MCP",
+            "transport": "real account WebSocket + OAuth Authorization Code/S256 + HTTP MCP",
             "backends": "real Linux PTY; deterministic Codex, Claude Code, Pi and OpenCode protocol fixtures",
             "external_service_contract": "Pi JSONL session initialized before Unix socket publication; OpenCode HTTP server started before explicit loading; only the test owner terminates these services",
             "model_calls": False,
@@ -974,3 +977,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

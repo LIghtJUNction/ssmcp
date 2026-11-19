@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise persistent sessions through actual SSH, OAuth, MCP and local CLI.
+"""Exercise persistent sessions through actual WSS, OAuth, MCP and local CLI.
 
 Only a private temporary session home, loopback fixture server and owned child
 processes are used. No system unit, existing session or model account is touched.
@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 
-from e2e import Harness, PUBLIC_URL, wait_for
+from e2e import Harness, wait_for
 
 
 class Sessions(Harness):
@@ -77,12 +77,11 @@ class Sessions(Harness):
 
     def create(self, name, *, control=False, expected=0):
         self.names.add(name)
-        args = ["sessions", "create", name, "--json", "--ssh", "--watchdog", "--reconnect-delay", "1",
-                "--title", "session lifecycle acceptance", "-F", str(self.directory / "ssh_config"),
-                "--shell", "/bin/sh"]
+        args = ["sessions", "create", name, "--json", *self.client_command(
+            name=name, extra_args=("--watchdog", "--reconnect-delay", "1",
+                                   "--title", "session lifecycle acceptance"))[1:]]
         if control:
             args.append("--session-control")
-        args.append(f"{self.user}@ssmcp-e2e")
         return self.cli(args, expect=expected)
 
     def connected(self, name, old_generation=None):
@@ -97,12 +96,12 @@ class Sessions(Harness):
         return wait_for(observe, timeout=30, description=f"observed connection for {name}")
 
     def authenticate_manager(self, status):
-        credentials = self.action("auth", status["name"])
-        self.client_id = status["connection"]["client_id"]
-        self.oauth_login({
-            "url": f"{PUBLIC_URL}/{self.user}",
-            "login_code": credentials["login_code"], "login_expires_in": 1800,
-        })
+        credentials = status["connection"]
+        self.validate_connection_record(credentials)
+        self.check(not status["auth_available"],
+                   "account sessions do not create a legacy connection login code")
+        self.client_id = credentials["client_id"]
+        self.oauth_login(credentials)
 
     def expect_native_failure(self, tool, arguments, needle):
         code = "try { await call(%s,%s,%s); } catch(error) { return {error:String(error)}; }" % (
@@ -230,7 +229,7 @@ def main():
     args.report.parent.mkdir(parents=True, exist_ok=True)
     report = {"revision":args.revision, "platform":sys.platform, "status":"failed", "checks":[]}
     if sys.platform != "linux" or os.geteuid() == 0:
-        report.update(status="blocked", error="isolated SSH fixture requires a non-root Linux user")
+        report.update(status="blocked", error="isolated account fixture requires a non-root Linux user")
         args.report.write_text(json.dumps(report, indent=2) + "\n")
         return 2
     with tempfile.TemporaryDirectory(prefix="ssmcp-service-e2e-") as directory:
@@ -255,3 +254,4 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
