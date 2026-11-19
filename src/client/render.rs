@@ -1008,7 +1008,20 @@ impl Renderer {
             .unwrap_or("");
         match kind {
             "exec.started" | "ssmcp.exec.started" => {
-                let command = command_label(&value["command"]);
+                // Both title and argv come from the audit-redacted event. Keep
+                // the invocation before the caller's purpose: defensive line
+                // redaction must not swallow it after a secret-looking title.
+                let command = match value["title"]
+                    .as_str()
+                    .filter(|title| !title.trim().is_empty())
+                {
+                    Some(title) => format!(
+                        "{} · {}",
+                        command_label(&value["command"]),
+                        activity::single_line(title, 160)
+                    ),
+                    None => command_label(&value["command"]),
+                };
                 self.activities.start(
                     activity_key("job", label, id),
                     id.into(),
@@ -4558,6 +4571,44 @@ mod tests {
         ] {
             assert!(!activity::progress(&invalid).contains('%'));
         }
+    }
+
+    #[test]
+    fn exec_title_uses_redacted_metadata_and_keeps_the_actual_command() {
+        let script = "print('fixture command')\nprint('done')";
+        let event = json!({"type":"exec.started","job_id":"title-81",
+            "title":"Inspect API_TOKEN=private-title-secret",
+            "command":["python3","-c",script],"cwd":"/work"});
+        let original = event.clone();
+        for (raw, verbose) in [(false, false), (true, false), (false, true)] {
+            let mut renderer = Renderer::new(raw, false, 160);
+            renderer.verbose = verbose;
+            let mut output = Vec::new();
+            renderer.event(&mut output, "fixture", &event).unwrap();
+            let shown = String::from_utf8(output).unwrap();
+            assert!(shown.contains("Inspect API_TOKEN=[redacted]"), "{shown}");
+            assert!(!shown.contains("private-title-secret"), "{shown}");
+            if !raw {
+                assert!(shown.contains("python3 -c"), "{shown}");
+                let activity = renderer.activities.snapshot().pop().unwrap();
+                assert_eq!(activity.id, "title-81");
+                assert!(activity.description.starts_with("python3 -c · 2 lines · "));
+                assert!(
+                    activity
+                        .description
+                        .ends_with("Inspect API_TOKEN=[redacted]")
+                );
+                assert!(!activity.description.contains("private-title-secret"));
+            }
+            assert_eq!(shown.contains("fixture command"), raw || verbose, "{shown}");
+            if verbose {
+                assert!(shown.contains("python3 -c <script>"), "{shown}");
+            }
+        }
+        assert_eq!(
+            event, original,
+            "rendering must not change the native job event"
+        );
     }
 
     #[test]

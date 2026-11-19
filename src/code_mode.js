@@ -558,6 +558,8 @@ const bootstrap = `(() => {
     if (!args || typeof args !== 'object' || isArray(args)) {
       throw new Failure('exec.run requires a command options object');
     }
+    // Preserve native start options, including the optional display-only title.
+    // The client validates title; helpers never infer it from inline script text.
     const {wait_ms = 5000, max_bytes = defaultMaxBytes, ...startArgs} = args;
     if (!Number.isSafeInteger(wait_ms) || wait_ms < 0 || wait_ms > 60000) {
       throw new Failure('exec.run wait_ms must be 0..=60000; it never cancels the command');

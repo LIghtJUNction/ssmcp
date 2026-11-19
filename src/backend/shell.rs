@@ -27,6 +27,7 @@ const MAX_RETAINED: usize = 128;
 const MAX_OUTPUT: usize = 64 * 1024;
 const COMPLETED_INLINE_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_ARGS: usize = 256;
+const MAX_TITLE_CHARS: usize = 160;
 const MAX_WAIT: u64 = 60_000;
 const MAX_TIMEOUT: u64 = 900_000;
 const MAX_INPUT: usize = 32 * 1024;
@@ -143,6 +144,7 @@ struct Job {
     id: String,
     pid: u32,
     command: Vec<String>,
+    title: Option<String>,
     cwd: PathBuf,
     started: Instant,
     state: Mutex<State>,
@@ -160,7 +162,7 @@ impl Job {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
     fn snapshot_locked(&self, state: &State) -> Value {
-        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"cwd":self.cwd,
+        json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"title":self.title,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
@@ -250,8 +252,9 @@ impl Shell {
         vec![
             tool(
                 "ssmcp.exec.start",
-                "Start an independent argv command immediately and return job_id. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
+                "Start an independent argv command immediately and return job_id. Supply a short title describing the purpose of complex inline scripts; it labels the command without changing execution. Commands run concurrently, survive code_mode completion, and stop when this client disconnects or reloads. No model is invoked. With --tty on Unix, output_mode is pty and stdout contains the combined terminal stream; stdin remains null or pipe.",
                 json!({"command":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":MAX_COMMAND_ARGS},
+                    "title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS,"description":"Optional display-only purpose, such as Check deployment status. At most 160 Unicode characters; surrounding whitespace is trimmed, blank titles and control or line-separator characters are rejected. Does not change argv, cwd, permissions or job identity."},
                     "cwd":{"type":"string","description":"Existing directory inside the authorized workspace; relative paths and the default resolve from that workspace."},
                     "env":{"type":"object","additionalProperties":{"type":"string"}},
                     "stdin":{"enum":["null","pipe"],"type":"string","default":"null","description":"null delivers EOF immediately; pipe enables bounded exec.write input and explicit close_stdin."},
@@ -509,6 +512,7 @@ impl Shell {
         #[serde(deny_unknown_fields)]
         struct Start {
             command: Vec<String>,
+            title: Option<String>,
             cwd: Option<PathBuf>,
             env: Option<HashMap<String, String>>,
             #[serde(default)]
@@ -517,6 +521,7 @@ impl Shell {
             timeout_ms: u64,
         }
         let args: Start = parse(args)?;
+        let title = job_title(args.title)?;
         if args.command.is_empty()
             || args.command.len() > MAX_COMMAND_ARGS
             || args.command[0].is_empty()
@@ -649,6 +654,7 @@ impl Shell {
             id: id.clone(),
             pid,
             command: args.command,
+            title,
             cwd,
             started: Instant::now(),
             state: Mutex::new(State {
@@ -679,7 +685,7 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"cwd":job.cwd}));
+        self.events.push(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"title":job.title,"cwd":job.cwd}));
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -914,6 +920,23 @@ fn tool(
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, String> {
     serde_json::from_value(args).map_err(|e| format!("invalid execution arguments: {e}"))
 }
+fn job_title(title: Option<String>) -> Result<Option<String>, String> {
+    title
+        .map(|title| {
+            if title.chars().count() > MAX_TITLE_CHARS
+                || title
+                    .chars()
+                    .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+                || title.trim().is_empty()
+            {
+                return Err(format!(
+                    "title must contain 1..={MAX_TITLE_CHARS} Unicode characters, with non-whitespace text and no control or line-separator characters"
+                ));
+            }
+            Ok(title.trim().to_owned())
+        })
+        .transpose()
+}
 fn empty(args: Value) -> Result<(), String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1007,6 +1030,7 @@ mod tests {
             id,
             pid: 0,
             command: vec!["completed fixture".into()],
+            title: None,
             cwd: std::env::current_dir().unwrap(),
             started: Instant::now(),
             state: Mutex::new(State {
@@ -1031,6 +1055,104 @@ mod tests {
             output_mode: "pipes",
             tty_slot: None,
         })
+    }
+
+    #[tokio::test]
+    async fn exec_title_rejection_precedes_job_creation() {
+        let shell = Shell::new();
+        for title in [
+            json!(""),
+            json!("   "),
+            json!(" leading newline\n"),
+            json!("title\twith tab"),
+            json!("title\u{1b}[2J"),
+            json!("title\u{7f}"),
+            json!("title\u{2028}second line"),
+            json!("title\u{2029}second paragraph"),
+            json!("x".repeat(MAX_TITLE_CHARS + 1)),
+            json!("界".repeat(MAX_TITLE_CHARS + 1)),
+        ] {
+            let error = shell
+                .call(
+                    "ssmcp.exec.start",
+                    json!({"command":[std::env::current_exe().unwrap(),"--exact",
+                        "backend::shell::tests::fixture_process","--nocapture"],
+                        "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},
+                        "title":title,"timeout_ms":1000}),
+                )
+                .await
+                .unwrap_err();
+            assert!(error.starts_with("title must contain"), "{error}");
+            assert!(shell.registry().jobs.is_empty());
+            assert_eq!(shell.slots.available_permits(), MAX_JOBS);
+        }
+        let events = shell
+            .call("ssmcp.exec.events", json!({"wait_ms":0}))
+            .await
+            .unwrap();
+        assert!(events["events"].as_array().unwrap().is_empty());
+        assert_eq!(job_title(None).unwrap(), None);
+        assert_eq!(
+            job_title(Some("界".repeat(MAX_TITLE_CHARS))).unwrap(),
+            Some("界".repeat(MAX_TITLE_CHARS))
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_title_is_metadata_through_the_job_lifecycle() {
+        let shell = Shell::new();
+        let command = json!([
+            std::env::current_exe().unwrap(),
+            "--exact",
+            "backend::shell::tests::fixture_process",
+            "--nocapture"
+        ]);
+        let started = shell
+            .call(
+                "ssmcp.exec.start",
+                json!({"command":command,"title":"  Read fixture output 中文  ",
+                    "env":{"SSMCP_SHELL_TEST_FIXTURE":"next"},"timeout_ms":5000}),
+            )
+            .await
+            .unwrap();
+        let id = started["job_id"].as_str().unwrap();
+        let finished = shell
+            .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+            .await
+            .unwrap();
+        let read = shell
+            .call("ssmcp.exec.read", json!({"job_id":id}))
+            .await
+            .unwrap();
+        let listed = shell.call("ssmcp.exec.list", json!({})).await.unwrap();
+        let listed = listed["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|job| job["job_id"] == id)
+            .unwrap();
+        for snapshot in [&started, &finished, &read["snapshot"], listed] {
+            assert_eq!(snapshot["title"], "Read fixture output 中文");
+            assert_eq!(snapshot["command"], command);
+            assert_eq!(snapshot["job_id"], id);
+            assert_eq!(snapshot["cwd"], started["cwd"]);
+        }
+        assert_eq!(finished["exit_code"], 0);
+        assert_eq!(output(&read), "next");
+        let events = shell
+            .call("ssmcp.exec.events", json!({"max_events":256,"wait_ms":0}))
+            .await
+            .unwrap();
+        let event = events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| &record["event"])
+            .find(|event| event["type"] == "exec.started")
+            .unwrap();
+        assert_eq!(event["title"], "Read fixture output 中文");
+        assert_eq!(event["job_id"], id);
+        assert_eq!(event["command"], command);
     }
 
     #[tokio::test]
