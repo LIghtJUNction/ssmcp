@@ -253,14 +253,11 @@ pub fn validate_title(title: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Startup allow targets use separate server-name and GitHub-login namespaces.
+/// Access targets are registered accounts on one explicit relay origin.
 pub fn canonical_allow_principal(principal: &str) -> Result<String, String> {
-    if principal.contains('@') {
-        canonical_github_principal(principal)
-    } else {
-        crate::username::normalize(principal)
-            .map_err(|error| format!("invalid server username: {error}"))
-    }
+    let (handle, server) =
+        crate::server_endpoint::allow_target(principal).map_err(|error| error.to_string())?;
+    crate::server_endpoint::allow_principal(&handle, &server).map_err(|error| error.to_string())
 }
 
 /// Validate a GitHub principal and return its case-insensitive canonical form.
@@ -482,7 +479,7 @@ impl AccessSnapshot {
     pub fn validate(&self) -> Result<(), String> {
         if self.entries.is_empty()
             || self.entries.len() > MAX_ALLOWED_PRINCIPALS
-            || self.entries.iter().filter(|entry| entry.owner).count() != 1
+            || self.entries.iter().filter(|entry| entry.owner).count() > 1
             || self
                 .message
                 .as_ref()
@@ -493,8 +490,11 @@ impl AccessSnapshot {
         let mut subjects = std::collections::HashSet::new();
         let mut principals = std::collections::HashSet::new();
         for entry in &self.entries {
-            if canonical_github_principal(&entry.principal)? != entry.principal
-                || format!("{}@github", entry.login.to_ascii_lowercase()) != entry.principal
+            if canonical_allow_principal(&entry.principal)? != entry.principal
+                || entry
+                    .principal
+                    .split_once('@')
+                    .is_none_or(|(handle, _)| handle != entry.login)
                 || entry.subject.is_empty()
                 || entry.subject.len() > 20
                 || !entry.subject.bytes().all(|byte| byte.is_ascii_digit())
@@ -951,78 +951,59 @@ mod tests {
     }
 
     #[test]
-    fn allow_principals_distinguish_server_usernames_from_github_logins() {
+    fn allow_principals_require_an_explicit_relay_namespace() {
         for (input, expected) in [
-            ("Alice", "alice"),
-            ("Alice_2-home", "alice_2-home"),
-            ("Alice@GitHub", "alice@github"),
-            ("a@github", "a@github"),
-            ("root@github", "root@github"),
-            ("gh-123@github", "gh-123@github"),
+            ("Alice@SSMCP.Test:443", "alice@ssmcp.test"),
+            (
+                "Alice_2-home@https://ssmcp.test/",
+                "alice_2-home@ssmcp.test",
+            ),
         ] {
             assert_eq!(canonical_allow_principal(input).unwrap(), expected);
         }
-        assert!(canonical_allow_principal(&"a".repeat(32)).is_ok());
         for input in [
             "",
-            "ab",
-            "root",
-            "gh-123",
-            " alice",
-            "alice ",
-            "alice/bob",
-            "alice@example.com",
-            "alice@github@github",
-            "alice,",
-            "álïce",
+            "alice",
+            "alice@github",
+            "@ssmcp.test",
+            "alice@@ssmcp.test",
+            "root@ssmcp.test",
         ] {
-            assert!(canonical_allow_principal(input).is_err(), "{input:?}");
+            assert!(canonical_allow_principal(input).is_err(), "{input}");
         }
-        assert!(canonical_allow_principal(&"a".repeat(33)).is_err());
         assert_ne!(
-            canonical_allow_principal("alice").unwrap(),
-            canonical_allow_principal("alice@github").unwrap()
+            canonical_allow_principal("alice@first.test").unwrap(),
+            canonical_allow_principal("alice@second.test").unwrap()
         );
     }
 
     #[test]
     fn client_metadata_keeps_legacy_shape_and_validates_allow_policy() {
-        let legacy = serde_json::json!({
-            "name":"dev", "cwd":"/project", "hostname":"workstation"
-        });
+        let legacy = serde_json::json!({"name":"dev","cwd":"/project","hostname":"workstation"});
         let mut metadata: ClientMetadata = serde_json::from_value(legacy.clone()).unwrap();
         assert!(metadata.allow.is_empty());
-        assert!(metadata.title.is_none());
         assert!(metadata.validate().is_ok());
         assert_eq!(serde_json::to_value(&metadata).unwrap(), legacy);
-        metadata.allow = vec!["alice@github".into(), "bob@github".into()];
+        metadata.allow = vec!["alice@ssmcp.test".into(), "bob_dev@ssmcp.test".into()];
         assert!(metadata.validate().is_ok());
         assert_eq!(
             serde_json::to_value(&metadata).unwrap()["allow"],
-            serde_json::json!(["alice@github", "bob@github"])
-        );
-        metadata.allow = vec!["alice".into(), "alice@github".into(), "bob_dev".into()];
-        assert!(metadata.validate().is_ok());
-        assert_eq!(
-            serde_json::to_value(&metadata).unwrap()["allow"],
-            serde_json::json!(["alice", "alice@github", "bob_dev"])
+            serde_json::json!(["alice@ssmcp.test", "bob_dev@ssmcp.test"])
         );
         for allow in [
-            vec!["Alice".into()],
-            vec!["root".into()],
-            vec!["alice".into(), "alice".into()],
-            vec!["Alice@github".into()],
-            vec!["alice@example.com".into()],
-            vec!["alice@github".into(), "alice@github".into()],
+            vec!["Alice@ssmcp.test".into()],
+            vec!["alice".into()],
+            vec!["alice@github".into()],
+            vec!["alice@ssmcp.test".into(), "alice@ssmcp.test".into()],
             (0..=MAX_ALLOWED_PRINCIPALS)
-                .map(|i| format!("user-{i}@github"))
+                .map(|i| format!("user-{i}@ssmcp.test"))
                 .collect(),
         ] {
             metadata.allow = allow;
             assert!(metadata.validate().is_err());
         }
         metadata.allow = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@github"))
+            .map(|i| format!("user-{i}@ssmcp.test"))
             .collect();
         assert!(metadata.validate().is_ok());
     }

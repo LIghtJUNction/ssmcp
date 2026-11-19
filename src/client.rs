@@ -70,15 +70,13 @@ Start
 Manage
   config · whoami · logout      Account and server settings
   update [--check]              Update the installed client
-  invite · join                Share a temporary session
   sessions · attach · service  Saved and background sessions
   setup · ui · 007             Setup, appearance and recovery
 
 Options
   --name NAME   --title TEXT   --server URL   --context-root PATH
   --no-browser  --no-watchdog  --theme NAME   --no-color
-  --allow USER[,USER...]  Share with registered server usernames
-  --allow USER@github    Share with GitHub logins; mix or repeat both forms
+  --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
 
 Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
@@ -95,9 +93,6 @@ Usage: ssmcp username@server [options]
        ssmcp config path
        ssmcp update [--check]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
-       ssmcp invite [--server URL] [--ttl 600] [--session-ttl 3600] [--shell sh|powershell]
-                    [--no-bootstrap] [--json]
-       ssmcp join [--server URL] --token INVITATION [options]
        ssmcp [options] [--server URL]
        ssmcp setup [--server URL] [--no-browser]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
@@ -119,9 +114,9 @@ Usage: ssmcp username@server [options]
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Seconds between retries, 1..=3600 (default 5)
   --title TITLE        Session title in the header and agent list (max 512 UTF-8 bytes)
-  --allow USER|USER@github
-                       Allow a registered server username or GitHub login
-                       Repeat or comma-separate; at most 32 accounts including you
+  --allow USER@SERVER  Allow only these registered relay accounts to control this device
+                       Repeat or comma-separate; at most 32 accounts
+                       No device login required; controllers must sign in
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -148,48 +143,34 @@ Examples:
   ssmcp --name laptop
   ssmcp list
   ssmcp -i
-  ssmcp invite
-  ssmcp invite --shell powershell
   ssmcp --no-watchdog --name one-shot
-  ssmcp --allow alice owner@relay.example
-  ssmcp --allow alice,octocat@github owner@relay.example
+  ssmcp --allow alice@ssmcp.lmm.best
+  ssmcp --server https://relay.example --allow alice@relay.example,bob@relay.example
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
-  ssmcp sessions create shared --allow alice,octocat@github owner@relay.example
+  ssmcp sessions create shared --allow alice@ssmcp.lmm.best
   ssmcp attach workstation
   ssmcp sessions close workstation
 
-username@server connects over HTTPS/WSS. The first connection opens GitHub
-authorization, validates and binds your chosen username, then connects automatically.
-The username belongs to this server and can differ from your GitHub login.
-Credentials are saved privately for this origin. Later connections reuse them;
-expired credentials reopen authorization. --no-browser prints a link and code.
-Bare ssmcp reuses your last authorized account. No SSH key or --allow is needed.
-ssmcp list shows the account's online controllable sessions; sessions list keeps
-listing local saved sessions. Ctrl-] leaves remote interactive control; Ctrl-C
-is delivered to the selected terminal. A temporary invitation can be redeemed
-once (default 10 minutes) and creates a controlled session (default 1 hour).
-The generated bootstrap command downloads its client from this server only.
-Temporary credentials stay in memory; Ctrl-C on the controlled device stops it.
-ssmcp logout clears this server's saved login and attempts to revoke it and
-its derived invitations/devices. Offline logout reports unconfirmed revocation;
-other servers and independent logins are preserved.
+On the controlled device, use --allow username@relay-server. No login or invitation
+is needed there. The account must already exist on that relay; a different server,
+an unknown or banned account, bare names and the former @github syntax are rejected.
+Only the listed accounts receive access. Controllers must sign in through OAuth.
+Names resolve to stable account IDs; billing follows the account making each call.
 
-Redirected stdout (or jsonl mode) emits one connection JSON object.
-Interactive stdout shows the MCP URL and OAuth login instructions.
-Add url to your MCP client, then enter login_code on its OAuth login page.
-login_expires_in deducts local backend startup time.
-With --allow, bare USER is the username chosen when registering on this server;
-USER@github is a GitHub login. The two names can identify different accounts.
-Your signed-in account remains the owner and is always allowed. Each target
-binds to a stable GitHub account ID, even if its display login later changes.
-Sharing requires an updated relay with per-session access support; server
-usernames also require account storage. Unknown or banned server usernames
-are rejected. Invitation-enrolled devices cannot grant access to others.
---allow cannot be combined with --list-tools.
+Without --allow, a saved valid login selects only your own registered username.
+username@server signs in and registers that username when needed. whoami displays
+your account, and logout removes the selected server's saved login. Other servers
+and independent logins are preserved. --no-browser prints the authorization URL.
+An update or a controlled-device restart does not grant a new controller identity.
+
+ssmcp list shows remotely controllable sessions; sessions list shows local saved
+sessions. Ctrl-] leaves remote interactive control; Ctrl-C is sent to its terminal.
+Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
+an MCP client and sign in as an allowed account. --allow cannot use --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
 Independent commands run concurrently and support status, output, wait and cancel.
 Color is automatic on terminals; NO_COLOR or redirected stderr disables ANSI.
@@ -200,8 +181,6 @@ forwards work on every client; system rsync transfers require Linux clients.
 Skill summaries and AGENTS.md views stay inside the workspace unless an operator
 adds --context-root. These extra roots expose context documents, not file writes.
 Keep this process running; Ctrl-C disconnects and stops local harnesses and jobs.
-An SSH connection without a saved account or --allow uses a one-time login code;
-disconnecting revokes that connection's grants and reconnecting needs new OAuth. An MCP app restart can reuse valid tokens.
 Install the persistent session manager with `ssmcp service install`; choose
 --system with an explicit non-root owner for boot startup, or a per-user service.
 New sessions use the running manager. Legacy --daemon also supports per-session
@@ -475,7 +454,7 @@ impl Options {
                     title = Some(value["--title=".len()..].to_owned());
                 }
                 Some("--allow") => {
-                    let value = args.next().ok_or("--allow requires USER or USER@github")?;
+                    let value = args.next().ok_or("--allow requires USER@SERVER")?;
                     add_allowed_principals(
                         &mut allow,
                         value.to_str().ok_or("--allow must be UTF-8")?,
@@ -655,7 +634,7 @@ impl Options {
         }
         if list_tools && !allow.is_empty() {
             return Err(
-                "--allow requires an SSH connection and cannot be used with --list-tools".into(),
+                "--allow requires a relay connection and cannot be used with --list-tools".into(),
             );
         }
         if !shell.is_absolute() {
@@ -950,7 +929,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --allow USER|USER@github  Share with server usernames or GitHub logins\n  USER is a registered server username; USER@github is a GitHub login.\n  Repeat --allow or comma-separate targets; your signed-in account stays the owner."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --allow USER@SERVER  Allow a registered account on the selected relay\n  No login is needed on this controlled device; controllers must sign in.\n  Repeat --allow or comma-separate targets. Without it, a saved login selects yourself."
         );
         return Ok(());
     }
@@ -982,7 +961,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
-    apply_account(&mut options, None, true).await?;
+    apply_account(&mut options, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
     validate_session_spec(&spec)?;
@@ -1069,118 +1048,40 @@ fn validate_destination(destination: &str) -> Result<(), String> {
     Ok(())
 }
 
-struct JoinRequest {
-    server: String,
-    token: String,
-}
-
-fn join_request(args: &mut Vec<OsString>) -> crate::Result<Option<JoinRequest>> {
-    if !args.first().is_some_and(|arg| arg == "join") {
-        return Ok(None);
-    }
-    args.remove(0);
-    let mut remaining = Vec::new();
-    let mut server = None;
-    let mut token = None;
-    let mut source = std::mem::take(args).into_iter();
-    while let Some(arg) = source.next() {
-        match arg.to_str() {
-            Some("--token") => {
-                if token.is_some() {
-                    return Err("--token may be supplied only once".into());
-                }
-                token = Some(
-                    source
-                        .next()
-                        .ok_or("--token requires a one-time invitation")?
-                        .into_string()
-                        .map_err(|_| "invitation must be UTF-8")?,
-                );
-            }
-            Some("--server") => {
-                if server.is_some() {
-                    return Err("--server may be supplied only once".into());
-                }
-                let value = source
-                    .next()
-                    .ok_or("--server requires an HTTPS origin")?
-                    .into_string()
-                    .map_err(|_| "--server must be UTF-8")?;
-                server = Some(account::normalize_server(&value)?);
-            }
-            Some(flag) if connection_option_takes_value(flag) => {
-                let value = source
-                    .next()
-                    .ok_or_else(|| format!("{flag} requires a value"))?;
-                remaining.extend([arg, value]);
-            }
-            _ => remaining.push(arg),
-        }
-    }
-    let server = account::resolve_server(server.as_deref())?;
-    let token = token.ok_or("usage: ssmcp join --server URL --token INVITATION [--name NAME]")?;
-    remaining.extend([OsString::from("--server"), OsString::from(&server)]);
-    *args = remaining;
-    Ok(Some(JoinRequest { server, token }))
-}
-
-async fn apply_account(
-    options: &mut Options,
-    join: Option<JoinRequest>,
-    allow_login: bool,
-) -> crate::Result<()> {
+async fn apply_account(options: &mut Options, allow_login: bool) -> crate::Result<()> {
     if options.list_tools {
-        if join.is_some() {
-            return Err("join starts a controlled session; --list-tools is local".into());
-        }
         return Ok(());
     }
-    if join.is_none()
-        && options.destination.is_some()
-        && options.server.is_none()
-        && !options.allow.is_empty()
-    {
-        return Ok(());
+    let server = account::resolve_server(options.server.as_deref())?;
+    for principal in &options.allow {
+        crate::server_endpoint::allow_handle_for_server(principal, &server)?;
     }
-    let credential = if let Some(join) = join {
-        if !options.allow.is_empty() {
-            return Err("join takes its account identity from the invitation; omit --allow".into());
+    if options.allow.is_empty() {
+        let saved = account::credentials(Some(&server)).await?;
+        if saved.is_none() && options.username.is_none() {
+            return Err("no saved sign-in; use --allow username@relay-server for an unsigned controlled device, or sign in to allow yourself".into());
         }
-        if options.daemon || options.session_control {
-            return Err("temporary join sessions run in the foreground without saved-session management; keep this terminal open".into());
-        }
-        options.temporary = true;
-        Some(account::enroll(&join.server, &join.token).await?)
-    } else if options.server.is_some() || options.destination.is_none() {
-        Some(
-            account::connect_credential(
-                options.server.as_deref(),
-                options.username.as_deref(),
-                options.no_browser,
-                allow_login,
-            )
-            .await?,
+        let credential = account::connect_credential(
+            Some(&server),
+            options.username.as_deref(),
+            options.no_browser,
+            allow_login && options.username.is_some(),
         )
-    } else {
-        account::credentials(None).await?
-    };
-    if options.server.is_some() || options.destination.is_none() {
-        let credential =
-            credential.ok_or("connect with ssmcp username@server to authorize this device")?;
-        options.server = Some(credential.server.clone());
+        .await?;
+        let handle = credential
+            .username
+            .as_deref()
+            .ok_or("register a server username before connecting without --allow")?;
+        options
+            .allow
+            .push(crate::server_endpoint::allow_principal(handle, &server)?);
         options.username = credential.username.clone();
-        if options.allow.is_empty() {
-            options.allow.push(credential.principal.clone());
-        }
         options.relay = Some(credential);
-    } else if options.allow.is_empty() {
-        // A cached, verified public principal selects the existing SSH ACL.
-        // The account bearer credential is never sent to an SSH destination.
-        if let Some(credential) = credential {
-            let identity = account::verify_identity(&credential).await?;
-            options.allow.push(identity.principal);
-        }
+    } else {
+        // An explicit local policy needs no account token on the controlled device.
+        options.relay = None;
     }
+    options.server = Some(server);
     Ok(())
 }
 
@@ -1236,15 +1137,12 @@ pub async fn run() -> crate::Result<()> {
     if account::dispatch(&args).await? {
         return Ok(());
     }
-    if args.first().is_some_and(|arg| arg == "join")
-        && args.iter().any(|arg| arg == "--help" || arg == "-h")
+    if args
+        .first()
+        .is_some_and(|arg| arg == "invite" || arg == "join")
     {
-        println!(
-            "Usage: ssmcp join [--server URL] --token INVITATION [--name NAME] [--no-watchdog]\nStarts a temporary controlled session over HTTPS. Keep this terminal open; Ctrl-C stops it."
-        );
-        return Ok(());
+        return Err("invite and join were removed; start the controlled device with ssmcp --allow username@relay-server".into());
     }
-    let join = join_request(&mut args)?;
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
     }
@@ -1286,7 +1184,7 @@ pub async fn run() -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
-    apply_account(&mut options, join, service.is_none()).await?;
+    apply_account(&mut options, service.is_none()).await?;
     if let Some(runner) = &service
         && (options.daemon
             || options.list_tools
@@ -1407,7 +1305,7 @@ pub async fn run() -> crate::Result<()> {
             {
                 reauthenticated = true;
                 options.allow.clear();
-                apply_account(&mut options, None, true).await?;
+                apply_account(&mut options, true).await?;
             } else {
                 if let Some(runner) = &service {
                     runner.record(
@@ -1488,7 +1386,7 @@ pub async fn run() -> crate::Result<()> {
         {
             reauthenticated = true;
             options.allow.clear();
-            apply_account(&mut options, None, true).await?;
+            apply_account(&mut options, true).await?;
             continue;
         }
         if !options.watchdog || unsupported_protocol || permanent {
@@ -1571,15 +1469,11 @@ struct RegisteredSsh {
 }
 
 impl RegisteredSsh {
-    async fn require_allow_access(
-        &mut self,
-        allow: &[String],
-        owner_principal: &str,
-    ) -> crate::Result<()> {
-        if !self.access_supported && allow.iter().any(|target| target != owner_principal) {
+    async fn require_allow_access(&mut self, allow: &[String]) -> crate::Result<()> {
+        if !self.access_supported && !allow.is_empty() {
             stop_registration(&mut self.ssh, &mut self.stderr_pump).await?;
             return Err(Box::new(relay::PermanentFailure(
-                "server did not acknowledge per-session sharing; update ssmcpd before using --allow for additional users".into()
+                "server did not acknowledge account access controls; update ssmcpd before using --allow".into()
             )));
         }
         Ok(())
@@ -1704,11 +1598,11 @@ async fn register_ssh(
     let github_auth = !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
         stop_registration(&mut ssh, &mut stderr_pump).await?;
-        return Err("server did not acknowledge the --allow GitHub access policy; upgrade ssmcpd with GitHub authorization configured before connecting".into());
+        return Err("server did not acknowledge the explicit account allow policy; upgrade ssmcpd before connecting".into());
     }
     if !github_auth && (ready.1.is_empty() || ready.2 == 0) {
         stop_registration(&mut ssh, &mut stderr_pump).await?;
-        return Err("server returned no login code for this connection; use --allow only when GitHub access is intended".into());
+        return Err("server returned no account access policy for this connection; use --allow username@relay-server".into());
     }
     Ok(Some(RegisteredSsh {
         ssh,
@@ -1808,17 +1702,18 @@ async fn connect(
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
-    let credential = options
-        .relay
-        .as_ref()
-        .ok_or("OAuth credentials are required to connect")?;
+    let server = options
+        .server
+        .as_deref()
+        .ok_or("a relay server is required")?;
+    let credential = options.relay.as_ref();
     let executable = std::env::current_exe()?;
     render::status(
         "https",
         "Progress",
         &format!(
-            "Connecting to {} with an authenticated HTTPS relay",
-            credential.server
+            "Connecting to {} with an explicit account allow list",
+            server
         ),
     );
     let cancelled = async {
@@ -1830,7 +1725,7 @@ async fn connect(
     let registration = register_ssh(
         &metadata,
         registered,
-        || relay::command(&executable, credential),
+        || relay::command(&executable, server, credential),
         cancelled,
         Duration::from_secs(120),
     )
@@ -1838,9 +1733,7 @@ async fn connect(
     let Some(mut registration) = registration else {
         return Ok(ConnectionExit::Stopped);
     };
-    registration
-        .require_allow_access(&metadata.allow, &credential.principal)
-        .await?;
+    registration.require_allow_access(&metadata.allow).await?;
     let RegisteredSsh {
         mut ssh,
         stderr_pump: _stderr_pump,
@@ -2048,7 +1941,7 @@ async fn connect(
                         }
                     }
                     let accepted = if options.temporary {
-                        Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
+                        Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
                     } else {
                         backend.validate_reload().and_then(|()| restart.accept(&json!({}), requests.len(), &client_id, github_auth)).map(|_| ())
                     };
@@ -2100,7 +1993,7 @@ async fn connect(
                         let _controller = render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation);
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let mut response = if options.temporary {
-                            Err("temporary joined sessions keep their credential only in memory; stop this session and create a new invitation to restart it".into())
+                            Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
@@ -2474,32 +2367,8 @@ mod tests {
     }
 
     #[test]
-    fn temporary_join_removes_invitation_from_reusable_connection_options() {
-        let mut args = [
-            "join",
-            "--server",
-            "https://example.com",
-            "--token",
-            "ci_1234567890",
-            "--name",
-            "temporary",
-        ]
-        .map(OsString::from)
-        .to_vec();
-        let join = join_request(&mut args).unwrap().unwrap();
-        assert_eq!(join.token, "ci_1234567890");
-        assert_eq!(join.server, "https://example.com");
-        assert!(
-            !args
-                .iter()
-                .any(|arg| arg == "--token" || arg == "ci_1234567890")
-        );
-        let options = Options::parse(args).unwrap().unwrap();
-        assert_eq!(options.name.as_deref(), Some("temporary"));
-        let mut invalid = ["join", "--token", "first", "--token", "second"]
-            .map(OsString::from)
-            .to_vec();
-        assert!(join_request(&mut invalid).is_err());
+    fn retired_join_is_not_a_reusable_connection_destination() {
+        assert!(Options::parse(["join", "--token", "retired"].map(OsString::from)).is_err());
     }
 
     #[test]
@@ -2810,15 +2679,15 @@ mod tests {
     }
 
     #[test]
-    fn github_allow_flags_combine_canonicalize_and_deduplicate() {
+    fn qualified_allow_flags_combine_canonicalize_and_deduplicate() {
         let options = Options::parse(
             [
                 "--server",
                 "https://relay.example",
                 "--allow",
-                "OctoCat@GitHub, Alice-Dev@github",
+                "OctoCat@RELAY.Example:443, Alice-Dev@relay.example",
                 "--allow",
-                "OCTOCAT@github,bob@github",
+                "OCTOCAT@relay.example,bob@relay.example",
             ]
             .map(OsString::from),
         )
@@ -2826,7 +2695,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             options.allow,
-            ["octocat@github", "alice-dev@github", "bob@github"]
+            [
+                "octocat@relay.example",
+                "alice-dev@relay.example",
+                "bob@relay.example"
+            ]
         );
         assert_eq!(options.metadata().unwrap().allow, options.allow);
         assert_eq!(options.server.as_deref(), Some("https://relay.example"));
@@ -2834,7 +2707,7 @@ mod tests {
     }
 
     #[test]
-    fn allow_server_usernames_and_github_logins_remain_distinct() {
+    fn qualified_allow_survives_saved_sessions_without_credentials() {
         let options = Options::parse(
             [
                 "--server",
@@ -2842,33 +2715,31 @@ mod tests {
                 "--name",
                 "allow-roundtrip",
                 "--allow",
-                "Alice, ALICE@GitHub, Alice_Dev",
+                "Alice@relay.example, ALICE_DEV@relay.example",
                 "--allow",
-                "alice,alice@github",
+                "alice@relay.example",
             ]
             .map(OsString::from),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(options.allow, ["alice", "alice@github", "alice_dev"]);
-        assert_eq!(options.metadata().unwrap().allow, options.allow);
-        let spec = options.session_spec().unwrap();
-        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(
+            options.allow,
+            ["alice@relay.example", "alice_dev@relay.example"]
+        );
+        let restored = Options::parse_saved(&options.session_spec().unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.allow, options.allow);
         assert_eq!(restored.server, options.server);
+        assert!(restored.relay.is_none());
         assert!(restored.destination.is_none());
     }
 
     #[test]
     fn allow_limits_targets_and_rejects_invalid_or_local_options() {
         let all = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| {
-                if i % 2 == 0 {
-                    format!("user-{i}")
-                } else {
-                    format!("user-{i}@github")
-                }
-            })
+            .map(|i| format!("user-{i}@relay.example"))
             .collect::<Vec<_>>()
             .join(",");
         let options = Options::parse(
@@ -2892,7 +2763,7 @@ mod tests {
                 "--allow",
                 &all,
                 "--allow",
-                "another@github",
+                "another@relay.example",
             ]
             .map(OsString::from),
         )
@@ -2901,13 +2772,12 @@ mod tests {
         assert!(error.contains("32 distinct"), "{error}");
         for value in [
             "",
-            "ab",
-            "root",
-            "gh-123",
-            "first.last",
-            "alice@example.com",
-            "alice@github,",
-            ",alice@github",
+            "alice",
+            "root@relay.example",
+            "alice@github",
+            "alice@relay.example,",
+            ",alice@relay.example",
+            "alice@https://relay.example/path",
         ] {
             let error = Options::parse(
                 ["--server", "https://relay.example", "--allow", value].map(OsString::from),
@@ -2920,16 +2790,14 @@ mod tests {
             Options::parse(["--allow"].map(OsString::from))
                 .err()
                 .unwrap()
-                .contains("requires USER or USER@github")
+                .contains("requires USER@SERVER")
         );
-        for value in ["alice", "alice@github"] {
-            assert!(
-                Options::parse(["--list-tools", "--allow", value].map(OsString::from))
-                    .err()
-                    .unwrap()
-                    .contains("cannot be used with --list-tools")
-            );
-        }
+        assert!(
+            Options::parse(["--list-tools", "--allow", "alice@relay.example"].map(OsString::from))
+                .err()
+                .unwrap()
+                .contains("cannot be used with --list-tools")
+        );
     }
 
     #[test]

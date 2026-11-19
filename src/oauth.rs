@@ -492,6 +492,7 @@ impl OAuth {
 
     /// Delegate only a verified account's existing resource and fixed access
     /// lifetime. This snapshots under the OAuth lock and performs no storage I/O.
+    #[cfg(test)]
     pub(crate) fn delegation(
         &self,
         user: &str,
