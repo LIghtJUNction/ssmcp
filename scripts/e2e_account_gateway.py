@@ -173,8 +173,18 @@ class AccountGateway:
         h = self.harness
         self.validate_connection_record(credentials)
         resource = h.issuer + "/mcp"
-        h.check(credentials.get("url") == resource,
-                "the account connection advertises its exact identity-scoped MCP resource")
+        if "url" in credentials:
+            h.check(credentials["url"] == resource,
+                    "the account connection advertises its exact identity-scoped MCP resource")
+        else:
+            # Saved session status exposes public connection fields only.
+            # Bind its real ID to this fixture account without inventing a URL.
+            status, sessions, _ = h.request(
+                "GET", path="/api/client/sessions", secret=h.account_token)
+            h.check(status == 200 and isinstance(sessions, dict)
+                    and any(client.get("id") == credentials["client_id"]
+                            for client in sessions.get("clients", [])),
+                    "the saved connection belongs to the authenticated account session list")
         status, _, challenge = h.request(body={}, secret="")
         metadata_url = h.issuer + "/.well-known/oauth-protected-resource/mcp"
         h.check(status == 401 and metadata_url in challenge.get("www-authenticate", ""),
