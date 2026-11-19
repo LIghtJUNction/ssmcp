@@ -136,7 +136,9 @@ jobs:
       - name: Exercise discovered harness fixtures through SSH and OAuth
         run: python3 scripts/e2e_agents.py --bin-dir target/debug
       - name: Exercise unified execution, audit and connection isolation
-        run: python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
+        run: |
+          python3 scripts/test_e2e_unified.py
+          python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
       - name: Exercise computer-use, Omarchy discovery and image transport
         if: matrix.runner == 'ubuntu-24.04'
         run: python3 scripts/e2e_computer_use.py --bin-dir target/debug --evidence-dir "$RUNNER_TEMP/ssmcp-computer-use" --report "$RUNNER_TEMP/ssmcp-computer-use-report.json"
