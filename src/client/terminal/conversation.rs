@@ -12,6 +12,7 @@ pub(super) mod logout;
 mod questions;
 mod queue;
 mod tasks;
+mod user_wait;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum View {
@@ -423,6 +424,10 @@ impl State {
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
+        if let Some(arguments) = user_wait::arguments(text) {
+            self.chat_user_wait(arguments)?;
+            return Ok(true);
+        }
         if let Some(body) = listener::body(text) {
             self.chat_force_send(body)?;
             return Ok(true);
@@ -727,6 +732,14 @@ impl State {
             if let Err(error) = self.chat_command(text.trim()) {
                 self.notice = Some(error);
             }
+            self.dirty = true;
+            return;
+        }
+        if user_wait::arguments(&text).is_some() {
+            if let Err(error) = self.chat_command(&text) {
+                self.notice = Some(error);
+            }
+            // Wait controls stay local even while editing or preparing input.
             self.dirty = true;
             return;
         }
@@ -2411,7 +2424,9 @@ impl State {
             let line = if g.rows >= 3 && index == g.rows - 1 {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
-                let priority_hint = self.notice.is_some() || scroll_hint.is_some();
+                let wait_hint = self.chat_user_wait_hint();
+                let priority_hint =
+                    self.notice.is_some() || scroll_hint.is_some() || wait_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2419,6 +2434,7 @@ impl State {
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
+                    if let Some(hint) = wait_hint { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
                     if self.conversation.view == View::Tasks {

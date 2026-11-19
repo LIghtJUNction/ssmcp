@@ -21,6 +21,7 @@ mod handoff;
 mod highlight;
 pub(crate) mod input;
 pub(crate) mod interface;
+pub(crate) mod notification;
 mod panel;
 pub(crate) mod presentation;
 #[cfg(test)]
