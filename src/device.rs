@@ -1557,10 +1557,18 @@ mod tests {
         ));
 
         let mut legacy = open_socket(&base, &device, vec![]).await;
-        let bytes = match legacy.next().await.unwrap().unwrap() {
-            Message::Binary(data) => data.to_vec(),
-            Message::Text(text) => text.as_bytes().to_vec(),
-            _ => panic!("ready frame"),
+        let bytes = loop {
+            match tokio::time::timeout(Duration::from_secs(4), legacy.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+            {
+                Message::Binary(data) => break data.to_vec(),
+                Message::Text(text) => break text.as_bytes().to_vec(),
+                Message::Ping(_) | Message::Pong(_) => continue,
+                _ => panic!("ready frame"),
+            }
         };
         let old_ready: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(old_ready["type"], "ready");

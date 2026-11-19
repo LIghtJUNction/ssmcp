@@ -63,11 +63,20 @@ pub(super) fn command(executable: &Path, credential: &Credential) -> Command {
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", &credential.server)
         .env("SSMCP_RELAY_TOKEN", &credential.token)
+        .env(
+            "SSMCP_RELAY_CAPABILITIES",
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command
+}
+
+fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
+    (parent_offer == Some(crate::wire::SESSION_ACCESS_CAPABILITY))
+        .then(|| HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY))
 }
 
 fn websocket_url(server: &str) -> crate::Result<String> {
@@ -100,12 +109,16 @@ pub(super) async fn run() -> crate::Result<()> {
         .map_err(|_| "invalid client credential")?;
     authorization.set_sensitive(true);
     request.headers_mut().insert("authorization", authorization);
-    // Unknown HTTP headers are harmless on older servers. They keep the original
-    // strict v7 Ready shape, which leaves access controls disabled in the parent.
-    request.headers_mut().insert(
-        crate::wire::CAPABILITIES_HEADER,
-        HeaderValue::from_static(crate::wire::SESSION_ACCESS_CAPABILITY),
-    );
+    // The parent, not just this helper, must understand the optional Ready fields.
+    // This also supports an old running client that starts a newer relay after update.
+    // Older servers ignore the HTTP offer and keep the strict v7 Ready shape.
+    if let Some(capability) =
+        access_capability_header(std::env::var("SSMCP_RELAY_CAPABILITIES").ok().as_deref())
+    {
+        request
+            .headers_mut()
+            .insert(crate::wire::CAPABILITIES_HEADER, capability);
+    }
     let configuration = WebSocketConfig::default()
         .max_message_size(Some(MAX_FRAME))
         .max_frame_size(Some(MAX_FRAME));
@@ -242,6 +255,17 @@ pub(super) async fn run() -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn access_capability_header_requires_explicit_support_from_the_parent() {
+        assert!(access_capability_header(None).is_none());
+        assert!(access_capability_header(Some("session_access_v10")).is_none());
+        assert!(access_capability_header(Some("")).is_none());
+        assert_eq!(
+            access_capability_header(Some(crate::wire::SESSION_ACCESS_CAPABILITY)).unwrap(),
+            crate::wire::SESSION_ACCESS_CAPABILITY
+        );
+    }
 
     #[test]
     fn quota_http_rejection_uses_only_the_validated_server_origin() {
