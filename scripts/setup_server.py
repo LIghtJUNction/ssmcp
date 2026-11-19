@@ -139,7 +139,7 @@ def probe(base):
         if request('/api/client/whoami')[0] != 401 or request('/api/client/sessions')[0] != 401:
             raise RuntimeError('unauthenticated account endpoints did not reject access')
     finally:
-        request('/api/setup/cancel', {'device_code': grant['device_code']})
+        request('/api/client/login/cancel', {'device_code': grant['device_code']})
 
 
 def disable_legacy(runner):

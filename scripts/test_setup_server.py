@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import json
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 import setup_server as setup
 
@@ -51,6 +53,34 @@ class SetupTests(unittest.TestCase):
             changes, _, _ = setup.configuration(config, None, proxy, template)
             self.assertIn('server_name relay.example.com;', changes[proxy])
             self.assertNotIn('ssmcp.example.com', changes[proxy])
+
+    def test_health_probe_cancels_its_client_login_on_success_and_failure(self):
+        for unauthorized in (True, False):
+            with self.subTest(unauthorized=unauthorized):
+                connection = Mock()
+                replies = [
+                    (200, b"ok"),
+                    (200, json.dumps({"device_code":"health-check-fixture"}).encode()),
+                    (401 if unauthorized else 200, b"{}"),
+                ]
+                if unauthorized:
+                    replies.append((401, b"{}"))
+                replies.append((200, b"{}"))
+                connection.getresponse.side_effect = [
+                    Mock(status=status, read=Mock(return_value=body)) for status, body in replies
+                ]
+                with patch.object(setup.http.client, "HTTPConnection", return_value=connection):
+                    if unauthorized:
+                        setup.probe("http://127.0.0.1:8080")
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            setup.probe("http://127.0.0.1:8080")
+                calls = connection.request.call_args_list
+                self.assertEqual(calls[1].args[:2], ("POST", "/api/client/login/start"))
+                self.assertEqual(calls[-1].args[:2], ("POST", "/api/client/login/cancel"))
+                self.assertEqual(json.loads(calls[-1].kwargs["body"]),
+                                 {"device_code":"health-check-fixture"})
+                self.assertEqual(connection.close.call_count, len(calls))
 
     def transaction(self, fail=False, unchanged=False, portal=True):
         with tempfile.TemporaryDirectory() as directory:

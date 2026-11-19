@@ -33,11 +33,15 @@ pub(crate) const TARGETS: &[&str] = &[
     "x86_64-pc-windows-msvc",
     "aarch64-pc-windows-msvc",
 ];
+const INSTALL_SH: &str = include_str!("../scripts/install.sh");
+const INSTALL_POWERSHELL: &str = include_str!("../scripts/install.ps1");
 const SH: &str = include_str!("client_downloads/install.sh");
 const POWERSHELL: &str = include_str!("client_downloads/install.ps1");
 
 #[derive(Clone)]
 struct Downloads {
+    install_shell: Arc<str>,
+    install_powershell: Arc<str>,
     shell: Arc<str>,
     powershell: Arc<str>,
     publisher: Option<Publisher>,
@@ -195,6 +199,12 @@ pub fn configured(
         None => None,
     };
     let state = Downloads {
+        install_shell: INSTALL_SH
+            .replace("'https://ssmcp.lmm.best'", &shell_quote(&origin))
+            .into(),
+        install_powershell: INSTALL_POWERSHELL
+            .replace("'https://ssmcp.lmm.best'", &powershell_quote(&origin))
+            .into(),
         shell: SH
             .replace("@@ORIGIN@@", &shell_quote(&origin))
             .replace("@@WIRE@@", &crate::wire::VERSION.to_string())
@@ -206,6 +216,8 @@ pub fn configured(
         publisher: publisher.clone(),
     };
     let router = Router::new()
+        .route("/install.sh", get(install_shell))
+        .route("/install.ps1", get(install_powershell))
         .route("/client/install.sh", get(shell))
         .route("/client/install.ps1", get(powershell))
         .route("/client/release.json", get(release))
@@ -331,6 +343,12 @@ fn script(source: &str) -> Response {
         source.to_owned(),
     )
         .into_response()
+}
+async fn install_shell(State(state): State<Downloads>) -> Response {
+    script(&state.install_shell)
+}
+async fn install_powershell(State(state): State<Downloads>) -> Response {
+    script(&state.install_powershell)
 }
 async fn shell(State(state): State<Downloads>) -> Response {
     script(&state.shell)
@@ -553,6 +571,8 @@ mod tests {
         std::fs::write(root.join(&name), bytes).unwrap();
         publish(&root, "x86_64-unknown-linux-gnu", bytes);
         let state = Downloads {
+            install_shell: "".into(),
+            install_powershell: "".into(),
             shell: "".into(),
             powershell: "".into(),
             publisher: Some(Publisher::test_fixture(&root)),
@@ -629,9 +649,14 @@ mod tests {
                 .as_str()
                 .unwrap()
         );
-        for path in ["install.sh", "install.ps1"] {
+        for path in [
+            "install.sh",
+            "install.ps1",
+            "client/install.sh",
+            "client/install.ps1",
+        ] {
             let response = client
-                .get(format!("http://{address}/client/{path}"))
+                .get(format!("http://{address}/{path}"))
                 .header("Host", "injected.example")
                 .send()
                 .await
@@ -642,6 +667,10 @@ mod tests {
             assert!(source.contains("https://configured.example"));
             assert!(!source.contains("injected.example"));
             assert!(!source.contains("@@ORIGIN@@"));
+            if !path.starts_with("client/") {
+                assert!(source.contains("Sign in: ssmcp login --server"));
+                assert!(!source.contains("'https://ssmcp.lmm.best'"));
+            }
         }
         let response = client
             .get(format!(
