@@ -682,6 +682,9 @@ async fn scan_skills(
                     continue;
                 }
                 if entry["kind"] == "directory" {
+                    // Automatic descent excludes discarded packages. An
+                    // explicit paths entry rooted inside .trash still scans
+                    // normally, and exact document reads remain available.
                     if package
                         || matches!(
                             name.to_ascii_lowercase().as_str(),
@@ -1353,3 +1356,126 @@ fn escape_markdown(value: &str) -> String {
 
 #[cfg(test)]
 mod completion_tests;
+
+#[cfg(test)]
+pub(crate) mod read_activity_tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct Directory(PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fixture() -> (Directory, Context) {
+        let base = std::env::temp_dir().join(format!(
+            "ssmcp-read-activity-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&base).unwrap();
+        let root = base.join("workspace");
+        fs::create_dir(&root).unwrap();
+        for name in ["review", "testing", "write", ".trash/archived"] {
+            let path = root.join(format!(".agents/skills/{name}/SKILL.md"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                path,
+                format!(
+                    "---\nname: {}\ndescription: Fixture metadata\n---\nExact body for {name}.\n",
+                    name.rsplit('/').next().unwrap()
+                ),
+            )
+            .unwrap();
+        }
+        let output = crate::output::OutputStore::at_for_test(base.join("output")).unwrap();
+        let context = Context::with_output(root, vec![], output).unwrap();
+        (Directory(base), context)
+    }
+
+    /// Actual native file audit records, consumed by the display projection's
+    /// scan regression instead of manufacturing successful read observations.
+    pub(crate) async fn native_scan() -> (Vec<Value>, Value) {
+        let (_directory, context) = fixture();
+        let listed = context
+            .perform("ssmcp.skills.list", json!({}))
+            .await
+            .unwrap();
+        let audit = context.roots[0]
+            .workspace()
+            .unwrap()
+            .perform("ssmcp.fs.events", json!({"max_events":256}))
+            .await
+            .unwrap();
+        let events = audit["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["event"].clone())
+            .collect();
+        drop(context);
+        (events, listed)
+    }
+
+    #[tokio::test]
+    async fn read_activity_skips_automatic_trash_and_keeps_explicit_access() {
+        let (directory, context) = fixture();
+        let listed = context
+            .perform("ssmcp.skills.list", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(listed["total"], 3);
+        assert!(
+            listed["skills"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|skill| { !skill["path"].as_str().unwrap().contains(".trash/") })
+        );
+        let archive = ".agents/skills/.trash/archived/SKILL.md";
+        let audit = context.roots[0]
+            .workspace()
+            .unwrap()
+            .perform("ssmcp.fs.events", json!({"max_events":256}))
+            .await
+            .unwrap();
+        assert_eq!(audit["events"].as_array().unwrap().len(), 3);
+        assert!(audit["events"].as_array().unwrap().iter().all(|item| {
+            item["event"]["type"] == "ssmcp.file.read" && item["event"]["path"] != archive
+        }));
+        let explicit = context
+            .perform(
+                "ssmcp.skills.list",
+                json!({
+                    "paths":[".agents/skills/.trash"]
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicit["total"], 1);
+        assert_eq!(explicit["skills"][0]["path"], archive);
+        let read = context
+            .perform("ssmcp.skills.read", json!({"path":archive}))
+            .await
+            .unwrap();
+        assert!(
+            read["content"]
+                .as_str()
+                .unwrap()
+                .ends_with("Exact body for .trash/archived.\n")
+        );
+        assert_eq!(
+            fs::read_to_string(directory.0.join("workspace").join(archive)).unwrap(),
+            read["content"].as_str().unwrap()
+        );
+        drop(context);
+    }
+}

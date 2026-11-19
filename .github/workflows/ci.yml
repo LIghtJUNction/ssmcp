@@ -124,6 +124,12 @@ jobs:
             "${restrictions[@]}" \
             /usr/local/bin/ssmcp-runtime-test \
             --exact code_mode::tests::real_system_runtime_uses_mandatory_os_isolation --ignored --nocapture
+      - name: Verify output and terminals across Unix users
+        timeout-minutes: 2
+        run: |
+          sudo -n python3 scripts/test_multi_user_runtime.py \
+            --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" \
+            --report "$RUNNER_TEMP/ssmcp-multi-user-runtime-report.json"
       - run: cargo build --locked --bins --example vt_snapshot
       - name: Preserve DCR through a real daemon restart
         run: python3 scripts/test_registry_restart.py --bin-dir target/debug
@@ -204,6 +210,7 @@ jobs:
             ${{ runner.temp }}/ssmcp-account-relay-report.json
             ${{ runner.temp }}/ssmcp-daemon-report*
             ${{ runner.temp }}/ssmcp-daemon-manager.log
+            ${{ runner.temp }}/ssmcp-multi-user-runtime-report.json
           if-no-files-found: warn
           retention-days: 14
       - run: cargo build --locked --release

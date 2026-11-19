@@ -1,6 +1,6 @@
 [package]
 name = "ztui-core"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.100"
 description = "Allocation-free text row, geometry, and ANSI frame-diff primitives for Project Z"

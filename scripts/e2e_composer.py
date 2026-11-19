@@ -44,14 +44,24 @@ def input_text(snapshot):
     return "\n".join(snapshot["rows"][-4:-1])
 
 
-def visible_record(snapshot, request_text, status, message_id=None):
-    rows = snapshot["rows"]
-    for index, row in enumerate(rows[:-4]):
-        if index and request_text in row:
-            heading = rows[index - 1]
-            if re.search(r"\b" + re.escape(status) + r"\b", heading):
-                if message_id is None or message_id in heading:
-                    return True
+def visible_record(snapshot, request_text, status, message_id=None, *, selected=False):
+    rows = snapshot["rows"][:-4]
+    expected = " ".join(request_text.split())
+    for index, row in enumerate(rows):
+        meta = re.match(r"^\s*([^·]+?)\s*·\s*#([^\s·]+)(?:\s|·|$)", row)
+        if meta is None or (status is not None and meta[1].strip() != status):
+            continue
+        if message_id is not None and meta[2] != message_id[:8]:
+            continue
+        body = []
+        marked = False
+        for line in reversed(rows[max(0, index - 2):index]):
+            if not line.strip() or "Requests ·" in line:
+                break
+            marked |= line.lstrip().startswith("›")
+            body.insert(0, line.strip().removeprefix("›").strip())
+        if expected in " ".join(body) and (not selected or marked):
+            return True
     return False
 
 
@@ -180,9 +190,15 @@ class Composer(Dashboard):
         self.focus_input(front)
         front.send(b"\t" + HOME + DOWN * indexes[0])
         front.until(
-            lambda shot: any("›" in row and message_id in row for row in shot["rows"]),
-            "keyboard selection of the actual request identity",
+            lambda shot: visible_record(shot, "", None, message_id, selected=True),
+            "keyboard selection of the request card",
         )
+        # The abbreviated visual ID is only a location hint. Verify the exact
+        # selected identity through the authoritative projection and full queue.
+        selected = self.ui("/display/conversation")["selected"]
+        current = self.queue()["queue"]
+        self.check(0 <= selected < len(current) and current[selected]["id"] == message_id,
+                   "the selected request retains its exact full identity")
 
     def agents(self, front):
         self.focus_input(front)
@@ -268,7 +284,7 @@ class Composer(Dashboard):
         front.until(empty_composer_ready,
                     "the live chat composer in the owned terminal")
         self.command(front, "/queue")
-        self.check(self.queue()["supported"], "SSH negotiated the request-queue wire protocol")
+        self.check(self.queue()["supported"], "the account relay negotiated the request-queue wire protocol")
 
         first_text = "touch composer-hidden-shell-leak"
         following_draft = "COMPOSER_DRAFT_TYPED_BEFORE_ACK"
@@ -571,7 +587,7 @@ def main():
             parser.error(f"missing {executable}; build the binaries and vt_snapshot first")
     started = time.monotonic()
     report = {"status": "failed", "platform": platform.system(),
-              "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+              "transport": "production account router over loopback HTTP/WebSocket, synthetic GitHub provider",
               "scope": "real composer, queue revisions, bound recipients, and local reexec; no models",
               "binaries": {name: sha256(path) for name, path in (
                   ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"), ("vt_snapshot", decoder))},
@@ -607,4 +623,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
