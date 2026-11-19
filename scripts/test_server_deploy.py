@@ -29,7 +29,8 @@ deploy = load("deploy_release")
 entry = load("deploy_entry")
 COMMIT = "a" * 40
 TAG = "v0.10.3"
-ARCHIVE = "ssmcp-0.10.3-x86_64-unknown-linux-gnu.tar.gz"
+ARCHIVE = "ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+PREFIX = ""
 URL = "https://github.com/LIghtJUNction/ssmcp/releases/download/" + TAG + "/" + ARCHIVE
 
 
@@ -95,15 +96,15 @@ class DeploymentContracts(unittest.TestCase):
 
     def archive(self, root, extra=None):
         archive = root / "package.tar.gz"
-        prefix = ARCHIVE.removesuffix(".tar.gz")
+        prefix = PREFIX
         with tarfile.open(archive, "w:gz") as output:
-            for name, data in [(prefix + "/ssmcpd", b"fake executable"), (prefix + "/code-mode.js", b"fake matched runner")]:
+            for name, data in [(prefix + "ssmcpd", b"fake executable"), (prefix + "code-mode.js", b"fake matched runner")]:
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
                 output.addfile(info, io.BytesIO(data))
             if extra is not None:
                 output.addfile(extra, io.BytesIO(b"x") if extra.isfile() else None)
-        return archive, {"archive": ARCHIVE, "archive_bytes": archive.stat().st_size,
+        return archive, {"archive": ARCHIVE, "archive_prefix": PREFIX, "archive_bytes": archive.stat().st_size,
                          "archive_sha256": deploy.sha(archive)}
 
     def test_only_verified_runtime_members_are_installed(self):
@@ -130,7 +131,7 @@ class DeploymentContracts(unittest.TestCase):
         for kind in ["traversal", "symlink"]:
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                info = tarfile.TarInfo(ARCHIVE.removesuffix(".tar.gz") + ("/../escape" if kind == "traversal" else "/alias"))
+                info = tarfile.TarInfo(PREFIX + ("../escape" if kind == "traversal" else "alias"))
                 if kind == "symlink":
                     info.type, info.linkname = tarfile.SYMTYPE, "/etc/passwd"
                 else:
