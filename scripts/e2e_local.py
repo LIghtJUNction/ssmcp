@@ -337,8 +337,9 @@ class Local(Harness):
                    "PKCE exchange returns a real local MCP access token")
         self.secret = tokens["access_token"]
         self.sensitive.extend(value for key, value in tokens.items() if "token" in key and isinstance(value, str))
-        self.check(self.oauth_request("/oauth/token", "POST", exchange, form=True)[0] == 400,
-                   "the authorization code cannot be exchanged twice")
+        # Replaying a redeemed code intentionally revokes its token family.
+        # Keep that negative case until after the authenticated tool round-trip.
+        self.oauth_exchange = exchange
         self.callback.close()
         self.callback = None
 
@@ -395,6 +396,10 @@ class Local(Harness):
         self.check(socket_path.parent.stat().st_uid == os.geteuid()
                    and socket_path.parent.stat().st_mode & 0o777 == 0o700,
                    "the actual local transport directory is private to the effective UID")
+        self.check(self.oauth_request("/oauth/token", "POST", self.oauth_exchange, form=True)[0] == 400,
+                   "the authorization code cannot be exchanged twice")
+        self.check(self.rpc("ping")[0] == 401,
+                   "replaying a redeemed local code revokes its previously issued token family")
         _, restored = self.front.disconnect()
         self.check(restored == self.front.original_termios, "local shutdown restores the owned physical terminal mode")
         wait_for(lambda: all(process_identity(pid) != identity for pid, identity in children.items()),
