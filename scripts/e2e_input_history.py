@@ -654,7 +654,7 @@ def main():
     started = time.monotonic()
     report = {
         "status": "failed", "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+        "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
         "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL and resume; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
