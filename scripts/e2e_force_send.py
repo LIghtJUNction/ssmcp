@@ -343,10 +343,22 @@ class ForceSend(InputHistory):
         front.credentials = credentials
         self.check(self.client_id != previous_id,
                    "the owned WSS disconnect creates a new connection identity")
-        self.receipt(front, delivery_id, "unknown")
+        front.until(lambda shot: "上次连接：发送结果未确认" in text(shot)
+                    and "不会自动重发" in text(shot),
+                    "the original sender's explicit unknown outcome after reconnection")
+        self.check(not self.ui("/display/conversation")["force_pending"],
+                   "the disconnected sender finishes without resubmitting its delivery")
         status = self.listener("status")
         self.check(status["listener"] is None and status["pending"] is None,
                    "reconnection restores neither the old lease nor its forced delivery")
+        self.check(status["receipts"] == [] and delivery_id not in json.dumps(status),
+                   "the new network listener status contains no previous connection receipt")
+        self.check(self.ui("/listener")["receipts"] == [],
+                   "the new UI listener projection contains no previous connection receipt")
+        events = self.ui("/display/events")["events"]
+        self.check(sum("上次连接" in item["summary"] for item in events) == 1,
+                   "the local terminal restores the interrupted sender outcome once")
+        self.save_shot("force-reconnected-unknown-120", front, cells=True)
         self.check(self.ui("/display/conversation")["draft"]["text"] == original,
                    "connection loss preserves the unconfirmed force-send draft")
         self.listener_error("read", **lease, wait_ms=0)

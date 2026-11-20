@@ -191,6 +191,9 @@ struct State {
     lease: Option<Lease>,
     pending: Option<Pending>,
     receipts: VecDeque<Remembered>,
+    // A bounded, one-shot handoff to the same process's replacement terminal.
+    // Never serialized by listener status or exposed to a remote receiver.
+    interrupted_sender: Option<Receipt>,
     cursor: u64,
     open_keys: VecDeque<OpenKey>,
     local_endpoint: Option<String>,
@@ -314,7 +317,14 @@ impl Hub {
 
     fn reset_for(&self, connection_id: Option<&str>, generation: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let interrupted = state.pending.is_some();
         state.lost("connection_ended", "发送失败：连接已结束，消息未投递");
+        if interrupted {
+            // A reconnect recreates the terminal and can drop its old Task
+            // before the watch result is rendered. Preserve only this system
+            // failure/unknown outcome, never source text or rejection reasons.
+            state.interrupted_sender = state.receipts.back().map(|item| item.receipt.clone());
+        }
         // The old sender keeps its final receipt through its watch receiver.
         // Snapshot/ACK history belongs only to the active connection; carrying
         // it forward would expose old rejection details after a reconnect.
@@ -331,6 +341,14 @@ impl Hub {
         });
         drop(state);
         self.changed();
+    }
+
+    fn take_interrupted_sender(&self) -> Option<Receipt> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .interrupted_sender
+            .take()
     }
 
     fn open_for(
@@ -797,6 +815,11 @@ pub(crate) fn disconnect() {
 }
 pub(crate) fn snapshot() -> Value {
     global().snapshot()
+}
+/// Restore one interrupted send to the local terminal after reconnecting.
+/// This is deliberately not part of the remotely callable listener API.
+pub(crate) fn take_interrupted_sender_receipt() -> Option<Receipt> {
+    global().take_interrupted_sender()
 }
 pub(crate) fn target(selected_thread: Option<&str>) -> Result<Target, String> {
     global().target_for(selected_thread)

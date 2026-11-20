@@ -187,7 +187,21 @@ impl State {
             Err(error) if error.starts_with("发送") => error,
             Err(error) => format!("发送失败：{error}；草稿已保留"),
         };
-        let detail = panel::safe_text(&detail);
+        self.chat_listener_notice(&detail);
+    }
+
+    pub(super) fn chat_restore_interrupted_force_send(&mut self) {
+        if let Some(receipt) = receiver::take_interrupted_sender_receipt() {
+            self.chat_show_interrupted_force_send(receipt);
+        }
+    }
+
+    fn chat_show_interrupted_force_send(&mut self, receipt: Receipt) {
+        self.chat_listener_notice(&format!("上次连接：{}", receipt.detail));
+    }
+
+    fn chat_listener_notice(&mut self, detail: &str) {
+        let detail = panel::safe_text(detail);
         self.log_event(
             "listener",
             &json!({"type":"ssmcp.message","author":"Listener","text":detail}),
@@ -408,5 +422,36 @@ mod tests {
         assert_eq!(state.chat_input_stamp().unwrap(), before);
         assert!(state.actions.is_empty());
         assert!(state.conversation.force_task.is_none());
+    }
+    #[test]
+    fn force_listener_restored_disconnect_notice_preserves_the_current_draft() {
+        for status in [Status::Failed, Status::Unknown] {
+            let original = "/send Keep the original draft after reconnect";
+            let mut state = preview(original);
+            let stamp = state.chat_input_stamp().unwrap();
+            let mut receipt = completed(status).unwrap().receipt;
+            receipt.code = "connection_ended".into();
+            receipt.detail = match status {
+                Status::Failed => "发送失败：连接已结束，消息未投递",
+                Status::Unknown => {
+                    "发送结果未确认：已尝试投递，但未收到监听程序的接收确认；不会自动重发"
+                }
+                _ => unreachable!(),
+            }
+            .into();
+            state.chat_show_interrupted_force_send(receipt);
+            assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            assert!(state.actions.is_empty());
+            assert!(state.conversation.force_task.is_none());
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .is_some_and(|detail| detail.starts_with("上次连接：发送"))
+            );
+            let events = state.events.snapshot();
+            assert_eq!(events["retained_events"], 1);
+            assert!(events.to_string().contains("上次连接"));
+        }
     }
 }
