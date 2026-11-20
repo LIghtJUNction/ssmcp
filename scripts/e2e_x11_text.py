@@ -294,6 +294,7 @@ class Fixture(ReceiverControl):
         self.root, self.binary = root, binary.resolve()
         self.evidence, self.helpers = evidence, helpers
         self.processes, self.logs, self.cases = [], [], []
+        self.focus_outcomes = []
         self.server = self.receiver = None
         self.changed_read = self.resume_write = None
         self.env = None
@@ -357,7 +358,8 @@ class Fixture(ReceiverControl):
         self.command_input = self.receiver.stdin
         ready = self.receiver_lines.read().decode().split()
         require(len(ready) == 4 and ready[0] == "READY", "invalid GTK readiness")
-        self.window, self.other_window, self.receiver_pid = ready[1:]
+        self.window, self.other_window = (hex(int(value, 10)) for value in ready[1:3])
+        self.receiver_pid = ready[3]
         wait_for(lambda: "/org/a11y/atspi/accessible/root" in bus_call(
                  "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root",
                  "org.a11y.atspi.Accessible.GetChildren").stdout, "GTK accessibility registration")
@@ -376,8 +378,9 @@ class Fixture(ReceiverControl):
 
     def focus(self):
         outcome = self.call("focus", {"window_id": self.window})
+        self.focus_outcomes.append({"window_id": self.window, "worker": outcome})
         require(outcome["exit_code"] == 0 and outcome["reply"]["error"] is None,
-                "real worker could not focus the owned GTK receiver")
+                "real worker could not focus the owned GTK receiver: " + json.dumps(outcome))
 
     def record(self, name, outcome, expected, *, error=None, changes=None, caret=None):
         state = self.state()
@@ -527,7 +530,8 @@ class OwnedGtkReceiver(ReceiverControl):
         })
         ready = self.receiver_lines.read(timeout=10).decode().split()
         require(len(ready) == 4 and ready[0] == "READY", "owned GTK app did not become ready")
-        self.window, self.other_window, self.receiver_pid = ready[1:]
+        self.window, self.other_window = (hex(int(value, 10)) for value in ready[1:3])
+        self.receiver_pid = ready[3]
 
         def private_context():
             result = self.context()
@@ -583,7 +587,7 @@ def run_mcp_recovery(harness, fixture):
     rows = fixture.cases
     for field in ("machine", "pid"):
         fixture.reset()
-        harness.call("ssmcp.computer.focus", {"window_id": fixture.window})
+        focused = harness.call("ssmcp.computer.focus", {"window_id": fixture.window})
         wrong = "MACHINE not-this-private-host.invalid" if field == "machine" else "PID 4294967294"
         restore = "MACHINE local" if field == "machine" else "PID " + fixture.receiver_pid
         require(fixture.command(wrong) == "OK", "set MCP receiver identity")
@@ -593,7 +597,8 @@ def run_mcp_recovery(harness, fixture):
                 json.dumps({"text": "ASCII prefix🙂"})))
             state = fixture.state()
             row = {"name": "same Computer rejects then recovers from " + field,
-                   "client_id": client, "rejection": reply, "rejected_state": state}
+                   "client_id": client, "focus_response": focused,
+                   "rejection": reply, "rejected_state": state}
             rows.append(row)
             require(reply.get("isError") is True, "MCP must return a real native rejection")
             require(state["text"] == "" and state["changes"] == 0, "MCP rejection sent an ASCII prefix")
@@ -658,6 +663,7 @@ def main():
             report["error"] = str(failure)
         finally:
             report["cases"] = fixture.cases
+            report["setup_focus"] = fixture.focus_outcomes
             try:
                 fixture.close()
                 report["owned_process_cleanup"] = "passed"
