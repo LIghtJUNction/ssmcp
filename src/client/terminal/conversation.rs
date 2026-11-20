@@ -3858,18 +3858,26 @@ mod tests {
 
     #[test]
     fn narrow_agent_list_keeps_different_models_visible() {
-        let mut state = preview(24, 70);
-        state.audit = Default::default();
-        for model in ["Model A", "Model B"] {
-            state.audit.ingest(&json!({
-                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
-                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
-            }));
+        for columns in [48, 70] {
+            let mut state = preview(24, columns);
+            state.audit = Default::default();
+            for model in ["Model A", "Model B"] {
+                state.audit.ingest(&json!({
+                    "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                    "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+                }));
+            }
+            state.chat_agents();
+            let screen = display(&mut state).screen().contents();
+            assert!(
+                screen.contains("ChatGPT · Model A"),
+                "{columns} columns:\n{screen}"
+            );
+            assert!(
+                screen.contains("ChatGPT · Model B"),
+                "{columns} columns:\n{screen}"
+            );
         }
-        state.chat_agents();
-        let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("ChatGPT · Model A"));
-        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]

@@ -162,6 +162,10 @@ fn native_picker_can_select_a_local_process_merged_with_the_user_queue_row() {
         "recipients":[wire(native(&own,None,"current process"))]
     }));
     state.chat_native_picker("").unwrap();
+    assert!(
+        state.conversation.native_picker,
+        "restoring the column must not replace explicit picker intent"
+    );
     assert_eq!(
         state.conversation.selected_agent.as_deref(),
         Some("member:next")
@@ -170,6 +174,10 @@ fn native_picker_can_select_a_local_process_merged_with_the_user_queue_row() {
     assert_eq!(
         state.conversation.native_recipient,
         Some(format!("client:{own}"))
+    );
+    assert_eq!(
+        state.conversation.native_account,
+        Some(("github".into(), "42".into()))
     );
     assert_eq!(state.conversation.view, View::Activity);
 }
