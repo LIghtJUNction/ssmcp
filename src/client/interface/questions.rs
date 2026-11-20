@@ -1096,14 +1096,78 @@ mod tests {
     #[test]
     fn tools_do_not_offer_a_way_to_impersonate_the_users_answer() {
         let catalog = tools();
-        assert_eq!(catalog.len(), 3);
+        let names: Vec<_> = catalog
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "ssmcp.ui.ask",
+                "ssmcp.ui.questions",
+                "ssmcp.ui.message",
+                "ssmcp.ui.answer",
+                "ssmcp.ui.finish",
+                "ssmcp.ui.question_ack",
+                "ssmcp.ui.question_delivery",
+            ]
+        );
+        // A legitimate agent answer derives its actor from the accepted call,
+        // never from JSON fields supplied by the caller.
+        for tool in &catalog {
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["additionalProperties"], false, "{}", tool["name"]);
+            let properties = schema["properties"].as_object().unwrap();
+            for field in [
+                "actor",
+                "answer_actor",
+                "origin",
+                "role",
+                "agent",
+                "provider",
+                "subject",
+                "thread_id",
+                "approved",
+            ] {
+                assert!(
+                    !properties.contains_key(field),
+                    "{} must not accept {field}",
+                    tool["name"]
+                );
+            }
+        }
         let ask = &catalog[0]["inputSchema"];
         assert!(ask["properties"].get("answer").is_none());
         let read = &catalog[1];
         assert_eq!(read["annotations"]["readOnlyHint"], true);
         assert!(read["inputSchema"]["properties"].get("answer").is_none());
         let message = &catalog[2]["inputSchema"];
-        assert!(message["properties"].get("role").is_none());
-        assert!(message["properties"].get("agent").is_none());
+        assert_eq!(
+            message["properties"]["kind"]["enum"],
+            json!(["progress", "answer"])
+        );
+        let answer = &catalog[3]["inputSchema"];
+        assert!(answer["properties"].get("answer").is_some());
+        assert_eq!(
+            answer["properties"]["decision"]["enum"],
+            json!(["yes", "no"])
+        );
+        let delivery = &catalog[6];
+        assert_eq!(delivery["annotations"]["readOnlyHint"], true);
+        assert_eq!(delivery["inputSchema"]["properties"], json!({}));
+
+        // Both answer forms require a verified scope before accessing the queue.
+        // The parser also rejects an explicit attempt to impersonate a human.
+        for request in [
+            json!({"id":"fixture_question","answer":"yes"}),
+            json!({"id":"fixture_question","decision":"yes"}),
+        ] {
+            let error = agent_answer(request.clone()).unwrap_err();
+            assert!(error.starts_with("question_auth_required:"), "{error}");
+            let mut forged = request;
+            forged["actor"] = json!({"origin":"human"});
+            let error = agent_answer(forged).unwrap_err();
+            assert!(error.contains("actor fields are forbidden"), "{error}");
+        }
     }
 }
