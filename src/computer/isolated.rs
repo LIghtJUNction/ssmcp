@@ -192,6 +192,7 @@ fn surface(mut response: Value, desktop: &str) -> Value {
         metadata.insert("moves_host_pointer".into(), json!(desktop == "host"));
         metadata.insert("host_input_requires_explicit_target".into(), json!(true));
         metadata.insert("host_input_requires_local_handoff".into(), json!(true));
+        metadata.insert("background_enabled".into(), json!(true));
         let text = serde_json::to_string(metadata).unwrap_or_default();
         if let Some(items) = response.get_mut("content").and_then(Value::as_array_mut)
             && let Some(item) = items.iter_mut().find(|item| item["type"] == "text")
@@ -219,7 +220,7 @@ fn inactive_status() -> Value {
         "reason":if supported {
             "No private desktop is running. computer.app_launch starts one automatically; use computer.desktop_start first for a custom size."
         } else {
-            "Private desktops require Linux and Xvfb on this platform. Use browser background control. Explicit desktop: host permits inspection; input additionally needs a short local /computer host handoff."
+            "Private desktops require Linux and Xvfb on this platform. Background browser control remains enabled. Explicit desktop: host permits inspection; input additionally needs the local operator's /computer on switch."
         }
     })
 }
@@ -285,7 +286,7 @@ pub(super) async fn dispatch(
             status["supported"] = json!(cfg!(target_os = "linux"));
             status["helpers"] = required_helpers();
             status["default_input"] = json!(
-                "isolated; app_launch starts a private desktop; host input requires desktop: host and a short local /computer host handoff"
+                "isolated; app_launch starts a private desktop; host input requires desktop: host and the local operator's shared /computer on switch"
             );
             Ok(result(status))
         }
@@ -359,7 +360,7 @@ pub(super) async fn dispatch(
                 parse::<Empty>(args)?;
                 return Ok(surface(result(inactive_status()), "isolated"));
             }
-            Err("no private desktop is running; computer.app_launch starts one automatically, or call computer.desktop_start. Use browser tools for page background control; desktop: host permits observation, while host input also requires a short local /computer host handoff".into())
+            Err("no private desktop is running; computer.app_launch starts one automatically, or call computer.desktop_start. Background browser control remains enabled; desktop: host permits observation, while host input also requires the local operator's /computer on switch".into())
         }
     }
 }
@@ -367,7 +368,7 @@ pub(super) async fn dispatch(
 impl Desktop {
     #[cfg(not(target_os = "linux"))]
     async fn start(_root: &Path, _options: Start) -> Result<Self, String> {
-        Err("private desktops currently require Linux and Xvfb; use browser background control. Host input requires a short local /computer host handoff".into())
+        Err("private desktops currently require Linux and Xvfb; background browser control remains enabled. Host input requires the local operator's /computer on switch".into())
     }
 
     #[cfg(target_os = "linux")]
@@ -795,6 +796,8 @@ mod tests {
                 .unwrap_err()
                 .contains("no private desktop")
         );
+        // This assertion checks routing, never real foreground input.
+        computer.set_host_input_local(false).unwrap();
         assert!(
             computer
                 .perform("ssmcp.computer.key", json!({"desktop":"host","key":""}))

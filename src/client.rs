@@ -6,6 +6,7 @@ mod audit_view;
 mod browser_setup;
 mod clipboard;
 pub(crate) mod completion;
+mod computer_control;
 mod composer;
 mod config;
 pub(crate) mod context_memory;
@@ -76,11 +77,13 @@ Start
   ssmcp alice@relay.example     Connect and sign in when needed
   ssmcp list                    List your online devices
   ssmcp -i                      Open an authorized remote terminal
+  ssmcp attach ID|NAME|N        Attach to a listed device or saved local session
 
 Manage
   config · whoami · logout      Account and server settings
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
+  computer on|off|status        Shared foreground computer switch
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -109,7 +112,8 @@ Usage: ssmcp username@server [options]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
-       ssmcp attach [NAME|list] [--read-only]
+       ssmcp attach [ID|NAME|N|list] [--local|--remote] [--read-only]
+       ssmcp computer [on|off|toggle|status] [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
        ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
@@ -190,7 +194,10 @@ and independent logins are preserved. --no-browser prints the authorization URL.
 An update or a controlled-device restart does not grant a new controller identity.
 
 ssmcp list shows remotely controllable sessions; sessions list shows local saved
-sessions. Ctrl-] leaves remote interactive control; Ctrl-C is sent to its terminal.
+sessions. Use attach ID, a unique NAME, or an index from the last list. --remote
+and --local choose the target scope explicitly. Remote attach opens the selected
+PTY, not the original chat panel. --read-only sends no input or terminal resize.
+Ctrl-] leaves remote interactive control; Ctrl-C is sent to its terminal.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
 an MCP client and sign in as an allowed account. --allow cannot use --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -207,13 +214,17 @@ Install the persistent session manager with `ssmcp service install`; choose
 --system with an explicit non-root owner for boot startup, or a per-user service.
 New sessions use the running manager. Legacy --daemon also supports per-session
 systemd --user, launchd and Task Scheduler when the manager is not installed.
-Bare `ssmcp attach` lists sessions. Ctrl-] detaches without stopping the session;
+Bare `ssmcp attach` lists local saved sessions. Ctrl-] detaches without stopping the session;
 the dashboard provides audit navigation. Use `ssmcp -i` for interactive input,
 or disable the dashboard when attaching to a saved session.
 --session-control explicitly grants this OS user's saved-session management.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
+Use /computer on or /computer off in chat to set the foreground switch shared by
+all ssmcp sessions on this machine and OS user. Background control stays enabled.
+Super+Alt+C toggles the switch with a desktop binding or enhanced keyboard input.
+The local CLI `ssmcp computer toggle` is the desktop shortcut command.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
@@ -1358,6 +1369,9 @@ pub async fn run() -> crate::Result<()> {
         return Err("007 recovery mode currently requires Linux and systemd".into());
     }
     config::normalize_args(&mut args)?;
+    if computer_control::dispatch(&args)? {
+        return Ok(());
+    }
     if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
     {
         return Ok(());

@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::process::Command;
 
+mod attach;
 pub(super) mod login;
 pub(super) mod status;
 
@@ -1096,6 +1097,10 @@ fn select_client<'a>(entries: &'a [Value], selected: &str) -> Result<&'a str> {
     {
         return Ok(id);
     }
+    select_client_exact(entries, selected)
+}
+
+fn select_client_exact<'a>(entries: &'a [Value], selected: &str) -> Result<&'a str> {
     let matches: Vec<_> = entries
         .iter()
         .filter(|entry| {
@@ -1154,6 +1159,7 @@ async fn list(args: &Arguments) -> Result<()> {
     let value = api.get("/api/client/sessions", &credential.token).await?;
     let entries = clients(&value)?;
     if !args.interactive {
+        attach::remember_list(&credential, entries)?;
         if args.json {
             println!("{}", serde_json::to_string_pretty(&value)?);
         } else {
@@ -1174,6 +1180,7 @@ async fn list(args: &Arguments) -> Result<()> {
     let selected = if let Some(id) = &args.client {
         id.clone()
     } else {
+        attach::remember_list(&credential, entries)?;
         eprint!("{}", list_table(entries));
         prompt_selection().await?
     };
@@ -1183,6 +1190,7 @@ async fn list(args: &Arguments) -> Result<()> {
         &credential,
         id,
         args.terminal.as_deref().unwrap_or("main"),
+        false,
     )
     .await
 }
@@ -1193,7 +1201,13 @@ impl Drop for Reader {
         self.0.abort();
     }
 }
-async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &str) -> Result<()> {
+async fn interactive(
+    api: &Api,
+    credential: &Credential,
+    id: &str,
+    terminal: &str,
+    read_only: bool,
+) -> Result<()> {
     if terminal.is_empty() || terminal.len() > 128 || terminal.chars().any(char::is_control) {
         return Err("--terminal must be a listed terminal ID".into());
     }
@@ -1204,9 +1218,17 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
         json!({"terminal_id":terminal}),
     )
     .await?;
-    let mut keyboard = input::Keyboard::open(false)?;
+    let mut keyboard = input::Keyboard::open(read_only)?;
     let mut utf8 = input::Utf8Input::default();
-    eprintln!("{}", interactive_connection_hint(id, terminal));
+    if read_only {
+        eprintln!(
+            "Connected to {} / {} · Read-only: input and terminal resize are disabled; Ctrl+] or Ctrl+C detaches without stopping the remote session.",
+            safe(id),
+            safe(terminal)
+        );
+    } else {
+        eprintln!("{}", interactive_connection_hint(id, terminal));
+    }
     let (tx, mut rx) = tokio::sync::mpsc::channel(2);
     let (reader_api, reader_credential, reader_id, reader_terminal) = (
         api.clone(),
@@ -1238,21 +1260,26 @@ async fn interactive(api: &Api, credential: &Credential, id: &str, terminal: &st
                     input::Event::PasteExpired=>{utf8=input::Utf8Input::default();}
                     input::Event::End=>{
                         let text=utf8.push(&[],true);
-                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        if !read_only && !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
                         break;
                     }
                     input::Event::Interrupt=>{
+                        if read_only { break; }
                         // This interactive command owns a remote shell, not a
                         // dashboard. Preserve the advertised remote Ctrl-C.
                         let text=utf8.push(b"\x03",false);
                         api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;
                     }
                     input::Event::Bytes(bytes)|input::Event::PasteBytes(bytes)=>{
-                        let text=utf8.push(&bytes,false);
-                        if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        if !read_only {
+                            let text=utf8.push(&bytes,false);
+                            if !text.is_empty(){api.call(credential,id,"terminal.write",json!({"terminal_id":terminal,"data":text})).await?;}
+                        }
                     }
                     input::Event::Resize(rows,cols)=>{
-                        api.call(credential,id,"terminal.resize",json!({"terminal_id":terminal,"rows":rows.clamp(1,1000),"cols":cols.clamp(1,1000)})).await?;
+                        if !read_only {
+                            api.call(credential,id,"terminal.resize",json!({"terminal_id":terminal,"rows":rows.clamp(1,1000),"cols":cols.clamp(1,1000)})).await?;
+                        }
                     }
                 },
                 page=rx.recv()=>{
@@ -1308,6 +1335,10 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     let Some(first) = args.first().and_then(|v| v.to_str()) else {
         return Ok(false);
     };
+    if first == "attach" {
+        attach::run(&args[1..]).await?;
+        return Ok(true);
+    }
     let (operation, rest, interactive) = match first {
         "login" | "logout" | "whoami" | "list" | "ls" => (first, &args[1..], false),
         "sessions"

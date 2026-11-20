@@ -21,6 +21,8 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod computer;
+mod computer_keys;
 mod conversation;
 pub(super) use conversation::reload_state::{
     Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
@@ -1085,7 +1087,6 @@ impl Geometry {
 }
 
 fn request_interrupt(_state: &mut State) {
-    crate::client::interface::computer::local_input();
     #[cfg(unix)]
     // SAFETY: this targets only the current process, whose normal signal handler
     // owns graceful shutdown and restoration of the original terminal mode.
@@ -1103,6 +1104,7 @@ enum Key {
     Help,
     Questions,
     Select,
+    ComputerToggle,
     Layout,
     Sidebar,
     Theme,
@@ -1241,6 +1243,7 @@ impl Keyboard {
             | Key::Help
             | Key::Questions
             | Key::Select
+            | Key::ComputerToggle
             | Key::Layout
             | Key::Sidebar
             | Key::Theme
@@ -1314,6 +1317,26 @@ impl Keyboard {
                 continue;
             }
             self.pending.push(byte);
+            if !self.pasting {
+                match computer_keys::decode(&self.pending) {
+                    computer_keys::Decoded::Press => {
+                        actions.push(Key::ComputerToggle);
+                        self.pending.clear();
+                        self.since = None;
+                        continue;
+                    }
+                    computer_keys::Decoded::Ignore => {
+                        self.pending.clear();
+                        self.since = None;
+                        continue;
+                    }
+                    computer_keys::Decoded::Pending => {
+                        self.since.get_or_insert(now);
+                        continue;
+                    }
+                    computer_keys::Decoded::Other => {}
+                }
+            }
             if !self.pasting && self.pending.starts_with(b"\x1b[<") {
                 if matches!(byte, b'M' | b'm') {
                     let values = std::str::from_utf8(&self.pending[3..self.pending.len() - 1])
@@ -1482,6 +1505,7 @@ struct State {
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
+    computer: computer::Control,
     link_metrics: super::link_metrics::View,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
@@ -1532,6 +1556,7 @@ impl State {
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
+            computer: computer::Control::default(),
             link_metrics: super::link_metrics::View::default(),
             graphics: images::Graphics::default(),
             media: Vec::new(),
@@ -1942,13 +1967,15 @@ impl State {
             self.geometry.log_rows > 0,
             self.ui.layout == Layout::Logs,
         );
-        if !self.preview && (!output.is_empty() || !actions.is_empty()) {
-            crate::client::interface::computer::local_input();
-        }
         let selection_input =
             self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
+            if matches!(action, Key::ComputerToggle) {
+                self.sleep_key(action);
+                self.computer_toggle();
+                continue;
+            }
             if self.sleep_key(action) {
                 continue;
             }
@@ -2284,13 +2311,25 @@ impl State {
                     " F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ".into()
                 };
                 let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
+                let badge_width = g.cols.saturating_sub(2).min((g.cols / 2).max(10));
+                let badge = self.computer_badge(badge_width);
+                let reserved = if badge.is_empty() {
+                    0
+                } else {
+                    badge.width() as u16 + 2
+                };
                 let text = footer::render(
                     &hint,
                     self.server_origin.as_ref(),
                     connection,
-                    g.cols,
+                    g.cols.saturating_sub(reserved),
                     self.notice.is_some() || self.filter_editing || idle_update,
                 );
+                let text = if badge.is_empty() {
+                    text
+                } else {
+                    format!("{badge}  {text}")
+                };
                 rows.push(self.tone(
                     if self.keyboard.logs {
                         PanelTone::Accent
@@ -2349,6 +2388,7 @@ impl State {
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
                 "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
+                "Super+Alt+C Toggle shared foreground computer input; background stays on".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
@@ -2748,6 +2788,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut pending_update_notice = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
+        computer::refresh(shared, Instant::now());
         if offset >= pending.len() {
             output.media.complete();
             let (refresh, requests) = {

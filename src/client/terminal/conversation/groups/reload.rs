@@ -80,11 +80,26 @@ impl Selection {
             .unwrap_or_else(|| self.selected.values().map(SavedRecipient::from).collect())
     }
 
+    pub(in crate::client::terminal::conversation) fn saved_selection_matches(
+        &self,
+        saved: &[SavedRecipient],
+    ) -> bool {
+        if let Some(restoring) = &self.restoring {
+            return restoring == saved;
+        }
+        self.selected.len() == saved.len()
+            && self.selected.values().zip(saved).all(|(current, saved)| {
+                current.id == saved.id
+                    && current.account.provider == saved.provider
+                    && current.account.subject == saved.subject
+            })
+    }
+
     pub(in crate::client::terminal::conversation) fn restore_selection(
         &mut self,
         recipients: Vec<SavedRecipient>,
     ) {
-        if self.saved_selection() != recipients {
+        if !self.saved_selection_matches(&recipients) {
             self.selected.clear();
             self.restoring = (!recipients.is_empty()).then_some(recipients);
             self.restore_error = None;
@@ -176,6 +191,29 @@ mod tests {
             .unwrap();
         state.chat_group_command("save review team").unwrap();
         state.conversation.groups.reload_snapshot()
+    }
+
+    #[test]
+    fn saved_selection_comparison_checks_accounts_before_and_after_restore() {
+        let mut selection = Selection::default();
+        assert!(selection.saved_selection_matches(&[]));
+        let item = recipient(1, false);
+        selection.selected.insert(item.id.clone(), item);
+        let saved = selection.saved_selection();
+        assert!(selection.saved_selection_matches(&saved));
+        assert!(!selection.saved_selection_matches(&[]));
+        let mut changed = saved.clone();
+        changed[0].subject = "99".into();
+        assert!(!selection.saved_selection_matches(&changed));
+        changed[0].subject.clone_from(&saved[0].subject);
+        changed[0].provider = "changed".into();
+        assert!(!selection.saved_selection_matches(&changed));
+        selection.selected.clear();
+        selection.restoring = Some(saved.clone());
+        assert!(selection.saved_selection_matches(&saved));
+        assert!(!selection.saved_selection_matches(&changed));
+        selection.restore_selection(saved.clone());
+        assert_eq!(selection.restoring.as_ref(), Some(&saved));
     }
 
     #[test]

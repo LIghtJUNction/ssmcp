@@ -55,8 +55,8 @@ impl State {
     }
 }
 
-fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
-    let alternatives = match hint {
+fn shortcuts(hint_kind: Hint, width: u16, status: &str) -> String {
+    let alternatives = match hint_kind {
         Hint::Completion => [
             "↑↓ choose · Tab insert · Esc close · /help",
             "↑↓ choose · Tab insert · Esc close",
@@ -104,11 +104,20 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
         .chain(["F1 help", "F1", "?"])
         .find(|text| text.width() <= available)
         .unwrap_or("");
+    let shortcut = format!("{hint} · Super+Alt+C computer");
+    let hint = if !matches!(hint_kind, Hint::Completion | Hint::Loading)
+        && !hint.is_empty()
+        && shortcut.width() <= available
+    {
+        shortcut
+    } else {
+        hint.to_owned()
+    };
     let with_status = format!("{hint} · {status}");
     if !hint.is_empty() && !status.is_empty() && with_status.width() <= available {
         with_status
     } else {
-        hint.into()
+        hint
     }
 }
 

@@ -109,7 +109,7 @@ async fn wayland_preflight_recovery_fixture() {
     let server = tokio::spawn(compositor(listener, state.clone()));
     let computer = Computer::new(root).unwrap();
     assert_eq!(computer.session, Session::Hyprland);
-    computer.handoff_host_input_local(60).unwrap();
+    computer.set_host_input_local(true).unwrap();
 
     let cases = [
         (

@@ -482,6 +482,37 @@ async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
     }
 }
 
+/// Auto attach may fall back only when the saved definition is absent. A
+/// present but unreadable/invalid definition must retain its local error.
+pub(crate) fn saved_session_exists(name: &str) -> Result<bool> {
+    if super::validate_name(name).is_err() {
+        return Ok(false);
+    }
+    let root = match super::session_root(false) {
+        Ok(root) => root,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    saved_session_in(&root, name)
+}
+
+fn saved_session_in(root: &std::path::Path, name: &str) -> Result<bool> {
+    match std::fs::symlink_metadata(super::session_directory(root, name)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+        Ok(_) => {
+            super::load(root, name)?;
+            Ok(true)
+        }
+    }
+}
+
 pub async fn manage(args: Vec<OsString>) -> Result<()> {
     let args: Vec<String> = args
         .into_iter()
@@ -504,7 +535,7 @@ pub async fn manage(args: Vec<OsString>) -> Result<()> {
     }
     if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
         println!(
-            "Usage: ssmcp attach [list] [--json]\n       ssmcp attach NAME [--read-only]\n\nAttach only to an existing running local session. Ctrl-] detaches; the session keeps running.\nCtrl-C reaches the inner terminal while input is enabled. F7 cycles session terminals.\n--read-only permits another observer without taking input ownership."
+            "Usage: ssmcp attach [list] [--json]\n       ssmcp attach --local NAME [--read-only]\n\nAttach to an existing running local session. Ctrl-] detaches; the session keeps running.\nCtrl-C reaches the inner terminal while input is enabled. F7 cycles session terminals.\n--read-only permits another observer without taking input ownership.\nUse ssmcp attach --remote ID_OR_NAME for an authorized online device."
         );
         return Ok(());
     }
@@ -935,6 +966,29 @@ async fn send_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attach_local_probe_keeps_damaged_definitions_local() {
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-attach-probe-{}",
+            super::super::random_suffix().unwrap()
+        ));
+        crate::platform::private_directory(&root).unwrap();
+        assert!(!saved_session_in(&root, "missing").unwrap());
+        let directory = super::super::session_directory(&root, "broken");
+        crate::platform::private_directory(&directory).unwrap();
+        assert!(saved_session_in(&root, "broken").is_err());
+        std::fs::write(directory.join("manifest.json"), "invalid").unwrap();
+        assert!(saved_session_in(&root, "broken").is_err());
+        #[cfg(unix)]
+        {
+            let link = super::super::session_directory(&root, "linked");
+            std::os::unix::fs::symlink(&directory, &link).unwrap();
+            assert!(saved_session_in(&root, "linked").is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn pending_session_can_be_observed_but_does_not_queue_input() {
         let capture = Capture::new().unwrap();

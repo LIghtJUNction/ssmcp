@@ -66,6 +66,15 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
         state.conversation.timing_fixture.as_mut().unwrap().active[0] = entry(None, 65_999);
         let elapsed = screen(&mut state);
         assert!(elapsed.contains("Timer +01:05"), "{cols}: {elapsed}");
+        for frame in [&first, &later, &elapsed] {
+            let divider = frame.lines().find(|row| row.contains("Timer ")).unwrap();
+            assert!(
+                divider.contains("foreground ? · background on")
+                    || divider.contains("FG ? · BG on")
+                    || divider.contains("F:? B:on"),
+                "{cols}: {divider}"
+            );
+        }
         assert_eq!(
             state.conversation.composer.text(),
             "keep this draft exactly"
