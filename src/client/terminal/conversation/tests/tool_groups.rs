@@ -97,10 +97,20 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
             .lines()
             .position(|row| row.contains("Tools · 5 calls"))
             .unwrap() as u16;
-        let before = state.events.snapshot();
-        assert!(before["tool_groups"][0]["scroll"].as_u64().unwrap() > 0);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], false);
+        assert!(!screen.contains("call 0 result"), "{screen}");
         state.chat_key(Key::Mouse {
-            button: 64,
+            button: 0,
+            x: 8,
+            y: header_y,
+            release: false,
+        });
+        display(&mut state);
+        save_preview(&mut state, "group-expanded");
+        let before = state.events.snapshot();
+        assert_eq!(before["tool_groups"][0]["scroll"], 0);
+        state.chat_key(Key::Mouse {
+            button: 65,
             x: 8,
             y: header_y,
             release: false,
@@ -109,17 +119,17 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
         let scrolled = state.events.snapshot();
         assert!(
             scrolled["tool_groups"][0]["scroll"].as_u64().unwrap()
-                < before["tool_groups"][0]["scroll"].as_u64().unwrap()
+                > before["tool_groups"][0]["scroll"].as_u64().unwrap()
         );
         assert_eq!(scrolled["scroll"], before["scroll"]);
         assert_eq!(scrolled["events"][1]["panel"], before["events"][1]["panel"]);
         save_preview(&mut state, "group-scrolled");
-
-        state.conversation.content_focus = true;
         state.chat_key(Key::Home);
         display(&mut state);
         assert_eq!(state.events.snapshot()["tool_groups"][0]["scroll"], 0);
-        state.chat_key(Key::AuditUp);
+        for _ in 0..4 {
+            state.chat_key(Key::AuditDown);
+        }
         display(&mut state);
         let selected_previous = state.events.snapshot()["selected"].clone();
         state.chat_key(Key::AuditDown);
@@ -174,6 +184,23 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
         state.chat_key(Key::Home);
         let head_again = display(&mut state).screen().contents();
         assert!(head_again.contains("head-marker"), "{head_again}");
+        let header_y = head_again
+            .lines()
+            .position(|row| row.contains("Tools · 5 calls"))
+            .unwrap() as u16;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y: header_y,
+            release: false,
+        });
+        display(&mut state);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], false);
+        // Enter on the selected summary reopens only the display group.
+        input(&mut state, b"\r");
+        display(&mut state);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], true);
+        assert_eq!(state.events.snapshot()["events"][5]["expanded"], true);
         assert_eq!(state.conversation.snapshot()["draft"], draft);
         assert_eq!(state.chat_data()["queue"], queue);
         assert!(state.actions.is_empty() && state.conversation.submitting.is_none());

@@ -46,6 +46,7 @@ struct Event {
     chat_expanded: bool,
     panel: CommandPanel,
     group_panel: CommandPanel,
+    group_expanded: bool,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
@@ -83,6 +84,7 @@ struct CommandPanel {
 struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
+    group_expanded: bool,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -458,6 +460,7 @@ impl EventPosition {
 #[derive(Clone, Debug)]
 pub(super) struct EventPosition {
     selected: Option<u64>,
+    selected_group: Option<u64>,
     scroll: usize,
     follow: bool,
     reveal: bool,
@@ -471,6 +474,7 @@ impl Default for EventPosition {
     fn default() -> Self {
         Self {
             selected: None,
+            selected_group: None,
             scroll: 0,
             follow: true,
             reveal: false,
@@ -488,6 +492,7 @@ pub(crate) struct EventView {
     bytes: usize,
     next_id: u64,
     selected: Option<u64>,
+    selected_group: Option<u64>,
     scroll: usize,
     follow: bool,
     reveal: bool,
@@ -495,6 +500,7 @@ pub(crate) struct EventView {
     hit_rows: Vec<Option<u64>>,
     panel_hit_rows: Vec<Option<u64>>,
     group_hit_rows: Vec<Option<u64>>,
+    group_header_hit_rows: Vec<Option<u64>>,
     total_rows: usize,
     page_rows: usize,
     image_cells: Option<images::CellSize>,
@@ -531,7 +537,7 @@ impl EventView {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
         }
-        tool_activity::groups(&self.events, &self.read_groups())
+        tool_activity::groups(&self.events)
     }
 
     fn tool_group_for(&self, id: u64) -> Option<tool_activity::Group> {
@@ -541,23 +547,88 @@ impl EventView {
             .find(|group| group.contains(index))
     }
 
+    fn selection_targets(&self) -> Vec<(u64, bool)> {
+        let groups = self.tool_groups();
+        let reads = self.read_groups();
+        let mut targets = Vec::new();
+        for (index, event) in self.events.iter().enumerate() {
+            if !event.matches(&self.query, self.level, self.scope) {
+                continue;
+            }
+            if let Some(group) = groups.iter().find(|group| group.contains(index)) {
+                if index == group.start {
+                    targets.push((group.head, true));
+                }
+                if group.expanded {
+                    targets.push((event.id, false));
+                }
+            } else if reads
+                .iter()
+                .find(|group| group.contains(index))
+                .is_none_or(|group| group.expanded || index == group.start)
+            {
+                targets.push((event.id, false));
+            }
+        }
+        targets
+    }
+
     fn visible_ids(&self) -> Vec<u64> {
-        let groups = self.read_groups();
-        self.events
-            .iter()
-            .enumerate()
-            .filter(|(_, event)| event.matches(&self.query, self.level, self.scope))
-            .filter(|(index, _)| {
-                groups
-                    .iter()
-                    .find(|group| group.contains(*index))
-                    .is_none_or(|group| group.expanded || *index == group.start)
-            })
-            .map(|(_, event)| event.id)
-            .collect()
+        let mut ids = Vec::new();
+        for (id, _) in self.selection_targets() {
+            if ids.last() != Some(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
+    fn preserve_tool_selection(&mut self) {
+        let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) else {
+            self.selected_group = None;
+            return;
+        };
+        if !group.expanded {
+            if !self.follow && self.selected_group.is_none() {
+                // A new adjacent call must not swallow an item already being read.
+                self.events[group.start].group_expanded = true;
+                self.reveal = true;
+            } else {
+                self.selected = Some(group.head);
+                self.selected_group = Some(group.head);
+            }
+        }
+    }
+
+    fn set_tool_expanded(&mut self, group: &tool_activity::Group, expanded: bool) -> bool {
+        if group.expanded == expanded {
+            return false;
+        }
+        let head = &mut self.events[group.start];
+        head.group_expanded = expanded;
+        if expanded && head.group_panel.rows == 0 {
+            head.group_panel.scroll = Some(0);
+        }
+        self.selected = Some(group.head);
+        self.selected_group = Some(group.head);
+        self.follow = false;
+        self.reveal = true;
+        self.hit_rows.clear();
+        self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
+        true
+    }
+
+    fn selected_tool_header(&self) -> Option<tool_activity::Group> {
+        let group = self.selected.and_then(|id| self.tool_group_for(id))?;
+        (self.selected_group == Some(group.head) || !group.expanded).then_some(group)
     }
 
     fn read_group_for(&self, id: u64) -> Option<read_activity::Group> {
+        if self.tool_group_for(id).is_some() {
+            return None;
+        }
         let index = self.events.iter().position(|event| event.id == id)?;
         self.read_groups()
             .into_iter()
@@ -565,6 +636,7 @@ impl EventView {
     }
 
     fn preserve_read_selection(&mut self) {
+        self.preserve_tool_selection();
         if !self.follow
             && let Some(group) = self.selected.and_then(|id| self.read_group_for(id))
             && !group.expanded
@@ -591,6 +663,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.placements.clear();
         true
     }
@@ -612,6 +685,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.placements.clear();
         self.reveal = !self.follow;
     }
@@ -632,6 +706,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.placements.clear();
         self.total_rows = 0;
         self.page_rows = 0;
@@ -673,6 +748,7 @@ impl EventView {
     pub(super) fn position(&self) -> EventPosition {
         EventPosition {
             selected: self.selected,
+            selected_group: self.selected_group,
             scroll: self.scroll,
             follow: self.follow,
             reveal: self.reveal,
@@ -687,6 +763,7 @@ impl EventView {
                         CommandPosition {
                             scroll: event.panel.scroll,
                             group_scroll: event.group_panel.scroll,
+                            group_expanded: event.group_expanded,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -703,6 +780,7 @@ impl EventView {
 
     pub(super) fn restore_position(&mut self, position: &EventPosition) {
         self.selected = position.selected;
+        self.selected_group = position.selected_group;
         self.scroll = position.scroll;
         self.follow = position.follow;
         self.reveal = position.reveal;
@@ -716,6 +794,7 @@ impl EventView {
                 .unwrap_or_default();
             event.panel.scroll = panel.scroll;
             event.group_panel.scroll = panel.group_scroll;
+            event.group_expanded = panel.group_expanded;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
@@ -740,6 +819,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.placements.clear();
         self.preserve_read_selection();
         let visible = self.visible_ids();
@@ -1004,6 +1084,7 @@ impl EventView {
                 chat_expanded: false,
                 panel: CommandPanel::default(),
                 group_panel: CommandPanel::default(),
+                group_expanded: false,
                 truncated,
                 tone,
                 meta,
@@ -1138,16 +1219,20 @@ impl EventView {
     /// Negative selects an earlier event; positive selects a later event.
     pub(crate) fn select(&mut self, delta: isize) {
         self.new_image = None;
-        let visible = self.visible_ids();
+        let visible = self.selection_targets();
         if visible.is_empty() {
             return;
         }
         let current = visible
             .iter()
-            .position(|id| Some(*id) == self.selected)
+            .position(|(id, group)| {
+                Some(*id) == self.selected && *group == self.selected_group.is_some()
+            })
             .unwrap_or(visible.len() - 1);
         let next = current.saturating_add_signed(delta).min(visible.len() - 1);
-        self.selected = Some(visible[next]);
+        let (id, group) = visible[next];
+        self.selected = Some(id);
+        self.selected_group = group.then_some(id);
         self.follow = false;
         self.reveal = true;
     }
@@ -1179,6 +1264,9 @@ impl EventView {
     }
 
     pub(crate) fn scroll_selected_panel(&mut self, delta: isize) -> bool {
+        if let Some(id) = self.selected_group {
+            return self.scroll_tool_group(id, delta);
+        }
         let Some(id) = self.selected else {
             return false;
         };
@@ -1200,6 +1288,9 @@ impl EventView {
         let Some(group) = self.tool_group_for(id) else {
             return false;
         };
+        if !group.expanded {
+            return false;
+        }
         self.events[group.start].group_panel.scroll_by(delta);
         self.new_image = None;
         self.follow = false;
@@ -1232,6 +1323,11 @@ impl EventView {
         self.follow = true;
         self.reveal = false;
         self.selected = self.visible_ids().last().copied();
+        self.selected_group = self
+            .selected
+            .and_then(|id| self.tool_group_for(id))
+            .filter(|group| !group.expanded)
+            .map(|group| group.head);
         if let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) {
             self.events[group.start].group_panel.scroll = None;
         }
@@ -1239,6 +1335,9 @@ impl EventView {
 
     pub(crate) fn toggle(&mut self) -> bool {
         self.new_image = None;
+        if let Some(group) = self.selected_tool_header() {
+            return self.set_tool_expanded(&group, !group.expanded);
+        }
         if let Some(group) = self.selected.and_then(|id| self.read_group_for(id)) {
             return self.set_read_expanded(&group, !group.expanded);
         }
@@ -1274,6 +1373,9 @@ impl EventView {
 
     fn set_expanded(&mut self, expanded: bool) -> bool {
         self.new_image = None;
+        if let Some(group) = self.selected_tool_header() {
+            return self.set_tool_expanded(&group, expanded);
+        }
         if let Some(group) = self.selected.and_then(|id| self.read_group_for(id)) {
             return self.set_read_expanded(&group, expanded);
         }
@@ -1313,6 +1415,11 @@ impl EventView {
             return false;
         }
         self.selected = Some(id);
+        self.selected_group = self
+            .group_header_hit_rows
+            .get(usize::from(row))
+            .copied()
+            .flatten();
         self.new_image = None;
         self.follow = false;
         // Preserve the clicked row, even when it belongs to a long body.
@@ -1326,6 +1433,7 @@ impl EventView {
         self.read_expanded.clear();
         self.bytes = 0;
         self.selected = None;
+        self.selected_group = None;
         self.scroll = 0;
         self.follow = true;
         self.reveal = false;
@@ -1333,6 +1441,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.total_rows = 0;
         self.page_rows = 0;
         self.placements.clear();
@@ -1346,7 +1455,7 @@ impl EventView {
         json!({
             "schema_version":1, "events":self.events.iter().enumerate().map(|(index,event)| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
-                "bytes":event.text.len(),"expanded":groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded),"truncated":event.truncated,
+                "bytes":event.text.len(),"expanded":if self.tool_groups().iter().any(|group| group.contains(index)) { event.expanded(self.scope) } else { groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded) },"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
@@ -1364,14 +1473,15 @@ impl EventView {
             "tool_groups":self.tool_groups().iter().map(|group| {
                 let panel = &self.events[group.start].group_panel;
                 json!({
-                    "id":group.head,"count":group.end-group.start,
-                    "members":(group.start..group.end).map(|index|self.events[index].id).collect::<Vec<_>>(),
-                    "scroll":panel.offset(),"rows":panel.rows,"visible_rows":panel.page,
+                    "id":group.head,"count":group.members.len(),"expanded":group.expanded,
+                    "stats":tool_activity::stats(&self.events, group),
+                    "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>(),
+                    "scroll":panel.offset(),"rows":panel.rows,"visible_rows":if group.expanded {panel.page} else {0},
                     "following":panel.scroll.is_none()
                 })
             }).collect::<Vec<_>>(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
-            "selected":self.selected,"scroll":self.scroll,
+            "selected":self.selected,"selected_group":self.selected_group,"scroll":self.scroll,
             "rows_below":self.rows_below(),"following":self.follow,
             "image_cache_bytes":self.image_bytes(),"max_image_cache_bytes":images::CACHE_BYTES,
             "scope":"retained display preview; original tool output uses its archive"
@@ -1396,6 +1506,7 @@ impl EventView {
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
         self.group_hit_rows.clear();
+        self.group_header_hit_rows.clear();
         self.placements.clear();
         if width == 0 || height == 0 {
             self.page_rows = 0;
@@ -1413,6 +1524,7 @@ impl EventView {
         let mut image_spans = Vec::new();
         let mut panel_spans = Vec::new();
         let mut group_spans = Vec::new();
+        let mut group_header_spans = Vec::new();
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
@@ -1441,6 +1553,7 @@ impl EventView {
                         palette: &palette,
                         ui,
                         selected: self.selected,
+                        selected_group: self.selected_group,
                         focused,
                         reveal: self.reveal,
                     },
@@ -1455,9 +1568,17 @@ impl EventView {
                         .map(|(id, from, to)| (id, start + from, start + to)),
                 );
                 group_spans.push((group.head, start, start + block.rows.len()));
+                group_header_spans.push((group.head, start, start + block.header_rows));
+                if group.expanded {
+                    group_header_spans.push((
+                        group.head,
+                        start + block.rows.len() - 1,
+                        start + block.rows.len(),
+                    ));
+                }
                 rows.extend(block.rows);
                 previous_compact_tool = false;
-                visible_events += group.end - group.start;
+                visible_events += group.members.len();
                 continue;
             }
             let event = &mut self.events[index];
@@ -1992,6 +2113,12 @@ impl EventView {
                 )
             {
                 self.placements.push(placement);
+            }
+        }
+        self.group_header_hit_rows.resize(page, None);
+        for (id, start, end) in group_header_spans {
+            for row in start.max(self.scroll)..end.min(self.scroll + page) {
+                self.group_header_hit_rows[row - self.scroll] = Some(id);
             }
         }
         self.group_hit_rows.resize(page, None);
@@ -2711,6 +2838,10 @@ mod tests {
             b"",
         );
         view.set_scope(EventScope::Conversation);
+        let folded = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert!(folded.contains("Tools · 2 calls") && !folded.contains("cargo check"));
+        view.select(-1);
+        assert!(view.open());
         let rows = view.render(100, 20, &plain_ui(), false);
         let first = rows
             .iter()

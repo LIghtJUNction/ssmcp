@@ -1,8 +1,7 @@
 //! A bounded viewport over adjacent retained tool events; no output is copied
 //! into a second history and individual event identities remain selectable.
 use super::{
-    Event, Ui, clip_plain, conversation_body, correlation::Kind, paint, read_activity,
-    semantic_text, styled_rows,
+    Event, Ui, clip_plain, conversation_body, correlation::Kind, paint, semantic_text, styled_rows,
 };
 use std::collections::VecDeque;
 
@@ -10,7 +9,9 @@ use std::collections::VecDeque;
 pub(super) struct Group {
     pub(super) start: usize,
     pub(super) end: usize,
+    pub(super) members: Vec<usize>,
     pub(super) head: u64,
+    pub(super) expanded: bool,
 }
 
 impl Group {
@@ -19,15 +20,34 @@ impl Group {
     }
 }
 
-/// Prose, diagnostics, images, diffs and existing compact read summaries keep
-/// their boundaries. Filtering never makes originally separated calls adjacent.
-pub(super) fn groups(events: &VecDeque<Event>, reads: &[read_activity::Group]) -> Vec<Group> {
+#[derive(Default, serde::Serialize)]
+pub(super) struct Stats {
+    pub(super) running: usize,
+    pub(super) done: usize,
+    pub(super) failed: usize,
+    pub(super) unknown: usize,
+}
+
+pub(super) fn stats(events: &VecDeque<Event>, group: &Group) -> Stats {
+    let mut stats = Stats::default();
+    for index in &group.members {
+        match events[*index].meta.status {
+            Some(super::Status::Running) => stats.running += 1,
+            Some(super::Status::Done | super::Status::Exit(0)) => stats.done += 1,
+            Some(status) if status.failed() => stats.failed += 1,
+            _ => stats.unknown += 1,
+        }
+    }
+    stats
+}
+
+/// Retained logical calls count once; stdout/lifecycle updates are already
+/// correlated into those events. Native discovery bookkeeping is transparent.
+/// Conversation, images and other diagnostics retain their original boundaries.
+pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
     let eligible = |index: usize| {
         let event = &events[index];
-        event.meta.kind == Kind::Tool
-            && !event.meta.diff
-            && event.image.is_none()
-            && !reads.iter().any(|group| group.contains(index))
+        event.meta.kind == Kind::Tool && event.image.is_none()
     };
     let mut result = Vec::new();
     let mut start = 0;
@@ -36,15 +56,27 @@ pub(super) fn groups(events: &VecDeque<Event>, reads: &[read_activity::Group]) -
             start += 1;
             continue;
         }
+        let mut members = vec![start];
         let mut end = start + 1;
-        while end < events.len() && eligible(end) {
+        while end < events.len() {
+            if eligible(end) {
+                members.push(end);
+            } else if !(events[end].meta.kind == Kind::Log
+                && events[end].meta.read_bookkeeping
+                && events[end].image.is_none()
+                && !matches!(events[end].tone, "error" | "warning"))
+            {
+                break;
+            }
             end += 1;
         }
-        if end - start > 1 {
+        if members.len() > 1 {
             result.push(Group {
                 start,
                 end,
+                members,
                 head: events[start].id,
+                expanded: events[start].group_expanded,
             });
         }
         start = end;
@@ -58,6 +90,7 @@ pub(super) struct Options<'a> {
     pub(super) palette: &'a str,
     pub(super) ui: &'a Ui,
     pub(super) selected: Option<u64>,
+    pub(super) selected_group: Option<u64>,
     pub(super) focused: bool,
     pub(super) reveal: bool,
 }
@@ -66,6 +99,7 @@ pub(super) struct Block {
     pub(super) rows: Vec<(u64, String)>,
     pub(super) panels: Vec<(u64, usize, usize)>,
     pub(super) selected_row: Option<usize>,
+    pub(super) header_rows: usize,
 }
 
 pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Options<'_>) -> Block {
@@ -75,26 +109,86 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
         palette,
         ui,
         selected,
+        selected_group,
         focused,
         reveal,
     } = options;
+    let stats = stats(events, group);
+    let active = selected_group == Some(group.head);
+    let marker = if group.expanded { "▾" } else { "▸" };
+    let title = format!(
+        "{} {marker} Tools · {} calls",
+        if active && focused { "›" } else { " " },
+        group.members.len()
+    );
+    let status = [
+        (stats.running, "run"),
+        (stats.done, "done"),
+        (stats.failed, "fail"),
+        (stats.unknown, "unknown"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, label)| format!("{label} {count}"))
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let tone = if stats.failed > 0 {
+        "warning"
+    } else if active && focused {
+        "accent"
+    } else {
+        "muted"
+    };
+    let mut header = if title.chars().count() + status.chars().count() + 3 <= width {
+        vec![(
+            group.head,
+            paint(
+                &clip_plain(&format!("{title} · {status}"), width),
+                tone,
+                ui,
+                active && focused,
+            ),
+        )]
+    } else {
+        vec![
+            (
+                group.head,
+                paint(&clip_plain(&title, width), tone, ui, active && focused),
+            ),
+            (
+                group.head,
+                paint(
+                    &clip_plain(&format!("    {status}"), width),
+                    "muted",
+                    ui,
+                    false,
+                ),
+            ),
+        ]
+    };
+    let header_rows = header.len();
+    if !group.expanded {
+        return Block {
+            rows: header,
+            panels: Vec::new(),
+            selected_row: active.then_some(0),
+            header_rows,
+        };
+    }
+
     let gutter_width = 4.min(width.saturating_sub(1));
     let body_width = width.saturating_sub(gutter_width).max(1);
     let indent = 4.min(body_width.saturating_sub(1));
     let detail_width = body_width.saturating_sub(indent).max(1);
-    let window_page = page.saturating_sub(2).clamp(1, 12);
+    let window_page = page.saturating_sub(header_rows + 1).clamp(1, 12);
     let mut body = Vec::new();
     let mut panels = Vec::new();
     let mut selected_row = None;
     let mut selected_end = None;
-    let mut failed = 0;
-    let mut running = 0;
-
-    for index in group.start..group.end {
-        let event = &mut events[index];
-        failed += usize::from(event.meta.status.is_some_and(|status| status.failed()));
-        running += usize::from(event.meta.status == Some(super::Status::Running));
-        let selected = selected == Some(event.id);
+    for index in &group.members {
+        let event = &mut events[*index];
+        let command = event.meta.command && !event.meta.diff;
+        let selected = selected == Some(event.id) && !active;
         if selected {
             selected_row = Some(body.len());
         }
@@ -127,7 +221,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 *cached_width != detail_width || *cached_palette != cache_palette
             })
         {
-            let rows = if event.meta.command {
+            let rows = if command {
                 let text = if expanded {
                     // This is the same bounded, redacted source used by the
                     // standalone command panel, never native argument metadata.
@@ -167,7 +261,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
             event.cache = Some((detail_width, cache_palette, rows));
         }
         let content = &event.cache.as_ref().unwrap().2;
-        if event.meta.command {
+        if command {
             event.panel.rows = content.len();
             let limit = if expanded {
                 window_page.saturating_sub(2).clamp(1, 10)
@@ -237,23 +331,8 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
         panel.scroll = Some(offset);
     }
 
-    let state = if failed > 0 {
-        format!(" · {failed} failed")
-    } else if running > 0 {
-        format!(" · {running} running")
-    } else {
-        String::new()
-    };
-    let header = format!("  Tools · {} calls{state}", group.end - group.start);
-    let mut rows = vec![(
-        group.head,
-        paint(
-            &clip_plain(&header, width),
-            if failed > 0 { "warning" } else { "muted" },
-            ui,
-            false,
-        ),
-    )];
+    let mut rows = Vec::new();
+    rows.append(&mut header);
     let gutter = paint(&clip_plain("  │ ", gutter_width), "muted", ui, false);
     rows.extend(
         body.into_iter()
@@ -263,9 +342,9 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
     );
     let range = format!("{}–{}/{}", offset + 1, offset + panel.page, panel.rows);
     let hint = if width >= 70 {
-        format!("  └ {range} · wheel/PgUp/PgDn scroll tools · Enter details")
+        format!("  └ {range} · wheel/PgUp/PgDn scroll tools · header folds")
     } else {
-        format!("  └ {range} · scroll tools · Enter details")
+        format!("  └ {range} · scroll tools · header folds")
     };
     rows.push((
         group.head,
@@ -276,16 +355,17 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
         .filter_map(|(id, start, end)| {
             let start = start.max(offset);
             let end = end.min(offset + panel.page);
-            (start < end).then_some((id, 1 + start - offset, 1 + end - offset))
+            (start < end).then_some((id, header_rows + start - offset, header_rows + end - offset))
         })
         .collect();
     let selected_row = selected_row
         .filter(|row| *row >= offset && *row < offset + panel.page)
-        .map(|row| 1 + row - offset);
+        .map(|row| header_rows + row - offset);
     Block {
         rows,
         panels,
-        selected_row,
+        selected_row: if active { Some(0) } else { selected_row },
+        header_rows,
     }
 }
 
