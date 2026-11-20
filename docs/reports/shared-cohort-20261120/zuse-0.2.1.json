@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "observed_utc": "2026-11-20T01:00:22.818618+00:00",
+  "status": "source metadata and release tooling passed",
+  "upstream": {
+    "package": "zuse-computer",
+    "version": "0.2.1",
+    "source": "d930769005d307c42639e8abedc81ab039427e40",
+    "crate_url": "https://static.crates.io/crates/zuse-computer/zuse-computer-0.2.1.crate",
+    "crate_bytes": 369745,
+    "crate_sha256": "8da9a00ef8468d196234a99cb4d7f47991d9fb1ef704f67da2ce63d46395ea04",
+    "vcs": {
+      "git": {
+        "sha1": "d930769005d307c42639e8abedc81ab039427e40"
+      },
+      "path_in_vcs": ""
+    }
+  },
+  "prior_ssmcp_source": "70d847ee3b529f16292297b20b80b2d06a43a9d5",
+  "changes": [
+    "Cargo.toml exact path dependency0.2.1",
+    "Cargo.lock path package0.2.1, same dependency set",
+    "crates/zuse canonical released source"
+  ],
+  "checks": [
+    {
+      "check": "metadata",
+      "command": [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-deps",
+        "--format-version",
+        "1"
+      ],
+      "exit_code": 0,
+      "started_utc": "2026-11-20T01:00:20.478109+00:00",
+      "log": "/home/lightjunction/Documents/GITHUB/project_z/dist/cohort-preflight/ssmcp-zuse-0.2.1-metadata.log"
+    },
+    {
+      "check": "release-tests",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_release.py"
+      ],
+      "exit_code": 0,
+      "started_utc": "2026-11-20T01:00:20.493836+00:00",
+      "log": "/home/lightjunction/Documents/GITHUB/project_z/dist/cohort-preflight/ssmcp-zuse-0.2.1-release-tests.log"
+    }
+  ],
+  "application_validation": {
+    "compile": "pending resource-controlled local gate",
+    "native_runtime_and_formal_assets": "owned by existing SSMCP application session",
+    "installed_application": "unchanged by this source update"
+  }
+}
