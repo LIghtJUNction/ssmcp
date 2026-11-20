@@ -317,6 +317,10 @@ class Fixture(ReceiverControl):
         self.server = module.PrivateXvfb(self.root / "display", width=960, height=360)
         self.server.start()
         self.env = self.server.environment
+        # Direct-worker fixtures own their bus and display too. Inherited
+        # libatspi overrides must not redirect this test toward an outer session.
+        self.env.pop("AT_SPI_BUS_ADDRESS", None)
+        self.env.pop("AT_SPI_DISPLAY", None)
         self.env.update(GDK_BACKEND="x11", NO_AT_BRIDGE="0", GIO_USE_VFS="local")
         subprocess.run(["xdpyinfo"], env=self.env, stdout=subprocess.DEVNULL,
                        stderr=subprocess.PIPE, check=True, timeout=5)
