@@ -1,0 +1,224 @@
+{
+  "status": "passed",
+  "checks": 69,
+  "passed_checks": [
+    "the owned account router keeps its credentials in a private ready record",
+    "the isolated account has the expected stable provider identity and handle",
+    "the real production account router is healthy",
+    "the account connection advertises its exact identity-scoped MCP resource",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact account endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "the account OAuth endpoint requires provider consent instead of a connection login code",
+    "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+    "OAuth pages cannot be cached and bind same-origin form submission",
+    "real identity exchange validates provider PKCE and requires explicit consent",
+    "OAuth consent preserves the registered callback, state and issuer",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the account relay credential cannot authenticate as an MCP access token",
+    "pending recall starts with an empty next-caller composer",
+    "the next reference scenario starts with an empty composer",
+    "the exact user draft is present before submission",
+    "send_accepted_frame: no extra input during physical observation",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "the next reference scenario starts with an empty composer",
+    "the exact user draft is present before submission",
+    "send_accepted_frame: no extra input during physical observation",
+    "the acknowledged pending bubble is visible before Up: no keyboard input was sent during the observation",
+    "before-up: real conversation has exact old/new/delivered body counts at 120 columns",
+    "before-up: recalled text appears only in its intended physical composer",
+    "before-up: real conversation has exact old/new/delivered body counts at 48 columns",
+    "before-up: recalled text appears only in its intended physical composer",
+    "up_confirmed_takeback_frame: no extra input during physical observation",
+    "Up restores the exact request identity, source and UTF-8 end cursor",
+    "recalled: real conversation has exact old/new/delivered body counts at 120 columns",
+    "recalled: recalled text appears only in its intended physical composer",
+    "recalled: real conversation has exact old/new/delivered body counts at 48 columns",
+    "recalled: recalled text appears only in its intended physical composer",
+    "Escape preserves the held edit, its exact text, cursor and recipient",
+    "the held edit is not delivered and the earlier delivered message is not replayed",
+    "recall and Escape do not create or cancel a replacement request",
+    "escape-held: real conversation has exact old/new/delivered body counts at 120 columns",
+    "escape-held: recalled text appears only in its intended physical composer",
+    "escape-held: real conversation has exact old/new/delivered body counts at 48 columns",
+    "escape-held: recalled text appears only in its intended physical composer",
+    "edited_send_accepted_frame: no extra input during physical observation",
+    "resubmission advances the same request revision and clears only its accepted edit",
+    "resubmission reuses the original message ID without an additional request",
+    "resubmitted: real conversation has exact old/new/delivered body counts at 120 columns",
+    "resubmitted: recalled text appears only in its intended physical composer",
+    "resubmitted: real conversation has exact old/new/delivered body counts at 48 columns",
+    "resubmitted: recalled text appears only in its intended physical composer",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "the revised request is delivered once without replay",
+    "the earlier delivered request remains delivered throughout pending editing",
+    "up_delivered_input_history_frame: no extra input during physical observation",
+    "history recall of delivered text is an ordinary draft, not a queue takeback",
+    "ordinary history recall cannot change delivered queue identities, revisions or states",
+    "delivered-history: real conversation has exact old/new/delivered body counts at 120 columns",
+    "delivered-history: recalled text appears only in its intended physical composer",
+    "delivered-history: real conversation has exact old/new/delivered body counts at 48 columns",
+    "delivered-history: recalled text appears only in its intended physical composer",
+    "mouse_content_focus: no extra input during physical observation",
+    "mouse_composer_focus: no extra input during physical observation",
+    "typed_draft_frame: no extra input during physical observation",
+    "at least one physical input arrived during a real history-producing call",
+    "the focused acceptance runner remained unchanged"
+  ],
+  "frames": [
+    "interactions-pending-recall-before-up-120.json",
+    "interactions-pending-recall-before-up-48.json",
+    "interactions-pending-recall-recalled-120.json",
+    "interactions-pending-recall-recalled-48.json",
+    "interactions-pending-recall-escape-held-120.json",
+    "interactions-pending-recall-escape-held-48.json",
+    "interactions-pending-recall-resubmitted-120.json",
+    "interactions-pending-recall-resubmitted-48.json",
+    "interactions-pending-recall-delivered-history-120.json",
+    "interactions-pending-recall-delivered-history-48.json"
+  ],
+  "quiet_checks": [
+    "the acknowledged pending bubble is visible before Up",
+    "server-confirmed Up recall removes only the old pending bubble without another key",
+    "resubmitting the edit adds exactly one new bubble and keeps the delivered bubble",
+    "Up after delivery copies history while retaining the delivered conversation bodies"
+  ],
+  "pending_recall": {
+    "request_id": "6b2da4ae980de5ef6323ab6cb40e3c91",
+    "preserved_delivered_id": "65ac8a9971c148cb2fd4cf248f239116",
+    "original_revision": 1,
+    "edited_revision": 3,
+    "verified_widths": [
+      120,
+      48
+    ],
+    "rows": 58,
+    "escape_preserves_edit": true,
+    "delivered_once": true
+  },
+  "latency_samples": [
+    {
+      "action": "send_accepted_frame",
+      "input_ms": 1260.427192,
+      "visible_ms": 1284.470156,
+      "latency_ms": 24.042964,
+      "budget_ms": 500,
+      "within_budget": true
+    },
+    {
+      "action": "send_accepted_frame",
+      "input_ms": 2188.140598,
+      "visible_ms": 2230.413994,
+      "latency_ms": 42.273396,
+      "budget_ms": 500,
+      "within_budget": true
+    },
+    {
+      "action": "up_confirmed_takeback_frame",
+      "input_ms": 3211.917464,
+      "visible_ms": 3243.070902,
+      "latency_ms": 31.153438,
+      "budget_ms": 500,
+      "within_budget": true
+    },
+    {
+      "action": "edited_send_accepted_frame",
+      "input_ms": 7466.509941,
+      "visible_ms": 7497.37039,
+      "latency_ms": 30.860449,
+      "budget_ms": 500,
+      "within_budget": true
+    },
+    {
+      "action": "up_delivered_input_history_frame",
+      "input_ms": 9053.695258,
+      "visible_ms": 9089.554741,
+      "latency_ms": 35.859483,
+      "budget_ms": 500,
+      "within_budget": true
+    },
+    {
+      "action": "mouse_content_focus",
+      "input_ms": 10885.397585,
+      "visible_ms": 10914.43192,
+      "latency_ms": 29.034335,
+      "budget_ms": 250,
+      "within_budget": true,
+      "overlapped_history_call": true
+    },
+    {
+      "action": "mouse_composer_focus",
+      "input_ms": 10921.31195,
+      "visible_ms": 10951.506027,
+      "latency_ms": 30.194077,
+      "budget_ms": 250,
+      "within_budget": true,
+      "overlapped_history_call": true
+    },
+    {
+      "action": "typed_draft_frame",
+      "input_ms": 10957.539972,
+      "visible_ms": 10993.739404,
+      "latency_ms": 36.199432,
+      "budget_ms": 250,
+      "within_budget": true,
+      "overlapped_history_call": true
+    }
+  ],
+  "history_write_calls": [
+    {
+      "start_ms": 10797.753903,
+      "end_ms": 10875.129054,
+      "history_saved": true
+    },
+    {
+      "start_ms": 10875.137759,
+      "end_ms": 10960.142301,
+      "history_saved": true
+    },
+    {
+      "start_ms": 10960.149349,
+      "end_ms": 11060.18996,
+      "history_saved": true
+    }
+  ],
+  "focused_runner_sha256": "ea601787135257cb3838fa249a233b85a5944a9245de68daa900f5396709e106",
+  "timing": "monotonic physical PTY write to first matching VT frame; 5 ms pump plus decoder overhead",
+  "budgets": "diagnostic targets: 250 ms local input; 500 ms loopback accepted send/takeback",
+  "transport": "existing production account router, native tools, WebSocket and owned PTY",
+  "models_started": false,
+  "existing_clients_reloaded": false,
+  "existing_services_touched": false,
+  "real_user_credentials_used": false,
+  "source_revision": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+  "elapsed_seconds": 13.91,
+  "binaries_sha256_before": {
+    "ssmcp": "3fbf04e3cb5c38bcb83f8e9e674901af4b0ab111e014601f01df5208206a641c",
+    "ssmcpd": "a2d0b04a6f6ba8654f218de69defc122429896e92079df5a3d41c14c559c4b2f",
+    "decoder": "b84e542a44cf19c271b9a13f5a4cfc593a88595789aed850ab88f686137d714e",
+    "fixture": "abf4aeb63926ec386933197212acc8e1ac3cbf75f0d8e9659015493992e00f5e"
+  },
+  "binaries_sha256_after": {
+    "ssmcp": "3fbf04e3cb5c38bcb83f8e9e674901af4b0ab111e014601f01df5208206a641c",
+    "ssmcpd": "a2d0b04a6f6ba8654f218de69defc122429896e92079df5a3d41c14c559c4b2f",
+    "decoder": "b84e542a44cf19c271b9a13f5a4cfc593a88595789aed850ab88f686137d714e",
+    "fixture": "abf4aeb63926ec386933197212acc8e1ac3cbf75f0d8e9659015493992e00f5e"
+  },
+  "source_sha256": {
+    "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+    "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+    "e2e_composer.py": "b7c1c4eb3944d8555383081c6a505ae6aa001376a64fd15a9c73d116ceaf8e10",
+    "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+    "e2e_client_ui.py": "ec4c4978ef89d57ff23371b44ce86dae5f14abe54d466bcdb211eb30a5ae3c3d",
+    "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+    "e2e.py": "eb6d38f05130666fa900be1be89e68288140806ae434d0a0a212b13b9fd5b74a"
+  },
+  "inputs_unchanged": true
+}
