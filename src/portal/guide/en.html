@@ -17,16 +17,36 @@
   <nav aria-label="Language"><a href="/guide/en" lang="en" aria-current="page">English</a><a href="/guide/zh" lang="zh-CN">简体中文</a></nav>
 </header>
 <main class="container" id="content">
-  <section class="hero">
-    <p class="eyebrow">YOUR COMPUTER. YOUR TOOLS.</p>
-    <h1>A bridge from your AI app<br>to the work on your computer.</h1>
-    <p class="lead">ssmcp connects a computer to an app that supports MCP, the protocol for calling tools. Commands run on the connected computer. Their results return to your app and appear in the terminal.</p>
-    <div class="hero-links"><a class="button" href="#start">Get connected</a><a href="#scenarios">Explore use cases <span aria-hidden="true">↓</span></a></div>
-    <p class="note">This QR code opens public documentation. It contains no login code or session credential.</p>
+  <section class="hero" aria-labelledby="guide-title">
+    <div class="hero-copy">
+      <h1 id="guide-title">Connect your computer to your AI app.</h1>
+      <p class="lead">ssmcp connects a computer to an app that supports MCP, the protocol for calling tools. Commands run on the connected computer. Their results return to your app and appear in the terminal.</p>
+      <div class="hero-links"><a class="button" href="#start">Get connected</a><a href="#scenarios">Explore use cases <span aria-hidden="true">↓</span></a></div>
+      <p class="note">The QR code in the terminal opens this public guide and contains no credentials.</p>
+    </div>
+    <aside class="connection" aria-labelledby="connection-title">
+      <h2 id="connection-title">How the connection works</h2>
+      <ol>
+        <li><strong>AI app</strong><span>Requests a tool call</span></li>
+        <li><strong>SSMCP relay</strong><span>Routes the request</span></li>
+        <li><strong>Your computer</strong><span>Runs the tool and returns the result</span></li>
+      </ol>
+    </aside>
   </section>
 
+  <nav class="contents" aria-label="On this page">
+    <ul>
+      <li><a href="#start">Getting started</a></li>
+      <li><a href="#devices">Devices</a></li>
+      <li><a href="#basics">Daily use</a></li>
+      <li><a href="#scenarios">Use cases</a></li>
+      <li><a href="#tools">Tool calls</a></li>
+      <li><a href="#help">Troubleshooting</a></li>
+    </ul>
+  </nav>
+
   <section id="start" aria-labelledby="start-title">
-    <div class="section-heading"><p class="eyebrow">01 / START</p><h2 id="start-title">Connect once, then choose your tools.</h2></div>
+    <div class="section-heading"><h2 id="start-title">Connect once, then choose your tools.</h2></div>
     <ol class="steps">
       <li><h3>Install the client.</h3><p>Get the client for your system from <a href="https://github.com/LIghtJUNction/ssmcp/releases">GitHub releases</a>. The Windows installer prepares Node.js, Playwright and Chromium for native browser tools. Open a terminal in the project folder you want to work with.</p></li>
       <li><h3>Connect this computer.</h3><p>Choose your account name on the <a href="/">gateway account page</a>, then run the command below. Follow GitHub authorization when prompted.</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p class="note">Replace <code>yourname</code> with your account name. On later visits, <code>ssmcp</code> can reuse your last authorized account.</p></li>
@@ -35,7 +55,7 @@
   </section>
 
   <section id="devices" aria-labelledby="devices-title">
-    <div class="section-heading"><p class="eyebrow">02 / DEVICES &amp; DESKTOPS</p><h2 id="devices-title">Connect another controlled device.</h2></div>
+    <div class="section-heading"><h2 id="devices-title">Connect another controlled device.</h2></div>
     <div class="scenarios">
       <article><h3>Name the registered controller account.</h3><p>Install the client on the controlled device and name an account registered on this relay. This device need not sign in; every controller must authenticate to the selected server.</p><pre><code>ssmcp --server {{gateway_origin}} --allow yourname@{{gateway_authority}}</code></pre><p>Repeat <code>--allow</code> or separate up to 32 accounts with commas. An explicit list authorizes only those accounts. With a saved valid login, omitting the list allows only yourself. Bare usernames, <code>@github</code>, and targets on another server are rejected. Stop the device process to close the connection.</p><p>The CLI <code>invite</code> / <code>join</code> and MCP <code>invite</code> entry points were removed. Agent membership still uses <code>collab.join</code>. Traffic belongs to the actual controller; one account reaching its quota or losing access does not disconnect other authorized controllers.</p></article>
       <article><h3>Use a private desktop for app work.</h3><p>Desktop observation and input default to the connection's private display. On Linux, launching an installed app starts that display when needed. Your usual desktop keeps its mouse position and focus.</p><pre><code>Open the editor in a private desktop.
@@ -44,7 +64,7 @@ Inspect the document and capture the result.</code></pre><p class="note">Private
   </section>
 
   <section id="basics" aria-labelledby="basics-title">
-    <div class="section-heading"><p class="eyebrow">03 / EVERYDAY INPUT</p><h2 id="basics-title">Write a request. Add the context it needs.</h2></div>
+    <div class="section-heading"><h2 id="basics-title">Write a request. Add the context it needs.</h2></div>
     <p>Enter queues your request for the selected member or the next eligible agent interaction. You can keep typing a second draft while work continues. Keep your AI conversation active so the agent can receive queued input.</p>
     <div class="table-wrap"><table><thead><tr><th scope="col">Input</th><th scope="col">What it does</th></tr></thead><tbody>
       <tr><td><code>@src/main.rs</code></td><td>Include a workspace file. Use <code>@"docs/My notes.md"</code> when the path has spaces.</td></tr>
@@ -59,7 +79,7 @@ Inspect the document and capture the result.</code></pre><p class="note">Private
   </section>
 
   <section id="scenarios" aria-labelledby="scenarios-title">
-    <div class="section-heading"><p class="eyebrow">04 / PUT IT TO WORK</p><h2 id="scenarios-title">Start with a concrete result.</h2></div>
+    <div class="section-heading"><h2 id="scenarios-title">Start with a concrete result.</h2></div>
     <div class="scenarios">
       <article><h3>Change a project</h3><p>Give the agent a file and a specific outcome. Ask it to inspect the change, run the relevant checks and explain the result.</p><pre><code>@src/main.rs Fix the reported error.
 Run the relevant tests and show the diff.</code></pre></article>
@@ -76,7 +96,7 @@ inspect the latest build result.</code></pre></article>
   </section>
 
   <section id="tools" aria-labelledby="tools-title">
-    <div class="section-heading"><p class="eyebrow">05 / FOR TOOL CALLERS</p><h2 id="tools-title">Discover the live contract.</h2></div>
+    <div class="section-heading"><h2 id="tools-title">Discover the live contract.</h2></div>
     <p>Use <code>list</code> to get the selected client's ID. Inside code_mode, search its registered tools and read the returned schemas before calling them. Native tools work without another harness. Optional harnesses start unloaded: <code>ssmcp.harnesses.list</code> reads cached status; <code>ssmcp.harnesses.load</code> explicitly loads one provider. Loaded tools keep their native arguments and approval rules.</p>
     <pre><code>const clientId = "ID_FROM_LIST";
 return await tools.search(clientId, {
@@ -91,7 +111,7 @@ image(await call(clientId, "ssmcp.fs.read_image", {
 }));</code></pre></details>
   </section>
 
-  <section class="help" aria-labelledby="help-title">
+  <section class="help" id="help" aria-labelledby="help-title">
     <h2 id="help-title">Need a quick check?</h2>
     <dl><div><dt>No online client?</dt><dd>Keep the local client running and check that your app and client use the same authorized account and gateway.</dd></div><div><dt>A tool is missing?</dt><dd>Refresh the client list and search the selected client's live tools. Native tools are available by default. Load an optional harness explicitly when its capabilities are needed, then search the refreshed catalog.</dd></div><div><dt>The QR does not fit?</dt><dd>The sidebar shows a readable link instead. F1 retains the full guide address on smaller terminals.</dd></div></dl>
   </section>
