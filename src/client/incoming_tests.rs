@@ -1,6 +1,7 @@
 use super::*;
+use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 use tokio::io::{AsyncWriteExt, duplex};
 
 fn broken_pipe() -> crate::Error {
@@ -35,7 +36,12 @@ async fn late_rejection_preserves_the_raw_permanent_authorization_reason() {
         let error = {
             let outcome = incoming.after_connection_error(broken_pipe());
             tokio::pin!(outcome);
-            assert!(futures_util::poll!(&mut outcome).is_pending());
+            assert!(
+                outcome
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
             write_frame(
                 &mut relay,
                 &Frame::Reject {
@@ -112,7 +118,10 @@ async fn an_existing_permanent_failure_needs_no_further_frame_or_deadline() {
     let error = {
         let outcome = incoming.after_connection_error(relay::failure(relay::AUTH_EXPIRED.into()));
         tokio::pin!(outcome);
-        match futures_util::poll!(&mut outcome) {
+        match outcome
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
             Poll::Ready(error) => error,
             Poll::Pending => panic!("a known permanent failure must not wait for another frame"),
         }
