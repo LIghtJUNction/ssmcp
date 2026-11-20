@@ -267,6 +267,14 @@ mod tests {
     fn reload_snapshot_rejects_a_canvas_without_a_valid_active_column() {
         let mut state = State::new(24, 80, &Ui::default());
         let saved = serde_json::to_value(state.chat_reload_snapshot()).unwrap();
+        let mut invalid_filter = saved.clone();
+        invalid_filter["canvas"]["columns"][1]["position"]["logs"] =
+            serde_json::json!({"scrollback": 0, "query": "", "level": 3, "filter_offset": 0});
+        let checkpoint: Snapshot = serde_json::from_value(invalid_filter).unwrap();
+        assert!(
+            checkpoint.validate().is_err(),
+            "the log UI only has categories 0..=2"
+        );
         for bad in [
             serde_json::json!({"columns":[], "active":0, "next_id":9, "logs_return":null}),
             serde_json::json!({"columns":[{"id":1,"view":"Activity","position":null}], "active":2, "next_id":9, "logs_return":null}),
