@@ -58,6 +58,7 @@ def input_hashes(binary_dir, decoder, fixture_binary):
 class HumanFinish(InputHistory):
     def __init__(self, directory, binary_dir, decoder, output):
         super().__init__(directory, binary_dir, decoder, output)
+        self.fixture_timeout_seconds = 180
         self.frame_records = []
         self.case_number = 0
 
@@ -182,8 +183,11 @@ class HumanFinish(InputHistory):
         rows, columns = shot["size"]
         if rows != 30 or columns not in (120, 48):
             raise AssertionError("the terminal evidence has unexpected dimensions")
+        encoded = json.dumps(shot, ensure_ascii=False, indent=2) + "\n"
+        self.check(not any(secret and secret in encoded for secret in [self.secret, *self.sensitive]),
+                   name + ": the terminal snapshot contains no fixture credential")
         path = self.output / (name + ".json")
-        path.write_text(json.dumps(shot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.write_text(encoded, encoding="utf-8")
         self.frame_records.append({
             "path": path.name, "sha256": sha256(path), "rows": rows, "cols": columns,
             "source_kind": "owned_pty_capture", "keyboard_actor": "fixture_simulated_user",
