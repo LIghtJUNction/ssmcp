@@ -139,7 +139,7 @@ class Questions(Composer):
         self.agents(front)
         front.until(lambda shot: "Question fixture agent" in text(shot),
                     "the actual fixture collaboration member")
-        roster = self.queue()["agents"]
+        roster = self.member_roster(front, member)
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)

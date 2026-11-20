@@ -116,6 +116,17 @@ class Composer(Dashboard):
     def queue(self):
         return self.observe("ssmcp.ui.queue", {"action": "get"})
 
+    def member_roster(self, front, member):
+        # The native recipient directory and steering roster arrive separately.
+        # Select only after this exact member appears in the queue's own roster.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            roster = self.queue()["agents"]
+            if any(agent["agent_id"] == member["agent_id"] for agent in roster):
+                return roster
+            front.pump(min(0.05, max(0, deadline - time.monotonic())))
+        raise AssertionError("the exact collaboration member did not reach the steering roster")
+
     def ui(self, path):
         projection = self.observe("ssmcp.ui.get", {"path": path})
         if projection.get("schema_version") != 1 or projection.get("path") != path or "value" not in projection:
@@ -215,7 +226,7 @@ class Composer(Dashboard):
 
     def recipient(self, front, member=None):
         self.agents(front)
-        roster = self.queue()["agents"]
+        roster = self.member_roster(front, member) if member is not None else self.queue()["agents"]
         if member is None:
             index = 0
             label = "next caller"

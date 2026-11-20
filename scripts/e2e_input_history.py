@@ -619,7 +619,7 @@ class InputHistory(Composer):
         self.agents(front)
         front.until(lambda shot: "Input fixture member" in text(shot),
                     "the registered fixture member arriving in the live roster")
-        roster = self.queue()["agents"]
+        roster = self.member_roster(front, member)
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
