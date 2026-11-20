@@ -431,7 +431,9 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     started = time.monotonic()
     report = {"status": "failed", "source_revision": args.source_revision, "zcalld_revision": args.zcalld_revision}
-    with tempfile.TemporaryDirectory(prefix="ssmcp-zcalld-pty-", dir=args.out.resolve().parent) as directory:
+    # Keep owned Unix endpoints below sockaddr_un's path limit even when the
+    # immutable build/report directory has a long provenance-rich name.
+    with tempfile.TemporaryDirectory(prefix="ssmcp-zcl-", dir="/tmp") as directory:
         harness = Integration(Path(directory), args.bin_dir.resolve(), binaries["decoder"], args.out, binaries["zcalld"])
         def redact(value):
             for secret in [harness.secret, *harness.sensitive]:
