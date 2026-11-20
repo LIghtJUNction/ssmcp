@@ -1,6 +1,7 @@
 //! Independent command jobs with bounded live output and durable output artifacts.
 use super::{events::EventLog, process::Managed};
 use crate::output::{Capture, OutputStore};
+use crate::runtime::time::ExecutionTiming;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -148,7 +149,7 @@ struct Job {
     command: Vec<String>,
     title: Option<String>,
     cwd: PathBuf,
-    started: Instant,
+    timing: ExecutionTiming,
     state: Mutex<State>,
     changed: Notify,
     cancel: watch::Sender<bool>,
@@ -164,11 +165,15 @@ impl Job {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
     fn snapshot_locked(&self, state: &State) -> Value {
+        let through = state.finished.unwrap_or_else(Instant::now).into_std();
         json!({"job_id":self.id,"id":self.id,"pid":self.pid,"pid_role":PID_ROLE,"command":self.command,"title":self.title,"cwd":self.cwd,
             "state":if state.running {"running"} else if state.cancelled {"cancelled"} else if state.timed_out {"timed_out"} else if state.error.is_some() {"failed"} else {"completed"},
             "running":state.running,"exit_code":state.exit_code,"exit_signal":state.exit_signal,"cancelled":state.cancelled,
             "timed_out":state.timed_out,"error":state.error,
-            "duration_ms":state.finished.unwrap_or_else(Instant::now).duration_since(self.started).as_millis() as u64,
+            "duration_ms":self.timing.elapsed_ms(through),
+            "timeout_ms":self.timing.timeout_ms(),
+            "remaining_ms":if state.running {self.timing.remaining_ms(through)} else {None},
+            "deadline_clock":"monotonic",
             "output_mode":self.output_mode,"tty_slot":self.tty_slot,
             "stdin":self.input_snapshot(state),
             "stdout":state.stdout.metadata(),"stderr":state.stderr.metadata()})
@@ -612,7 +617,7 @@ impl Shell {
                 .jobs
                 .values()
                 .filter(|job| !job.state().running)
-                .min_by_key(|job| job.started)
+                .min_by_key(|job| job.timing.started)
                 .map(|job| job.id.clone())
         } else {
             None
@@ -685,7 +690,7 @@ impl Shell {
             command: args.command,
             title,
             cwd,
-            started: Instant::now(),
+            timing: ExecutionTiming::new(Instant::now().into_std(), args.timeout_ms),
             state: Mutex::new(State {
                 running: true,
                 exit_code: None,
@@ -714,7 +719,10 @@ impl Shell {
         }
         registry.jobs.insert(id.clone(), job.clone());
         drop(registry);
-        self.events.push_scoped(json!({"type":"exec.started","job_id":id,"pid":pid,"pid_role":PID_ROLE,"command":job.command,"title":job.title,"cwd":job.cwd}), job.creator.clone());
+        let mut started = job.snapshot();
+        started["type"] = json!("exec.started");
+        self.events
+            .push_execution(started, job.creator.clone(), job.timing);
         let events = self.events.clone();
         let worker = job.clone();
         tokio::spawn(async move {
@@ -725,8 +733,9 @@ impl Shell {
                 biased;
                 _=cancel_rx.changed() => (None,true,false,None,None),
                 result=async {
-                    if args.timeout_ms==0 { Ok(process.wait().await) }
-                    else { timeout(Duration::from_millis(args.timeout_ms),process.wait()).await }
+                    if let Some(deadline) = worker.timing.deadline {
+                        timeout_at(deadline.into(), process.wait()).await
+                    } else { Ok(process.wait().await) }
                 } => match result {
                     Ok(Ok(status)) => (status.code(),false,false,None,exit_signal(&status)),
                     Ok(Err(error)) => (None,false,false,Some(error.to_string()),None),
@@ -777,7 +786,6 @@ impl Shell {
             events.push_scoped(snapshot, worker.creator.clone());
         });
         let mut result = job.snapshot();
-        result["timeout_ms"] = json!(args.timeout_ms);
         result["evicted_job_id"] = json!(evicted);
         Ok(result)
     }
@@ -1062,7 +1070,7 @@ mod tests {
             command: vec!["completed fixture".into()],
             title: None,
             cwd: std::env::current_dir().unwrap(),
-            started: Instant::now(),
+            timing: ExecutionTiming::new(Instant::now().into_std(), 0),
             state: Mutex::new(State {
                 running: false,
                 exit_code: Some(0),

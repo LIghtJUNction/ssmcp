@@ -74,6 +74,7 @@ pub(super) struct TaskView {
     pub description: String,
     pub cwd: Option<String>,
     pub started: Instant,
+    pub deadline: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -913,6 +914,7 @@ mod tests {
                 description: "修复中文 e\u{301}\u{1b}[2J\nnext".into(),
                 cwd: Some("/repo\rhidden".into()),
                 started: now - Duration::from_secs(6),
+                deadline: None,
             }],
             ..PanelSnapshot::default()
         };
@@ -1084,12 +1086,14 @@ mod tests {
                     description: "cargo test".into(),
                     cwd: Some("project".into()),
                     started: now - Duration::from_secs(6),
+                    deadline: None,
                 },
                 TaskView {
                     id: "#b".into(),
                     description: "cargo check".into(),
                     cwd: None,
                     started: now - Duration::from_secs(5),
+                    deadline: None,
                 },
             ],
             git: Some(Arc::new(git.clone())),

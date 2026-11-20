@@ -67,7 +67,7 @@ def render(snapshot, path, label):
 
 
 class Session:
-    def __init__(self, root, label, binary, decoder, report):
+    def __init__(self, root, label, binary, decoder, report, capabilities=None):
         self.root = root / label
         self.root.mkdir()
         self.label, self.report = label, report
@@ -76,7 +76,7 @@ class Session:
         workspace.mkdir()
         config = self.root / "config.toml"
         config.write_text("[ui]\ndashboard = true\n")
-        self.state = e2e_account_relay.State()
+        self.state = e2e_account_relay.State(capabilities=capabilities)
         self.server = e2e_account_relay.ThreadingHTTPServer(("127.0.0.1", 0), e2e_account_relay.Handler)
         self.server.daemon_threads = True
         self.server.state = self.state
