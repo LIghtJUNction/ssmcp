@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import time
 
-from e2e_composer import ENTER, ESC, HOME, RIGHT
+from e2e_composer import DOWN, ENTER, ESC, HOME, RIGHT
 from e2e_dashboard import text
 from e2e_input_history import InputHistory, PASTE_START, PASTE_END
 
@@ -142,6 +142,63 @@ class Interactions(InputHistory):
         return self.wait_state(
             front, lambda item: item["view"] == "questions" and item["answering"] == request_id,
             "Shift+Up opening the exact pending request")
+
+    def command_details(self, front):
+        secret = "command-visibility-fixture-private"
+        self.sensitive.append(secret)
+        counter = self.workspace / "command-view-once.txt"
+        script = (
+            "from pathlib import Path\n"
+            "p=Path('command-view-once.txt')\n"
+            "p.write_text((p.read_text() if p.exists() else '') + 'once\\n')\n"
+            "# API_TOKEN=" + secret + "\n"
+            "# " + "界" * 700 + "\n"
+            "# COMMAND_SOURCE_END\n"
+        )
+        argv = ["python3", "-c", script, "COMMAND_ARGV_LAST"]
+        job = self.run_job(argv)
+        self.finish_job(job, front)
+        self.replace_short(front, "/command " + job["job_id"])
+        front.send(ENTER)
+        state = self.wait_state(
+            front, lambda item: item["view"] == "tasks"
+            and item["tasks"]["detail"] and item["tasks"]["selected_id"] == job["job_id"],
+            "the complete-command shortcut selects the exact real native job")
+        self.check(state["tasks"]["selected_job"]["command"] == argv,
+                   "display redaction does not modify native command arguments")
+        for columns in (120, 48):
+            front.resize(32, columns)
+            front.pump(0.15)
+            front.send(HOME)
+            shot = front.until(lambda item: "argv[0]" in text(item),
+                               "the first exact argument is visible", cells=True)
+            for name, value in (("command-start", shot),):
+                stem = f"interactions-{name}-{columns}"
+                (self.output / (stem + ".json")).write_text(
+                    json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+                (self.output / (stem + ".txt")).write_text(text(value) + "\n")
+                self.frames.append(stem + ".json")
+            for _ in range(200):
+                shot = front.until(lambda _item: True, "read the owned command pane", cells=True)
+                self.check(secret not in text(shot),
+                           f"command details keep the fixture secret redacted at {columns} columns")
+                if "COMMAND_ARGV_LAST" in text(shot):
+                    break
+                front.send(DOWN)
+                front.pump(0.025)
+            else:
+                raise AssertionError("scrolling never reached the last complete argument")
+            self.check("COMMAND_SOURCE_END" in text(shot),
+                       f"long multiline source reaches its real final line at {columns} columns")
+            stem = f"interactions-command-end-{columns}"
+            (self.output / (stem + ".json")).write_text(
+                json.dumps(shot, ensure_ascii=False, indent=2) + "\n")
+            (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
+            self.frames.append(stem + ".json")
+        self.check(counter.read_text() == "once\n",
+                   "opening and scrolling command details never re-executes the command")
+        front.resize(32, 120)
+        self.conversation(front)
 
     def ordinary_question(self, front, requester):
         draft = "MAIN_DRAFT 中文和路径 @./keep-local.txt"
@@ -488,6 +545,7 @@ class Interactions(InputHistory):
         reviewer = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY reviewer", "role": "reviewer"})
         self.sensitive.extend([requester["token"], reviewer["token"]])
+        self.command_details(front)
         draft = self.ordinary_question(front, requester)
         self.finish_decision(front, requester, "no", "yes", draft)
         self.finish_decision(front, requester, "yes", "ready after explicit review", draft)
