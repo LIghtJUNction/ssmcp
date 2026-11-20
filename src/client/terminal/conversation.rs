@@ -366,6 +366,16 @@ impl State {
         self.dirty = true;
     }
 
+    fn chat_retargeted(&mut self, id: &str, source: Option<&str>) {
+        if source.is_some_and(|source| {
+            source != id && self.conversation.editing.as_deref() == Some(source)
+        }) {
+            // Only the exact predecessor may transfer its editing association.
+            // Text, recipient selection, cursor and parked draft remain intact.
+            self.conversation.editing = Some(id.to_owned());
+        }
+    }
+
     fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
         if self.conversation.recalling.as_ref() == Some(&id) {
             self.conversation.recalling = None;
@@ -437,12 +447,19 @@ impl State {
                         self.chat_recalled(&id, &text);
                     }
                     let data = steering::snapshot();
-                    let target = items(&data, "queue")
-                        .iter()
-                        .find(|item| message_id(item) == id)
+                    let entries = items(&data, "queue");
+                    let record = entries.iter().find(|item| message_id(item) == id);
+                    let target = record
                         .and_then(|record| record.get("target").and_then(Value::as_str))
                         .filter(|target| *target != "next")
                         .map(str::to_owned);
+                    if !recalled {
+                        self.chat_retargeted(
+                            &id,
+                            record
+                                .and_then(|record| record.get("retry_of").and_then(Value::as_str)),
+                        );
+                    }
                     self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
@@ -5152,6 +5169,47 @@ mod tests {
                 "the original audit transcript records the later recall"
             );
         }
+    }
+
+    #[test]
+    fn cross_room_retarget_transfers_only_its_source_edit_and_keeps_unknown_history() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted("original_unknown".into(), "SHARED_BODY".into(), Vec::new());
+        state.conversation.editing = Some("original_unknown".into());
+        state.conversation.composer.set_text("AMENDED_DRAFT 界");
+        input(&mut state, b"\x1b[D");
+        let text = state.conversation.composer.text().to_owned();
+        let cursor = state.conversation.composer.cursor();
+        state.conversation.parked = Some(steering::SavedDraft {
+            text: "PARKED_DRAFT".into(),
+            cursor: 3,
+            target: Some("example-reviewer".into()),
+            native_recipient: None,
+        });
+        let parked = state.conversation.parked.clone();
+        state.chat_retargeted("wrong_retry", Some("unrelated_source"));
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("original_unknown")
+        );
+        state.chat_retargeted("new_attempt", Some("original_unknown"));
+        state.chat_editable("new_attempt".into(), "SHARED_BODY".into(), None);
+        assert_eq!(state.conversation.editing.as_deref(), Some("new_attempt"));
+        assert_eq!(state.conversation.composer.text(), text);
+        assert_eq!(state.conversation.composer.cursor(), cursor);
+        assert_eq!(state.conversation.parked, parked);
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        state.chat_enqueued("new_attempt".into(), "SHARED_BODY".into());
+        state.chat_accepted("new_attempt".into(), "SHARED_BODY".into(), Vec::new());
+        assert_eq!(state.events.snapshot()["retained_events"], 2);
+        state.chat_recalled("new_attempt", "SHARED_BODY");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen.contains("SHARED_BODY"),
+            "the original unknown attempt remains: {screen}"
+        );
     }
 
     #[test]

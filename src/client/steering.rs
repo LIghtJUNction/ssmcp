@@ -80,6 +80,8 @@ struct Record {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     reference_warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry_of: Option<String>,
 }
 
 impl Record {
@@ -253,6 +255,10 @@ impl Outbox {
                 || !ids.insert(&message.id)
                 || record.room_id.as_ref().is_some_and(|room| !valid_id(room))
                 || record
+                    .retry_of
+                    .as_ref()
+                    .is_some_and(|source| !valid_id(source) || source == &message.id)
+                || record
                     .error
                     .as_ref()
                     .is_some_and(|error| error.len() > 1024)
@@ -394,7 +400,7 @@ impl Manager {
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
-                "reference_warnings":record.reference_warnings,
+                "reference_warnings":record.reference_warnings,"retry_of":record.retry_of,
                 "source":if record.message.id.starts_with("webhook_") {"webhook"} else {"client_user"},
                 "retarget_required":record.retarget_required,"uncertain":record.uncertain
             })).collect::<Vec<_>>(),
@@ -467,10 +473,7 @@ impl Manager {
         }
     }
 
-    fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
-        self.mutable()?;
-        validate_text(text)?;
-        let target = self.target(target)?;
+    fn reserve_record(&mut self, text_bytes: usize) -> Result<(), String> {
         self.prune();
         if self
             .outbox
@@ -486,13 +489,21 @@ impl Manager {
                 .iter()
                 .map(|record| record.message.text.len())
                 .sum::<usize>()
-                + text.len()
+                + text_bytes
                 > MAX_TEXT_BYTES
         {
             return Err(
                 "local request queue is full; finish or cancel a queued request first".into(),
             );
         }
+        Ok(())
+    }
+
+    fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
+        self.mutable()?;
+        validate_text(text)?;
+        let target = self.target(target)?;
+        self.reserve_record(text.len())?;
         let id = random_id()?;
         self.outbox.records.push(Record {
             message: SteeringMessage {
@@ -514,6 +525,7 @@ impl Manager {
             pending: None,
             error: None,
             reference_warnings: Vec::new(),
+            retry_of: None,
         });
         let index = self.outbox.records.len() - 1;
         if self.connected
@@ -641,25 +653,93 @@ impl Manager {
         self.mutate(index, MutationKind::Cancel, false)
     }
 
-    fn retarget(&mut self, id: &str, target: Option<&str>) -> Result<(), String> {
+    fn retarget(&mut self, id: &str, target: Option<&str>) -> Result<String, String> {
+        self.retarget_with_id(id, target, random_id)
+    }
+
+    fn retarget_with_id(
+        &mut self,
+        id: &str,
+        target: Option<&str>,
+        new_id: impl FnOnce() -> Result<String, String>,
+    ) -> Result<String, String> {
         self.mutable()?;
         let target = self.target(target)?;
         let index = self.index(id)?;
-        let record = &mut self.outbox.records[index];
+        let original = self.outbox.records[index].clone();
         let offline_unsent = !self.connected
-            && record.safe_to_publish
-            && !record.uncertain
-            && record.message.state == SteeringState::Queued;
-        if record.terminal()
-            || record.pending.is_some()
-            || (!record.retarget_required
-                && !record.uncertain
-                && record.message.state != SteeringState::Editing
+            && original.safe_to_publish
+            && !original.uncertain
+            && original.message.state == SteeringState::Queued;
+        if original.terminal()
+            || original.pending.is_some()
+            || (!original.retarget_required
+                && !original.uncertain
+                && original.message.state != SteeringState::Editing
                 && !offline_unsent)
         {
             return Err("take back this request before changing its recipient".into());
         }
-        let changed_room = record.room_id != self.outbox.room_id;
+        let changed_room = original.room_id != self.outbox.room_id;
+        if changed_room && original.ever_sent {
+            // A new room cannot confirm the fate of the old request. Preserve
+            // its identity and source; explicit recovery creates a held attempt.
+            if let Some(retry) = self.outbox.records.iter().find(|record| {
+                record.retry_of.as_deref() == Some(id)
+                    && record.room_id == self.outbox.room_id
+                    && record.message.text == original.message.text
+                    && record.message.target == target
+            }) {
+                if retry.message.state != SteeringState::Editing
+                    || retry.ever_sent
+                    || !retry.safe_to_publish
+                    || retry.pending.is_some()
+                    || retry.uncertain
+                    || retry.retarget_required
+                {
+                    return Err(format!(
+                        "this recovery already has request {}; inspect that attempt before resending",
+                        retry.message.id
+                    ));
+                }
+                let retry_id = retry.message.id.clone();
+                return self.retarget_with_id(&retry_id, Some(&target), new_id);
+            }
+            let retry_id = new_id()?;
+            if !valid_id(&retry_id) || self.index(&retry_id).is_ok() {
+                return Err("cannot create a distinct recovery request identity".into());
+            }
+            self.reserve_record(original.message.text.len())?;
+            let mut message = original.message.clone();
+            message.id.clone_from(&retry_id);
+            message.revision = 0;
+            message.target = target;
+            message.state = SteeringState::Editing;
+            message.created_at_ms = now_ms();
+            message.updated_at_ms = message.created_at_ms;
+            message.delivery = None;
+            let text = super::references::source(&message.text).to_owned();
+            self.outbox.records.push(Record {
+                message,
+                room_id: self.outbox.room_id.clone(),
+                safe_to_publish: true,
+                ever_sent: false,
+                uncertain: false,
+                retarget_required: false,
+                resume_after_reload: false,
+                pending: None,
+                error: None,
+                reference_warnings: original.reference_warnings,
+                retry_of: Some(id.to_owned()),
+            });
+            self.event(UiEvent::Editable {
+                id: retry_id.clone(),
+                text,
+                recalled: false,
+            });
+            return Ok(retry_id);
+        }
+        let record = &mut self.outbox.records[index];
         if changed_room || record.uncertain {
             record.message.revision = 0;
             record.ever_sent = false;
@@ -678,7 +758,7 @@ impl Manager {
             text,
             recalled: false,
         });
-        Ok(())
+        Ok(id.to_owned())
     }
 
     fn enqueue(&mut self, command: SteeringCommand) -> Result<u64, String> {
@@ -1099,6 +1179,7 @@ impl Manager {
                         pending: None,
                         error: None,
                         reference_warnings: Vec::new(),
+                        retry_of: None,
                     });
                 }
             }
@@ -1382,7 +1463,7 @@ pub(super) fn take_back(id: &str) -> Result<(), String> {
 pub(super) fn cancel(id: &str) -> Result<(), String> {
     with(|manager| manager.cancel(id))
 }
-pub(super) fn retarget(id: &str, target: Option<&str>) -> Result<(), String> {
+pub(super) fn retarget(id: &str, target: Option<&str>) -> Result<String, String> {
     with(|manager| manager.retarget(id, target))
 }
 pub(super) fn draft() -> (String, usize) {
@@ -2409,6 +2490,269 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cross_room_recovery_recall_preserves_a_delivered_original_with_a_lost_receipt() {
+        fn exchange(
+            manager: &mut Manager,
+            receiver: &mut mpsc::Receiver<Transport>,
+            queue: &crate::steering::Queue,
+            room: &str,
+        ) -> SteeringCommand {
+            let (request_id, request) = command(manager, receiver);
+            manager
+                .reply(request_id, queue.command(room, vec![], request.clone()))
+                .unwrap();
+            request
+        }
+        let old_queue = crate::steering::Queue::default();
+        let new_queue = crate::steering::Queue::default();
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        exchange(&mut manager, &mut receiver, &old_queue, "room_one");
+        let body = "SAME_BODY_ACROSS_ROOMS 界";
+        let original_id = manager.submit(body, None).unwrap();
+        exchange(&mut manager, &mut receiver, &old_queue, "room_one");
+        manager.events.clear();
+        manager.accepted_history.clear();
+        assert_eq!(
+            old_queue
+                .claim("room_one", "original_delivery", None, 1, 64 * 1024)
+                .len(),
+            1
+        );
+        let delivered = old_queue
+            .command("room_one", vec![], SteeringCommand::Snapshot {})
+            .unwrap();
+        assert_eq!(delivered.messages[0].state, SteeringState::Delivered);
+        // The response reached its caller, but this client did not see that receipt.
+        assert_eq!(
+            manager.outbox.records[0].message.state,
+            SteeringState::Queued
+        );
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        exchange(&mut manager, &mut receiver, &new_queue, "room_two");
+        let original = serde_json::to_value(&manager.outbox.records[0]).unwrap();
+        assert!(manager.outbox.records[0].uncertain);
+        let retry_id = manager.retarget(&original_id, None).unwrap();
+        assert_ne!(retry_id, original_id);
+        assert_eq!(
+            serde_json::to_value(&manager.outbox.records[0]).unwrap(),
+            original
+        );
+        assert_eq!(
+            manager.outbox.records[1].retry_of.as_deref(),
+            Some(original_id.as_str())
+        );
+        assert_eq!(
+            manager.outbox.records[1].message.state,
+            SteeringState::Editing
+        );
+        assert!(receiver.try_recv().is_err(), "retarget never publishes");
+        assert_eq!(manager.retarget(&original_id, None).unwrap(), retry_id);
+        assert_eq!(
+            manager.outbox.records.len(),
+            2,
+            "retrying retarget reuses its held attempt"
+        );
+        let handoff: Outbox =
+            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
+        handoff.validate().unwrap();
+        assert_eq!(
+            handoff.records[1].retry_of.as_deref(),
+            Some(original_id.as_str())
+        );
+        manager.events.clear();
+        manager.publish_edit(&retry_id, body, None).unwrap();
+        let published = exchange(&mut manager, &mut receiver, &new_queue, "room_two");
+        assert!(
+            matches!(published, SteeringCommand::Publish { message_id, expected_revision: 0, .. } if message_id == retry_id)
+        );
+        assert_eq!(
+            std::mem::take(&mut manager.accepted_history),
+            vec![AcceptedHistory {
+                id: retry_id.clone(),
+                text: body.into(),
+            }]
+        );
+        manager.events.clear();
+        manager.take_back(&retry_id).unwrap();
+        exchange(&mut manager, &mut receiver, &new_queue, "room_two");
+        assert_eq!(
+            std::mem::take(&mut manager.recalled_history),
+            vec![AcceptedHistory {
+                id: retry_id.clone(),
+                text: body.into(),
+            }]
+        );
+        assert_eq!(
+            serde_json::to_value(&manager.outbox.records[0]).unwrap(),
+            original
+        );
+        assert!(
+            new_queue
+                .claim("room_two", "after_recall", None, 1, 64 * 1024)
+                .is_empty()
+        );
+        assert_ne!(
+            crate::client::interface::history::request_identity(&original_id, body).unwrap(),
+            crate::client::interface::history::request_identity(&retry_id, body).unwrap(),
+        );
+        // A later authoritative reconciliation still resolves the original ID.
+        manager.disconnect();
+        let mut receiver = manager.connect("room_one", 7);
+        exchange(&mut manager, &mut receiver, &old_queue, "room_one");
+        assert_eq!(
+            manager.outbox.records[manager.index(&original_id).unwrap()]
+                .message
+                .state,
+            SteeringState::Delivered
+        );
+        assert_eq!(manager.delivered_memory.last().unwrap().id, original_id);
+        assert!(manager.recalled_history.is_empty());
+        assert_ne!(
+            manager.index(&original_id).unwrap(),
+            manager.index(&retry_id).unwrap()
+        );
+    }
+
+    #[test]
+    fn recovery_attempt_reuse_is_bound_to_room_body_target_and_unsent_state() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let original = publish(&mut manager, &mut receiver, "ORIGINAL_BODY", None);
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        let first = manager.retarget(&original.id, None).unwrap();
+        assert_eq!(
+            manager
+                .retarget_with_id(&original.id, None, || Err("must not generate".into()))
+                .unwrap(),
+            first
+        );
+        let targeted = manager.retarget(&original.id, Some("agent_one")).unwrap();
+        assert_ne!(
+            targeted, first,
+            "a different exact recipient is not the same held attempt"
+        );
+        manager.publish_edit(&first, "AMENDED_BODY", None).unwrap();
+        let Transport::Wire { id } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        manager.fail_unsent(id, "fixture preparation failed before transport");
+        let matching_body = manager.retarget(&original.id, None).unwrap();
+        assert_ne!(
+            matching_body, first,
+            "recovery must not reuse a different edited body"
+        );
+        manager
+            .publish_edit(&matching_body, "ORIGINAL_BODY", None)
+            .unwrap();
+        let (publish_id, _) = command(&mut manager, &mut receiver);
+        let mut accepted = manager.outbox.records[manager.index(&matching_body).unwrap()]
+            .message
+            .clone();
+        accepted.revision = 1;
+        manager
+            .reply(publish_id, Ok(snapshot_for("room_two", 1, vec![accepted])))
+            .unwrap();
+        assert!(
+            manager.retarget(&original.id, None).is_err(),
+            "an already-published matching recovery must not create a duplicate"
+        );
+        manager.disconnect();
+        let mut receiver = manager.connect("room_three", 7);
+        ready(&mut manager, &mut receiver, "room_three");
+        let third_room = manager.retarget(&original.id, None).unwrap();
+        assert_ne!(third_room, matching_body);
+        assert_eq!(
+            manager.outbox.records[manager.index(&matching_body).unwrap()]
+                .room_id
+                .as_deref(),
+            Some("room_two")
+        );
+        assert_eq!(
+            manager.outbox.records[manager.index(&third_room).unwrap()]
+                .room_id
+                .as_deref(),
+            Some("room_three")
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "the new destination remains held"
+        );
+    }
+
+    #[test]
+    fn recovery_entropy_and_capacity_failures_preserve_the_original_attempt() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let original = publish(&mut manager, &mut receiver, "UNKNOWN_ORIGINAL", None);
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        let before = serde_json::to_value(&manager.outbox).unwrap();
+        assert!(
+            manager
+                .retarget_with_id(&original.id, None, || Err("fixture entropy failure".into()))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&manager.outbox).unwrap(), before);
+        assert!(
+            manager
+                .retarget_with_id(&original.id, None, || Ok(original.id.clone()))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&manager.outbox).unwrap(), before);
+        for _ in 1..MAX_USER_MESSAGES {
+            manager.submit("OTHER_HELD_REQUEST", None).unwrap();
+        }
+        let full = serde_json::to_value(&manager.outbox).unwrap();
+        assert!(
+            manager
+                .retarget_with_id(&original.id, None, || Ok("capacity_retry".into()))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_value(&manager.outbox).unwrap(), full);
+    }
+
+    #[test]
+    fn same_room_retarget_after_takeback_keeps_identity_and_expected_revision() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "SAME_ROOM", None);
+        manager.take_back(&message.id).unwrap();
+        let (takeback, _) = command(&mut manager, &mut receiver);
+        message.state = SteeringState::Editing;
+        message.revision = 2;
+        manager
+            .reply(
+                takeback,
+                Ok(snapshot_for("room_one", 2, vec![message.clone()])),
+            )
+            .unwrap();
+        assert_eq!(
+            manager
+                .retarget_with_id(&message.id, None, || Err("must not generate".into()))
+                .unwrap(),
+            message.id
+        );
+        assert_eq!(manager.outbox.records.len(), 1);
+        assert_eq!(manager.outbox.records[0].message.revision, 2);
+        manager
+            .publish_edit(&message.id, "SAME_ROOM_EDITED", None)
+            .unwrap();
+        let (_, request) = command(&mut manager, &mut receiver);
+        assert!(
+            matches!(request, SteeringCommand::Publish { message_id, expected_revision: 2, .. } if message_id == message.id)
+        );
+    }
+
     #[test]
     fn uncertain_retarget_and_local_edit_never_retract_previous_history() {
         let mut manager = Manager::default();
@@ -2418,7 +2762,8 @@ mod tests {
         manager.disconnect();
         let mut receiver = manager.connect("room_two", 7);
         ready(&mut manager, &mut receiver, "room_two");
-        manager.retarget(&message.id, None).unwrap();
+        let retry_id = manager.retarget(&message.id, None).unwrap();
+        assert_ne!(retry_id, message.id);
         assert!(matches!(
             manager.events.pop_front(),
             Some(UiEvent::Editable {
@@ -2426,7 +2771,7 @@ mod tests {
                 ..
             })
         ));
-        manager.take_back(&message.id).unwrap();
+        manager.take_back(&retry_id).unwrap();
         assert!(matches!(
             manager.events.pop_front(),
             Some(UiEvent::Editable {

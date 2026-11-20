@@ -471,10 +471,7 @@ fn queue_call(request: QueueRequest) -> Result<Value, String> {
             super::steering::cancel(&id)?;
             id
         }
-        QueueRequest::Retarget { id, target } => {
-            super::steering::retarget(&id, target.as_deref())?;
-            id
-        }
+        QueueRequest::Retarget { id, target } => super::steering::retarget(&id, target.as_deref())?,
     };
     // This native entry runs outside the terminal State lock. Local input
     // handlers mark themselves dirty and only notify finish waiters.
@@ -654,7 +651,7 @@ fn queue_tool() -> Value {
     };
     json!({
         "name":"ssmcp.ui.queue",
-        "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
+        "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. When an already-sent request belongs to another room, retarget preserves that unknown attempt and returns a new held request ID with retry_of pointing to the original. Always edit the returned ID; retarget does not publish it. Same-room retries and ordinary edits retain their ID. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
         "inputSchema":{"type":"object","oneOf":[
             variant("get", &[], json!({})),
             variant("submit", &["text"], json!({"text":text,"target":target})),
