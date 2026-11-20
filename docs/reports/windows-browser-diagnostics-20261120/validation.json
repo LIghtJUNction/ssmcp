@@ -1,0 +1,439 @@
+{
+  "schema": "ssmcp.windows-browser-failure-diagnostics.validation.v1",
+  "date_utc": "2026-11-20",
+  "scope": "Bounded failure reporting; the original Windows ARM installation cause remains unidentified",
+  "formal_reports": [
+    {
+      "workflow_run": 44754296839,
+      "source_sha": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+      "report_file": "windows-native-browser-arm64-44754296839.json",
+      "report_sha256": "76717752ef7640c40f39a643925f26e7fe42b9ee11d962587e3d392e46016d96",
+      "report": {
+        "schema": "ssmcp.windows-native-browser-smoke.v1",
+        "ok": true,
+        "target": "aarch64-pc-windows-msvc",
+        "expected_client_version": "0.10.21",
+        "platform": "Win32NT",
+        "powershell_version": "7.6.10",
+        "scope": "Real production dependency helpers, official Node installation, pinned Playwright, headless Chromium and the newly built native client on Windows",
+        "started_at": "2026-11-20T14:38:14.9496322Z",
+        "worker_exit_code": 0,
+        "checks": [
+          "Actual Windows runtime is required",
+          "The release smoke runs under native PowerShell 7",
+          "The parent created the temporary smoke directory",
+          "Runner architecture matches the release target",
+          "The parent assigned the worker to its owned Windows job before installation",
+          "Both installers have one browser dependency block",
+          "Both self-contained installers use the identical production browser implementation",
+          "The production release installer parses",
+          "The bounded downloader function Wait-DownloadTask is unambiguous",
+          "The bounded downloader function Receive-BoundedStream is unambiguous",
+          "The bounded downloader function Invoke-BoundedDownload is unambiguous",
+          "Only function definitions are imported from the browser block",
+          "The client is the native executable for this target",
+          "The client version matches the validated release",
+          "The clean-install pass cannot reuse a preinstalled Node from PATH",
+          "Explicit runtime overrides are absent for the clean-install pass",
+          "The clean pass downloaded the official Node checksum list and archive",
+          "Dependency setup restored PATH before native client verification",
+          "The official managed Node 24 LTS installation runs with npm",
+          "Node PE architecture matches the release target",
+          "Node executes as the expected Windows architecture",
+          "The actual installed Playwright version is pinned to 1.65.1",
+          "The selected browser is the downloaded Playwright Chromium",
+          "The new client reports native browser readiness",
+          "The client resolves the exact selected Node and Chromium without a modified PATH",
+          "Chromium starts headlessly, renders a local page and closes successfully",
+          "The second real setup pass reuses Node without another download",
+          "The second setup pass preserves the selected runtime paths",
+          "Reusing dependencies preserves Node, Chromium and the pinned package bytes",
+          "Production persistence selects the verified runtime paths"
+        ],
+        "downloads": [
+          {
+            "host": "nodejs.org",
+            "resource": "SHASUMS256.txt",
+            "bytes": 3171,
+            "sha256": "06d17307d84ec057dd2783863f12cb228c9273f9424b330532e4e3699f5d47c9"
+          },
+          {
+            "host": "nodejs.org",
+            "resource": "node-v24.22.3-win-arm64.zip",
+            "bytes": 33802073,
+            "sha256": "b3cc74a295b39d4f273271e96f58c06dd2b35757ca12abec64c7d0598b434f14"
+          }
+        ],
+        "client": {
+          "version": "ssmcp 0.10.21",
+          "target": "aarch64-pc-windows-msvc",
+          "architecture": "arm64",
+          "sha256": "7da519049f01c414c0b4d8dc6641c9e204640003efe658be206bafbb1010a593"
+        },
+        "node": {
+          "version": "24.22.3",
+          "architecture": "arm64",
+          "path": "<temporary>/local/ssmcp/runtime/node-v24.22.3-win-arm64/node.exe",
+          "sha256": "172e320db179ce416fc012b96b9917dacfb442beb081de57c4deaed7b5a24644"
+        },
+        "playwright": {
+          "version": "1.65.1",
+          "package_sha256": "66a5c412c28b7fe15902da5cb5d7dd503d1c8604d0afe46797fe31aa7dc1a6e0"
+        },
+        "chromium": {
+          "version": "159.0.8154.6",
+          "architecture": "x64",
+          "path": "<temporary>/browsers/chromium-1255/chrome-win64/chrome.exe",
+          "sha256": "9b5b0b9d91b08bc432f53ddf9946aaec7ab100b3f887819656c2ee63cde1757e",
+          "architecture_matches_target": false,
+          "headless_local_page": true
+        },
+        "runtime": {
+          "mode": "native",
+          "ready": true,
+          "exact_paths_match": true,
+          "independent_of_path": true
+        },
+        "reused": true,
+        "helper_sha256": "31190ecb64e054882d8dbb35ed0d8f33c58d6fb2a7f4e8770f31ffc654dd1602",
+        "installer_sha256": {
+          "scripts/install.ps1": "d907f6c7e00b235c8a3c95ede1be8a47f14356f80cfda7394676105d3a88e069",
+          "src/client_downloads/install.ps1": "2679b77959d3dbf8a128f16a6b1641fb2efe2094bebb7a2282f675bca2c18336"
+        },
+        "owned_processes_stopped": true,
+        "environment_restored": true,
+        "temporary_directory_removed": true,
+        "cleanup_errors": [],
+        "finished_at": "2026-11-20T14:39:09.7802953Z",
+        "elapsed_seconds": 54.838
+      }
+    },
+    {
+      "workflow_run": 44762565095,
+      "source_sha": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "report_file": "windows-native-browser-arm64-44762565095.json",
+      "report_sha256": "c08e51fdfd300d12b930577ab1af9e84e180029eb867d39361ec3d4a0f10876c",
+      "report": {
+        "schema": "ssmcp.windows-native-browser-smoke.v1",
+        "ok": false,
+        "target": "aarch64-pc-windows-msvc",
+        "expected_client_version": "0.10.21",
+        "platform": "Win32NT",
+        "powershell_version": "7.6.10",
+        "scope": "Real production dependency helpers, official Node installation, pinned Playwright, headless Chromium and the newly built native client on Windows",
+        "started_at": "2026-11-20T15:29:09.2829805Z",
+        "worker_exit_code": 1,
+        "checks": [
+          "Actual Windows runtime is required",
+          "The release smoke runs under native PowerShell 7",
+          "The parent created the temporary smoke directory",
+          "Runner architecture matches the release target",
+          "The parent assigned the worker to its owned Windows job before installation",
+          "Both installers have one browser dependency block",
+          "Both self-contained installers use the identical production browser implementation",
+          "The production release installer parses",
+          "The bounded downloader function Wait-DownloadTask is unambiguous",
+          "The bounded downloader function Receive-BoundedStream is unambiguous",
+          "The bounded downloader function Invoke-BoundedDownload is unambiguous",
+          "Only function definitions are imported from the browser block",
+          "The client is the native executable for this target",
+          "The client version matches the validated release",
+          "The clean-install pass cannot reuse a preinstalled Node from PATH",
+          "Explicit runtime overrides are absent for the clean-install pass"
+        ],
+        "downloads": [
+          {
+            "host": "nodejs.org",
+            "resource": "SHASUMS256.txt",
+            "bytes": 3171,
+            "sha256": "06d17307d84ec057dd2783863f12cb228c9273f9424b330532e4e3699f5d47c9"
+          },
+          {
+            "host": "nodejs.org",
+            "resource": "node-v24.22.3-win-arm64.zip",
+            "bytes": 33802073,
+            "sha256": "b3cc74a295b39d4f273271e96f58c06dd2b35757ca12abec64c7d0598b434f14"
+          }
+        ],
+        "client": {
+          "version": "ssmcp 0.10.21",
+          "target": "aarch64-pc-windows-msvc",
+          "architecture": "arm64",
+          "sha256": "c7761388861283f81506cfe000a6711f28d3e679d833e1b9e823143ea51cde8d"
+        },
+        "helper_sha256": "31190ecb64e054882d8dbb35ed0d8f33c58d6fb2a7f4e8770f31ffc654dd1602",
+        "installer_sha256": {
+          "scripts/install.ps1": "d907f6c7e00b235c8a3c95ede1be8a47f14356f80cfda7394676105d3a88e069",
+          "src/client_downloads/install.ps1": "2679b77959d3dbf8a128f16a6b1641fb2efe2094bebb7a2282f675bca2c18336"
+        },
+        "failure": {
+          "phase": "clean_dependency_install",
+          "exception_type": "MethodInvocationException"
+        },
+        "owned_processes_stopped": true,
+        "environment_restored": true,
+        "temporary_directory_removed": true,
+        "cleanup_errors": [],
+        "finished_at": "2026-11-20T15:29:22.4852293Z",
+        "elapsed_seconds": 13.211
+      }
+    },
+    {
+      "workflow_run": 44762565095,
+      "source_sha": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "report_file": "windows-native-browser-x64-44762565095.json",
+      "report_sha256": "6334a4addbd93140e918ab8792afcf91bbde74f8858901b1395c9c8b39f92020",
+      "report": {
+        "schema": "ssmcp.windows-native-browser-smoke.v1",
+        "ok": true,
+        "target": "x86_64-pc-windows-msvc",
+        "expected_client_version": "0.10.21",
+        "platform": "Win32NT",
+        "powershell_version": "7.6.10",
+        "scope": "Real production dependency helpers, official Node installation, pinned Playwright, headless Chromium and the newly built native client on Windows",
+        "started_at": "2026-11-20T15:28:06.2240137Z",
+        "worker_exit_code": 0,
+        "checks": [
+          "Actual Windows runtime is required",
+          "The release smoke runs under native PowerShell 7",
+          "The parent created the temporary smoke directory",
+          "Runner architecture matches the release target",
+          "The parent assigned the worker to its owned Windows job before installation",
+          "Both installers have one browser dependency block",
+          "Both self-contained installers use the identical production browser implementation",
+          "The production release installer parses",
+          "The bounded downloader function Wait-DownloadTask is unambiguous",
+          "The bounded downloader function Receive-BoundedStream is unambiguous",
+          "The bounded downloader function Invoke-BoundedDownload is unambiguous",
+          "Only function definitions are imported from the browser block",
+          "The client is the native executable for this target",
+          "The client version matches the validated release",
+          "The clean-install pass cannot reuse a preinstalled Node from PATH",
+          "Explicit runtime overrides are absent for the clean-install pass",
+          "The clean pass downloaded the official Node checksum list and archive",
+          "Dependency setup restored PATH before native client verification",
+          "The official managed Node 24 LTS installation runs with npm",
+          "Node PE architecture matches the release target",
+          "Node executes as the expected Windows architecture",
+          "The actual installed Playwright version is pinned to 1.65.1",
+          "The selected browser is the downloaded Playwright Chromium",
+          "The new client reports native browser readiness",
+          "The client resolves the exact selected Node and Chromium without a modified PATH",
+          "Chromium starts headlessly, renders a local page and closes successfully",
+          "The second real setup pass reuses Node without another download",
+          "The second setup pass preserves the selected runtime paths",
+          "Reusing dependencies preserves Node, Chromium and the pinned package bytes",
+          "Production persistence selects the verified runtime paths"
+        ],
+        "downloads": [
+          {
+            "host": "nodejs.org",
+            "resource": "SHASUMS256.txt",
+            "bytes": 3171,
+            "sha256": "06d17307d84ec057dd2783863f12cb228c9273f9424b330532e4e3699f5d47c9"
+          },
+          {
+            "host": "nodejs.org",
+            "resource": "node-v24.22.3-win-x64.zip",
+            "bytes": 37762649,
+            "sha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f"
+          }
+        ],
+        "client": {
+          "version": "ssmcp 0.10.21",
+          "target": "x86_64-pc-windows-msvc",
+          "architecture": "x64",
+          "sha256": "fe7ae5138e2d0946502c2a943253516dd74c5d8e5034ea39fe9f17fd3e2de59a"
+        },
+        "node": {
+          "version": "24.22.3",
+          "architecture": "x64",
+          "path": "<temporary>/local/ssmcp/runtime/node-v24.22.3-win-x64/node.exe",
+          "sha256": "86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6"
+        },
+        "playwright": {
+          "version": "1.65.1",
+          "package_sha256": "66a5c412c28b7fe15902da5cb5d7dd503d1c8604d0afe46797fe31aa7dc1a6e0"
+        },
+        "chromium": {
+          "version": "159.0.8154.6",
+          "architecture": "x64",
+          "path": "<temporary>/browsers/chromium-1255/chrome-win64/chrome.exe",
+          "sha256": "9b5b0b9d91b08bc432f53ddf9946aaec7ab100b3f887819656c2ee63cde1757e",
+          "architecture_matches_target": true,
+          "headless_local_page": true
+        },
+        "runtime": {
+          "mode": "native",
+          "ready": true,
+          "exact_paths_match": true,
+          "independent_of_path": true
+        },
+        "reused": true,
+        "helper_sha256": "31190ecb64e054882d8dbb35ed0d8f33c58d6fb2a7f4e8770f31ffc654dd1602",
+        "installer_sha256": {
+          "scripts/install.ps1": "d907f6c7e00b235c8a3c95ede1be8a47f14356f80cfda7394676105d3a88e069",
+          "src/client_downloads/install.ps1": "2679b77959d3dbf8a128f16a6b1641fb2efe2094bebb7a2282f675bca2c18336"
+        },
+        "owned_processes_stopped": true,
+        "environment_restored": true,
+        "temporary_directory_removed": true,
+        "cleanup_errors": [],
+        "finished_at": "2026-11-20T15:28:29.6147026Z",
+        "elapsed_seconds": 23.397
+      }
+    }
+  ],
+  "local_checks": {
+    "base_sha": "c7086f9545602f45399e7a237995a48440e7d8aa",
+    "platform": "Linux x86_64",
+    "powershell_version": "7.6.10",
+    "powershell_archive_sha256": "e261cabc91c78a9afe8d1e5f24731ab0d38204735ab2ec94b0af55102652e10d",
+    "checks": [
+      {
+        "name": "bootstrap",
+        "command": [
+          "/workspace/scratch/18a2b71ce5be/powershell-7.6.10/runtime/pwsh",
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-File",
+          "scripts/test_windows_browser_bootstrap.ps1",
+          "-Out",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-windows-smoke-validation-20261120/bootstrap.json"
+        ],
+        "exit_code": 0,
+        "expected_exit_code": 0,
+        "seconds": 3.767
+      },
+      {
+        "name": "non-windows-guard",
+        "command": [
+          "/workspace/scratch/18a2b71ce5be/powershell-7.6.10/runtime/pwsh",
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-File",
+          "scripts/smoke_windows_browser.ps1",
+          "-ClientPath",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-windows-smoke-c708/not-a-windows-client.exe",
+          "-Target",
+          "aarch64-pc-windows-msvc",
+          "-ExpectedVersion",
+          "0.10.21",
+          "-Out",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-windows-smoke-validation-20261120/non-windows-guard.json"
+        ],
+        "exit_code": 1,
+        "expected_exit_code": 1,
+        "seconds": 0.726
+      }
+    ],
+    "source_sha256": {
+      "scripts/smoke_windows_browser.ps1": "a26948246bf2d17d2ff71e21b506898a5481d822d30471ff1c7a63bdaeff233b",
+      "scripts/test_windows_browser_bootstrap.ps1": "586367b9fb3db2fb92920bd23fc96a6fec95edcf1744e50c14b9779b0cd12c19"
+    },
+    "source_sha": "f9cc781e6814a89952ef6bd89e423b9c802cd972"
+  },
+  "bootstrap": {
+    "schema": "ssmcp.windows-browser-bootstrap.v1",
+    "ok": true,
+    "scope": "Production PowerShell helpers with mocked Windows executables, downloads and user environment; no Windows installation",
+    "platform": "Unix",
+    "checks": [
+      "scripts/install.ps1 parses as PowerShell",
+      "scripts/install.ps1 contains the dependency helper",
+      "scripts/install.ps1 invokes dependency setup once",
+      "scripts/install.ps1 verifies dependencies before replacing the installed client",
+      "src/client_downloads/install.ps1 parses as PowerShell",
+      "src/client_downloads/install.ps1 contains the dependency helper",
+      "Both standalone installers use exactly the same dependency implementation",
+      "src/client_downloads/install.ps1 invokes dependency setup once",
+      "src/client_downloads/install.ps1 verifies dependencies before replacing the installed client",
+      "Native argv preserves Unicode, spaces, embedded quotes, trailing backslashes and shell metacharacters",
+      "Nonzero native exit cannot be reported as success",
+      "The real Windows smoke script parses",
+      "The smoke failure formatter is unambiguous",
+      "A real archive file collision retains the outer method exception and phase",
+      "The real archive failure retains its underlying I/O type and numeric error code",
+      "The archive failure identifies the production helper and source line",
+      "Unlisted caller frames and their paths are omitted",
+      "Archive diagnostics omit the private path embedded in the real error message",
+      "A real process start failure retains the native system error code",
+      "Process diagnostics omit executable paths and invocation arguments",
+      "A real nonzero process exit remains a failure without retaining stderr",
+      "Exception chains have a fixed six-entry bound",
+      "Allowed stack frames have a fixed eight-entry bound",
+      "Bounded diagnostics never copy exception messages",
+      "An existing working Node, npm and pinned Playwright are reused without package installation",
+      "Chromium is installed through the exact pinned Playwright CLI",
+      "Verified Node and Chromium paths are persisted for later terminals",
+      "Dependency setup does not rewrite the caller or user PATH",
+      "Runtime discovery is verified with the original PATH, not the temporary install PATH",
+      "A later process restores the same paths from persisted user environment without downloading",
+      "npm fails explicitly",
+      "npm does not persist a partial success or keep temporary process overrides",
+      "chromium_download fails explicitly",
+      "chromium_download does not persist a partial success or keep temporary process overrides",
+      "chromium_launch fails explicitly",
+      "chromium_launch does not persist a partial success or keep temporary process overrides",
+      "old_client fails explicitly",
+      "old_client does not persist a partial success or keep temporary process overrides",
+      "wrong_runtime fails explicitly",
+      "wrong_runtime does not persist a partial success or keep temporary process overrides",
+      "persist fails explicitly",
+      " does not persist a partial success or keep temporary process overrides",
+      "An invalid explicit Node override cannot fall back to another installation",
+      "An invalid explicit browser override cannot be silently replaced",
+      "x64 installs the verified Node distribution under the user runtime directory",
+      "x64 installs pinned Playwright through the selected Node and its adjacent npm",
+      "x64 never installs, probes or registers an external harness",
+      "arm64 installs the verified Node distribution under the user runtime directory",
+      "arm64 installs pinned Playwright through the selected Node and its adjacent npm",
+      "arm64 never installs, probes or registers an external harness",
+      "An invalid Node checksum is rejected before extraction or execution",
+      "Rejected Node bytes never reach native execution",
+      "Node archive traversal cannot escape its owned extraction directory"
+    ]
+  },
+  "non_windows_guard": {
+    "schema": "ssmcp.windows-native-browser-smoke.v1",
+    "ok": false,
+    "target": "aarch64-pc-windows-msvc",
+    "expected_client_version": "0.10.21",
+    "platform": "Unix",
+    "powershell_version": "7.6.10",
+    "scope": "Real production dependency helpers, official Node installation, pinned Playwright, headless Chromium and the newly built native client on Windows",
+    "started_at": "2026-11-20T15:41:36.5600176Z",
+    "failure": {
+      "phase": "windows_guard",
+      "exception_type": "RuntimeException",
+      "category": "OperationStopped",
+      "exception_chain": [
+        {
+          "type": "System.Management.Automation.RuntimeException",
+          "hresult": -2146233087
+        }
+      ],
+      "frames": [
+        {
+          "function": "Invoke-SmokeParent",
+          "source": "smoke_script",
+          "line": 394
+        }
+      ]
+    },
+    "environment_restored": true,
+    "temporary_directory_removed": true,
+    "cleanup_errors": [],
+    "finished_at": "2026-11-20T15:41:36.6558452Z",
+    "elapsed_seconds": 0.107
+  },
+  "unchanged_paths": [
+    "scripts/install.ps1",
+    "src/client_downloads/install.ps1",
+    ".github/workflows/release.yml"
+  ],
+  "local_windows_arm_installation_executed": false,
+  "old_workflow_jobs_rerun": false
+}
