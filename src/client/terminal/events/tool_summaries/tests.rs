@@ -143,7 +143,7 @@ async fn eleventh_real_call_reminds_once_and_summary_restarts_the_counter() {
         );
 
         // A fresh outer run has the same authorization scope and can update.
-        let next_run = source(&fixture.runtime, 100, "123", None, "renamed login").await;
+        let next_run = source(&fixture.runtime, 100, "123", None, "renamed-login").await;
         assert_eq!(group_id(&view, &next_run), id);
         let duplicate = view
             .tool_summary_set(&next_run, id, "Inspecting workspace files", Some(1))
