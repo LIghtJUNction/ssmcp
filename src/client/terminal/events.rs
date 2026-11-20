@@ -8,6 +8,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod command_rows;
 #[cfg(test)]
 mod command_visibility_tests;
 mod correlation;
@@ -1976,12 +1977,16 @@ impl EventView {
                 && self.query.is_empty()
             {
                 let start = rows.len();
+                let prefix = clip_plain(
+                    &format!("{} • ", if selected && focused { "›" } else { " " }),
+                    indent,
+                );
                 rows.push((
                     event.id,
                     format!(
                         "{}{}",
                         paint(&prefix, tone, ui, selected && focused),
-                        paint(&clip_plain(&title, body_width), tone, ui, false)
+                        event.command_heading_row(body_width, ui)
                     ),
                 ));
                 let inset = 2.min(body_width.saturating_sub(1));
@@ -2020,13 +2025,38 @@ impl EventView {
                 if event.panel.scroll.is_some() {
                     event.panel.scroll = Some(offset);
                 }
-                for row in content.iter().skip(offset).take(event.panel.page) {
-                    let gutter = paint(&clip_plain("│ ", inset), "muted", ui, false);
+                if content.is_empty() {
+                    let label = if event.meta.status == Some(Status::Running) {
+                        "(no output yet)"
+                    } else {
+                        "(no output)"
+                    };
+                    rows.push((
+                        event.id,
+                        paint(
+                            &clip_plain(&format!("{}└ {label}", " ".repeat(indent)), width),
+                            "muted",
+                            ui,
+                            false,
+                        ),
+                    ));
+                }
+                for (line, row) in content
+                    .iter()
+                    .skip(offset)
+                    .take(event.panel.page)
+                    .enumerate()
+                {
+                    let gutter = paint(
+                        &clip_plain(if line == 0 { "└ " } else { "  " }, inset),
+                        "muted",
+                        ui,
+                        false,
+                    );
                     rows.push((event.id, format!("{}{gutter}{row}", " ".repeat(indent))));
                 }
-                if !content.is_empty() {
+                {
                     previous_compact_tool = false;
-                    let action = if expanded { "fold" } else { "expand" };
                     let range = format!(
                         "{}–{}/{}",
                         offset + 1,
@@ -2048,15 +2078,15 @@ impl EventView {
                         format!("{range} · wheel/PgUp/PgDn · Home command · Enter fold{partial}")
                     } else if expanded && width >= 48 {
                         format!("{range} · Home cmd · Enter fold{partial}")
-                    } else if width >= 70 {
-                        format!("{range} · wheel / PgUp/PgDn · Enter {action}{partial}")
+                    } else if expanded {
+                        format!("{range} · Enter fold{partial}")
                     } else {
-                        format!("{range} · {action}{partial}")
+                        event.command_preview_hint(content.len(), event.panel.page)
                     };
                     rows.push((
                         event.id,
                         paint(
-                            &clip_plain(&format!("{}└ {detail}", " ".repeat(indent)), width),
+                            &clip_plain(&format!("{}  {detail}", " ".repeat(indent)), width),
                             "muted",
                             ui,
                             false,
@@ -2963,7 +2993,7 @@ mod tests {
         view.set_scope(EventScope::Conversation);
         let running = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(
-            running.contains("bash -lc · 2 lines · running"),
+            running.contains("Running bash -lc 'printf first'"),
             "{running}"
         );
         assert!(!running.contains("shell #1a") && !running.contains("started"));
@@ -2980,9 +3010,9 @@ mod tests {
             finished.as_bytes(),
         );
         let done = view.render(100, 12, &plain_ui(), false).join("\n");
-        assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
+        assert!(done.contains("Ran bash -lc 'printf first'"), "{done}");
         assert!(done.contains("first-result") && done.contains("second-result"));
-        assert!(done.contains("1–3/3") && done.contains("Enter expand"));
+        assert!(done.contains("Show details · Enter"));
         for hidden in ["exit=0", "cwd /example", "[RUN", "[STDOUT", "[OK"] {
             assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
         }
@@ -3007,7 +3037,7 @@ mod tests {
         let bytes = view.bytes;
         assert!(view.open(), "the selected command expands in conversation");
         let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
-        assert_eq!(expanded.matches(invocation).count(), 1, "{expanded}");
+        assert_eq!(expanded.matches(invocation).count(), 2, "{expanded}");
         assert_eq!(
             view.render(100, 20, &plain_ui(), false).join("\n"),
             expanded
@@ -3032,26 +3062,14 @@ mod tests {
         assert_eq!(view.events[0].command_detail_text(), expected_detail);
 
         for (job, summary, expected) in [
-            (
-                "17",
-                "[RUN] #17 cargo test --lib",
-                "cargo test --lib · done",
-            ),
+            ("17", "[RUN] #17 cargo test --lib", "Ran cargo test --lib"),
             (
                 "1234567890abcdef1234567890abcdef-1a",
                 "[RUN] #1a cargo check",
-                "cargo check · done",
+                "Ran cargo check",
             ),
-            (
-                "17",
-                "[RUN] printf #17 started",
-                "printf #17 started · done",
-            ),
-            (
-                "17",
-                "[RUN] #other cargo check",
-                "#other cargo check · done",
-            ),
+            ("17", "[RUN] printf #17 started", "Ran printf #17 started"),
+            ("17", "[RUN] #other cargo check", "Ran #other cargo check"),
         ] {
             let mut preview = EventView::new();
             preview.ingest_event(
@@ -3063,8 +3081,8 @@ mod tests {
             let rendered = preview.render(100, 8, &plain_ui(), false).join("\n");
             assert!(rendered.contains(expected), "{rendered}");
             assert!(
-                !rendered.contains("Click expand"),
-                "no output yet: {rendered}"
+                rendered.contains("(no output)") && rendered.contains("Show details · Enter"),
+                "empty output still exposes retained command details: {rendered}"
             );
             assert_eq!(preview.events[0].text, summary);
         }
@@ -3102,7 +3120,7 @@ mod tests {
             let rendered = view.render(100, 8, &ui, true).join("\n");
             let plain = unstyled(&rendered);
             assert!(
-                plain.contains(&format!("printf '#123' started · {status}")),
+                plain.contains("printf '#123' started") && plain.to_lowercase().contains(status),
                 "{plain}"
             );
             assert!(!plain.contains("shell #abc") && !plain.contains(" · done"));
@@ -3137,11 +3155,11 @@ mod tests {
     fn compact_tool_runs_keep_message_spacing_and_exact_mouse_targets() {
         let mut view = EventView::new();
         view.ingest_conversation(b"[USER] queued\nPlease check the project.\n");
-        for (id, command) in [("a", "cargo check"), ("b", "cargo test")] {
+        for (id, tool) in [("a", "inspect symbols"), ("b", "inspect diagnostics")] {
             view.ingest_event(
-                "shell",
-                &json!({"type":"exec.started","job_id":id,"command":["cargo",command]}),
-                format!("[RUN ] shell {id} {command} started\n").as_bytes(),
+                "native",
+                &json!({"type":"harness.tool.started","call_id":id}),
+                format!("[REQ] {tool} call={id} started\n").as_bytes(),
             );
         }
         view.ingest_event(
@@ -3151,17 +3169,17 @@ mod tests {
         );
         view.set_scope(EventScope::Conversation);
         let folded = view.render(100, 20, &plain_ui(), false).join("\n");
-        assert!(folded.contains("Tools · 2 calls") && !folded.contains("cargo check"));
+        assert!(folded.contains("Tools · 2 calls") && !folded.contains("inspect symbols"));
         view.select(-1);
         assert!(view.open());
         let rows = view.render(100, 20, &plain_ui(), false);
         let first = rows
             .iter()
-            .position(|row| row.contains("cargo check"))
+            .position(|row| row.contains("inspect symbols"))
             .unwrap();
         let second = rows
             .iter()
-            .position(|row| row.contains("cargo test"))
+            .position(|row| row.contains("inspect diagnostics"))
             .unwrap();
         let answer = rows.iter().position(|row| row.contains("Ada")).unwrap();
         assert_eq!(second, first + 1, "folded tools share a compact group");
@@ -3179,8 +3197,8 @@ mod tests {
             ("b", "second-result\nsecond-context\nsecond-tail\n"),
         ] {
             view.ingest_event(
-                "shell",
-                &json!({"type":"exec.stdout","job_id":id}),
+                "native",
+                &json!({"type":"tool_result","call_id":id}),
                 detail.as_bytes(),
             );
         }
@@ -3191,8 +3209,7 @@ mod tests {
             .unwrap();
         assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
-        assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
-        assert!(rows[result_row + 3].contains("1–8/8"), "{rows:?}");
+        assert!(rows[result_row + 2].contains("1–6/6"), "{rows:?}");
         assert_eq!(
             rows.iter()
                 .filter(|row| row.contains("scroll tools"))
@@ -3201,8 +3218,8 @@ mod tests {
         );
         let collapsed = rows.join("\n");
         assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
-        assert!(collapsed.contains("first-tail") && collapsed.contains("second-tail"));
-        assert!(view.mouse_select((result_row + 2) as u16));
+        assert!(!collapsed.contains("first-tail") && !collapsed.contains("second-tail"));
+        assert!(view.mouse_select((result_row + 1) as u16));
         assert_eq!(view.selected, Some(view.events[2].id));
         assert!(view.open());
         let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
@@ -3210,7 +3227,7 @@ mod tests {
             expanded.contains("second-result") && expanded.contains("second-tail"),
             "{expanded}"
         );
-        assert!(expanded.contains("first-tail"), "{expanded}");
+        assert!(expanded.contains("first-context"), "{expanded}");
         assert_eq!(view.events.len(), 4);
     }
 

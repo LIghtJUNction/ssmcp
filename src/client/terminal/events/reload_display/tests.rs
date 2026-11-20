@@ -45,8 +45,7 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
             .iter()
             .any(|key| key.contains("old-job-a"))
     );
-    assert!(before.open());
-    before.select(2);
+    before.selected = Some(before.events[2].id);
     assert!(before.open());
     before.render(48, 24, &ui(), true);
     assert!(before.scroll_selected_panel(6));
@@ -81,10 +80,15 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
     assert!(after.events[1].historical && after.events[1].interrupted);
     assert_eq!(after.events[2].meta.status, Some(Status::Exit(0)));
     assert_eq!(after.events[2].panel.offset(), 6);
-    assert!(after.events[2].chat_expanded && after.tool_groups()[0].expanded);
+    assert!(after.events[2].chat_expanded);
+    assert!(after.tool_groups().is_empty());
     assert_eq!(after.selected, Some(after.events[2].id));
-    assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["running"], 0);
-    assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["unknown"], 1);
+    assert!(
+        after
+            .events
+            .iter()
+            .all(|event| event.meta.status != Some(Status::Running))
+    );
     let old_text = after.events[1].text.clone();
     after.ingest_event(
         "shell",
@@ -102,7 +106,15 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
 #[test]
 fn reload_display_keeps_both_outer_fold_states_and_separates_new_live_calls() {
     for expanded in [false, true] {
-        let mut before = fixture();
+        let mut before = EventView::new();
+        before.set_scope(EventScope::Conversation);
+        for id in ["old-tool-a", "old-tool-b"] {
+            before.ingest_event(
+                "native",
+                &json!({"type":"harness.tool.started","call_id":id}),
+                format!("[REQ] inspect call={id} started\n").as_bytes(),
+            );
+        }
         if expanded {
             assert!(before.open());
         }
@@ -118,9 +130,9 @@ fn reload_display_keeps_both_outer_fold_states_and_separates_new_live_calls() {
         assert_eq!(after.selected_group, Some(after.tool_groups()[0].head));
         for id in ["new-a", "new-b"] {
             after.ingest_event(
-                "shell",
-                &json!({"type":"exec.started","job_id":id}),
-                b"[RUN] next command\n",
+                "native",
+                &json!({"type":"harness.tool.started","call_id":id}),
+                b"[REQ] next inspection\n",
             );
         }
         assert_eq!(after.tool_groups().len(), 2);
