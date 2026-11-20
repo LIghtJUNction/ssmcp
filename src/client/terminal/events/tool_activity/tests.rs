@@ -405,7 +405,12 @@ fn legacy_command_group_fold_survives_head_pruning_without_crossing_a_boundary()
     for index in 0..MAX_EVENTS {
         command(&mut legacy, &format!("legacy-{index}"), 0);
     }
-    assert!(legacy.events.iter().all(|event| event.tool_group_id.is_none()));
+    assert!(
+        legacy
+            .events
+            .iter()
+            .all(|event| event.tool_group_id.is_none())
+    );
     legacy.select(isize::MIN);
     assert!(legacy.back());
     let old_head = legacy.tool_groups()[0].head;
