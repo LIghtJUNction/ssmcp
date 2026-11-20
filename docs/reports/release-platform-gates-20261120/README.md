@@ -15,7 +15,7 @@
 
 ## 最终工作流结果
 
-GitHub API 读回确认运行在 2026-11-20 02:44:05 UTC 已完成，结论为 failure。完整任务回执见 [formal-run.json](formal-run.json)。
+GitHub API 读回确认运行已完成，结论为 failure；API 记录的更新时间为 2026-11-20 02:44:05 UTC。完整任务回执见 [formal-run.json](formal-run.json)。
 
 六个平台的优化构建、打包和安装验证任务全部成功；Linux x86_64 与 ARM64 两项安装后服务运行检查也成功。六个检查任务失败：四个 Windows/macOS 客户端严格 Clippy，以及两个 Linux workspace 测试任务。两种 Linux 架构的配置测试错误相同。
 

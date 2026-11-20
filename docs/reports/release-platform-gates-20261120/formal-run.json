@@ -13,7 +13,7 @@
     "attempt": 1,
     "status": "completed",
     "conclusion": "failure",
-    "completed_at": "2026-11-20T02:44:05Z"
+    "updated_at": "2026-11-20T02:44:05Z"
   },
   "requested": {
     "tag": "v0.10.14",
