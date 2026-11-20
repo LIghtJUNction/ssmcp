@@ -72,6 +72,15 @@ if scenario in ("session-access", "compat-delegation"):
     capabilities = [os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"]]
 elif scenario == "compat-attribution":
     capabilities = ["control_attribution_v1"]
+elif scenario in ("messages", "compat-messages"):
+    capabilities = [os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
+elif scenario == "session-messages":
+    capabilities = [os.environ["SSMCP_PROTOCOL_ACCESS_CAPABILITY"],
+                    "control_attribution_v1",
+                    os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
+elif scenario == "compat-attribution-messages":
+    capabilities = ["control_attribution_v1",
+                    os.environ["SSMCP_PROTOCOL_MESSAGES_CAPABILITY"]]
 elif scenario == "compat-unknown":
     capabilities = ["unknown_owner_permission"]
 if scenario == "policy-login":
@@ -123,6 +132,10 @@ impl Fixture {
             .env(
                 "SSMCP_PROTOCOL_ACCESS_CAPABILITY",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
+            )
+            .env(
+                "SSMCP_PROTOCOL_MESSAGES_CAPABILITY",
+                crate::wire::messages::CAPABILITY,
             )
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
@@ -226,6 +239,7 @@ async fn initial_allow_requires_capability_and_reaps_an_unacknowledged_transport
         .await;
     let mut registration = result.unwrap().unwrap();
     assert!(registration.access_supported);
+    assert!(!registration.messaging_supported);
     registration
         .require_allow_access(&["colleague@ssmcp.test".into(), "alice@ssmcp.test".into()])
         .await
@@ -245,6 +259,7 @@ async fn current_protocol_preserves_metadata_for_login_and_allow() {
         let registration = result.unwrap().expect("registration was cancelled");
         assert_eq!(attempts, 1);
         assert!(registered);
+        assert!(!registration.messaging_supported);
         assert_eq!(registration.ready.1.is_empty(), allow);
         assert_eq!(registration.ready.2 == 0, allow);
         assert_eq!(fixture.hellos()[0]["version"], VERSION);
@@ -252,6 +267,23 @@ async fn current_protocol_preserves_metadata_for_login_and_allow() {
             fixture.hellos()[0]["metadata"],
             serde_json::to_value(&metadata).unwrap()
         );
+        close(registration).await;
+    }
+}
+
+#[tokio::test]
+async fn current_protocol_negotiates_messaging_independently_of_access() {
+    for (scenario, access_supported) in [("messages", false), ("session-messages", true)] {
+        let fixture = Fixture::new();
+        let mut registered = false;
+        let (result, attempts) = fixture
+            .register(scenario, &metadata(false), &mut registered, READY_LIMIT)
+            .await;
+        let registration = result.unwrap().expect("registration was cancelled");
+        assert_eq!(attempts, 1);
+        assert!(registered);
+        assert_eq!(registration.access_supported, access_supported);
+        assert!(registration.messaging_supported);
         close(registration).await;
     }
 }
@@ -419,6 +451,8 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
         ("compat-login", false),
         ("compat-ttl", false),
         ("compat-delegation", false),
+        ("compat-messages", false),
+        ("compat-attribution-messages", false),
         ("compat-unknown", false),
     ] {
         let fixture = Fixture::new();
@@ -438,6 +472,7 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
         if valid {
             let mut registration = result.unwrap().unwrap();
             assert!(!registration.access_supported);
+            assert!(!registration.messaging_supported);
             assert!(registration.ready.1.is_empty());
             assert_eq!(registration.ready.2, 0);
             registration
