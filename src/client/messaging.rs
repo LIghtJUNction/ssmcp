@@ -23,6 +23,7 @@ pub(super) struct Request {
 struct Pending {
     command: Command,
     deadline: Instant,
+    quiet: bool,
 }
 #[derive(Clone, Serialize)]
 struct Outgoing {
@@ -45,6 +46,7 @@ struct Manager {
     next_id: u64,
     next_poll: Option<Instant>,
     revision: u64,
+    watch_recipients: bool,
 }
 impl Manager {
     fn changed(&mut self) {
@@ -57,7 +59,7 @@ impl Manager {
         json!({
             "available":self.available(), "connected":self.connected,
             "recipients":self.recipients, "outgoing":self.outgoing,
-            "error":self.error, "pending":!self.pending.is_empty(), "revision":self.revision,
+            "error":self.error, "pending":self.pending.values().any(|pending|!pending.quiet), "revision":self.revision,
         })
     }
     fn connect(&mut self, supported: bool) -> mpsc::Receiver<Request> {
@@ -74,6 +76,9 @@ impl Manager {
         receiver
     }
     fn request(&mut self, command: Command) -> Result<(), String> {
+        self.request_with_visibility(command, false)
+    }
+    fn request_with_visibility(&mut self, command: Command, quiet: bool) -> Result<(), String> {
         if !self.available() {
             return Err(UNSUPPORTED.into());
         }
@@ -99,12 +104,18 @@ impl Manager {
             Pending {
                 command,
                 deadline: Instant::now() + TIMEOUT,
+                quiet,
             },
         );
-        self.changed();
+        if !quiet {
+            self.changed();
+        }
         Ok(())
     }
     fn refresh(&mut self) -> Result<(), String> {
+        self.refresh_with_visibility(false)
+    }
+    fn refresh_with_visibility(&mut self, quiet: bool) -> Result<(), String> {
         if self
             .pending
             .values()
@@ -112,7 +123,7 @@ impl Manager {
         {
             return Ok(());
         }
-        self.request(Command::List {})
+        self.request_with_visibility(Command::List {}, quiet)
     }
     fn send(&mut self, recipient_id: &str, text: &str, request_id: &str) -> Result<(), String> {
         let command = Command::Send {
@@ -171,24 +182,28 @@ impl Manager {
         self.error = None;
         Ok(())
     }
-    fn update_receipt(&mut self, receipt: Receipt) {
-        if let Some(message) = self.outgoing.iter_mut().find(|message| {
+    fn update_receipt(&mut self, receipt: Receipt) -> bool {
+        let Some(message) = self.outgoing.iter_mut().find(|message| {
             message.request_id == receipt.request_id && message.recipient_id == receipt.recipient_id
-        }) {
-            message.message_id = Some(receipt.message_id);
-            message.error = None;
-            message.status = match receipt.status {
-                crate::wire::messages::Status::Queued => "queued",
-                crate::wire::messages::Status::Included => "included",
-                crate::wire::messages::Status::Acknowledged => "acknowledged",
-                crate::wire::messages::Status::Expired => {
-                    message.error =
-                        Some("连接、成员或权限已变化；消息没有重新路由给其他收件人".into());
-                    "failed"
-                }
-            }
-            .into();
-        }
+        }) else {
+            return false;
+        };
+        let (status, error) = match receipt.status {
+            crate::wire::messages::Status::Queued => ("queued", None),
+            crate::wire::messages::Status::Included => ("included", None),
+            crate::wire::messages::Status::Acknowledged => ("acknowledged", None),
+            crate::wire::messages::Status::Expired => (
+                "failed",
+                Some("连接、成员或权限已变化；消息没有重新路由给其他收件人".to_owned()),
+            ),
+        };
+        let changed = message.message_id.as_deref() != Some(receipt.message_id.as_str())
+            || message.status != status
+            || message.error != error;
+        message.message_id = Some(receipt.message_id);
+        message.error = error;
+        message.status = status.into();
+        changed
     }
     fn failure(&mut self, command: &Command, error: &str) {
         self.changed();
@@ -207,7 +222,9 @@ impl Manager {
         let Some(pending) = self.pending.remove(&id) else {
             return;
         };
-        self.changed();
+        if !pending.quiet {
+            self.changed();
+        }
         let result = result.and_then(|result| {
             result.validate()?;
             Ok(result)
@@ -229,13 +246,18 @@ impl Manager {
                     );
                     return;
                 }
+                let mut changed = self.error.is_some();
                 if matches!(pending.command, Command::List {}) {
+                    changed |= self.recipients != result.recipients;
                     self.recipients = result.recipients;
                 }
                 for receipt in result.receipts {
-                    self.update_receipt(receipt);
+                    changed |= self.update_receipt(receipt);
                 }
                 self.error = None;
+                if pending.quiet && changed {
+                    self.changed();
+                }
             }
             Err(error) => self.failure(&pending.command, &error),
         }
@@ -258,12 +280,13 @@ impl Manager {
         }
         if self.available() && self.next_poll.is_some_and(|deadline| deadline <= now) {
             self.next_poll = Some(now + POLL);
-            if self
-                .outgoing
-                .iter()
-                .any(|m| matches!(m.status.as_str(), "submitting" | "queued" | "included"))
+            if self.watch_recipients
+                || self
+                    .outgoing
+                    .iter()
+                    .any(|m| matches!(m.status.as_str(), "submitting" | "queued" | "included"))
             {
-                let _ = self.refresh();
+                let _ = self.refresh_with_visibility(true);
             }
         }
     }
@@ -295,6 +318,10 @@ pub(crate) fn available() -> bool {
 }
 pub(crate) fn snapshot() -> Value {
     state().snapshot()
+}
+/// UI visibility hint, safe while the terminal state mutex is held.
+pub(crate) fn watch_recipients(visible: bool) {
+    state().watch_recipients = visible;
 }
 pub(crate) fn refresh() -> Result<(), String> {
     state().refresh()

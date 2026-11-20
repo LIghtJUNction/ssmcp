@@ -200,3 +200,41 @@ fn reconnect_clears_stale_recipients_without_replaying_unconfirmed_send() {
     );
     assert_eq!(manager.outgoing[0].status, "failed");
 }
+
+#[test]
+fn idle_picker_refreshes_only_while_visible_and_unchanged_reply_does_not_redraw() {
+    let (mut manager, mut receiver, one, two) = ready();
+    assert!(manager.outgoing.is_empty());
+    manager.watch_recipients = true;
+    let before = manager.revision;
+    manager.next_poll = Some(Instant::now());
+    manager.poll();
+    let list = receiver.try_recv().unwrap();
+    assert!(matches!(list.command, Command::List {}));
+    assert_eq!(manager.snapshot()["pending"], false);
+    assert_eq!(manager.revision, before);
+    manager.reply(
+        list.id,
+        Ok(Reply {
+            recipients: vec![one.clone(), two.clone()],
+            ..Default::default()
+        }),
+    );
+    assert_eq!(manager.revision, before);
+    manager.next_poll = Some(Instant::now());
+    manager.poll();
+    let next = receiver.try_recv().unwrap();
+    manager.reply(
+        next.id,
+        Ok(Reply {
+            recipients: vec![one, two, recipient("3")],
+            ..Default::default()
+        }),
+    );
+    assert!(manager.revision > before);
+    assert_eq!(manager.recipients.len(), 3);
+    manager.watch_recipients = false;
+    manager.next_poll = Some(Instant::now());
+    manager.poll();
+    assert!(receiver.try_recv().is_err());
+}
