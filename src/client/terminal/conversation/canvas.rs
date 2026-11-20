@@ -31,6 +31,7 @@ struct Position {
     question_id: Option<String>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_archived: bool,
+    selected_history: Option<String>,
     audit: crate::client::audit_view::AuditPosition,
     events: events::EventPosition,
     logs: Option<LogPosition>,
@@ -63,6 +64,8 @@ struct ReloadPosition {
     detail: bool,
     detail_scroll: usize,
     history: Option<String>,
+    #[serde(default)]
+    history_archived: bool,
     selected_history: Option<String>,
     events: events::ReloadPosition,
     logs: Option<ReloadLogs>,
@@ -209,14 +212,8 @@ impl State {
                             .history
                             .as_ref()
                             .map(|history| history.metadata.id.clone()),
-                        selected_history: (column.view == View::History)
-                            .then(|| {
-                                self.conversation
-                                    .sessions
-                                    .get(position.selected)
-                                    .map(|session| session.id.clone())
-                            })
-                            .flatten(),
+                        history_archived: position.history_archived,
+                        selected_history: position.selected_history.clone(),
                         events: position.events.for_reload(),
                         logs: position.logs.as_ref().map(|logs| ReloadLogs {
                             scrollback: logs.scrollback,
@@ -267,6 +264,8 @@ impl State {
                             detail_scroll: position.detail_scroll,
                             question_id: None,
                             history,
+                            history_archived: position.history_archived,
+                            selected_history: position.selected_history,
                             audit: Default::default(),
                             events: position.events.position(),
                             logs: position.logs.map(|logs| LogPosition {
@@ -303,6 +302,14 @@ impl State {
             question_id: self.conversation.question_id.clone(),
             history: self.conversation.history.clone(),
             history_archived: self.conversation.history_archived,
+            selected_history: (self.conversation.view == View::History)
+                .then(|| {
+                    self.conversation
+                        .sessions
+                        .get(self.conversation.selected)
+                        .map(|session| session.id.clone())
+                })
+                .flatten(),
             audit: self.audit.position(),
             events: self.events.position(),
             logs: (self.conversation.view == View::Logs).then(|| LogPosition {
@@ -342,6 +349,9 @@ impl State {
             let column = &mut self.conversation.canvas.columns[index];
             (column.view, column.position.take())
         };
+        let selected_history = position
+            .as_ref()
+            .and_then(|position| position.selected_history.clone());
         self.conversation.view = view;
         if let Some(position) = position {
             self.conversation.content_focus = position.content_focus;
@@ -415,6 +425,20 @@ impl State {
                 Ok(sessions) => self.conversation.sessions = sessions,
                 Err(error) => self.notice = Some(format!("Could not read history: {error}")),
             }
+        }
+        if view == View::History {
+            if let Some(id) = selected_history {
+                self.conversation.selected = self
+                    .conversation
+                    .sessions
+                    .iter()
+                    .position(|session| session.id == id)
+                    .unwrap_or_default();
+            }
+            self.conversation.selected = self
+                .conversation
+                .selected
+                .min(self.conversation.sessions.len().saturating_sub(1));
         }
         self.dirty = true;
     }
