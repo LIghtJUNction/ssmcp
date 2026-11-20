@@ -59,6 +59,15 @@ class EventTests(unittest.TestCase):
                 release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
 
 
+    def test_only_publication_is_serialized_across_release_tags(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()
+        before, publication = workflow.split("  publish_release:\n", 1)
+        publication, after = publication.split("\n  deploy_server:", 1)
+        self.assertIn("    concurrency:\n      group: github-release-publication\n"
+                      "      cancel-in-progress: false\n", publication)
+        self.assertNotIn("    concurrency:\n", before + after)
+
+
 class DeploymentPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -416,7 +425,7 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(resume=resume):
                 initial_assets = [asset(next(output.glob("*.zip")))] if resume else []
                 state = {"release": {"id": 17, "tag_name": "v0.5.0", "draft": True,
-                                     "assets": initial_assets} if resume else None,
+                                     "prerelease": False, "assets": initial_assets} if resume else None,
                          "creates": 0, "uploads": [], "published": 0, "id_reads": 0}
 
                 def fake_run(args, **kwargs):
@@ -435,7 +444,8 @@ class ReleaseTests(unittest.TestCase):
                     if list(args[:3]) == ["gh", "release", "create"]:
                         self.assertIsNone(metadata, "retry must reuse the existing draft")
                         state["creates"] += 1
-                        state["release"] = {"id": 17, "tag_name": "v0.5.0", "draft": True, "assets": []}
+                        state["release"] = {"id": 17, "tag_name": "v0.5.0", "draft": True,
+                                            "prerelease": False, "assets": []}
                     elif list(args[:3]) == ["gh", "release", "upload"]:
                         path = Path(args[4])
                         self.assertNotIn(path.name, [item["name"] for item in metadata["assets"]])
@@ -912,12 +922,20 @@ class GithubReleaseTests(unittest.TestCase):
         (self.root / "dist").mkdir()
         self.archive = self.root / "dist/archive.zip"
         self.archive.write_bytes(b"verified archive")
-        self.metadata = {"id": 123, "tag_name": "v0.5.0", "draft": True, "assets": []}
+        self.tag = "v0.5.0"
+        self.metadata = {"id": 123, "tag_name": self.tag, "draft": True,
+                         "prerelease": False, "assets": []}
         self.releases = [self.metadata]
+        self.history = [{"id": 1, "tag_name": "v0.4.0", "draft": False, "prerelease": False}]
         self.calls = []
         self.downloaded = self.archive.read_bytes()
         self.bad_upload = None
         self.hidden_draft_reads = 0
+
+    def candidate(self, version):
+        self.tag = "v" + version
+        self.metadata["tag_name"] = self.tag
+        (self.root / "Cargo.toml").write_text(f'[package]\nname = "ssmcp"\nversion = "{version}"\n')
 
     def asset(self):
         return {"name": self.archive.name, "size": self.archive.stat().st_size,
@@ -932,16 +950,16 @@ class GithubReleaseTests(unittest.TestCase):
             if visible and self.hidden_draft_reads:
                 self.hidden_draft_reads -= 1
                 visible = []
-            return json.dumps([[{"id": 1, "tag_name": "v0.4.0"}], visible])
+            return json.dumps([self.history, visible])
         if args == ("gh", "api", "repos/owner/repo/releases/123"):
             return json.dumps(self.metadata)
         if args[:3] == ("gh", "release", "view"):
-            return "https://github.com/owner/repo/releases/tag/v0.5.0"
+            return "https://github.com/owner/repo/releases/tag/" + self.tag
         raise AssertionError(f"unexpected release API command: {args}")
 
     def cli(self, args, **kwargs):
         self.calls.append(tuple(args))
-        if args == ["gh", "api", "repos/owner/repo/releases/tags/v0.5.0"]:
+        if args == ["gh", "api", "repos/owner/repo/releases/tags/" + self.tag]:
             if self.releases and not self.metadata["draft"]:
                 return subprocess.CompletedProcess(args, 0, json.dumps(self.metadata), "")
             return subprocess.CompletedProcess(args, 1, "", "gh: Not Found (HTTP 404)")
@@ -971,10 +989,90 @@ class GithubReleaseTests(unittest.TestCase):
              mock.patch.object(release, "checksums"), \
              mock.patch.object(release, "command", side_effect=self.api), \
              mock.patch.object(release.subprocess, "run", side_effect=self.cli):
-            release.release("v0.5.0", self.root)
+            release.release(self.tag, self.root)
 
     def operations(self, operation):
         return [call for call in self.calls if call[:3] == ("gh", "release", operation)]
+
+    def test_first_stable_release_becomes_latest_despite_other_drafts_and_prereleases(self):
+        for history in ([], [
+                {"tag_name": "v99.0.0", "draft": True, "prerelease": False},
+                {"tag_name": "v99.0.0-rc.1", "draft": False, "prerelease": True}]):
+            with self.subTest(history=history):
+                self.history = history
+                self.metadata.update(draft=True, assets=[])
+                self.calls.clear()
+                self.publish_release()
+                self.assertIn("--latest=true", self.operations("edit")[0])
+
+    def test_newer_stable_release_uses_numeric_version_order_for_latest(self):
+        self.candidate("0.10.0")
+        self.history[0]["tag_name"] = "v0.9.999"
+        self.publish_release()
+        self.assertIn("--latest=true", self.operations("edit")[0])
+
+    def test_older_stable_can_publish_without_claiming_latest_from_a_later_page(self):
+        self.candidate("0.10.16")
+        self.releases.append({"id": 456, "tag_name": "v0.10.17",
+                              "draft": False, "prerelease": False})
+        self.publish_release()
+        self.assertEqual(self.metadata["assets"], [self.asset()])
+        self.assertFalse(self.metadata["draft"])
+        self.assertIn("--latest=false", self.operations("edit")[0])
+        self.assertIn("--prerelease=false", self.operations("edit")[0])
+
+    def test_prerelease_does_not_claim_latest_or_need_a_stable_comparison(self):
+        self.candidate("0.10.18-rc.1")
+        self.publish_release()
+        self.assertIn("--latest=false", self.operations("edit")[0])
+        self.assertIn("--prerelease=true", self.operations("edit")[0])
+        # The only listing is draft discovery, before upload.
+        self.assertEqual(sum("--paginate" in call for call in self.calls), 1)
+
+    def test_latest_listing_errors_retain_verified_assets_in_the_draft(self):
+        real_api = self.api
+        for status in (403, 404, 500):
+            with self.subTest(status=status):
+                self.metadata.update(draft=True, assets=[])
+                self.calls.clear()
+                error = subprocess.CalledProcessError(1, ["gh", "api"],
+                                                     stderr=f"gh: HTTP {status}")
+
+                def unavailable(*args, **kwargs):
+                    if "--paginate" in args and self.metadata["assets"]:
+                        raise error
+                    return real_api(*args, **kwargs)
+
+                with mock.patch.object(self, "api", side_effect=unavailable), \
+                     self.assertRaises(subprocess.CalledProcessError) as caught:
+                    self.publish_release()
+                self.assertIs(caught.exception, error)
+                self.assertEqual(self.metadata["assets"], [self.asset()])
+                self.assertTrue(self.metadata["draft"])
+                self.assertEqual(self.operations("edit"), [])
+
+    def test_malformed_latest_listing_never_guesses_a_publication_policy(self):
+        real_api = self.api
+        for response in ("not JSON", "{}", "[]", "[{}]",
+                         '[[{"tag_name":"v0.10.17","draft":false}]]',
+                         '[[{"tag_name":"v0.10.17","draft":"false","prerelease":false}]]',
+                         '[[{"tag_name":"release","draft":false,"prerelease":false}]]',
+                         '[[{"tag_name":"v0.10.01","draft":false,"prerelease":false}]]'):
+            with self.subTest(response=response):
+                self.metadata.update(draft=True, assets=[])
+                self.calls.clear()
+
+                def malformed(*args, **kwargs):
+                    if "--paginate" in args and self.metadata["assets"]:
+                        return response
+                    return real_api(*args, **kwargs)
+
+                with mock.patch.object(self, "api", side_effect=malformed), \
+                     self.assertRaises(ValueError):
+                    self.publish_release()
+                self.assertEqual(self.metadata["assets"], [self.asset()])
+                self.assertTrue(self.metadata["draft"])
+                self.assertEqual(self.operations("edit"), [])
 
     def test_tag_404_reuses_existing_draft_and_reloads_only_by_id(self):
         self.publish_release()
