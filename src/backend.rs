@@ -3,6 +3,7 @@ pub mod cc;
 pub mod codex;
 pub mod events;
 pub mod opencode;
+pub(crate) mod peer;
 pub mod pi;
 pub mod playwright;
 pub mod process;
