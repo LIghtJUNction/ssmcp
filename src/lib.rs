@@ -15,6 +15,7 @@ pub mod context;
 pub mod history;
 #[cfg(target_os = "linux")]
 pub mod http;
+pub(crate) mod http_client;
 #[cfg(target_os = "linux")]
 pub mod identity;
 #[cfg(target_os = "linux")]
