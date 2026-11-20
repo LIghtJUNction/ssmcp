@@ -39,6 +39,7 @@ impl Home {
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
             .env_remove("SSMCP_UI_CONFIG")
+            .env_remove("SSMCP_RELAY_TOKEN")
             .env("NO_COLOR", "1")
             .output()
             .unwrap()
@@ -181,8 +182,11 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
     assert!(String::from_utf8_lossy(&denied.stderr).contains("not signed in"));
     let connection = home.command(&["--no-watchdog", "--name", "config-check"]);
     assert!(!connection.status.success());
-    assert!(String::from_utf8_lossy(&connection.stderr).contains("choose a username to connect"));
-    assert!(String::from_utf8_lossy(&connection.stderr).contains("username@edited.example"));
+    assert!(connection.stdout.is_empty());
+    let error = String::from_utf8_lossy(&connection.stderr);
+    assert!(error.contains("no saved sign-in"), "{error}");
+    assert!(error.contains("--allow username@relay-server"), "{error}");
+    assert!(!error.contains(&"a".repeat(64)));
     home.success(&["config", "unset", "server"]);
     assert_eq!(
         home.success(&["config", "get", "server"]).trim(),
@@ -191,35 +195,67 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
 }
 
 #[test]
-fn invite_override_uses_selected_origin_for_api_script_and_join() {
+fn explicit_server_overrides_configuration_for_account_and_allow_requests() {
     let home = Home::new();
     home.success(&["config", "set", "server", "https://configured.example"]);
     let server = Server::once(
         "200 OK",
         json!({
-            "token": format!("ci_{}", "b".repeat(64)), "expires_in": 600, "session_expires_in": 3600
+            "identity": {"provider":"github", "subject":"123", "login":"alice",
+                "principal":"alice@github", "username":"alice-home"}
         }),
     );
     let token = "c".repeat(64);
     home.account(&server.origin, &token);
-    let output = home.success(&["--server", &server.origin, "invite", "--json"]);
-    let invitation: serde_json::Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(invitation["server"], server.origin);
-    assert_eq!(invitation["bootstrap"], true);
-    let command = invitation["command_sh"].as_str().unwrap();
-    assert!(command.contains(&format!("{}/client/install.sh", server.origin)));
-    assert!(command.contains(&format!("--server '{}'", server.origin)));
-    assert!(!command.contains("ssmcp.lmm.best"));
-    assert!(!command.contains("configured.example"));
-    assert!(!command.contains(&token));
+    let output = home.success(&["--server", &server.origin, "whoami", "--json"]);
+    let account: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(account["server"], server.origin);
+    assert_eq!(account["identity"]["username"], "alice-home");
+    assert!(!output.contains("ssmcp.lmm.best"));
+    assert!(!output.contains("configured.example"));
+    assert!(!output.contains(&token));
     let request = server.request();
-    assert!(request.starts_with("POST /api/client/invites "));
+    assert!(request.starts_with("GET /api/client/whoami "));
     assert!(
         request
             .to_ascii_lowercase()
             .contains(&format!("authorization: bearer {token}"))
     );
-    // Per-command selection leaves the saved default untouched.
+
+    // Explicit --allow reaches the selected relay anonymously, even when that
+    // origin has a saved login. A protocol rejection stops before tools start.
+    let relay = Server::once(
+        "404 Not Found",
+        json!({"error":"fixture_no_account_clients"}),
+    );
+    home.account(&relay.origin, &token);
+    let allow = format!("alice@{}", relay.origin);
+    let output = home.command(&[
+        "--server",
+        &relay.origin,
+        "--allow",
+        &allow,
+        "--no-watchdog",
+        "--no-browser",
+        "--name",
+        "config-override-fixture",
+    ]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("server does not support account clients"),
+        "{error}"
+    );
+    assert!(!error.contains("Starting native tools"), "{error}");
+    assert!(!error.contains(&token));
+    let request = relay.request();
+    assert!(request.starts_with("GET /api/client/connect "));
+    assert!(request.to_ascii_lowercase().contains("upgrade: websocket"));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&token));
+
+    // Per-command selection leaves the saved configuration untouched.
     assert_eq!(
         home.success(&["config", "get", "server"]).trim(),
         "https://configured.example"
@@ -227,28 +263,42 @@ fn invite_override_uses_selected_origin_for_api_script_and_join() {
 }
 
 #[test]
-fn configured_default_is_used_by_invite_login_named_connection_and_join() {
+fn configured_default_is_used_by_account_login_named_connection_and_allow() {
     let home = Home::new();
     let server = Server::once(
         "200 OK",
         json!({
-            "token": format!("ci_{}", "b".repeat(64)), "expires_in": 600, "session_expires_in": 3600
+            "identity": {"provider":"github", "subject":"123", "login":"alice",
+                "principal":"alice@github", "username":"alice-home"}
         }),
     );
-    home.account(&server.origin, &"d".repeat(64));
-    home.account("https://last-login.example", &"e".repeat(64));
+    let selected_token = "d".repeat(64);
+    let previous_token = "e".repeat(64);
+    home.account(&server.origin, &selected_token);
+    home.account("https://last-login.example", &previous_token);
     home.success(&["config", "set", "server", &server.origin]);
-    let invitation: serde_json::Value =
-        serde_json::from_str(&home.success(&["invite", "--json", "--no-bootstrap"])).unwrap();
-    assert_eq!(invitation["server"], server.origin);
-    assert_eq!(invitation["bootstrap"], false);
-    assert!(server.request().starts_with("POST /api/client/invites "));
+    let output = home.success(&["whoami", "--json"]);
+    let account: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(account["server"], server.origin);
+    assert!(!output.contains(&selected_token));
+    assert!(!output.contains(&previous_token));
+    let request = server.request();
+    assert!(request.starts_with("GET /api/client/whoami "));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains(&format!("authorization: bearer {selected_token}"))
+    );
+    assert!(!request.contains(&previous_token));
 
     let login = Server::once("400 Bad Request", json!({"error": "stop_test"}));
     home.success(&["config", "set", "server", &login.origin]);
     let output = home.command(&["login", "--no-browser"]);
     assert!(!output.status.success());
-    assert!(login.request().starts_with("POST /api/client/login/start "));
+    let request = login.request();
+    assert!(request.starts_with("POST /api/client/login/start "));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains(&previous_token));
 
     let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
     home.success(&["config", "set", "server", &named.origin]);
@@ -258,18 +308,39 @@ fn configured_default_is_used_by_invite_login_named_connection_and_join() {
     assert!(request.starts_with("POST /api/client/login/start "));
     assert!(request.contains("\"username\":\"alice\""));
     assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(!request.contains(&"e".repeat(64)));
+    assert!(!request.contains(&previous_token));
 
-    let join = Server::once("410 Gone", json!({"error": "expired"}));
-    home.success(&["config", "set", "server", &join.origin]);
-    let token = format!("ci_{}", "f".repeat(64));
-    let output = home.command(&["join", "--token", &token, "--no-watchdog"]);
+    // The configured origin also controls unsigned --allow connections. A
+    // different last-login origin must neither override it nor supply a token.
+    let relay = Server::once(
+        "404 Not Found",
+        json!({"error":"fixture_no_account_clients"}),
+    );
+    home.account(&relay.origin, &selected_token);
+    home.account("https://last-login.example", &previous_token);
+    home.success(&["config", "set", "server", &relay.origin]);
+    let allow = format!("alice@{}", relay.origin);
+    let output = home.command(&["--allow", &allow, "--no-watchdog", "--no-browser"]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("expired"));
-    let request = join.request();
-    assert!(request.starts_with("POST /api/client/enroll "));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("server does not support account clients"),
+        "{error}"
+    );
+    assert!(!error.contains("Starting native tools"), "{error}");
+    assert!(!error.contains(&selected_token));
+    assert!(!error.contains(&previous_token));
+    assert_eq!(
+        home.success(&["config", "get", "server"]).trim(),
+        relay.origin
+    );
+    let request = relay.request();
+    assert!(request.starts_with("GET /api/client/connect "));
+    assert!(request.to_ascii_lowercase().contains("upgrade: websocket"));
     assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(request.contains(&token));
+    assert!(!request.contains(&selected_token));
+    assert!(!request.contains(&previous_token));
 }
 
 #[test]
@@ -310,7 +381,9 @@ fn invalid_configuration_never_silently_selects_the_builtin_server() {
     for args in [
         vec!["config", "get", "server"],
         vec!["login", "--no-browser"],
-        vec!["invite"],
+        vec!["whoami"],
+        vec!["--no-watchdog"],
+        vec!["--allow", "alice@remote.example", "--no-watchdog"],
     ] {
         let result = home.command(&args);
         assert!(!result.status.success());
