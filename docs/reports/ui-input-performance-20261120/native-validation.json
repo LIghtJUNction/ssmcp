@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-20T21:43:33+08:00",
+  "source_commit": "67d546e7f9c4cfccdefbd15ba0aeb4a7fbbb3567",
+  "runner_commit": "e7b78845e2778cf884cd344ee482d2ca95334f9b",
+  "runner_commit_changes_production_source": false,
+  "status": "targeted_tests_and_patch_pty_passed_final_integration_pending",
+  "passed": 19,
+  "failed": 0,
+  "source_clean_before_and_after": true,
+  "submodule_commits": {
+    "zharness": "e3580c01c7252da090d04e59b59762bc561777d1",
+    "zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "source_file_sha256": {
+    "Cargo.toml": "ad337b3028ce89b7a47b9afbfe4a70fcb8bca4a66aefa9262db70ba60063b70d",
+    "Cargo.lock": "62de93e702e7304f19be19dff712721b896c8e62e1f3b7739bd746e1c265983c",
+    "src/client/interface/history.rs": "ecde7f80402a3b4f74ecba5b1e04d276b658136b2d7d7f5f09caa1c0b6e5710e",
+    "src/client/interface/history/archive.rs": "5def3d3f95dffc177f24553f1ab5636778bc8dc6b807a8c71bd5a5417104eac0",
+    "src/client/interface/history/ownership.rs": "c3a998c6e9685b494bee1d263058d03563902f75068b81922373ac025040df73",
+    "src/client/terminal/events.rs": "3e83d52729d5c6255324c479d53158278e40884e9bc9e8dc57b19bf9c38abde2",
+    "src/client/terminal/events/tool_activity/tests.rs": "72ef4553996f41e6773f5ec6b754c6018dca9417c3e78e4e53578527e7d614f1",
+    "src/client/steering.rs": "872972c9f2199981be6f962f2096d290717a61bad1434637af211aebcc7d0fec",
+    "src/client/terminal/conversation.rs": "328ec9dd188709421ff3889266a6272f32b9e9783fece3bb87d75df481e1a907"
+  },
+  "tests": [
+    {
+      "group": "targeted",
+      "name": "ownership",
+      "passed": 5,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 129.97
+    },
+    {
+      "group": "targeted",
+      "name": "snapshot",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 1.618
+    },
+    {
+      "group": "targeted",
+      "name": "latest_takeback_reclaims_only_the_latest_unsent_request",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.114
+    },
+    {
+      "group": "targeted",
+      "name": "uncertain_retarget_and_local_edit_never_retract_previous_history",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.114
+    },
+    {
+      "group": "targeted",
+      "name": "enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.27
+    },
+    {
+      "group": "targeted",
+      "name": "delivery_winning_takeback_cannot_restore_or_republish_the_request",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.164
+    },
+    {
+      "group": "attribution",
+      "name": "client::interface::history::archive::tests::history_archive_invalid_index_fails_without_releasing_or_modifying_current_history",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.032
+    },
+    {
+      "group": "attribution",
+      "name": "client::interface::history::archive::tests::history_archive_rejects_linked_index_without_touching_the_target",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.016
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::conversation::reload_state::tests::failed_jsonl_resume_keeps_only_the_saved_read_only_conversation_preview",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.016
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::conversation::reload_state::tests::reload_keeps_history_cards_owner_local_and_logs_global",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.032
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::events::source_tests::native_job_late_output_stays_with_creator_history_and_in_global_logs_and_tasks",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.164
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::events::source_tests::verified_ui_message_retries_stay_with_the_original_jsonl",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.164
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::events::source_tests::verified_ui_present_retries_stay_with_the_original_jsonl",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.164
+    },
+    {
+      "group": "attribution",
+      "name": "client::terminal::events::source_tests::history_capture_is_lazy_and_headless_first_message_uses_its_reserved_owner",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.114
+    },
+    {
+      "group": "attribution",
+      "name": "session::attach::tests::modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner",
+      "passed": 1,
+      "failed": 0,
+      "exit_code": 0,
+      "seconds": 0.008
+    }
+  ],
+  "libtest_sha256": "005686d64d5aff0b52deb3b9bcc64d75a2f460c5756d12a399097e45d80db6b6",
+  "libtest_sha256_after": "005686d64d5aff0b52deb3b9bcc64d75a2f460c5756d12a399097e45d80db6b6",
+  "native_output_complete": true,
+  "native_output_sha256": [
+    "bc0a2a9907e9691ada890364aae82bb60066cfa961a3d600e44816587d75aec7",
+    "b032789702ac83a3880752ed2e002b9d177d7a5407e4a60681b0b75291ed6239"
+  ],
+  "memory_before_candidate_installation": {
+    "sample_time_unix": 1795181380.7303662,
+    "primary": {
+      "Name": "ssmcp",
+      "State": "S (sleeping)",
+      "VmSize": "568744 kB",
+      "VmHWM": "25784 kB",
+      "VmRSS": "13736 kB",
+      "VmSwap": "5536 kB",
+      "Threads": "4"
+    },
+    "smaps_rollup": {
+      "Rss": "13736 kB",
+      "Pss": "6859 kB",
+      "Pss_Anon": "6008 kB",
+      "Pss_File": "851 kB",
+      "Shared_Clean": "7516 kB",
+      "Shared_Dirty": "0 kB",
+      "Private_Clean": "320 kB",
+      "Private_Dirty": "5900 kB",
+      "Anonymous": "6008 kB",
+      "Swap": "5536 kB"
+    },
+    "note": "Single observation of the existing primary client; not a before/after comparison. No latency cause or RSS improvement is inferred."
+  },
+  "pending": [
+    "Final integrated candidate acceptance and release",
+    "Production installation"
+  ],
+  "physical_acceptance": {
+    "binary_source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "harness_source": "0d32db070eb349710339cb94d0e8914a71136c94",
+    "checks": 69,
+    "timing_samples": 8,
+    "all_within_diagnostic_budgets": true,
+    "report": "pty-report.json",
+    "provenance": "validation-provenance.json"
+  },
+  "post_test_formatting": {
+    "source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "source_change": "four exact rustfmt line-wrap replacements in two files",
+    "checks_passed": true
+  }
+}
