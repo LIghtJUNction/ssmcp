@@ -12,6 +12,8 @@ cargo test --offline --locked --lib --message-format=json http::await_tool:: -- 
 
 该命令构建了当前 libtest，等待测试实际运行 3.77 秒。其余分组直接复用 Cargo JSON 回执里的同一个 libtest 可执行文件，分别传入下表筛选器及 `--nocapture --test-threads=1`；没有为每组重新构建，也没有将仅编译成功计作测试通过。
 
+正式发布所需的 `cargo clippy --offline --workspace --locked --all-targets -- -D warnings` 也在同一源码上完成，退出码为 0，耗时 416.65 秒。没有修改 Rust 实现来通过该检查。Cargo 自身报告了 `qrcodegen` 的 `cargo::unused_dependencies` 清单提示；该提示不属于 Rust/Clippy 警告门禁，未使命令失败，也没有在本分支顺带移除依赖。
+
 | 范围 | 精确筛选器 | 通过数 |
 |---|---|---:|
 | 通用等待 | `http::await_tool::` | 26 |
@@ -26,6 +28,8 @@ cargo test --offline --locked --lib --message-format=json http::await_tool:: -- 
 | 执行等待与结果保留 | `backend::shell::tests::waits_keep_work_running_and_completed_jobs_remain_available` | 1 |
 | 执行超时、取消及客户端隔离 | `backend::shell::tests::jobs_support_timeout_cancellation_and_client_isolation` | 1 |
 | 合计 | 各组不重叠 | 106 |
+
+随后同步了三个已有 Python e2e 脚本中精确列举公共工具的断言，使其与 `list / code_mode / collab / request_finish / await / messages` 一致。对四个相关脚本执行了 Python AST 语法解析，并检查五处公共目录列表；这项静态核对不表示执行过完整 e2e，也没有改变上述 Rust 源码和已通过的结果。
 
 ## 这些测试证明的边界
 
