@@ -2463,11 +2463,64 @@ mod tests {
         native.await.unwrap().unwrap();
         assert_eq!(summary_run.tool_summary_notices(&client_id, None).len(), 1);
         assert!(!session.tool_summary_advertised());
-        let mut summary_report = report(summary_run, &access_token);
-        assert_eq!(
-            finish_user_response(&summary_report, original.clone()).await,
-            original
+        let rejected_report = report(summary_run, &access_token);
+        let rejected_original = original.clone();
+        let rejecting =
+            tokio::spawn(
+                async move { finish_user_response(&rejected_report, rejected_original).await },
+            );
+        let Some(Frame::Call { id, operation, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing legacy capability probe");
+        };
+        assert!(matches!(operation,Operation::CallTool{name,arguments}
+            if name=="ssmcp.ui.tool_summary" && arguments==json!({"action":"list"})));
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Err("unknown tool: ssmcp.ui.tool_summary".into()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(rejecting.await.unwrap(), original);
+        assert!(!session.tool_summary_advertised());
+
+        // Each code-mode run gets at most one probe. A later real native call
+        // establishes this new run's pending notice independently.
+        let summary_run = code_mode::AuditRun::new("return null;", None).unwrap();
+        summary_run.record_connection(&session).unwrap();
+        let native = start_native(
+            summary_run.clone(),
+            Operation::CallTool {
+                name: "ssmcp.fs.stat".into(),
+                arguments: json!({"path":"fixture"}),
+            },
         );
+        let Some(Frame::Call { id, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing next run's native stat call");
+        };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(native_notice.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        native.await.unwrap().unwrap();
+        let mut summary_report = report(summary_run, &access_token);
 
         // Capability is learned from the actual session's catalog, never JS JSON.
         let catalog = start_native(
@@ -2696,6 +2749,174 @@ mod tests {
             .unwrap()
             .unwrap();
         http_server.abort();
+    }
+
+    #[tokio::test]
+    async fn tool_summary_probe_discovers_native_capability_without_catalog_after_eleven_calls() {
+        use crate::wire::{self, Frame};
+        use tokio::{
+            io::BufReader,
+            net::{TcpListener, UnixStream},
+            time::timeout,
+        };
+        for valid in [false, true] {
+            let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let routes = router(broker.clone());
+            let http_server =
+                tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+            let (server, client) = UnixStream::pair().unwrap();
+            let attachment = tokio::spawn(broker.clone().attach(server));
+            let (reader, mut writer) = client.into_split();
+            let mut reader = BufReader::new(reader);
+            wire::write_frame(
+                &mut writer,
+                &Frame::Hello {
+                    version: wire::VERSION,
+                    mode: wire::Mode::Shell,
+                    metadata: wire::ClientMetadata {
+                        name: "reminder-fixture".into(),
+                        title: None,
+                        cwd: "/tmp".into(),
+                        hostname: "fixture".into(),
+                        allow: Vec::new(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::Ready {
+                url,
+                login_code,
+                client_id,
+                ..
+            }) = wire::read_frame(&mut reader).await.unwrap()
+            else {
+                panic!("missing ready frame");
+            };
+            let user = url.rsplit('/').next().unwrap().to_owned();
+            let access_token = cancellation_test_token(&base, &url, &login_code).await;
+            let authorization = broker.authenticate(&user, &access_token).await.unwrap();
+            let session = broker
+                .client(&user, &authorization, &client_id)
+                .await
+                .unwrap();
+            let run = code_mode::AuditRun::new("return null;", None).unwrap();
+            run.record_connection(&session).unwrap();
+            let notice = json!({"schema_version":1,"group_id":"fresh-group","revision":0,
+                "call_count":11,"covered_call_count":0,"threshold":10,
+                "tool":"ssmcp.ui.tool_summary"});
+            // Exercise eleven actual Session/Frame calls, without ListTools or a JS
+            // result that could carry the notice. Only the last native reply has it.
+            for index in 0..11 {
+                let target = session.clone();
+                let authorization = authorization.clone();
+                let call = tokio::spawn(code_mode::AUDIT_RUN.scope(run.clone(), async move {
+                    target
+                        .call_with_authorization(
+                            Operation::CallTool {
+                                name: "ssmcp.fs.stat".into(),
+                                arguments: json!({"path":"fixture"}),
+                            },
+                            None,
+                            &authorization,
+                        )
+                        .await
+                }));
+                let Some(Frame::Call { id, operation, .. }) =
+                    timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                else {
+                    panic!("missing native call {index}");
+                };
+                assert!(matches!(operation, Operation::CallTool { name, arguments }
+                    if name == "ssmcp.fs.stat" && arguments == json!({"path":"fixture"})));
+                let mut result = json!({"structuredContent":{"exists":true}});
+                if index == 10 {
+                    result["_meta"] = json!({"ssmcp.tool_summary":notice});
+                }
+                wire::write_frame(
+                    &mut writer,
+                    &Frame::Reply {
+                        id,
+                        result: Ok(result),
+                    },
+                )
+                .await
+                .unwrap();
+                call.await.unwrap().unwrap();
+            }
+            assert!(!session.tool_summary_advertised());
+            assert_eq!(run.tool_summary_notices(&client_id, None).len(), 1);
+            let original =
+                json!({"content":[],"structuredContent":{"result":null},"isError":false});
+            let report = CodeRunReport {
+                broker: broker.clone(),
+                user: user.clone(),
+                access_token,
+                run: run.clone(),
+                delivered: true,
+            };
+            let response = original.clone();
+            let finalizing =
+                tokio::spawn(async move { finish_user_response(&report, response).await });
+            let Some(Frame::Call { id, operation, .. }) =
+                timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                    .await
+                    .unwrap()
+                    .unwrap()
+            else {
+                panic!("missing first-use native summary capability probe");
+            };
+            assert!(matches!(operation, Operation::CallTool { name, arguments }
+                if name == "ssmcp.ui.tool_summary" && arguments == json!({"action":"list"})));
+            let group = if valid {
+                json!({"group_id":"fresh-group","revision":0,"call_count":11,"covered_call_count":0})
+            } else {
+                json!({"group_id":"fresh-group"})
+            };
+            wire::write_frame(
+                &mut writer,
+                &Frame::Reply {
+                    id,
+                    result: Ok(json!({"structuredContent":{
+                        "schema_version":1,"threshold":10,"groups":[group]
+                    }})),
+                },
+            )
+            .await
+            .unwrap();
+            let response = finalizing.await.unwrap();
+            assert_eq!(session.tool_summary_advertised(), valid);
+            assert!(!run.claim_tool_summary_probe(&client_id, None));
+            if valid {
+                let reminders = response["structuredContent"]["tool_summary_reminders"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(reminders.len(), 1);
+                assert_eq!(reminders[0]["group_id"], "fresh-group");
+                assert_eq!(reminders[0]["call_count"], 11);
+                assert_eq!(response["structuredContent"]["result"], Value::Null);
+                assert_eq!(response["content"].as_array().unwrap().len(), 1);
+                assert!(response["structuredContent"].get("user_messages").is_none());
+            } else {
+                assert_eq!(
+                    response, original,
+                    "malformed native success is not capability proof"
+                );
+            }
+            drop(reader);
+            drop(writer);
+            timeout(Duration::from_secs(2), attachment)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            http_server.abort();
+        }
     }
 
     #[tokio::test]

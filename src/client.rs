@@ -2052,6 +2052,26 @@ async fn connect(
     .await
 }
 
+/// Keep an oversized native result off the wire without losing a host reminder.
+/// The callback only cancels the reservation carried by this rejected reply.
+pub(crate) fn bounded_native_reply(
+    result: Result<serde_json::Value, String>,
+    restore_reminder: impl FnOnce(&serde_json::Value),
+) -> Result<serde_json::Value, String> {
+    if serde_json::to_vec(&result).map_or(true, |bytes| bytes.len() + 256 > MAX_FRAME) {
+        if let Ok(value) = &result
+            && let Some(reminder) = value
+                .get("_meta")
+                .and_then(|meta| meta.get(interface::tool_summary::META_KEY))
+        {
+            restore_reminder(reminder);
+        }
+        Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into())
+    } else {
+        result
+    }
+}
+
 async fn connect_inner(
     options: &Options,
     ui: &ui::Ui,
@@ -2476,9 +2496,14 @@ async fn connect_inner(
                         let mut result = call_scope.scope(backend.perform(operation)).await;
                         if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
-                        if serde_json::to_vec(&result).map_or(true, |bytes|bytes.len() + 256 > MAX_FRAME) {
-                            result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
-                        }
+                        result = call_scope.scope(async {
+                            bounded_native_reply(result, |reminder| {
+                                terminal::restore_tool_summary_reminder(
+                                    &crate::runtime::call_scope::Source::capture(),
+                                    reminder,
+                                );
+                            })
+                        }).await;
                         if let Err(error) = &result {
                             call_scope.scope(async {
                                 render::scoped_event(
