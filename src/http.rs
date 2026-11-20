@@ -1644,7 +1644,9 @@ fn commit_user_response_inner(
             waiting,
         } = target;
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
-        native_candidates.push((session.clone(), owner.clone(), binding.clone()));
+        if !report.run.time_observation_only(session.client_id()) {
+            native_candidates.push((session.clone(), owner.clone(), binding.clone()));
+        }
         if answers_deferred.len() < 8
             && binding.is_some()
             && let Some(reason) = report.run.question_answer_deferred(session.client_id())

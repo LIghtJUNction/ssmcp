@@ -7,6 +7,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 mod attribution;
 pub mod messages;
 pub mod versions;
+pub mod wait_display;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
 
 /// The sole supported wire protocol, including controller, source audit and steering.
@@ -591,6 +592,11 @@ pub enum Frame {
     },
     CodeModeFinished {
         completion: CodeCompletion,
+    },
+    /// Only sent after explicit wait_display_v1 offer/echo negotiation. This
+    /// is display metadata, never a native call, queue receipt or permission.
+    WaitDisplay {
+        snapshot: wait_display::Snapshot,
     },
     Reply {
         id: u64,

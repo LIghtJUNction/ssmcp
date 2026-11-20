@@ -9,6 +9,7 @@ mod attribution_tests;
 mod management;
 mod messaging;
 mod traffic;
+pub(crate) mod wait_display;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
     user_policy::{TrafficError, TrafficFailure, TrafficFailureState, TrafficOutcome},
@@ -181,6 +182,7 @@ pub struct Session {
     public_url: String,
     sender: mpsc::Sender<Call>,
     reports: mpsc::Sender<wire::CodeCompletion>,
+    wait_display: Arc<wait_display::Hub>,
     slots: Semaphore,
     alive: AtomicBool,
     ssh_user: String,
@@ -785,6 +787,7 @@ impl Broker {
             },
             sender,
             reports,
+            wait_display: wait_display::Hub::new(false),
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: user.into(),
@@ -887,6 +890,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
+            session.wait_display.close();
             self.native_messages.close_connection(session);
             session.collaboration.close();
             session.steering.close();
@@ -1126,6 +1130,12 @@ impl Broker {
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
+        let wait_display_supported = access_supported
+            && control_attribution
+            && peer.as_ref().is_some_and(|peer| peer.wait_display);
+        let time_observation_supported = access_supported
+            && control_attribution
+            && peer.as_ref().is_some_and(|peer| peer.time_observation);
         let mut capabilities = Vec::new();
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
@@ -1138,6 +1148,12 @@ impl Broker {
         }
         if version_notice_supported {
             capabilities.push(wire::versions::CAPABILITY.into());
+        }
+        if wait_display_supported {
+            capabilities.push(wire::wait_display::CAPABILITY.into());
+        }
+        if time_observation_supported {
+            capabilities.push(wire::wait_display::TIME_CAPABILITY.into());
         }
         let login_code = if restricted {
             String::new()
@@ -1172,6 +1188,7 @@ impl Broker {
             },
             sender,
             reports,
+            wait_display: wait_display::Hub::new(wait_display_supported),
             slots: Semaphore::new(wire::MAX_INFLIGHT),
             alive: AtomicBool::new(true),
             ssh_user: user.clone(),
@@ -1271,6 +1288,8 @@ impl Broker {
             let mut deliveries: BillingQueue<ReplyReady> = FuturesUnordered::new();
             let mut completion_reports: BillingQueue<Option<Frame>> = FuturesUnordered::new();
             let mut expiry = tokio::time::interval(Duration::from_secs(1));
+            let mut wait_updates = session.wait_display.subscribe();
+            let mut wait_revision = 0;
             loop {
                 // Keep the same read future across requests/ticks: partial JSON frames
                 // must not be discarded when another select branch becomes ready.
@@ -1279,6 +1298,14 @@ impl Broker {
                 let received = loop {
                     tokio::select! {
                         frame = &mut next_frame => break frame?,
+                        _ = wait_updates.changed(), if wait_display_supported => {
+                            let _ = *wait_updates.borrow_and_update();
+                            if let Some(snapshot) = session.wait_display.snapshot(&self, &session)
+                                && snapshot.revision > wait_revision {
+                                wait_revision = snapshot.revision;
+                                timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::WaitDisplay { snapshot })).await??;
+                            }
+                        },
                         Some(call) = requests.recv() => {
                             if call.reply.is_closed() { continue; }
                             if let Err(error) = session.validate_binding(call.binding.as_ref()) {
@@ -1388,6 +1415,7 @@ impl Broker {
                             // Reuse this bounded connection heartbeat; no task,
                             // remote lookup, or mailbox polling is required.
                             self.refresh_native_connection(&session);
+                            session.wait_display.refresh(&self, &session);
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
                             for id in expired {
                                 if let Some(call) = pending.remove(&id) {
@@ -1471,6 +1499,7 @@ impl Broker {
                     .notice(&self.public_url, TrafficOutcome::Unknown),
             });
             session.alive.store(false, Ordering::Release);
+            session.wait_display.close();
             requests.close();
             for (id, call) in pending.drain() {
                 let _ = call
@@ -1499,6 +1528,7 @@ impl Broker {
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
+        session.wait_display.close();
         self.native_messages.close_connection(&session);
         session.collaboration.close();
         session.steering.close();
@@ -2047,6 +2077,7 @@ mod tests {
             },
             sender,
             reports,
+            wait_display: wait_display::Hub::new(false),
             slots: Semaphore::new(1),
             alive: AtomicBool::new(true),
             ssh_user: "test".into(),

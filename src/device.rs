@@ -388,6 +388,8 @@ pub(crate) struct DevicePeer {
     pub control_attribution: bool,
     pub native_messages: bool,
     pub version_notice: bool,
+    pub wait_display: bool,
+    pub time_observation: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -397,6 +399,8 @@ impl From<Registration> for DevicePeer {
             control_attribution: account.control_attribution,
             native_messages: false,
             version_notice: false,
+            wait_display: false,
+            time_observation: false,
             account: Some(account),
         }
     }
@@ -773,6 +777,8 @@ async fn connect(
         control_attribution,
         native_messages,
         version_notice: capability_requested(&headers, wire::versions::CAPABILITY),
+        wait_display: capability_requested(&headers, wire::wait_display::CAPABILITY),
+        time_observation: capability_requested(&headers, wire::wait_display::TIME_CAPABILITY),
     };
     let transport = broker
         .admit_transport()

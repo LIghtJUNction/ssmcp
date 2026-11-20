@@ -32,6 +32,7 @@ struct NativeAnswers {
     summary_probe_pause: Option<(Arc<Notify>, Arc<Notify>)>,
     finish_operations: Vec<Value>,
     held_replies: Vec<Frame>,
+    display_frames: Vec<wire::wait_display::Snapshot>,
 }
 
 struct Fixture {
@@ -82,6 +83,10 @@ async fn receive(socket: &mut Socket) -> Option<Frame> {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_timing(false).await
+    }
+
+    async fn with_timing(timing: bool) -> Self {
         let mut nonce = [0_u8; 16];
         crate::platform::random_bytes(&mut nonce).unwrap();
         let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -129,10 +134,19 @@ impl Fixture {
         request.headers_mut().insert(
             wire::CAPABILITIES_HEADER,
             format!(
-                "{}, {}, {}",
+                "{}, {}, {}{}",
                 wire::SESSION_ACCESS_CAPABILITY,
                 wire::CONTROL_ATTRIBUTION_CAPABILITY,
-                wire::messages::CAPABILITY
+                wire::messages::CAPABILITY,
+                if timing {
+                    format!(
+                        ", {}, {}",
+                        wire::wait_display::CAPABILITY,
+                        wire::wait_display::TIME_CAPABILITY
+                    )
+                } else {
+                    String::new()
+                }
             )
             .parse()
             .unwrap(),
@@ -169,6 +183,18 @@ impl Fixture {
                 .any(|c| c == wire::CONTROL_ATTRIBUTION_CAPABILITY)
         );
         assert!(capabilities.iter().any(|c| c == wire::messages::CAPABILITY));
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|c| c == wire::wait_display::CAPABILITY),
+            timing
+        );
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|c| c == wire::wait_display::TIME_CAPABILITY),
+            timing
+        );
         let token = broker.oauth.test_identity_tokens("mcp", "42")["access_token"]
             .as_str()
             .unwrap()
@@ -203,6 +229,7 @@ impl Fixture {
             summary_probe_pause: None,
             finish_operations: vec![],
             held_replies: vec![],
+            display_frames: vec![],
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
@@ -224,6 +251,18 @@ impl Fixture {
                 if matches!(frame, Frame::Reject { .. }) {
                     break;
                 }
+                let frame = match frame {
+                    Frame::WaitDisplay { snapshot } => {
+                        assert!(
+                            timing,
+                            "legacy peers must never receive an unknown display frame"
+                        );
+                        snapshot.validate().unwrap();
+                        answers.lock().unwrap().display_frames.push(snapshot);
+                        continue;
+                    }
+                    frame => frame,
+                };
                 let Frame::Call {
                     id,
                     operation: Operation::CallTool { name, arguments },
@@ -246,15 +285,30 @@ impl Fixture {
                     } else {
                         let attribution = attribution.expect("authenticated native attribution");
                         assert_eq!(attribution.account.subject, "42");
-                        assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
-                        if matches!(name.as_str(), "ssmcp.fs.stat" | "ssmcp.ui.tool_summary")
-                            || summary_exec
-                        {
+                        if matches!(
+                            name.as_str(),
+                            "ssmcp.time.now" | "ssmcp.time.wait" | "ssmcp.ui.tool_summary"
+                        ) {
+                            if let Some(agent) = &attribution.agent {
+                                assert_eq!(agent.id, expected_agent);
+                            }
+                        } else {
+                            assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
+                        }
+                        if name == "ssmcp.fs.stat" || summary_exec {
                             assert_eq!(
                                 code_context
                                     .as_ref()
                                     .and_then(|context| context.thread_id.as_deref()),
                                 Some(expected_agent.as_str()),
+                            );
+                        }
+                        if name == "ssmcp.ui.tool_summary" {
+                            assert_eq!(
+                                code_context
+                                    .as_ref()
+                                    .and_then(|context| context.thread_id.as_deref()),
+                                attribution.agent.as_ref().map(|agent| agent.id.as_str()),
                             );
                         }
                         let mut output = match name.as_str() {
@@ -329,11 +383,18 @@ impl Fixture {
                                 json!({"structuredContent":{"native":"kept"}})
                             }
                             "ssmcp.fs.stat" => json!({"structuredContent":{"exists":true}}),
+                            "ssmcp.time.now" => {
+                                json!({"structuredContent":{"schema_version":1,"unix_ms":1234,"monotonic_ms":12}})
+                            }
+                            "ssmcp.time.wait" => {
+                                json!({"structuredContent":{"schema_version":1,"timer_id":"timer_fixture_1","status":"running","completion_permission":false}})
+                            }
                             "ssmcp.ui.tool_summary" => {
                                 assert_eq!(arguments, json!({"action":"list"}));
                                 json!({"structuredContent":{"schema_version":1,"threshold":10,
-                                    "groups":[{"group_id":"await-fixture-group","revision":0,
-                                        "call_count":state.summary_calls,"covered_call_count":0}],
+                                    "groups":if state.summary_calls == 0 {vec![]} else {vec![json!({
+                                        "group_id":"await-fixture-group","revision":0,
+                                        "call_count":state.summary_calls,"covered_call_count":0})]},
                                     "has_more":false,"truncated":false}})
                             }
                             _ => panic!("unexpected fixture native tool {name}"),
@@ -360,7 +421,12 @@ impl Fixture {
                                 });
                             }
                         }
-                        if name == "fixture.error" {
+                        if name == "ssmcp.time.wait" && arguments["timer_id"] == "missing_timer" {
+                            Err(
+                                "time timer is unknown, expired, or belongs to another caller"
+                                    .into(),
+                            )
+                        } else if name == "fixture.error" {
                             Err("synthetic native failure".into())
                         } else {
                             Ok(output)
@@ -1045,3 +1111,5 @@ async fn tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_cons
 
 mod await_capacity;
 mod finish_receipts;
+mod time_primitives;
+mod wait_display;

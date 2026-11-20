@@ -56,6 +56,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.client.reload", "ssmcp.client.capabilities",
     "ssmcp.resources.list", "ssmcp.resources.templates", "ssmcp.resources.read",
     "ssmcp.output.read", "ssmcp.output.stat", "ssmcp.output.cleanup",
+    "ssmcp.time.now", "ssmcp.time.wait",
     "ssmcp.exec.start", "ssmcp.exec.list", "ssmcp.exec.status", "ssmcp.exec.wait",
     "ssmcp.exec.read", "ssmcp.exec.write", "ssmcp.exec.cancel", "ssmcp.exec.forget", "ssmcp.exec.events",
     "ssmcp.harnesses.list", "ssmcp.harnesses.load", "ssmcp.audit.events",

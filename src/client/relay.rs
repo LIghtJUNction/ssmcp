@@ -74,11 +74,13 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{}",
+                "{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
-                crate::wire::versions::CAPABILITY
+                crate::wire::versions::CAPABILITY,
+                crate::wire::wait_display::CAPABILITY,
+                crate::wire::wait_display::TIME_CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -99,6 +101,35 @@ pub(super) fn restrict_to_self(command: &mut Command) {
     );
 }
 
+/// Read the actual parent-generated offer, including the self-only override.
+/// A Ready claim cannot enable a capability this process did not request.
+pub(super) fn timing_offer(command: &Command) -> (bool, bool) {
+    let offer = command
+        .as_std()
+        .get_envs()
+        .find(|(name, _)| *name == "SSMCP_RELAY_CAPABILITIES")
+        .and_then(|(_, value)| value)
+        .and_then(|value| value.to_str());
+    let Some(offer) = offer.filter(|value| access_capability_header(Some(value)).is_some()) else {
+        return (false, false);
+    };
+    let has = |name| offer.split(',').any(|value| value.trim() == name);
+    (
+        has(crate::wire::wait_display::TIME_CAPABILITY),
+        has(crate::wire::wait_display::CAPABILITY),
+    )
+}
+
+pub(super) fn negotiated_timing(offer: (bool, bool), capabilities: &[String]) -> (bool, bool) {
+    let has = |name| capabilities.iter().any(|value| value == name);
+    let current_identity = has(crate::wire::SESSION_ACCESS_CAPABILITY)
+        && has(crate::wire::CONTROL_ATTRIBUTION_CAPABILITY);
+    (
+        current_identity && offer.0 && has(crate::wire::wait_display::TIME_CAPABILITY),
+        current_identity && offer.1 && has(crate::wire::wait_display::CAPABILITY),
+    )
+}
+
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
     let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
     let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
@@ -109,6 +140,8 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
                 | crate::wire::messages::CAPABILITY
                 | crate::wire::versions::CAPABILITY
+                | crate::wire::wait_display::CAPABILITY
+                | crate::wire::wait_display::TIME_CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;
@@ -460,6 +493,38 @@ mod tests {
         ] {
             assert!(websocket_url(origin).is_err(), "{origin}");
         }
+    }
+
+    #[test]
+    fn timing_requires_the_real_parent_offer_and_explicit_current_ready_echo() {
+        let mut parent = command(Path::new("/fixture/ssmcp"), "https://fixture.test", None);
+        let offered = timing_offer(&parent);
+        assert_eq!(offered, (true, true));
+        let capabilities: Vec<String> = [
+            crate::wire::SESSION_ACCESS_CAPABILITY,
+            crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            crate::wire::wait_display::TIME_CAPABILITY,
+            crate::wire::wait_display::CAPABILITY,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(negotiated_timing(offered, &[]), (false, false));
+        assert_eq!(negotiated_timing(offered, &capabilities), (true, true));
+        assert_eq!(
+            negotiated_timing(offered, &capabilities[2..]),
+            (false, false)
+        );
+        assert_eq!(
+            negotiated_timing((false, false), &capabilities),
+            (false, false)
+        );
+        restrict_to_self(&mut parent);
+        assert_eq!(timing_offer(&parent), (false, false));
+        assert_eq!(
+            negotiated_timing(timing_offer(&parent), &capabilities),
+            (false, false)
+        );
     }
 
     #[test]

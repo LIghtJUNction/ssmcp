@@ -128,23 +128,35 @@ fn detail(snapshot: &Snapshot) -> String {
 
 fn hint(snapshot: &Snapshot) -> Option<String> {
     let episodes = groups(snapshot);
+    let remaining = snapshot
+        .active
+        .iter()
+        .map(|entry| entry.remaining_ms)
+        .min()?
+        .div_ceil(1000);
     let finish = snapshot
         .active
         .iter()
         .any(|entry| entry.intent == Intent::Finish);
     if episodes.len() > 1 {
         Some(if finish {
-            format!("{} 项等待 · 含结束确认 · /wait", episodes.len())
+            format!(
+                "{} 项等待 · 含结束确认 · {remaining}s · /wait",
+                episodes.len()
+            )
         } else {
-            format!("{} 项等待你的回应 · /wait", episodes.len())
+            format!("{} 项等待你的回应 · {remaining}s · /wait", episodes.len())
         })
     } else if finish {
-        Some(format!("{} · /wait", intent_text(Intent::Finish)))
+        Some(format!(
+            "{} · {remaining}s · /wait",
+            intent_text(Intent::Finish)
+        ))
     } else {
         snapshot
             .active
             .first()
-            .map(|entry| format!("{} · /wait", intent_text(entry.intent)))
+            .map(|entry| format!("{} · {remaining}s · /wait", intent_text(entry.intent)))
     }
 }
 
@@ -154,9 +166,21 @@ impl State {
             return Err("预览不连接真实的用户等待".into());
         }
         let text = match arguments.split_whitespace().collect::<Vec<_>>().as_slice() {
-            [] => detail(&waiting::snapshot()),
+            [] => {
+                let mut text = detail(&waiting::snapshot());
+                if let Some(timing) = self.chat_timing_detail() {
+                    text.push_str("\n\n");
+                    text.push_str(&timing);
+                }
+                text
+            }
             ["cancel", prefix] => {
-                let id = waiting::cancel(prefix)?;
+                let id = if prefix.starts_with("timer_") || prefix.starts_with("watch_") {
+                    crate::runtime::time::cancel_local(prefix)?;
+                    (*prefix).to_owned()
+                } else {
+                    waiting::cancel(prefix)?
+                };
                 format!("已取消等待 #{id}；会话继续，消息队列和草稿保持原样")
             }
             _ => return Err("用法：/wait 或 /wait cancel <等待编号或唯一前缀>".into()),
@@ -196,16 +220,20 @@ impl State {
         {
             return None;
         }
+        hint(&self.chat_user_wait_snapshot()).or_else(|| self.chat_timing_hint())
+    }
+
+    pub(super) fn chat_user_wait_snapshot(&self) -> Snapshot {
         // The real frame regression uses a local snapshot, never process-wide
         // connection state that parallel tests could change.
         #[cfg(test)]
         if let Some(snapshot) = &self.conversation.wait_fixture {
-            return hint(snapshot);
+            return snapshot.clone();
         }
         if self.preview {
-            return None;
+            return Snapshot::default();
         }
-        hint(&waiting::snapshot())
+        waiting::snapshot()
     }
 }
 
@@ -280,7 +308,7 @@ mod tests {
         };
         assert_eq!(
             hint(&snapshot).as_deref(),
-            Some("2 项等待 · 含结束确认 · /wait")
+            Some("2 项等待 · 含结束确认 · 13s · /wait")
         );
         let text = detail(&snapshot);
         assert_eq!(text.matches("Synthetic wait reason").count(), 2);
@@ -296,7 +324,10 @@ mod tests {
             ],
             ..Snapshot::default()
         };
-        assert_eq!(hint(&mixed).as_deref(), Some("等待你确认是否结束 · /wait"));
+        assert_eq!(
+            hint(&mixed).as_deref(),
+            Some("等待你确认是否结束 · 13s · /wait")
+        );
         let text = detail(&mixed);
         assert!(text.contains("#first-input · 等待你的输入"));
         assert!(text.contains("#second-finish · 等待你确认是否结束"));
