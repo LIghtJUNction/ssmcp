@@ -25,14 +25,7 @@ use tokio::io::AsyncReadExt;
 
 const MAX_BINARY: u64 = 256 * 1024 * 1024;
 const MAX_RELEASE: u64 = 16 * 1024;
-pub(crate) const TARGETS: &[&str] = &[
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin",
-    "x86_64-pc-windows-msvc",
-    "aarch64-pc-windows-msvc",
-];
+pub(crate) const TARGETS: &[&str] = crate::wire::versions::TARGETS;
 const INSTALL_SH: &str = include_str!("../scripts/install.sh");
 const INSTALL_POWERSHELL: &str = include_str!("../scripts/install.ps1");
 const SH: &str = include_str!("client_downloads/install.sh");
@@ -124,6 +117,17 @@ impl Publisher {
         })
         .await
         .map_err(|_| publication_error().to_owned())?
+    }
+
+    /// Only advertise the same complete, compatible publication exposed by the
+    /// download routes. The running gateway version alone is never an update.
+    pub(crate) async fn version_notice(&self) -> Option<crate::wire::versions::PublishedClient> {
+        let release: Release = serde_json::from_value(self.metadata().await.ok()?).ok()?;
+        let published = crate::wire::versions::PublishedClient {
+            version: release.version,
+            targets: release.targets.into_keys().collect(),
+        };
+        published.valid().then_some(published)
     }
 
     async fn asset(&self, target: String) -> Result<(File, Asset, String, u32), String> {
