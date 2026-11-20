@@ -2,7 +2,15 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（2026-11-20 21:26 UTC）
+## 当前状态（2026-11-20 21:55 UTC）
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 已推送到 [`c248d420`](https://github.com/LIghtJUNction/ssmcp/commit/c248d420e01d04c06be967e84543ce7d883f4cb3)，仍为 draft、未合并。该提交补齐两个 Linux socket 测试调用的新增参数，并将只供 Linux 测试使用的 `connect` 辅助函数限制到相应平台。[自动 CI 44824373375](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375) 在 21:55 UTC 实读时仍运行中。固定 tree 为 `0017f29c650f2ecdc2beb80662da1b4e2ba90280`；这次两文件补丁已核对，运行结果待取得。
+
+上一轮 [cae 自动 CI](https://github.com/LIghtJUNction/ssmcp/actions/runs/44823183393) 于 21:49:14 UTC 失败：三平台 fmt 成功、Clippy 步骤失败，产品测试、构建和 native lifecycle 均跳过。独立保留该次失败及更早的 b12 失败。原样转发与 HTTP 默认端口两项问题已在固定源码中修正；新发现的 `--input none` 重载超时路径仍待修正及实际验证。c248 的测试适配没有改变该重载逻辑。
+
+下方各时间点保留为历史状态；粘贴 A/B、最终 P1 和正式发布结果仍待取得。完整来源与当前状态见[本次结构化记录](source-ci-checkpoint-2155.json)。
+
+## 历史状态（2026-11-20 21:26 UTC）
 
 [PR #158](https://github.com/LIghtJUNction/ssmcp/pull/158)、[PR #157](https://github.com/LIghtJUNction/ssmcp/pull/157) 与 [PR #155](https://github.com/LIghtJUNction/ssmcp/pull/155) 已合入，本轮合流检查点为 [`cf0ab581`](https://github.com/LIghtJUNction/ssmcp/commit/cf0ab581700918a37fcccbebb93de2e0cab02841)。context 的三种本地重载已在独立固定源码 bbeb 上完成定向运行；输入第一阶段则以 [draft PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 公开，尚无编译或产品运行验收。已合入、定向运行通过和源码阶段完成是不同进度，不能合并为新主线的完整验收结论。
 
@@ -292,3 +300,35 @@ cf0 的完整 tree 为 `bd2bcce33baffa69b82d69d9cff3abdb85baa0fb`。合并证明
 ### 输入草稿的补充复核
 
 固定 dcb 的只读复核新增两项待修问题：[SSMCP 字面转发路径](https://github.com/LIghtJUNction/ssmcp/blob/dcb504c3947259e8912ac37c3123e46809419116/src/client/chat_io.rs#L214) 会先执行其后并不使用的本地引用准备，准备失败或超时会阻断原样转发；[HTTP 地址比较](https://github.com/LIghtJUNction/ssmcp/blob/dcb504c3947259e8912ac37c3123e46809419116/src/client/chat_io/transport.rs#L122) 在成功绑定合法端口 80 后，会拒绝省略默认端口的等价 Host/Origin。HTTP 默认端口省略的规范依据见 [RFC 9110 第 4.2.3 节](https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.3)。两项均已交回同一源码作者，尚未取得对应修复提交及运行结果；此复核没有启动产品、模型或新增测试。
+
+## 输入后续源码与 CI 补记（2026-11-20 21:52 UTC）
+
+### 两次失败分别归属
+
+[b12 运行 44820665507](https://github.com/LIghtJUNction/ssmcp/actions/runs/44820665507) 绑定 `b12c43b19ecfa3e14c46a09923b7add9eac94b68`，三平台 fmt 成功、Clippy 失败，后续产品步骤跳过。[Linux job](https://github.com/LIghtJUNction/ssmcp/actions/runs/44820665507/job/136580436019) 完整日志有六处唯一诊断：`account/send.rs:52` 的嵌套 if、`chat_io.rs:251/257` 的多余借用与循环写法、`broker/session_io.rs:706` 的双重引用 clone，以及两处 socket 代码的多余借用。独立复核另读取 [Windows](https://github.com/LIghtJUNction/ssmcp/actions/runs/44820665507/job/136580436017) 与 [macOS](https://github.com/LIghtJUNction/ssmcp/actions/runs/44820665507/job/136580436164) 各三处诊断。Linux 原日志 89,800 字节，SHA256 `128f708ee943f2b5ee9a688f5418bf8bfbe47d548e9747dca1f3662391fc41d7`；[Library 副本](https://chatgpt.com/library?file_id=libfile_fde3_f-9ac4b2bd77ac8191b5017d3ae7bd7716_e58c93d727108191bbc40d6c0d09ec81&account_id=personal)及 [Drive 副本](https://drive.google.com/file/d/1oe1OfYBiD5IzK-BO-IahOkPwdNwm3gBh/view?usp=drivesdk)已保全，Drive 实际下载与原字节一致。
+
+[cae 运行 44823183393](https://github.com/LIghtJUNction/ssmcp/actions/runs/44823183393) 已实际结束为 failure。[Linux job](https://github.com/LIghtJUNction/ssmcp/actions/runs/44823183393/job/136589172337) 在 Clippy 的测试编译中报两个 E0061：`local/socket/tests.rs:181/225` 调用 `Host::start(&settings)`，漏传 `local.rs:259` 新增的 `chat_disabled: bool`；exit 101。独立复核读取 [Windows](https://github.com/LIghtJUNction/ssmcp/actions/runs/44823183393/job/136589171833) 与 [macOS](https://github.com/LIghtJUNction/ssmcp/actions/runs/44823183393/job/136589172305) 各因 `steering.rs:1635:15` 的 `connect` 在 lib test 中未使用而失败，步骤分别退出 1、101。`qrcodegen` 未使用只报 warning。三平台产品步骤全部跳过；这些新阻断不等于 b12 的六处 lint 再次出现。
+
+cae Linux 原日志 85,145 字节，SHA256 `6626494818643d6249ea4c103fe642673e5c31dc036f57a703c52af0610546f7`，已保留原 BOM/LF 至 [Library](https://chatgpt.com/library?file_id=libfile_fde3_f-184d59c2df8c8191be5f48d956b58aac_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) 与 [Drive](https://drive.google.com/file/d/12PJrM3fXrx4a3SIJ0yNRgJ5HvagRi_PC/view?usp=drivesdk)；Drive 实际下载逐字节一致。
+
+### 已公开的源码进展与未决问题
+
+公开提交链为 [b12 合流](https://github.com/LIghtJUNction/ssmcp/commit/b12c43b19ecfa3e14c46a09923b7add9eac94b68)、[9232ba7 路由等修正](https://github.com/LIghtJUNction/ssmcp/commit/9232ba731389d249bbe3600075f3fcdc2e116116)、[bac3102 六处旧 lint 修改](https://github.com/LIghtJUNction/ssmcp/commit/bac3102f60506eb156ef6a5109d07559c16e9603)、[6336a38 输入禁用](https://github.com/LIghtJUNction/ssmcp/commit/6336a38b16ad68d4c859600928e7b23ef4e90156)、[cae 时间 UI 与能力处理](https://github.com/LIghtJUNction/ssmcp/commit/cae35a82683104049d4e30041df6e7e6bb3e6fc5)。cae tree 为 `2657970b36433de80a3cea9de3c5c5d2aba8728a`。
+
+源码阶段于 21:45:18.963771 UTC 完成、退出 0。作者回执记录 69 个变更路径和 20 项成功检查，范围仅为元数据、60 个 Rust 文件格式、4 个 Python 文件 AST 及差异检查；该阶段没有本地编译、Clippy 重跑或运行验收。随后实际公开推送已由 GitHub 核对，不能沿用较早“未推送”的状态。
+
+固定源码审查确认原两项 P2 的修改：[SSMCP 原样转发](https://github.com/LIghtJUNction/ssmcp/blob/cae35a82683104049d4e30041df6e7e6bb3e6fc5/src/client/chat_io.rs#L255-L303) 跳过未使用的本地引用准备并重查准入；[HTTP 默认端口](https://github.com/LIghtJUNction/ssmcp/blob/cae35a82683104049d4e30041df6e7e6bb3e6fc5/src/client/chat_io/transport.rs#L122-L150) 只在绑定 IP 和 scheme 精确匹配时接受省略 80。两项均未运行复现或测试。
+
+新 P2 仍未解决：`--input none` 下 Snapshot 会被[聊天准入检查](https://github.com/LIghtJUNction/ssmcp/blob/cae35a82683104049d4e30041df6e7e6bb3e6fc5/src/broker.rs#L278)拒绝，而[连接状态仍未 ready](https://github.com/LIghtJUNction/ssmcp/blob/cae35a82683104049d4e30041df6e7e6bb3e6fc5/src/client/steering.rs#L1494-L1495)；[重载路径](https://github.com/LIghtJUNction/ssmcp/blob/cae35a82683104049d4e30041df6e7e6bb3e6fc5/src/client.rs#L2194-L2220)据此预计达到 15 秒超时。这是静态路径推断，没有执行复现；保存参数能够保留不代表实际重载已经通过。
+
+### 粘贴入口的职责澄清
+
+主审实读确认以下三份文件职责不同，固定摘要不相互替代。
+
+| 文件角色 | 固定 SHA256 |
+| --- | --- |
+| `run_frozen_paste.py` 控制器／启动器，36,314 字节 | `4297fd6dc6561aa3a99bd05df20a9ca4abefe7675b9ee98fa42c37f7cc632aaa` |
+| 六场景性能驱动 | `1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8` |
+| Ctrl+V 后继脚本 | `db2db3cfd14c1e6be0b36b4605a1c6f4790da4cab5a3515ad352739912ae238f` |
+
+启动器仍调用 1300 驱动并绑定 db2；db2 的 `FROZEN_SHA` 仍须指向 1300。仅启动器改变不需要重设这个摘要，也不需要另造 Ctrl+V 后继脚本。724 的辅助文件集合只作参考；共同源码、构建与导出清单及五份实际二进制尚未绑定，本轮没有执行粘贴比较。
