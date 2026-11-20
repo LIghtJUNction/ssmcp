@@ -451,7 +451,9 @@ mod tests {
             );
             let events = state.events.snapshot();
             assert_eq!(events["retained_events"], 1);
-            assert!(events.to_string().contains("上次连接"));
+            // The snapshot contains event metadata, not message bodies. The
+            // retained transcript must still explain the interrupted send.
+            assert!(state.logs.screen().contents().contains("上次连接"));
         }
     }
 }
