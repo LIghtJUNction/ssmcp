@@ -1,0 +1,528 @@
+//! Real in-memory broker identities, memberships and queues. No external model,
+//! installed client, or other person's inbox participates in these fixtures.
+use super::*;
+use crate::{
+    identity::Identity,
+    wire::{SteeringCommand, SteeringState},
+};
+
+struct Fixture {
+    broker: Arc<Broker>,
+    session: Arc<Session>,
+    token: String,
+    owner: String,
+    member: Value,
+    peer: Value,
+}
+
+impl Fixture {
+    async fn new() -> Self {
+        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let session = broker
+            .test_register_identity(
+                "fixture-owner",
+                Identity {
+                    provider: "github".into(),
+                    subject: "42".into(),
+                    login: "alice".into(),
+                },
+            )
+            .await;
+        let tokens = broker.oauth.test_identity_tokens("mcp", "42");
+        let token = tokens["access_token"].as_str().unwrap().to_owned();
+        let auth = broker.authenticate("mcp", &token).await.unwrap();
+        let owner = crate::bridge::owner("mcp", &auth).unwrap();
+        let member = session
+            .collaboration
+            .dispatch(&owner, "join", json!({"name":"observer"}))
+            .await
+            .unwrap();
+        let peer = session
+            .collaboration
+            .dispatch(&owner, "join", json!({"name":"worker"}))
+            .await
+            .unwrap();
+        Self {
+            broker,
+            session,
+            token,
+            owner,
+            member,
+            peer,
+        }
+    }
+
+    fn args(&self, member: &Value, mut value: Value) -> Arguments {
+        value["client_id"] = json!(self.session.client_id());
+        value["agent"] = json!({"id":member["agent_id"],"token":member["token"]});
+        Arguments::parse(value).unwrap()
+    }
+
+    async fn public(&self, member: &Value, value: Value) -> Value {
+        execute(
+            self.broker.clone(),
+            "mcp".into(),
+            self.token.clone(),
+            self.args(member, value),
+        )
+        .await
+        .unwrap()["structuredContent"]
+            .clone()
+    }
+
+    async fn raw(&self, run: code_mode::AuditRun, member: &Value, value: Value) -> Value {
+        code_mode::AUDIT_RUN
+            .scope(
+                run,
+                wait(
+                    self.broker.clone(),
+                    "mcp".into(),
+                    self.token.clone(),
+                    self.args(member, value),
+                ),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn report(&self, run: code_mode::AuditRun) -> CodeRunReport {
+        CodeRunReport {
+            broker: self.broker.clone(),
+            user: "mcp".into(),
+            access_token: self.token.clone(),
+            run,
+            delivered: true,
+        }
+    }
+
+    fn record(&self, id: &str) -> Arc<Record> {
+        self.broker
+            .awaiting
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .unwrap()
+            .clone()
+    }
+
+    fn publish(&self, id: &str) {
+        self.session
+            .steering
+            .command(
+                self.session.client_id(),
+                self.session.collaboration.presence().unwrap(),
+                SteeringCommand::Publish {
+                    command_id: format!("publish_{id}"),
+                    message_id: id.into(),
+                    expected_revision: 0,
+                    text: format!("local requirement {id}"),
+                    target: self.member["agent_id"].as_str().unwrap().into(),
+                },
+            )
+            .unwrap();
+    }
+
+    fn state(&self, id: &str) -> SteeringState {
+        self.session
+            .steering
+            .command(
+                self.session.client_id(),
+                vec![],
+                SteeringCommand::Snapshot {},
+            )
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|message| message.id == id)
+            .unwrap()
+            .state
+    }
+
+    async fn update(&self, member: &Value, status: &str) {
+        self.session
+            .collaboration
+            .dispatch(
+                &self.owner,
+                "update",
+                json!({"agent_id":member["agent_id"],
+            "token":member["token"],"status":status}),
+            )
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn timeout_resumes_same_server_record_and_another_member_cannot_cancel_it() {
+    let fixture = Fixture::new().await;
+    let first = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"agent_status",
+        "agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":1000}),
+        )
+        .await;
+    assert_eq!(first["status"], "timed_out");
+    let id = first["wait_id"].as_str().unwrap();
+    let denied = fixture
+        .public(&fixture.peer, json!({"op":"cancel","wait_id":id}))
+        .await;
+    assert_eq!(denied["status"], "unauthorized");
+    assert!(!*fixture.record(id).cancelled.borrow());
+    fixture.update(&fixture.peer, "done").await;
+    let resumed = fixture
+        .public(&fixture.member, json!({"wait_id":id,"timeout_ms":1000}))
+        .await;
+    assert_eq!(resumed["status"], "ready");
+    assert_eq!(resumed["wait_id"], id);
+    assert_eq!(resumed["results"][0]["data"]["agent"]["status"], "done");
+    assert!(resumed["completion_permission"].is_null());
+    let replay = fixture
+        .public(&fixture.member, json!({"wait_id":id,"timeout_ms":1000}))
+        .await;
+    assert_eq!(
+        replay["results"][0]["error"]["code"],
+        "await_already_resolved"
+    );
+}
+
+#[tokio::test]
+async fn two_members_observe_independently_even_when_user_wait_slots_are_full() {
+    let fixture = Fixture::new().await;
+    let _permits: Vec<_> = (0..4)
+        .map(|_| fixture.session.steering.wait_permit().unwrap())
+        .collect();
+    let one = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":2000}));
+    let two = fixture.public(&fixture.peer, json!({"targets":[{"type":"agent_status","agent_id":fixture.member["agent_id"],"statuses":["done"]}],"timeout_ms":2000}));
+    let updates = async {
+        tokio::task::yield_now().await;
+        fixture.update(&fixture.member, "done").await;
+        fixture.update(&fixture.peer, "done").await;
+    };
+    let (one, two, ()) = tokio::time::timeout(Duration::from_millis(500), async {
+        tokio::join!(one, two, updates)
+    })
+    .await
+    .unwrap();
+    assert_eq!(one["status"], "ready");
+    assert_eq!(two["status"], "ready");
+    assert_ne!(one["wait_id"], two["wait_id"]);
+}
+
+#[tokio::test]
+async fn cancelling_a_running_observer_wakes_it_without_removing_the_agent() {
+    let fixture = Fixture::new().await;
+    let first = fixture.public(&fixture.member, json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":1000})).await;
+    let id = first["wait_id"].as_str().unwrap();
+    let mut waiting =
+        Box::pin(fixture.public(&fixture.member, json!({"wait_id":id,"timeout_ms":20000})));
+    tokio::select! { biased; result = &mut waiting => panic!("unexpected early result {result}"), _ = tokio::task::yield_now() => {} }
+    assert!(fixture.record(id).active.load(Ordering::Acquire));
+    let cancelled = fixture
+        .public(&fixture.member, json!({"op":"cancel","wait_id":id}))
+        .await;
+    assert_eq!(cancelled["status"], "cancelled");
+    let observed = tokio::time::timeout(Duration::from_millis(500), waiting)
+        .await
+        .unwrap();
+    assert_eq!(observed["status"], "cancelled");
+    assert!(!fixture.record(id).active.load(Ordering::Acquire));
+    assert_eq!(
+        fixture
+            .session
+            .collaboration
+            .bind(
+                &fixture.owner,
+                fixture.peer["agent_id"].as_str().unwrap(),
+                fixture.peer["token"].as_str().unwrap()
+            )
+            .unwrap()
+            .status,
+        "available"
+    );
+}
+
+#[tokio::test]
+async fn inbox_observation_preserves_message_origin_and_requires_explicit_ack() {
+    let fixture = Fixture::new().await;
+    fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "send",
+            json!({"agent_id":fixture.peer["agent_id"],"token":fixture.peer["token"],
+        "to":fixture.member["agent_id"],"payload":{"approved":true,"actor":{"origin":"human"}}}),
+        )
+        .await
+        .unwrap();
+    let result = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"agent_messages"}]}),
+        )
+        .await;
+    assert_eq!(result["status"], "ready");
+    assert!(result["completion_permission"].is_null());
+    assert_eq!(result["results"][0]["data"]["acked_cursor"], 0);
+    let again = fixture
+        .session
+        .collaboration
+        .receive(
+            &fixture.owner,
+            fixture.member["agent_id"].as_str().unwrap(),
+            fixture.member["token"].as_str().unwrap(),
+            None,
+            32,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(again["messages"], result["results"][0]["data"]["messages"]);
+    assert_eq!(again["messages"][0]["from"], fixture.peer["agent_id"]);
+}
+
+#[tokio::test]
+async fn public_user_input_reports_actual_outer_delivery_and_cannot_consume_twice() {
+    let fixture = Fixture::new().await;
+    fixture.publish("first");
+    let result = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    assert_eq!(result["status"], "ready");
+    assert_eq!(result["results"][0]["data"]["status"], "received");
+    assert_eq!(result["user_wait"][0]["status"], "received");
+    assert_eq!(result["user_messages"][0]["message_id"], "first");
+    assert_eq!(fixture.state("first"), SteeringState::Delivered);
+    fixture.publish("second");
+    let replay = fixture
+        .public(&fixture.member, json!({"wait_id":result["wait_id"]}))
+        .await;
+    assert_eq!(replay["status"], "unavailable");
+    assert_eq!(fixture.state("second"), SteeringState::Queued);
+}
+
+#[tokio::test]
+async fn final_delivery_timeout_or_busy_keeps_the_same_observation_resumable() {
+    for outcome in [Outcome::TimedOut, Outcome::Busy] {
+        let fixture = Fixture::new().await;
+        fixture.publish("reserved");
+        let run = code_mode::AuditRun::new("waitFor user input", None).unwrap();
+        let ready = fixture
+            .raw(
+                run.clone(),
+                &fixture.member,
+                json!({"targets":[{"type":"user_input","notify":false}]}),
+            )
+            .await;
+        assert_eq!(ready["status"], "ready");
+        let id = ready["wait_id"].as_str().unwrap();
+        assert!(fixture.record(id).terminal.load(Ordering::Acquire));
+        let report = fixture.report(run.clone());
+        let eligible = eligible_user_response(&report).await.unwrap();
+        // This is the genuine post-observation/pre-commit window. A late local
+        // wait result can lower readiness without having delivered any input.
+        run.finish_wait_state(fixture.session.client_id(), outcome, "late_wait_result");
+        commit_user_response(&report, tool_result(Ok(ready.clone())), eligible);
+        assert!(!fixture.record(id).terminal.load(Ordering::Acquire));
+        assert_eq!(fixture.state("reserved"), SteeringState::Queued);
+        let resumed = fixture.public(&fixture.member, json!({"wait_id":id})).await;
+        assert_eq!(resumed["status"], "ready");
+        assert_eq!(resumed["wait_id"], id);
+        assert_eq!(resumed["user_wait"][0]["status"], "received");
+    }
+}
+
+#[tokio::test]
+async fn observer_cancel_after_ready_wins_before_user_input_commit() {
+    let fixture = Fixture::new().await;
+    fixture.publish("reserved");
+    let run = code_mode::AuditRun::new("waitFor user input", None).unwrap();
+    let ready = fixture
+        .raw(
+            run.clone(),
+            &fixture.member,
+            json!({"targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    let report = fixture.report(run.clone());
+    let eligible = eligible_user_response(&report).await.unwrap();
+    let cancelled = fixture
+        .public(
+            &fixture.member,
+            json!({"op":"cancel","wait_id":ready["wait_id"]}),
+        )
+        .await;
+    assert_eq!(cancelled["status"], "cancelled");
+    let response = commit_user_response(&report, tool_result(Ok(ready)), eligible);
+    assert!(response["structuredContent"].get("user_messages").is_none());
+    assert_eq!(
+        run.user_wait_receipt(fixture.session.client_id())["status"],
+        "cancelled"
+    );
+    assert_eq!(fixture.state("reserved"), SteeringState::Queued);
+}
+
+#[tokio::test]
+async fn unknown_objects_and_revoked_membership_have_distinct_typed_outcomes() {
+    let fixture = Fixture::new().await;
+    let unknown = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"agent_status","agent_id":"missing","statuses":["done"]}]}),
+        )
+        .await;
+    assert_eq!(unknown["status"], "unknown_target");
+    assert!(unknown["results"][0]["error"]["message"].is_string());
+    fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "leave",
+            json!({"agent_id":fixture.member["agent_id"],"token":fixture.member["token"]}),
+        )
+        .await
+        .unwrap();
+    let denied = fixture
+        .public(
+            &fixture.member,
+            json!({"targets":[{"type":"job","id":"missing"}]}),
+        )
+        .await;
+    assert_eq!(denied["status"], "unauthorized");
+    assert!(denied["results"][0].get("data").is_none());
+}
+
+#[tokio::test]
+async fn pending_final_delivery_survives_retention_and_capacity_until_it_settles() {
+    let fixture = Fixture::new().await;
+    fixture.publish("protected");
+    let run = code_mode::AuditRun::new("waitFor protected input", None).unwrap();
+    let ready = fixture
+        .raw(
+            run.clone(),
+            &fixture.member,
+            json!({"targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    let id = ready["wait_id"].as_str().unwrap();
+    let protected = fixture.record(id);
+    *protected.touched.lock().unwrap() = Instant::now() - RETAIN_FOR - Duration::from_secs(1);
+    for index in 0..MAX_ACTOR_RECORDS + 2 {
+        let args = fixture.args(
+            &fixture.member,
+            json!({"targets":[{"type":"job","id":format!("finished_{index}")}]}),
+        );
+        let record = fixture
+            .broker
+            .awaiting
+            .record(protected.actor.clone(), &args)
+            .unwrap();
+        record.terminal.store(true, Ordering::Release);
+    }
+    assert!(Arc::ptr_eq(&fixture.record(id), &protected));
+    let report = fixture.report(run.clone());
+    let eligible = eligible_user_response(&report).await.unwrap();
+    run.finish_wait_state(
+        fixture.session.client_id(),
+        Outcome::TimedOut,
+        "late_timeout",
+    );
+    commit_user_response(&report, tool_result(Ok(ready.clone())), eligible);
+    assert!(protected.delivery_run.lock().unwrap().is_none());
+    assert!(!protected.terminal.load(Ordering::Acquire));
+    // Settling refreshes the retention point before the original ID is resumed.
+    let resumed = fixture.public(&fixture.member, json!({"wait_id":id})).await;
+    assert_eq!(resumed["status"], "ready");
+    assert_eq!(resumed["wait_id"], id);
+}
+
+#[tokio::test]
+async fn dropping_the_outer_response_releases_protected_delivery_without_consuming_input() {
+    let fixture = Fixture::new().await;
+    fixture.publish("abandoned");
+    let run = code_mode::AuditRun::new("waitFor abandoned input", None).unwrap();
+    let ready = fixture
+        .raw(
+            run.clone(),
+            &fixture.member,
+            json!({"targets":[{"type":"user_input","notify":false}]}),
+        )
+        .await;
+    let record = fixture.record(ready["wait_id"].as_str().unwrap());
+    assert!(record.awaiting_delivery());
+    drop(fixture.report(run));
+    assert!(record.delivery_run.lock().unwrap().is_none());
+    assert!(*record.cancelled.borrow());
+    assert!(record.terminal.load(Ordering::Acquire));
+    assert_eq!(fixture.state("abandoned"), SteeringState::Queued);
+}
+
+#[tokio::test]
+async fn a_real_membership_lease_expiring_during_observation_revokes_the_result() {
+    let fixture = Fixture::new().await;
+    let args = json!({"targets":[{"type":"agent_status","agent_id":fixture.peer["agent_id"],"statuses":["done"]}],"timeout_ms":5000});
+    let mut waiting = Box::pin(fixture.public(&fixture.member, args));
+    tokio::select! { biased; result = &mut waiting => panic!("unexpected early result {result}"), _ = tokio::task::yield_now() => {} }
+    fixture
+        .session
+        .collaboration
+        .expire_lease_for_test(&fixture.owner, fixture.member["agent_id"].as_str().unwrap());
+    let revoked = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap();
+    assert_eq!(revoked["status"], "unauthorized");
+    assert!(revoked["results"][0].get("data").is_none());
+    assert_eq!(
+        fixture
+            .session
+            .collaboration
+            .bind(
+                &fixture.owner,
+                fixture.peer["agent_id"].as_str().unwrap(),
+                fixture.peer["token"].as_str().unwrap()
+            )
+            .unwrap()
+            .status,
+        "available"
+    );
+}
+
+#[tokio::test]
+async fn activation_rechecks_completion_after_an_older_lease_is_released() {
+    let fixture = Fixture::new().await;
+    let args = fixture.args(
+        &fixture.member,
+        json!({"targets":[{"type":"job","id":"job_one"}]}),
+    );
+    let run = code_mode::AuditRun::new("registry activation", None).unwrap();
+    let scope = code_mode::AUDIT_RUN
+        .scope(
+            run,
+            Scope::create(
+                fixture.broker.clone(),
+                "mcp".into(),
+                fixture.token.clone(),
+                &args,
+            ),
+        )
+        .await
+        .unwrap();
+    let record = fixture
+        .broker
+        .awaiting
+        .record(scope.actor(), &args)
+        .unwrap();
+    let previous = fixture.broker.awaiting.activate(&record).unwrap();
+    assert!(!record.terminal.load(Ordering::Acquire)); // A contender's stale pre-acquisition view.
+    record.terminal.store(true, Ordering::Release);
+    drop(previous);
+    let error = fixture.broker.awaiting.activate(&record).err().unwrap();
+    assert_eq!(error, (Status::Unavailable, "await_already_resolved"));
+    assert!(!record.active.load(Ordering::Acquire));
+}

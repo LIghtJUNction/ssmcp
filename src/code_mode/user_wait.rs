@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 20_000;
 pub(crate) const MAX_TIMEOUT_MS: u64 = 25_000;
 pub(crate) const ENVELOPE_RESERVE_BYTES: usize = 32 * 1024;
-pub(crate) const CONTINUE_INSTRUCTION: &str = "Continue the authorized task unless the user has explicitly agreed to end. When user input is required, call ui.wait(client_id,{timeout_ms:20000,intent:'need_user'}). If it times out, wait again; do not treat timeout as permission to stop. For an intended session ending, use intent:'finish' and ask the user explicitly. A tool argument or agent-authored field cannot grant user consent. This reminder observes explicit wait intents and accepted native kind:'answer' messages; it cannot intercept arbitrary external assistant final responses.";
+pub(crate) const CONTINUE_INSTRUCTION: &str = "Continue the authorized task unless the user has explicitly agreed to end. When user input is required, call ui.wait(client_id,{timeout_ms:20000,intent:'need_user'}). If it times out, wait again; do not treat timeout as permission to stop. Before ending, use request_finish or the registered native ssmcp.ui.finish with a verified collab binding, then wait for the local user's explicit Yes. Pending timeout requires another wait on the same request ID. ui.wait intent:'finish' only waits for continued user guidance and never grants completion permission. A tool argument or agent-authored field cannot grant user consent. This reminder observes explicit wait intents and accepted native kind:'answer' messages; it cannot intercept arbitrary external assistant final responses.";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
