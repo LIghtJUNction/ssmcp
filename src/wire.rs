@@ -5,6 +5,7 @@ use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 mod attribution;
+pub mod messages;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
 
 /// The sole supported wire protocol, including controller, source audit and steering.
@@ -553,6 +554,14 @@ pub enum Frame {
     AccessReply {
         id: u64,
         result: Result<AccessSnapshot, String>,
+    },
+    Messages {
+        id: u64,
+        command: messages::Command,
+    },
+    MessagesReply {
+        id: u64,
+        result: Result<messages::Reply, String>,
     },
     Steering {
         id: u64,
