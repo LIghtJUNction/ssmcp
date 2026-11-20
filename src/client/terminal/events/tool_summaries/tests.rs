@@ -884,6 +884,67 @@ async fn ui_mutations_keep_non_conversation_image_question_and_task_events() {
     .await;
 }
 
+#[tokio::test]
+async fn command_summary_scroll_and_explicit_fold_survive_position_and_reload() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("summary-position-history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        command_call(&mut view, &fixture.runtime, 1).await;
+        for request in 2..=18 {
+            stat(&mut view, &fixture.runtime, request).await;
+        }
+        let id = group_id(&view, &first);
+        view.tool_summary_set(&first, &id, "Inspect command results", Some(0))
+            .unwrap();
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        view.render(120, 24, &ui, true);
+        let group = view.tool_groups()[0].clone();
+        view.scroll_tool_group(group.head, isize::MIN + 1);
+        assert!(view.scroll_tool_group(group.head, 2));
+        view.render(120, 24, &ui, true);
+        let inner_scroll = view.events[group.start].group_panel.scroll;
+        let outer_scroll = view.scroll;
+        assert_eq!(view.events[group.start].group_panel.offset(), 2);
+        view.tool_summary_set(&first, &id, "Checked command results", Some(1))
+            .unwrap();
+        view.render(48, 24, &ui, true);
+        assert_eq!(view.events[group.start].group_panel.scroll, inner_scroll);
+        assert_eq!(view.scroll, outer_scroll);
+        let group = view.tool_groups()[0].clone();
+        assert!(view.set_tool_expanded(&group, false));
+        let saved_position = serde_json::to_value(view.position().for_reload(&view)).unwrap();
+        let saved_position: super::super::ReloadPosition =
+            serde_json::from_value(saved_position).unwrap();
+        let display = serde_json::to_value(view.reload_display()).unwrap();
+        let mut restored = new_view(&first);
+        restored.restore_reload_display(serde_json::from_value(display).unwrap());
+        restored.restore_position(&saved_position.position(&restored));
+        for width in [48, 120] {
+            let text = restored.render(width, 24, &ui, true).join("\n");
+            assert_eq!(text.matches("Checked command results").count(), 1, "{text}");
+            assert!(!restored.tool_groups()[0].expanded, "{text}");
+        }
+        let group = restored.tool_groups()[0].clone();
+        assert_eq!(
+            restored.events[group.start].group_panel.scroll,
+            inner_scroll
+        );
+        assert!(!restored.events[group.start].group_automatic);
+        assert!(restored.set_tool_expanded(&group, true));
+        restored.render(120, 24, &ui, true);
+        assert_eq!(restored.events[group.start].group_panel.offset(), 2);
+        assert_eq!(
+            restored.snapshot()["tool_groups"][0]["summary_editable"],
+            false
+        );
+    })
+    .await;
+}
+
 #[test]
 fn summary_text_is_bounded_single_line_and_redacted() {
     for bad in [

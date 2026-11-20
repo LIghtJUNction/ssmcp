@@ -705,7 +705,7 @@ impl EventView {
         let head = &mut self.events[group.start];
         head.group_expanded = expanded;
         head.group_automatic = false;
-        if expanded && head.group_panel.rows == 0 {
+        if expanded && head.group_panel.rows == 0 && head.group_panel.scroll.is_none() {
             head.group_panel.scroll = Some(0);
         }
         self.selected = Some(group.head);
