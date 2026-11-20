@@ -545,15 +545,24 @@ class OwnedGtkReceiver(ReceiverControl):
         address = self.observed_context["root_bus"]
         require(address.startswith("unix:"), "private accessibility address is not local")
 
+        registration = {}
         def registered():
             response = subprocess.run([
                 "gdbus", "call", "--address", address, "--dest", "org.a11y.atspi.Registry",
                 "--object-path", "/org/a11y/atspi/accessible/root",
                 "--method", "org.a11y.atspi.Accessible.GetChildren",
             ], capture_output=True, text=True, timeout=2)
+            registration.update(exit_code=response.returncode,
+                                stdout=response.stdout[:4096], stderr=response.stderr[:4096])
             return response.returncode == 0 and "/org/a11y/atspi/accessible/root" in response.stdout
 
-        wait_for(registered, "owned GTK is registered on the observed private accessibility bus")
+        try:
+            wait_for(registered, "owned GTK is registered on the observed private accessibility bus")
+        finally:
+            (self.evidence / "accessibility-registration.json").write_text(json.dumps({
+                "context": self.observed_context, "registration": registration,
+                "window_id": self.window, "receiver_pid": self.receiver_pid,
+            }, indent=2) + "\n")
         self.reset()
         return self
 
