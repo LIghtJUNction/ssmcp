@@ -1,6 +1,7 @@
 //! Revalidate pending notices and recover metadata after a failed native reply.
-use super::{CodeRunReport, Operation};
+use super::{CodeRunReport, EligibleUserResponse, Operation, response_authorization};
 use crate::code_mode;
+use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 
 /// A pending notice or native failure earns one read-only probe per client/run.
@@ -70,4 +71,35 @@ pub(super) async fn collect(report: &CodeRunReport) {
         })
         .await;
     }
+}
+
+/// The same capability gate applies to both interactive and passive responses.
+/// Caller-supplied JSON and legacy provider metadata cannot establish capability.
+pub(super) fn notices(report: &CodeRunReport, target: &EligibleUserResponse) -> Vec<Value> {
+    if !target.session.tool_summary_advertised() {
+        return Vec::new();
+    }
+    report.run.tool_summary_notices(
+        target.session.client_id(),
+        target
+            .binding
+            .as_ref()
+            .map(|binding| binding.agent_id.as_str()),
+    )
+}
+
+/// Append only summary notices. Do not claim steering, acknowledge questions,
+/// drain native mailboxes, or advance conversation reminders during observation.
+pub(super) fn commit_response(
+    report: &CodeRunReport,
+    response: Value,
+    eligible: Vec<EligibleUserResponse>,
+) -> Value {
+    let mut reminders = Vec::new();
+    for target in eligible {
+        if response_authorization(report, &target).is_some() {
+            reminders.extend(notices(report, &target));
+        }
+    }
+    code_mode::tool_summaries::append(response, reminders)
 }

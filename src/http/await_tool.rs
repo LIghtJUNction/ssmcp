@@ -984,7 +984,7 @@ pub(super) async fn execute(
     // Passive object observation has no automatic inbox/question acknowledgement.
     // User input explicitly opts into the existing atomic outer delivery protocol.
     if !is_user_input {
-        return Ok(tool_result(Ok(value)));
+        return Ok(finish_passive_response(&report, &client_id, value).await);
     }
     if value["status"] != "ready" {
         let response = commit_user_delivery(&report, || tool_result(Ok(value)));
@@ -1019,6 +1019,28 @@ pub(super) async fn execute(
         *first = json!({"type":"text","text":value.to_string()});
     }
     Ok(user_wait::append(response, &run))
+}
+
+/// Passive observations still deliver earned tool summaries, without opting
+/// into the independent user-message, question or native-inbox delivery paths.
+async fn finish_passive_response(
+    report: &CodeRunReport,
+    client_id: &str,
+    mut value: Value,
+) -> Value {
+    tool_summaries::collect(report).await;
+    let eligible = eligible_user_response(report).await.unwrap_or_default();
+    // The bounded summary probe can await; withhold observation data as well as
+    // notices if its account, connection or binding changed during that await.
+    if !response_authorized(report, client_id) {
+        report.run.finish_wait_state(
+            client_id,
+            Outcome::AuthorizationRevoked,
+            "await_authorization_revoked_at_response",
+        );
+        withhold(&mut value);
+    }
+    tool_summaries::commit_response(report, tool_result(Ok(value)), eligible)
 }
 
 fn response_authorized(report: &CodeRunReport, client_id: &str) -> bool {
