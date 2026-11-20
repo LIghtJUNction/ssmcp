@@ -16,6 +16,8 @@ pub(crate) use config::BrowserSettings;
 pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
     config::browser()
 }
+#[cfg(test)]
+mod account_compat_tests;
 mod git_status;
 mod handoff;
 mod highlight;
@@ -82,6 +84,7 @@ Options
   --name NAME   --title TEXT   --server URL   --context-root PATH
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
+  --account-compat       Use an existing verified self account on an older relay
 
 Use ssmcp COMMAND --help for command options; --help-full lists all connection flags.
 In a connected chat: /help, @file, $skill, !command; Left opens Agents.
@@ -122,6 +125,9 @@ Usage: ssmcp username@server [options]
   --allow USER@SERVER  Allow only these registered relay accounts to control this device
                        Repeat or comma-separate; at most 32 accounts
                        No device login required; controllers must sign in
+  --account-compat     Explicit older-relay mode; requires one --allow for your saved account
+                       Verifies its registered handle; never signs in or registers a name
+                       This account owns the connection and pays its account quota
   --tty TERMINAL       Observe commands in reusable terminal windows (kitty, ztty, ...)
   --shell /path        Shell executable (default: platform shell)
   --context-root PATH  Add a read-only skill/instruction root (repeat up to 8 times)
@@ -150,6 +156,7 @@ Examples:
   ssmcp -i
   ssmcp --no-watchdog --name one-shot
   ssmcp --allow alice@ssmcp.lmm.best
+  ssmcp --account-compat --allow alice@ssmcp.lmm.best
   ssmcp --server https://relay.example --allow alice@relay.example,bob@relay.example
   ssmcp sessions status workstation
   ssmcp sessions stop workstation
@@ -165,6 +172,13 @@ is needed there. The account must already exist on that relay; a different serve
 an unknown or banned account, bare names and the former @github syntax are rejected.
 Only the listed accounts receive access. Controllers must sign in through OAuth.
 Names resolve to stable account IDs; billing follows the account making each call.
+
+--account-compat is an explicit authenticated mode for an older relay, not anonymous
+--allow. It requires a valid saved login for exactly the allowed account, verifies
+its stable identity and registered handle with that relay, and never starts OAuth
+or claims a username. The verified account owns this connection (including account
+management and audit visibility) and its quota applies. Access-list editing is
+unavailable. Missing, expired, revoked or mismatched credentials fail closed.
 
 Without --allow, a saved valid login selects only your own registered username.
 username@server signs in and registers that username when needed. whoami displays
@@ -318,6 +332,7 @@ struct Options {
     server: Option<String>,
     username: Option<String>,
     no_browser: bool,
+    account_compat: bool,
     relay: Option<account::Credential>,
     temporary: bool,
     name: Option<String>,
@@ -391,6 +406,7 @@ impl Options {
         let mut server = None;
         let mut username = None;
         let mut no_browser = false;
+        let mut account_compat = false;
         let mut ssh = false;
         let mut name = None;
         let mut title = None;
@@ -460,6 +476,7 @@ impl Options {
                         .set_public_url(value.to_str().ok_or("--public-url must be UTF-8")?)?;
                 }
                 Some("--no-browser") => no_browser = true,
+                Some("--account-compat") => account_compat = true,
                 Some("--username") => {
                     let value = args.next().ok_or("--username requires a name")?;
                     username = Some(crate::username::normalize(
@@ -696,6 +713,16 @@ impl Options {
                 "--allow requires a relay connection and cannot be used with --list-tools".into(),
             );
         }
+        if account_compat
+            && (allow.len() != 1
+                || username.is_some()
+                || destination.is_some()
+                || ssh
+                || local_mode
+                || list_tools)
+        {
+            return Err("--account-compat requires exactly one --allow USER@SERVER and no username, SSH destination, local mode or --list-tools".into());
+        }
         if !shell.is_absolute() {
             return Err("--shell requires an absolute path".into());
         }
@@ -712,6 +739,7 @@ impl Options {
             server,
             username,
             no_browser,
+            account_compat,
             relay: None,
             temporary: false,
             name,
@@ -769,6 +797,36 @@ impl Options {
         Ok(metadata)
     }
 
+    /// Only a freshly verified saved account may use the old self-only wire shape.
+    /// The operator's allow policy remains unchanged in saved settings and output.
+    fn registration_metadata(&self) -> crate::Result<ClientMetadata> {
+        let mut metadata = self.metadata()?;
+        if self.account_compat {
+            let credential = self
+                .relay
+                .as_ref()
+                .ok_or("--account-compat requires a verified saved account before connecting")?;
+            let handle = credential
+                .username
+                .as_deref()
+                .ok_or("--account-compat requires the account's registered relay username")?;
+            if credential.subject.is_none()
+                || self.server.as_deref() != Some(credential.server.as_str())
+                || self.allow.as_slice()
+                    != [crate::server_endpoint::allow_principal(
+                        handle,
+                        &credential.server,
+                    )?]
+            {
+                return Err(
+                    "--account-compat account binding does not match the allow policy".into(),
+                );
+            }
+            metadata.allow.clear();
+        }
+        Ok(metadata)
+    }
+
     /// Store only validated connection settings. Service stdout/stderr have a
     /// fixed non-interactive format, so display themes are deliberately omitted.
     fn session_spec(&self) -> crate::Result<crate::session::SessionSpec> {
@@ -795,6 +853,9 @@ impl Options {
         }
         for principal in &self.allow {
             args.extend([OsString::from("--allow"), OsString::from(principal)]);
+        }
+        if self.account_compat {
+            args.push(OsString::from("--account-compat"));
         }
         for path in &self.context_roots {
             args.extend([
@@ -1136,6 +1197,11 @@ async fn apply_account(options: &mut Options, allow_login: bool) -> crate::Resul
     for principal in &options.allow {
         crate::server_endpoint::allow_handle_for_server(principal, &server)?;
     }
+    if options.account_compat {
+        options.relay = Some(account::compat_credential(&server, &options.allow).await?);
+        options.server = Some(server);
+        return Ok(());
+    }
     if options.allow.is_empty() {
         let saved = account::credentials(Some(&server)).await?;
         if saved.is_none() && options.username.is_none() {
@@ -1390,6 +1456,27 @@ pub async fn run() -> crate::Result<()> {
             runner.record("stopped", attempt, None, None, None)?;
             return Ok(());
         }
+        if options.account_compat && attempt > 0 {
+            // Re-check the same saved account before every reconnect. This path
+            // never authorizes, claims a username or changes the local allow list.
+            let previous = options
+                .relay
+                .clone()
+                .ok_or("--account-compat lost its verified account; start a new connection")?;
+            apply_account(&mut options, false).await?;
+            let current = options
+                .relay
+                .as_ref()
+                .ok_or("--account-compat lost its verified account; start a new connection")?;
+            if current.subject != previous.subject
+                || current.principal != previous.principal
+                || current.token != previous.token
+            {
+                return Err(
+                    "--account-compat saved login changed; start a new explicit connection".into(),
+                );
+            }
+        }
         if options.relay.as_ref().is_some_and(|credential| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1398,6 +1485,7 @@ pub async fn run() -> crate::Result<()> {
                 >= credential.expires_at
         }) {
             if service.is_none()
+                && !options.account_compat
                 && !options.temporary
                 && options.username.is_some()
                 && !reauthenticated
@@ -1479,6 +1567,7 @@ pub async fn run() -> crate::Result<()> {
         if permanent
             && error.as_deref() == Some(relay::AUTH_EXPIRED)
             && service.is_none()
+            && !options.account_compat
             && !options.temporary
             && options.username.is_some()
             && !reauthenticated
@@ -1597,6 +1686,7 @@ async fn stop_registration(
 
 async fn register_ssh(
     metadata: &ClientMetadata,
+    account_compat: bool,
     registered: &mut bool,
     mut command: impl FnMut() -> Command,
     cancelled: impl std::future::Future<Output = ()>,
@@ -1669,6 +1759,9 @@ async fn register_ssh(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
+            capabilities
+                .iter()
+                .all(|capability| capability == crate::wire::CONTROL_ATTRIBUTION_CAPABILITY),
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1693,8 +1786,19 @@ async fn register_ssh(
         }
     };
     *registered = true;
-    let (ready, access_supported) = ready;
-    let github_auth = !metadata.allow.is_empty();
+    let (ready, access_supported, self_only_capabilities) = ready;
+    if account_compat
+        && (!metadata.allow.is_empty()
+            || !ready.1.is_empty()
+            || ready.2 != 0
+            || !self_only_capabilities)
+    {
+        stop_registration(&mut ssh, &mut stderr_pump).await?;
+        return Err(Box::new(relay::PermanentFailure(
+            "server did not acknowledge self-only account compatibility; no login code or access delegation is permitted".into(),
+        )));
+    }
+    let github_auth = account_compat || !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
         stop_registration(&mut ssh, &mut stderr_pump).await?;
         return Err("server did not acknowledge the explicit account allow policy; upgrade ssmcpd before connecting".into());
@@ -1899,8 +2003,19 @@ async fn connect_inner(
     let mut terminate = terminate_signal()?;
     let restart = reload::Restart::capture()?;
     let metadata = options.metadata()?;
+    let wire_metadata = options.registration_metadata()?;
     let executable = std::env::current_exe()?;
     transport.report_connecting();
+    if options.account_compat {
+        render::status(
+            "account",
+            "Notice",
+            &format!(
+                "Authenticated compatibility: {} owns this connection, including account management and audit visibility; its account quota applies. Access-list editing is disabled.",
+                options.allow[0]
+            ),
+        );
+    }
     let cancelled = async {
         tokio::select! {
             _ = interrupt.recv() => {},
@@ -1909,10 +2024,14 @@ async fn connect_inner(
     };
     let mut metric_channel = None;
     let registration = register_ssh(
-        &metadata,
+        &wire_metadata,
+        options.account_compat,
         registered,
         || {
             let mut command = transport.command(&executable);
+            if options.account_compat {
+                relay::restrict_to_self(&mut command);
+            }
             if matches!(&transport, Transport::Account { .. })
                 && ui.dashboard
                 && ui.log_format != render::LogFormat::Jsonl
@@ -1928,7 +2047,9 @@ async fn connect_inner(
     let Some(mut registration) = registration else {
         return Ok(ConnectionExit::Stopped);
     };
-    registration.require_allow_access(&metadata.allow).await?;
+    registration
+        .require_allow_access(&wire_metadata.allow)
+        .await?;
     let RegisteredSsh {
         mut ssh,
         stderr_pump: _stderr_pump,
@@ -2050,6 +2171,11 @@ async fn connect_inner(
         output["transport"] = json!("https");
         output["temporary"] = json!(options.temporary);
         output["expires_at"] = json!(credential.expires_at);
+        if options.account_compat {
+            output["account_compat"] = json!(true);
+            output["ownership"] = json!("verified_account");
+            output["quota"] = json!("account");
+        }
     }
     if github_auth {
         output["auth"] = json!("github");

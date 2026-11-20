@@ -18,6 +18,24 @@ ssmcp --server https://relay.example \
 
 目标的服务器 origin 必须与当前选择的服务器完全匹配。HTTPS 的默认 443 端口会规范化，非默认端口保留；`alice@relay.example:8443` 需要选择 `https://relay.example:8443`。裸用户名、`@github`、未知账号、被封禁账号和混入其他服务器的名单都会被拒绝。开发机 loopback HTTP 使用明确的 `alice@http://127.0.0.1:PORT`；普通主机名省略协议时表示 HTTPS。[端点规则](../src/server_endpoint.rs)
 
+## 旧服务端：显式使用已验证的自身账号
+
+如果旧服务端尚不支持匿名 `--allow`，而受控设备已经保存该服务器的有效登录，可显式选择认证兼容模式：
+
+~~~sh
+ssmcp --account-compat --allow alice@ssmcp.lmm.best
+
+# 其他服务器仍须显式选择同一个 origin。
+ssmcp --server https://relay.example \
+  --account-compat --allow alice@relay.example
+~~~
+
+此模式仅接受一个 `--allow` 账号。客户端使用同一 origin 的现有未过期凭据调用 `whoami`，核对稳定账号 ID、已保存的登录身份和服务端真实注册用户名；GitHub 显示名不能替代注册用户名。无凭据、凭据撤销或过期、账号不匹配、多个账号、跨服务器或验证失败都会停止连接。它不会打开 OAuth、注册用户名或更新保存的凭据。[验证入口](../src/client/account.rs)
+
+**这是已认证连接。该账号拥有连接，包括账号管理页查看和断开连接、审计可见性；连接沿用该账号的额度。** 客户端会在连接时明确提示，并在连接 JSON 中标记 `account_compat: true`、`ownership: "verified_account"`、`quota: "account"`。访问列表编辑不可用，握手不能返回登录码或委派能力。保存的会话仍保留原始 allow 及此显式开关，每次重连重新验证相同绑定。[握手和会话保存](../src/client.rs)
+
+未指定 `--account-compat` 时，匿名 `--allow` 的行为不变，不会自动携带本机凭据或切换为账号所有。服务端升级完成后可移除此开关，使用标准匿名模式。兼容模式不负责升级服务端，也不要求重启其他在线用户。
+
 ## 已登录客户端：省略名单仅允许自己
 
 在需要登录的客户端执行：

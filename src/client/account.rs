@@ -769,6 +769,37 @@ async fn login(args: &Arguments) -> Result<()> {
     Ok(())
 }
 
+/// Explicit old-relay compatibility is limited to an existing, verified self account.
+/// This path is read-only: no OAuth, username claim or credential-file update.
+pub(super) async fn compat_credential(server: &str, allow: &[String]) -> Result<Credential> {
+    compat_at(&state_root()?, server, allow).await
+}
+
+async fn compat_at(root: &Path, server: &str, allow: &[String]) -> Result<Credential> {
+    let [principal] = allow else {
+        return Err("--account-compat requires exactly one allowed account".into());
+    };
+    let server = normalize_server(server)?;
+    let requested = crate::server_endpoint::allow_handle_for_server(principal, &server)?;
+    let mut credential = load_at(root, Some(&server), false)?.ok_or(
+        "--account-compat requires an existing saved login for this relay; sign in separately",
+    )?;
+    let reply = Api::new(&server)?
+        .get("/api/client/whoami", &credential.token)
+        .await?;
+    let identity = public_identity(&reply)?;
+    same_subject(&credential, &identity)?;
+    if identity["principal"].as_str() != Some(credential.principal.as_str()) {
+        return Err("--account-compat server identity differs from the saved account".into());
+    }
+    if identity["username"].as_str() != Some(requested.as_str()) {
+        return Err("--account-compat requires the saved account's registered relay username to match the only --allow entry".into());
+    }
+    credential.subject = Some(identity["subject"].as_str().unwrap().into());
+    credential.username = Some(requested);
+    Ok(credential)
+}
+
 /// Obtain and validate the selected server's account without a separate login command.
 pub(super) async fn connect_credential(
     server: Option<&str>,

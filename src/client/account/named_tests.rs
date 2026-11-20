@@ -362,3 +362,116 @@ async fn background_sessions_report_required_authorization_without_opening_a_bro
     assert!(load_at(&root, Some(origin), true).unwrap().is_some());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn account_compat_verifies_registered_handle_without_changing_saved_login() {
+    let directory = root();
+    let (origin, requests) = server(|_| {
+        vec![Step {
+            path: "/api/client/whoami",
+            status: 200,
+            body: identity(Some("alice")),
+            authenticated: true,
+        }]
+    })
+    .await;
+    let credential = saved(&origin);
+    save_at(&directory, &credential).unwrap();
+    let before = fs::read(credential_path(&directory, &origin)).unwrap();
+    let current = compat_at(&directory, &origin, &[format!("alice@{origin}")])
+        .await
+        .unwrap();
+    // The registered handle deliberately differs from the GitHub login.
+    assert_eq!(current.username.as_deref(), Some("alice"));
+    assert_eq!(current.subject.as_deref(), Some("123"));
+    assert_eq!(current.principal, "octocat@github");
+    assert_eq!(current.token, credential.token);
+    assert_eq!(requests.await.unwrap(), vec![Value::Null]);
+    assert_eq!(
+        fs::read(credential_path(&directory, &origin)).unwrap(),
+        before
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn account_compat_rejects_unproven_binding_and_never_authorizes_or_claims() {
+    let mut wrong_subject = identity(Some("alice"));
+    wrong_subject["identity"]["subject"] = json!("456");
+    let mut wrong_principal = identity(Some("alice"));
+    wrong_principal["identity"]["login"] = json!("other");
+    wrong_principal["identity"]["principal"] = json!("other@github");
+    let mut missing_subject = identity(Some("alice"));
+    missing_subject["identity"]
+        .as_object_mut()
+        .unwrap()
+        .remove("subject");
+    for (status, body) in [
+        (200, identity(None)),
+        (200, identity(Some("different"))),
+        (200, wrong_subject),
+        (200, wrong_principal),
+        (200, missing_subject),
+        (401, json!({"error":"invalid_token"})),
+        (403, json!({"error":"account_banned"})),
+        (503, json!({"error":"unavailable"})),
+    ] {
+        let directory = root();
+        let (origin, requests) = server(|_| {
+            vec![Step {
+                path: "/api/client/whoami",
+                status,
+                body,
+                authenticated: true,
+            }]
+        })
+        .await;
+        let credential = saved(&origin);
+        save_at(&directory, &credential).unwrap();
+        let path = credential_path(&directory, &origin);
+        let before = fs::read(&path).unwrap();
+        let error = compat_at(&directory, &origin, &[format!("alice@{origin}")])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains(&credential.token));
+        assert_eq!(requests.await.unwrap(), vec![Value::Null]);
+        assert_eq!(fs::read(path).unwrap(), before);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn account_compat_rejects_missing_expired_multi_and_cross_origin_before_network() {
+    let directory = root();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let self_allow = vec![format!("alice@{origin}")];
+    assert!(compat_at(&directory, &origin, &self_allow).await.is_err());
+    let mut credential = saved(&origin);
+    credential.expires_at = now() - 1;
+    save_at(&directory, &credential).unwrap();
+    assert!(compat_at(&directory, &origin, &self_allow).await.is_err());
+    credential.expires_at = now() + 3600;
+    save_at(&directory, &credential).unwrap();
+    for allow in [
+        Vec::new(),
+        vec![format!("alice@{origin}"), format!("bob@{origin}")],
+        vec!["alice@other.example".into()],
+    ] {
+        assert!(compat_at(&directory, &origin, &allow).await.is_err());
+    }
+    let second_origin = "http://127.0.0.1:1";
+    assert!(
+        compat_at(
+            &directory,
+            second_origin,
+            &[format!("alice@{second_origin}")]
+        )
+        .await
+        .is_err()
+    );
+    assert!(matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock));
+    fs::remove_dir_all(directory).unwrap();
+}
