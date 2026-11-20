@@ -23,6 +23,28 @@ import time
 
 SOURCE = Path(__file__).resolve().parents[1]
 OLD_COMMIT = "4e3132d60600dca5053af81cdefa6962c3058ac4"
+OLD_RUNNER_BLOB_ID = "8d15b56207461ee817635c6b134380e1c2ffdc4d"
+OLD_RUNNER_SHA256 = "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0"
+
+
+def old_runner_bytes(provided=None):
+    if provided is not None:
+        blob = provided.read_bytes()
+    else:
+        try:
+            blob = subprocess.check_output(
+                ["git", "show", OLD_COMMIT + ":src/code_mode.js"], cwd=SOURCE,
+                stderr=subprocess.PIPE,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(
+                "original 0.10.13 runner is unavailable; pass --old-runner with "
+                "the verified byte-identical code_mode.js from the cleaned source"
+            ) from error
+    object_id = hashlib.sha1(b"blob " + str(len(blob)).encode("ascii") + b"\0" + blob).hexdigest()
+    if object_id != OLD_RUNNER_BLOB_ID or hashlib.sha256(blob).hexdigest() != OLD_RUNNER_SHA256:
+        raise RuntimeError("old runner differs from the pinned 0.10.13 Git blob and SHA256")
+    return blob
 
 
 def private(path, value):
@@ -455,6 +477,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--client", type=Path, required=True)
     parser.add_argument("--old-server", type=Path, required=True)
+    parser.add_argument("--old-runner", type=Path,
+                        help="verified 0.10.13 runner file; avoids requiring its original commit object")
     parser.add_argument("--new-server", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, default=Path("/var/tmp"))
@@ -481,9 +505,11 @@ def main():
             shutil.copy2(args.old_server, old)
             runner = root / "old-release/libexec/ssmcp/code-mode.js"
             runner.parent.mkdir(parents=True)
-            runner.write_bytes(subprocess.check_output(
-                ["git", "show", OLD_COMMIT + ":src/code_mode.js"], cwd=SOURCE,
-            ))
+            legacy_runner = old_runner_bytes(args.old_runner)
+            runner.write_bytes(legacy_runner)
+            report.update(old_runner_build_commit=OLD_COMMIT,
+                          old_runner_blob_id=OLD_RUNNER_BLOB_ID,
+                          old_runner_sha256=hashlib.sha256(legacy_runner).hexdigest())
             for label, server in (("old-0.10.13", old), ("new-main", args.new_server.resolve())):
                 if args.server_version != "both" and not label.startswith(args.server_version):
                     continue
