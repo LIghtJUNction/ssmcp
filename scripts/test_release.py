@@ -122,7 +122,7 @@ class DeploymentPolicyTests(unittest.TestCase):
         events.extend(("workflow_dispatch", {"inputs": inputs}) for inputs in (
             {}, {"deploy_server": True}, {"deploy_server": "true"},
             {"deploy_server": False}, {"deploy_server": "false"}))
-        for version in ("0.10.15", "0.10.16", "0.10.17", "0.10.18"):
+        for version in ("0.10.15", "0.10.16", "0.10.17", "0.10.18", "0.10.19", "0.10.20", "0.10.21"):
             for name, event in events:
                 with self.subTest(version=version, name=name, event=event):
                     result, output = self.run_policy(event, name=name, version=version)
@@ -134,7 +134,7 @@ class DeploymentPolicyTests(unittest.TestCase):
                     self.assertIn("active relay sessions", report["deployment_deferred"])
 
     def test_other_versions_keep_existing_deployment_selection(self):
-        for version in ("0.10.19", "0.10.19-rc.1"):
+        for version in ("0.10.22", "0.10.22-rc.1"):
             with self.subTest(version=version):
                 self.assert_policy({}, "true", name="push", version=version)
                 self.assert_policy({"inputs": {"deploy_server": False}}, "false", version=version)
