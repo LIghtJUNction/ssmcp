@@ -142,6 +142,7 @@ impl Broker {
         target: &Arc<Session>,
         authorization: &Authorization,
         agent_id: Option<&str>,
+        maximum: usize,
         budget: usize,
     ) -> Vec<Value> {
         let Ok(identity) = identity(authorization) else {
@@ -156,7 +157,7 @@ impl Broker {
                     client_id: target.client_id(),
                     identity,
                     agent_id,
-                    maximum: messages::MAX_DELIVERY,
+                    maximum: maximum.min(messages::MAX_DELIVERY),
                     budget,
                     include_delivered: false,
                 },
