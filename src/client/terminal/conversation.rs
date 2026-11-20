@@ -5534,15 +5534,21 @@ mod tests {
     fn reveal_tool_group_text(state: &mut State, needle: &str) -> String {
         state.chat_key(Key::HistoryStart);
         let screen = display(state).screen().contents();
-        let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+        let Some((y, heading)) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, row)| row.contains("Tools ·"))
+        else {
             return screen;
         };
-        state.chat_key(Key::Mouse {
-            button: 0,
-            x: 8,
-            y: y as u16,
-            release: false,
-        });
+        if heading.contains("▸ Tools ·") {
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y: y as u16,
+                release: false,
+            });
+        }
         for _ in 0..512 {
             let screen = display(state).screen().contents();
             if screen.contains(needle) {

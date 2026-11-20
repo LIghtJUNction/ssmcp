@@ -232,18 +232,39 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
 
 #[test]
 fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay() {
+    let header_row = |screen: &str| {
+        screen
+            .lines()
+            .position(|row| row.contains("Tools · 5 calls"))
+            .unwrap() as u16
+    };
     for cols in [120, 48] {
         for expanded in [false, true] {
             let mut before = fixture(cols);
-            let initial = display(&mut before).screen().contents();
-            let y = initial
-                .lines()
-                .position(|row| row.contains("Tools · 5 calls"))
-                .unwrap() as u16;
+            let mut initial = display(&mut before).screen().contents();
+            let folded_scroll = if expanded {
+                None
+            } else {
+                let group = &before.events.snapshot()["tool_groups"][0];
+                assert_eq!(group["expanded"], true);
+                assert_eq!(group["following"], true);
+                before.chat_key(Key::Mouse {
+                    button: 64,
+                    x: 8,
+                    y: header_row(&initial),
+                    release: false,
+                });
+                initial = display(&mut before).screen().contents();
+                let group = &before.events.snapshot()["tool_groups"][0];
+                let scroll = group["scroll"].as_u64().unwrap();
+                assert!(scroll > 0, "{initial}");
+                assert_eq!(group["following"], false);
+                Some(scroll)
+            };
             before.chat_key(Key::Mouse {
                 button: 0,
                 x: 8,
-                y,
+                y: header_row(&initial),
                 release: false,
             });
             let first = display(&mut before).screen().contents();
@@ -252,14 +273,10 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 false
             );
             if expanded {
-                let y = first
-                    .lines()
-                    .position(|row| row.contains("Tools · 5 calls"))
-                    .unwrap() as u16;
                 before.chat_key(Key::Mouse {
                     button: 0,
                     x: 8,
-                    y,
+                    y: header_row(&first),
                     release: false,
                 });
                 before.chat_key(Key::End);
@@ -295,14 +312,20 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             after.chat_apply_reload_snapshot(saved, Vec::new(), None);
             after.chat_restore_draft(draft);
             after.chat_restore_reload_input();
+            assert_eq!(
+                after.events.snapshot()["tool_groups"][0]["following"],
+                events["tool_groups"][0]["following"]
+            );
             let screen = display(&mut after).screen().contents();
             save_preview(&mut after, &format!("reload-after-{mode}"));
             let restored = after.events.snapshot();
             assert_eq!(restored["tool_groups"][0]["expanded"], expanded);
-            assert_eq!(
-                restored["tool_groups"][0]["scroll"],
-                events["tool_groups"][0]["scroll"]
-            );
+            if expanded {
+                assert_eq!(
+                    restored["tool_groups"][0]["scroll"],
+                    events["tool_groups"][0]["scroll"]
+                );
+            }
             assert_eq!(
                 restored["events"][5]["expanded"],
                 events["events"][5]["expanded"]
@@ -346,6 +369,21 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             assert_eq!(after.conversation.snapshot()["draft"], draft_display);
             assert_eq!(after.chat_data()["queue"], queue);
             assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+            if let Some(scroll) = folded_scroll {
+                after.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y: header_row(&screen),
+                    release: false,
+                });
+                display(&mut after);
+                let reopened = &after.events.snapshot()["tool_groups"][0];
+                assert_eq!(reopened["expanded"], true);
+                assert_eq!(reopened["following"], false);
+                assert_eq!(reopened["scroll"], scroll);
+                assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+                save_preview(&mut after, "reload-after-folded-reopened");
+            }
         }
     }
 }
