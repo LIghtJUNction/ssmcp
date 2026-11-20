@@ -514,29 +514,28 @@ impl State {
             }
             self.dirty = true;
         }
-        if let Some(id) = self.conversation.editing.clone() {
-            let data = steering::snapshot();
-            if let Some(record) = items(&data, "queue")
-                .iter()
-                .find(|record| message_id(record) == id)
-            {
-                if field(record, "status") == "cancelled" {
-                    self.conversation.editing = None;
-                    self.conversation.composer.take_text();
-                    if let Some(parked) = self.conversation.parked.take() {
-                        self.chat_restore_draft(parked);
-                    }
-                    self.notice = Some("Request cancelled · previous draft restored".into());
-                } else if field(record, "status") == "delivered"
-                    && self.conversation.submitting.is_none()
-                {
-                    self.conversation.editing = None;
-                    self.notice = Some(
-                        "This request was already delivered · current text is kept as a new draft"
-                            .into(),
-                    );
+        match self
+            .conversation
+            .editing
+            .as_deref()
+            .and_then(steering::request_status)
+        {
+            Some("cancelled") => {
+                self.conversation.editing = None;
+                self.conversation.composer.take_text();
+                if let Some(parked) = self.conversation.parked.take() {
+                    self.chat_restore_draft(parked);
                 }
+                self.notice = Some("Request cancelled · previous draft restored".into());
             }
+            Some("delivered") if self.conversation.submitting.is_none() => {
+                self.conversation.editing = None;
+                self.notice = Some(
+                    "This request was already delivered · current text is kept as a new draft"
+                        .into(),
+                );
+            }
+            _ => {}
         }
         if let Some(message) = failed_notice {
             self.notice = Some(message);
