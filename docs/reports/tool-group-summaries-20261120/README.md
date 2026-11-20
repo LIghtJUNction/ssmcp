@@ -1,78 +1,75 @@
-# ssmcp 工具组摘要：实现与验收
+# ssmcp 工具组摘要：主线整合与验收
 
-日期：2026-11-20（Asia/Taipei）
+日期：2026-11-20
 
-验证源码：`911bfe905e6df1b54bcc46be2f88c87813cb031c`
+验证源码：`8725b7b4606e8eb75c3d366c380f991842e0219a`
+
+账户退出整合源码：`4ca66fa12693b1b2db940da78b3c89cb2048425d`（补充验证见第 9 节）
 
 功能入口：[PR #119](https://github.com/LIghtJUNction/ssmcp/pull/119)
 
-本轮完成了连续工具组的可更新摘要，以及超过 10 次真实调用后的总结提醒。本文记录同一份冻结源码、对应构建产物和真实终端的验收结果。最终候选同时包含提醒交付修复、输入响应优化和主线的 zharness 0.6.0 依赖更新。
+本轮将工具组摘要、原生命令卡片和等待结果交付整合到同一份冻结源码。用户现在可以看清每组工具“正在做什么”，展开后仍能读到真实命令；明确折叠后，新结果和摘要更新不会把窗口再次打开。第 11 次真实调用产生的总结提醒，也能经被动等待响应交给 Agent。
 
-## 1. 用户能看到的变化
+本文更新此前 `911bfe9` checkpoint 的报告。第 4、5 节的完整构建、回归与截图对应 `8725b7b4606e8eb75c3d366c380f991842e0219a`；第 9 节单独记录后续账户退出整合。各阶段的成功数量与失败记录分别保存，不混入其他源码的结果。交付范围为源码和隔离验收，运行中的客户端与 relay 尚未部署这个候选。
 
-Agent 可以为一组连续工具调用写一句用途说明，例如“核对工作区文件，并检查缺失路径”。这句话显示在折叠标题和展开窗口顶部；调用总数、成功、失败和运行状态仍由实际执行事件决定。
+## 1. 用户能看到的结果
 
-更新摘要只替换组说明，不新增聊天消息。展开状态、内部滚动、外层滚动、选中项、输入草稿和光标保持原状。宽屏将标题与计数放在同一行；窄屏将状态移到下一行。单次调用没有摘要时仍使用普通卡片。
+没有摘要时，命令继续作为独立卡片显示真实 argv。即使 Agent 提供了用途标题，用户仍能看到实际执行的程序与参数。包含“读取文件 → 执行命令 → 再读取文件”的连续活动，也不会被切成多个共享同一组 ID、却重复显示全量计数的窗口。
 
-完整契约见[工具组总结说明](../../tool-group-summaries.md)。关键实现为[原生接口](https://github.com/LIghtJUNction/ssmcp/blob/911bfe905e6df1b54bcc46be2f88c87813cb031c/src/client/interface/tool_summary.rs)、[组状态与授权](https://github.com/LIghtJUNction/ssmcp/blob/911bfe905e6df1b54bcc46be2f88c87813cb031c/src/client/terminal/events/tool_summaries.rs)和[工具窗口渲染](https://github.com/LIghtJUNction/ssmcp/blob/911bfe905e6df1b54bcc46be2f88c87813cb031c/src/client/terminal/events/tool_activity.rs)。
+设置摘要后，一个逻辑组对应一个窗口、一个摘要标题。窗口收齐属于它的调用，保留调用总数及成功、失败、运行状态；展开时复用原有命令标题行。未发生历史淘汰时，可见成员数与实际调用数一致；发生淘汰后，累计数量与保留成员分别表达，不能把剩余行数当成全部工作量。[实现：工具窗口与命令行][tool-activity]、[command_rows.rs][command-rows]。
 
-## 2. Agent 如何更新摘要
+含命令的组首次获得摘要时默认展开，方便直接核对 argv；用户此前已经明确折叠，则优先保留这个选择。之后的新调用、连续刷新、第二次摘要更新和位置恢复都遵守同一选择。普通摘要替换保留内外滚动、选中状态、未发送草稿与光标，不追加聊天正文。新增的折叠意图字段有默认值，旧位置记录可以继续读取。[实现：events.rs][events]、[摘要回归测试][summary-tests]。
 
-原生工具名称为 `ssmcp.ui.tool_summary`。调用方先发现当前客户端注册的真实 schema，再使用以下操作：
+## 2. Agent 如何总结，何时再次提醒
 
-| 操作 | 参数与结果 |
+原生工具为 `ssmcp.ui.tool_summary`。调用方先读取实际客户端注册的 schema，再操作当前授权范围内的组：
+
+| 操作 | 行为 |
 | --- | --- |
-| `list` | 列出当前授权范围内最近最多 32 个可更新工具组；返回稳定的组 ID、摘要、revision 和计数。 |
-| `set` | 以准确的 `group_id` 设置或更新 `summary`；可携带 `expected_revision`，防止覆盖别人刚完成的更新。 |
+| `list` | 返回最近最多 32 个可更新组，以及稳定 `group_id`、摘要、revision、累计与已覆盖调用数；截断时给出相应标记。 |
+| `set` | 为准确的组 ID 设置或更新短摘要；可携带 `expected_revision`，版本冲突时拒绝覆盖。 |
 
-`summary` 必须是非空单行纯文本，最多 120 个 Unicode 字符、512 个 UTF-8 字节，并经过既有脱敏处理。
+摘要为非空、单行纯文本，最多 120 个 Unicode 字符、512 个 UTF-8 字节，并经过既有脱敏处理。计数与执行状态来自实际事件，摘要文本不能改写这些状态。[接口与参数校验][summary-interface]、[组状态与授权][summaries]。
 
-```javascript
-// clientId 来自实际连接；groupId 和 revision 来自刚读取的原生列表。
-return await call(clientId, "ssmcp.ui.tool_summary", {
-  action: "set",
-  group_id: groupId,
-  expected_revision: revision,
-  summary: "核对工作区文件，并检查缺失路径"
-});
-```
+开始、输出、结束属于同一请求时，只算一次。Agent 主动发起的新 `status`、`read`、`wait` 请求各算一次；摘要操作及内部观察不膨胀工作计数。累计 10 次不提醒，第 11 次提醒；成功设置摘要后记录当时的覆盖数量，再新增 11 次才需要更新。同一组、同一 revision 的提醒去重，提醒携带准确组 ID，避免让 Agent 猜测应总结哪个窗口。
 
-修改权限核对原始会话所有权、连接、真实账号，以及已有的 Agent 和线程绑定。显示名称不决定权限。未绑定 Agent 时，同一授权范围内可以跨 code_mode 运行更新自己的组；绑定后必须匹配原 Agent 和线程。重载保留有界的摘要显示，但恢复的历史组只读。
+授权同时核对原始会话所有权、连接、真实账号，以及已有 Agent／线程绑定。显示名称不能授权。未绑定 Agent 时，同一授权范围可以跨 code_mode 运行更新；绑定后必须精确匹配。重载保存摘要和显示位置，历史组恢复后只读，不恢复旧的编辑权限。新工具的完整契约见[工具组总结说明][summary-doc]。
 
-## 3. 第 11 次调用如何触发提醒
+## 3. 等待响应的交付边界
 
-一次工具请求可以产生开始、输出、结束等多个事件，这些事件都属于同一次调用。系统按实际发出的原生请求计数，不按界面刷新的次数计数。Agent 主动发起的新 status、read、wait 请求各算一次；摘要原语和内部观察请求不增加工作计数。
+提醒由真实原生回执进入 relay，再附加到外层响应。JavaScript 自造同名字段不能建立可信提醒。首次尚未读取目录时，授权范围内的只读确认可验证客户端是否支持摘要工具；原生结果超过桥接帧上限时，仅释放对应请求、范围和 revision 的提醒预约，已完成的业务操作不会因此重放。[relay 交付实现][http-summaries]、[提醒恢复修复 PR #131](https://github.com/LIghtJUNction/ssmcp/pull/131)。
 
-| 状态 | 行为 |
-| --- | --- |
-| 同组累计 10 次调用 | 不提醒。 |
-| 同组累计 11 次调用 | 提醒 Agent 调用摘要工具，并携带准确的组 ID。 |
-| 成功更新摘要 | 将当前调用数记为已覆盖数量。 |
-| 此后再新增 11 次调用 | 再提醒更新摘要。 |
+本轮补齐公开被动 `await` 的总结交付，同时保留两种等待入口各自的语义：
 
-同一组、同一摘要 revision 的提醒去重。提醒从真实原生回执进入 relay，再由 relay 加到外层响应；JavaScript 自造的返回字段不能触发这条链路。
+| 入口 | 总结提醒 | 其他输入交付 |
+| --- | --- | --- |
+| 公开 `await` 等待执行对象等被动目标 | 返回已获得的工具组提醒。 | 不领取待发送用户要求，不确认问题回答，不取走原生收件箱消息，也不推进会话提醒。 |
+| code_mode 内的 `waitFor` | 经原有 code_mode 外层结果交付提醒。 | 继续遵循 code_mode 已有的授权、领取和确认边界。 |
+| 明确等待 `user_input` | 采用已有用户输入交付流程。 | 以外层接收状态及对应消息作为交付证据。 |
 
-本轮同时补齐了两个交付场景：首次使用已知工具、尚未读取工具目录时，可通过一次授权内的只读回执确认总结能力；原生结果被 4 MiB 帧限制拦截时，只释放原请求、原调用范围和原 revision 的提醒预约，后续观察可以恢复提醒，不重放已完成的业务操作。[PR #131](https://github.com/LIghtJUNction/ssmcp/pull/131)
+公开 `await` 不占 JavaScript worker；`waitFor` 保留所在 worker。超时后使用原 `wait_id` 继续观察；新的原生等待请求按真实请求计数，取消只结束观察。最终只读复核可能发生等待，因此回传前再次检查账号、连接和绑定；若期间撤销授权，观察数据与提醒一并扣留。[等待实现][await]、[交付对照测试][delivery-tests]。
 
-最终状态复核有时间预算。复核失败或超时时，已捕获提醒可能仍包含旧 revision；Agent 应重新 list，并在 set 时携带 expected_revision。该机制不提供跨轮持久待发送队列。
+完整候选保留主线的 human-only finish 控制：结束请求需要本机用户明确同意，Agent 的 Yes、任务 ready、超时、其他 Agent 消息或总结提醒都不构成同意。已有许可按原生最终回答的规则消费；等待结束状态和工作结束许可是两个不同结果。[结束请求入口][finish]、[外层响应与工具说明][http]。
 
-## 4. 精确候选的验证结果
+## 4. 同一份源码的验证结果
 
-所有下列检查都针对 `911bfe905e6df1b54bcc46be2f88c87813cb031c`。源码与子模块在运行前后保持干净；构建采用锁定依赖、离线模式和单编译任务。没有把其他版本的二进制结果算作本候选的验收。
+验收使用冻结源码及其构建产物，运行前后核对源码、子模块和二进制。构建使用锁定依赖、离线模式与单编译任务；不会把旧二进制的结果归入新候选。
 
 | 构建检查 | 结果 |
 | --- | --- |
 | `cargo fmt --all -- --check` | 通过 |
-| `cargo test --lib --no-run --locked --offline` | 通过，生成本候选的测试可执行文件 |
+| `cargo test --lib --no-run --locked --offline` | 通过 |
 | `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | 通过 |
 | `cargo build --bins --example vt_snapshot --locked --offline` | 通过 |
 
-### 针对性 Rust 回归
+### Rust 回归
 
-| 范围 | 通过 | 失败 |
+验证清单按 20 组筛选组织，覆盖摘要、事件分组、原生命令、等待与输入交付、结束控制，以及历史归属和重载等相关边界。各组实际结果如下：
+
+| 筛选范围 | 通过 | 失败 |
 | --- | ---: | ---: |
-| 工具组摘要、计数、授权与提醒 | 26 | 0 |
-| 终端事件、分组与显示归属 | 93 | 0 |
+| 工具组摘要、计数、授权与提醒 | 34 | 0 |
+| 终端事件、分组与显示归属 | 102 | 0 |
 | Broker 原生交付 | 19 | 0 |
 | Runtime 执行 | 10 | 0 |
 | 原生 UI 工具目录 | 1 | 0 |
@@ -84,64 +81,127 @@ return await call(clientId, "ssmcp.ui.tool_summary", {
 | 历史归档 | 6 | 0 |
 | 会话重载 | 5 | 0 |
 | 会话切换后的晚到帧 | 1 | 0 |
+| 仅真人批准完成 | 10 | 0 |
+| 公共完成请求 | 3 | 0 |
+| 公共类型化等待 | 26 | 0 |
+| 协作等待 | 3 | 0 |
+| 独立命令卡片 | 3 | 0 |
+| code_mode waitFor 路由 | 1 | 0 |
+| 问题交付与被动观察隔离 | 8 | 0 |
 
-这些是各筛选范围的实际执行结果，部分用例会被不同筛选范围重复选中，因此不将它们相加为唯一测试总数。本轮没有声称运行了整个仓库的所有测试。
+部分筛选会选中相同测试，因此不把逐组数量相加当成唯一测试总数；本报告也不声称执行了整个仓库的全部测试。
 
-### 真实终端与原生链路
+### 三个真实 PTY 套件
 
-使用实际账号路由器代码、原生工具、code_mode、WebSocket 和独立 PTY，通过 **68 项检查**，生成 **6 张截图**。账号和内容均为隔离夹具；没有启动外部模型，没有重载已有客户端，也没有更改现有服务。
+| 套件 | 通过检查 | 截图 | 主要证据 |
+| --- | ---: | ---: | --- |
+| 核心工具组摘要 | 68 | 6 | 10／11 边界、再次覆盖、版本与授权拒绝、真实失败调用、展开滚动及历史不增。 |
+| readable 命令卡片 | 71 | 8 | 原生命令默认可读，命令与输出布局在宽窄终端下保持可用。 |
+| 摘要与命令整合 | 90 | 4 | 纯命令与混合调用各一个窗口，计数准确，明确折叠后保持，实际 argv 可读。 |
 
-验收覆盖首轮 10／11 次边界、更新后再 11 次提醒、同一运行内主动更新后撤销旧提醒、旧 revision 拒绝、不同 Agent 拒绝、JavaScript 伪造元数据拒绝，以及真实工具报错后的连续性。最终同一组包含 **46 次调用**，其中 11 次是刻意构造的缺失文件错误；第 **5** 版摘要覆盖到第 **46** 次调用。
+三个套件均通过，共生成 **18 张截图**。测试通过真实原生工具、code_mode、WebSocket 和独立 PTY 执行；使用隔离账号与内容夹具，不启动外部模型，不重启现有生产服务。
 
-120 列与 48 列均检查了精确草稿文本和 UTF-8 光标。展开阶段实际填满并超过 12 行窗口，随后执行内部滚动，再更新摘要，确认折叠、滚动与历史条数保持。最终折叠截图也完整生成。
+草稿验证直接比较完整 `{text, cursor}`。核心与摘要命令套件输入 `DRAFT_STAYS intact`，将光标左移 3 字节，再在 120／48 列、刷新、折叠和摘要更新之后核对原文本与 UTF-8 字节偏移。核心套件实际填满并超过有界窗口，执行滚轮动作后比较内外滚动和保留事件数，确认更新没有变成新增聊天。[核心 PTY 脚本][core-pty]。
 
-源码、命令结果、测试数量、二进制和脚本 SHA-256、字体与截图 SHA-256 均收录在 [report.json](report.json)。
+readable 套件只检查最终输入草稿文本与待发送队列为空；它没有设置非空草稿，也没有独立验证中间光标。这里将其可读性结论与另外两个套件的精确草稿结论分别记录。
+
+摘要命令套件分别执行两个隔离场景：纯 exec，以及 `stat → exec → stat`。每个场景用两次真实命令向夹具文件各追加一次标记；最终内容必须恰为两行，从文件副作用证明总结、刷新、折叠和读取没有重放命令。等待请求单独计数，不冒充新的命令执行。[摘要命令 PTY 脚本][commands-pty]。
+
+命令、逐组结果、套件报告、源码与二进制标识、脚本及截图校验值统一收录于 [report.json](report.json)。凭据检查由各套件执行，报告保留实际检查边界。
 
 ## 5. 实际界面
 
-以下截图来自本候选的实际 PTY 字节，经 VT 解码后渲染，没有手工重画界面。
+图片来自本候选的 PTY 字节，经 VT 解码后渲染；没有手工重画产品界面。宽屏与窄屏使用同一套真实交互。
 
-| 阶段 | 120 列 | 48 列 |
+| 核心摘要阶段 | 120 列 | 48 列 |
 | --- | --- | --- |
 | 首次摘要、折叠 | [查看](tool-summary-first-folded-120.png) | [查看](tool-summary-first-folded-48.png) |
 | 更新摘要、展开并滚动 | [查看](tool-summary-updated-expanded-120.png) | [查看](tool-summary-updated-expanded-48.png) |
 | 最终摘要、折叠 | [查看](tool-summary-final-folded-120.png) | [查看](tool-summary-final-folded-48.png) |
 
-### 展开窗口
+| readable 命令阶段 | 120 列 | 48 列 |
+| --- | --- | --- |
+| 默认命令卡片 | [查看](readable/readable-commands-folded-120.png) | [查看](readable/readable-commands-folded-48.png) |
+| 展开后的命令开头 | [查看](readable/readable-commands-expanded-head-120.png) | [查看](readable/readable-commands-expanded-head-48.png) |
+| 展开的输出 | [查看](readable/readable-commands-expanded-output-120.png) | [查看](readable/readable-commands-expanded-output-48.png) |
+| 展开的源码尾部 | [查看](readable/readable-commands-expanded-source-tail-120.png) | [查看](readable/readable-commands-expanded-source-tail-48.png) |
 
-![实际展开的工具组及保留的草稿](tool-summary-updated-expanded-120.png)
+| 摘要与命令整合 | 120 列 | 48 列 |
+| --- | --- | --- |
+| 纯命令、用户明确折叠 | [查看](commands/exec-only/summary-commands-exec-only-folded-120.png) | [查看](commands/exec-only/summary-commands-exec-only-folded-48.png) |
+| 文件与命令混合、用户明确折叠 | [查看](commands/mixed/summary-commands-mixed-folded-120.png) | [查看](commands/mixed/summary-commands-mixed-folded-48.png) |
 
-### 窄屏最终状态
+![展开后的摘要窗口与保留草稿](tool-summary-updated-expanded-120.png)
 
-![48 列下的摘要、真实计数与保留的草稿](tool-summary-final-folded-48.png)
+![窄屏下明确折叠的混合摘要窗口](commands/mixed/summary-commands-mixed-folded-48.png)
 
-## 6. 这轮发现并修复的问题
+## 6. 本轮修复的实际问题
 
-- list 输入必须严格校验允许的字段，避免未知参数被静默忽略。
-- 外层工具窗口的连续性处理保留原来的文件读取分组边界。
-- 原错误显示路径丢失调用来源，会在版本冲突或拒绝后拆出新组；现改为显式携带原调用身份，原错误结果保持不变。
-- 同 revision 下晚到的旧列表不能清掉更新的提醒；同一运行内已经完成的摘要更新仍会清理旧提醒。
-- 首次能力确认和超大回执的预约恢复纳入真实 Session／Frame 与生产帧限制回归。
-- 并行输入优化合入后，将测试专用 HistoryStore 导入限制在测试构建，并保留交互脚本原有的可执行权限。
+早期实现把可读命令从工具窗口直接排除，导致纯命令组设置摘要后没有标题，混合组则可能重复显示同一组 ID。修复先收齐逻辑组，再决定整个组显示为独立卡片还是摘要窗口；独立卡片与摘要窗口共用真实命令标题。
 
-夹具修正也单独留痕：11 行不足以产生 12 行窗口的滚动，因此先增加真实调用形成溢出；完整事件投影超过 8 KiB 时，改为只读取工具组元数据和需要的标量状态。产品限制与原状态断言均保留。前序失败记录没有改写为成功；它们与最终通过记录按不同源码和尝试编号分开保存。
+自动展开原先可能覆盖用户选择。现在将明确折叠意图独立保存，覆盖“先折叠、后加入命令、再首次设置摘要”及重载恢复的路径。旧的可读卡片测试保留，新增测试同时核对唯一成员、宽窄布局和滚动位置。
 
-输入响应优化的历史归属、撤回编辑、归档、重载及晚到会话帧已在本候选补查；性能补丁原有计时与本轮功能验收分别记录，见[输入响应优化报告](../ui-input-performance-20261120/iteration-report.md)。
+被动等待原先直接返回对象状态，可能遗漏它已获得的总结提醒。现增加仅处理总结的返回路径，并用 code_mode `waitFor` 作对照；授权在只读复核期间被撤销的情况也纳入回归。此前的错误来源丢失修复、严格列表参数校验和文件读取边界继续纳入回归。前序失败按原源码和尝试编号保留，没有改写成最终成功记录。
 
 ## 7. 仓库整理
 
-旧 [PR #109](https://github.com/LIghtJUNction/ssmcp/pull/109)、[PR #111](https://github.com/LIghtJUNction/ssmcp/pull/111)、[PR #112](https://github.com/LIghtJUNction/ssmcp/pull/112) 的代码此前已进入主线。本轮核对差异后补齐合并关系和 GitHub 合并状态，整合节点为 [4ae22ea](https://github.com/LIghtJUNction/ssmcp/commit/4ae22ea828ee2647b44c275f79679963ba7e88a9)。
+旧 [PR #109](https://github.com/LIghtJUNction/ssmcp/pull/109)、[PR #111](https://github.com/LIghtJUNction/ssmcp/pull/111)、[PR #112](https://github.com/LIghtJUNction/ssmcp/pull/112) 的内容此前已进入主线。本轮核对差异并补齐合并关系和 GitHub 状态，整合节点为 [4ae22ea](https://github.com/LIghtJUNction/ssmcp/commit/4ae22ea828ee2647b44c275f79679963ba7e88a9)。
 
-已删除 **23 个远程分支、21 个本地分支**。远程删除核对了准确 SHA 并读取结果确认；本地使用正常的已合并分支删除方式。活跃工作树和仍被使用的分支保留。具体名称及原 SHA 见 [branch-cleanup.json](branch-cleanup.json)。
+已清理 **23 个远程分支、21 个本地分支**。远程删除核对准确 SHA 并读取结果确认；本地采用正常的已合并分支删除方式。活跃工作树和仍被使用的分支保留，名称与原 SHA 见 [branch-cleanup.json](branch-cleanup.json)。
 
-## 8. 项目状态与后续范围
+## 8. 五项功能的当前边界
 
-| 项目 | 当前代码状态 |
+| 用户关心的项目 | 本轮确认的状态与源码依据 |
 | --- | --- |
-| Agents／Sessions 页面 | 已有注册参与者、观察到的活动和会话导航。 |
-| 待发送队列 | 已有排队、撤回编辑、取消和接收确认状态。 |
-| 连续工具调用窗口 | 已有分组、折叠和内部滚动；本轮补齐摘要与提醒。 |
-| 审计页 | 已有按执行轮次查看源码、调用和结果的入口，保留容量有限。 |
-| 聊天框到后端工具循环 | P1 输入、路由、确认与回传链路已实现；独立协议库、动态模型／推理选项、持久化会话上下文仍属后续工作。 |
+| Agents 页 | 已有参与者、观察到的活动和会话导航；入口在 [conversation.rs][conversation] 与 [activity.rs][activity]。 |
+| 待发送 | 已有排队、撤回编辑、取消与接收确认；入口在 [conversation/queue.rs][queue] 与 [client/steering.rs][steering]。 |
+| 连续工具调用窗口 | 已有分组、折叠和内部滚动；本轮整合可更新摘要、第 11 次提醒及可读命令，见 [tool_activity.rs][tool-activity]。 |
+| 审计页 | 已有按执行轮次查看源码、调用和结果的入口，保留容量有界；入口为 [audit_view.rs][audit] 与 [code_mode.rs][code-mode]。 |
+| 聊天框到后端循环 | 已有连接范围内的监听、路由、确认和回传，见 [interface/listener.rs][listener]；完整跨会话公开协议仍是设计提案。 |
 
-本次交付是源码与本地验收完成，尚未将这个候选部署到现有客户端或 relay。完整体验需要两端同时支持新协议处理；本报告不将本地验收等同于生产上线或全部平台发布验收。
+第五项不能标记为全部完成。[跨会话监听设计][listener-design]明确区分现有连接型监听与下一阶段：持久会话地址、明确接收端选择、跨连接查询原消息结果、独立协议 schema，以及 zcall／zcalld 的聊天控制、收件箱和上下文服务接线，仍需实现与独立验收。
+
+本候选尚未部署到运行中的客户端或 relay。完整总结体验需要两端支持相应原生工具与外层提醒；本地通过不等于生产上线，也不等于跨平台发布验收。最终状态复核有时间预算，Agent 遇到旧 revision 应重新 list，并在 set 中携带版本条件；当前机制不提供跨轮持久化的提醒待发送队列。
+
+## 9. 后续账户退出整合验证
+
+完整摘要验收完成后，主线又合入了账户连接写错误与晚到授权拒绝的修复。本轮将主线 `c7086f9` 正常合入，形成 `4ca66fa12693b1b2db940da78b3c89cb2048425d`，并针对这条连接生命周期边界补查。
+
+新增逻辑在停止请求派发后，最多再读取两秒终态拒绝；排队帧不会执行为新工具调用。只有真实拒绝被既有规则识别为永久授权失败时，才改变原错误分类。摘要计数、调用来源、原生超大回复恢复和 relay 最终授权仍保留原有实现。[整合差异](https://github.com/LIghtJUNction/ssmcp/compare/21342ea6b3de61883f70f3811f7d67e378091967...4ca66fa12693b1b2db940da78b3c89cb2048425d)
+
+该整合源码的格式检查、库测试构建、严格 workspace／all-target Clippy 与客户端构建均通过。五组针对性结果如下：
+
+| 补充筛选范围 | 通过 | 失败 |
+| --- | ---: | ---: |
+| 连接退出时的晚到拒绝与队列竞争 | 5 | 0 |
+| 永久错误分类 | 5 | 0 |
+| 客户端帧协议 | 10 | 0 |
+| 摘要计数、来源、授权与提醒 | 34 | 0 |
+| 最终交付前重新检查撤销 | 1 | 0 |
+
+使用该源码新构建的客户端，完整账户 relay 夹具一次通过 **47 项检查**。注销后的实际退出码为 **1**，表示授权撤销后的预期错误退出；连接尝试次数为 **2 → 2**。后台子进程回收、撤销后不再重连、最多一次重新授权及凭据删除检查均通过。
+
+这次补充检查使用独立账号夹具，未启动模型或修改运行服务。第 5 节的 18 张界面截图仍归属于原完整验收源码；本节的客户端哈希、命令、五组测试与账户结果单独保存在 [post-integration.json](post-integration.json)。
+
+[tool-activity]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/events/tool_activity.rs
+[command-rows]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/events/command_rows.rs
+[events]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/events.rs
+[summary-tests]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/events/tool_summaries/tests.rs
+[summary-interface]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/interface/tool_summary.rs
+[summaries]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/events/tool_summaries.rs
+[summary-doc]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/docs/tool-group-summaries.md
+[http-summaries]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/http/tool_summaries.rs
+[await]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/http/await_tool.rs
+[delivery-tests]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/http/question_delivery_tests.rs
+[finish]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/http/finish_request.rs
+[http]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/http.rs
+[conversation]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/conversation.rs
+[activity]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/activity.rs
+[queue]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/terminal/conversation/queue.rs
+[steering]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/steering.rs
+[audit]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/audit_view.rs
+[code-mode]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/code_mode.rs
+[listener]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/src/client/interface/listener.rs
+[listener-design]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/docs/design/chat-listener-protocol.md
+[core-pty]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/scripts/e2e_tool_summaries.py
+[commands-pty]: https://github.com/LIghtJUNction/ssmcp/blob/8725b7b4606e8eb75c3d366c380f991842e0219a/scripts/e2e_summary_commands.py
