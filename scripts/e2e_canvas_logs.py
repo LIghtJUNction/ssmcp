@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 import tempfile
 
-from e2e_client_ui import Preview, column, left_rows, logs_open, prompt_start, prompt_text, save_shot, text, view
+from e2e_client_ui import (
+    Preview, column, folded_command_preview, left_rows, logs_open,
+    prompt_start, prompt_text, save_shot, text, view,
+)
 
 
 LEFT = b"\x1b[D"
@@ -69,16 +72,15 @@ def run(binary, decoder, output, checks):
             )
             check("Improve the client experience" in body(initial)
                   and "src/client/terminal/events.rs" in body(initial)
-                  and "done" in body(initial)
-                  and "Command completed successfully" in body(initial)
-                  and "4–6/6" in body(initial)
+                  and folded_command_preview(initial)
                   and "expanded = false" in body(initial)
                   and "@@ -1 +1 @@" not in body(initial),
                   "conversation retains user messages and result summaries while tool and diff details start collapsed")
             check(DIAGNOSTIC not in text(initial),
                   "background diagnostics do not appear in the conversation")
-            initial_count = column(initial)[2]
-            check(initial_count == 8, "the main workflow starts with all eight logical columns")
+            # Conversation headers omit their numeric position and count. Check
+            # the fixture's initial count on the first actual Audit header below.
+            initial_count = 8
             save_shot(output, "canvas-conversation", initial)
 
             draft = "canvas draft 界"
@@ -140,6 +142,8 @@ def run(binary, decoder, output, checks):
             preview.send(RIGHT)
             audit = preview.until(lambda shot: view(shot, "code audit"),
                                   "Right at draft end navigating to code audit")
+            check(column(audit) == ("code audit", 3, initial_count),
+                  "the main workflow starts with all eight logical columns")
             check(draft in prompt_text(audit), "Right at the draft boundary changes columns without changing text")
             preview.send(ALT_LEFT)
             returned = preview.until(lambda shot: view(shot, "conversation"), "Alt+Left returning to conversation")
@@ -244,10 +248,21 @@ def run(binary, decoder, output, checks):
             preview.send(ALT_LEFT)
             preview.until(lambda shot: view(shot, "queue"), "return to the inserted queue column")
             preview.send(b"/new chat\r")
-            duplicate = preview.until(lambda shot: view(shot, "conversation"), "a second conversation column")
-            check(column(duplicate)[2] == initial_count + 2, "another column of an existing view type is independent")
+            duplicate = preview.until(lambda shot: view(shot, "conversation")
+                                      and folded_command_preview(shot), "a second conversation column")
+            duplicate_body = body(duplicate)
+            preview.send(ALT_LEFT)
+            duplicate_left = preview.until(lambda shot: view(shot, "queue"),
+                                           "the inserted queue immediately left of the new conversation")
+            check(column(duplicate_left) == ("queue", 3, initial_count + 2)
+                  and "To Builder" in text(duplicate_left),
+                  "another column of an existing view type is independent")
+            preview.send(ALT_RIGHT)
+            preview.until(lambda shot: view(shot, "conversation") and body(shot) == duplicate_body,
+                          "the new conversation restored from its actual left neighbor")
             preview.send(b"/close\r")
-            preview.until(lambda shot: view(shot, "queue"), "closing the duplicate conversation returns to its neighbor")
+            preview.until(lambda shot: column(shot) == ("queue", 3, initial_count + 1),
+                          "closing the duplicate conversation returns to its neighbor and reduces the count")
             preview.send(b"/close\r")
             preview.until(lambda shot: view(shot, "conversation"), "closing the inserted queue restores the original neighbor")
             preview.send(ALT_RIGHT)
@@ -348,12 +363,22 @@ def run_diff_login(binary, decoder, output, checks):
 
             preview.send(b"/new chat\r")
             duplicate = preview.until(lambda shot: view(shot, "conversation")
-                                      and column(shot)[2] == column(initial)[2] + 1,
+                                      and folded_command_preview(shot)
+                                      and "expanded = false" in body(shot)
+                                      and "@@ -1 +1 @@" not in body(shot),
                                       "an independent duplicate conversation")
-            expected_column = column(duplicate)
             expected_body = body(duplicate)
             check("expanded = false" in expected_body and "@@ -1 +1 @@" not in expected_body,
                   "a new conversation column starts with its own collapsed tool cards")
+            save_shot(output, "canvas-new-conversation", duplicate)
+            preview.send(ALT_RIGHT)
+            duplicate_right = preview.until(lambda shot: view(shot, "code audit"),
+                                            "the actual Audit neighbor of the duplicate conversation")
+            check(column(duplicate_right) == ("code audit", 4, 9),
+                  "the duplicate conversation inserts a ninth column before Audit")
+            preview.send(ALT_LEFT)
+            preview.until(lambda shot: view(shot, "conversation") and body(shot) == expected_body,
+                          "the duplicate conversation restored from its actual right neighbor")
             for command in ["/login", "/login open", "/login copy", "/login link"]:
                 preview.send(b"\x01\x0b" + command.encode())
                 typed = preview.until(lambda shot: command in prompt_text(shot),
@@ -368,7 +393,7 @@ def run_diff_login(binary, decoder, output, checks):
                 unchanged = {
                     "draft": command in prompt_text(rejected),
                     "cursor": rejected["cursor"] == cursor and not rejected["hide_cursor"],
-                    "column": column(rejected) == expected_column,
+                    "column": view(rejected, "conversation"),
                     "body": body(rejected) == expected_body,
                     "recipient": left_rows(rejected)[prompt_start(rejected)] == recipient_row,
                 }
@@ -380,8 +405,9 @@ def run_diff_login(binary, decoder, output, checks):
                                      "the original column's expanded diff")
             check("/login link" in prompt_text(previous),
                   "returning to the original conversation restores expansion and preserves the rejected command draft")
+            save_shot(output, "canvas-original-diff-return", previous)
             preview.send(ALT_RIGHT)
-            returned = preview.until(lambda shot: column(shot) == expected_column
+            returned = preview.until(lambda shot: view(shot, "conversation")
                                      and body(shot) == expected_body, "the independent duplicate column")
             check("/login link" in prompt_text(returned),
                   "the duplicate conversation retains its own collapsed state after the round trip")
@@ -527,16 +553,18 @@ def run_tasks(binary, decoder, output, checks):
                   "dedicated Tasks restores a closed Logs neighbor without deleting jobs or the recipient")
 
             command(preview, repaired_logs, "/new chat")
-            inserted = preview.until(lambda shot: column(shot) == ("conversation", 9, 9),
+            inserted = preview.until(lambda shot: view(shot, "conversation")
+                                     and folded_command_preview(shot),
                                      "a new chat column inserted after the whole Logs and Tasks pair")
             preview.send(ALT_LEFT)
-            preview.until(lambda shot: task_list(shot) and column(shot)[1] == 8,
+            preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 9),
                           "Tasks remaining immediately left of the inserted chat")
             preview.send(ALT_LEFT)
-            adjacent_logs = preview.until(lambda shot: logs_open(shot) and column(shot)[1] == 7,
+            adjacent_logs = preview.until(lambda shot: logs_open(shot) and column(shot) == ("logs", 7, 9),
                                           "Logs and Tasks remaining adjacent after insertion")
             check(column(adjacent_logs)[2] == 9 and "To Builder" in text(adjacent_logs),
                   "/new from Logs inserts after Tasks and never splits the canonical pair")
+            save_shot(output, "canvas-paired-logs", adjacent_logs)
             check(preview.process.poll() is None, "closing system columns leaves the preview session alive")
         except BaseException:
             save_shot(output, "canvas-tasks-failure", snapshot(preview))
