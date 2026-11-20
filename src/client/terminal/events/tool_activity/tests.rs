@@ -32,6 +32,28 @@ fn command(view: &mut EventView, id: &str, output: usize) -> u64 {
     }
     event_id
 }
+fn tool(view: &mut EventView, id: &str, output: usize) -> u64 {
+    view.ingest_event(
+        "native",
+        &json!({"type":"harness.tool.started","call_id":id}),
+        format!("[REQ] inspect {id} call={id} started\n").as_bytes(),
+    );
+    let event_id = view.events.back().unwrap().id;
+    if output > 0 {
+        view.ingest_event(
+            "native",
+            &json!({"type":"tool_result","call_id":id}),
+            format!(
+                "[RES] native\n{}",
+                (0..output)
+                    .map(|n| format!("{id}-{n:02}\n"))
+                    .collect::<String>()
+            )
+            .as_bytes(),
+        );
+    }
+    event_id
+}
 fn open_group(view: &mut EventView) {
     let group = view.tool_groups().last().unwrap().clone();
     view.selected = Some(group.head);
@@ -54,17 +76,17 @@ fn image_preview() -> super::super::images::Preview {
 fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
     for width in [120, 48] {
         let mut view = view();
-        command(&mut view, "running", 20);
-        command(&mut view, "passed", 20);
-        command(&mut view, "failed", 20);
+        tool(&mut view, "running", 20);
+        tool(&mut view, "passed", 20);
+        tool(&mut view, "failed", 20);
         view.ingest_event(
-            "shell",
-            &json!({"type":"exec.exited","job_id":"passed","exit_code":0}),
+            "native",
+            &json!({"type":"harness.tool.completed","call_id":"passed","exit_code":0}),
             b"[OK] shell passed exit=0\n",
         );
         view.ingest_event(
-            "shell",
-            &json!({"type":"exec.exited","job_id":"failed","exit_code":1}),
+            "native",
+            &json!({"type":"harness.tool.completed","call_id":"failed","exit_code":1}),
             b"[ERR] shell failed exit=1\n",
         );
         view.ingest_event(
@@ -74,8 +96,8 @@ fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
         );
         for _ in 0..5 {
             view.ingest_event(
-                "shell",
-                &json!({"type":"exec.stdout","job_id":"running"}),
+                "native",
+                &json!({"type":"tool_result","call_id":"running"}),
                 b"more output\n",
             );
         }
@@ -108,14 +130,14 @@ fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
 #[test]
 fn adjacent_tool_windows_respect_conversation_image_and_diagnostic_boundaries() {
     let mut view = view();
-    command(&mut view, "a", 0);
-    command(&mut view, "b", 0);
+    tool(&mut view, "a", 0);
+    tool(&mut view, "b", 0);
     view.ingest_conversation(b"[AGENT] Next checks\n");
-    command(&mut view, "c", 0);
-    command(&mut view, "d", 0);
+    tool(&mut view, "c", 0);
+    tool(&mut view, "d", 0);
     view.ingest(b"diagnostic boundary\n");
-    command(&mut view, "e", 0);
-    command(&mut view, "f", 0);
+    tool(&mut view, "e", 0);
+    tool(&mut view, "f", 0);
     assert_eq!(view.tool_groups().len(), 3);
     view.events[1].image = Some(image_preview());
     assert_eq!(view.tool_groups().len(), 2);
@@ -136,7 +158,7 @@ fn adjacent_tool_windows_respect_conversation_image_and_diagnostic_boundaries() 
 #[test]
 fn adjacent_tool_windows_count_read_groups_and_ignore_bookkeeping() {
     let mut view = view();
-    command(&mut view, "before-a", 0);
+    tool(&mut view, "before-a", 0);
     for name in ["one", "two", "three"] {
         view.ingest_event(
             "workspace",
@@ -145,7 +167,7 @@ fn adjacent_tool_windows_count_read_groups_and_ignore_bookkeeping() {
         );
         view.ingest_event("audit",&json!({"type":"ssmcp.skill.discovered","tool":"ssmcp.skills.list","path":name,"invoked":false}),b"[SKIL] discovered\n");
     }
-    command(&mut view, "after-a", 0);
+    tool(&mut view, "after-a", 0);
     assert_eq!(view.read_groups().len(), 1);
     assert_eq!(view.tool_groups().len(), 1);
     let snapshot = view.snapshot();
@@ -164,7 +186,7 @@ fn adjacent_tool_window_scroll_and_selection_keep_exact_event_targets() {
     for width in [120, 48, 12, 1] {
         let mut view = view();
         let ids = (0..8)
-            .map(|n| command(&mut view, &format!("job{n}"), 20))
+            .map(|n| tool(&mut view, &format!("job{n}"), 20))
             .collect::<Vec<_>>();
         let original = view
             .events
@@ -225,49 +247,54 @@ fn adjacent_tool_window_scroll_and_selection_keep_exact_event_targets() {
 }
 
 #[test]
-fn adjacent_tool_windows_preserve_fold_inner_scroll_and_canvas_positions() {
-    let mut view = view();
-    let ids = (0..6)
-        .map(|n| command(&mut view, &format!("job{n}"), 40))
-        .collect::<Vec<_>>();
-    open_group(&mut view);
-    view.select(3);
-    assert_eq!(view.selected, Some(ids[2]));
-    assert!(view.open());
-    view.render(120, 24, &ui(), true);
-    let offset = view.events[0].group_panel.offset();
-    assert!(view.scroll_selected_panel(3));
-    view.render(120, 24, &ui(), true);
-    assert_eq!(view.events[2].panel.offset(), 3);
-    assert_eq!(view.events[0].group_panel.offset(), offset);
-    let row = view
-        .panel_hit_rows
-        .iter()
-        .position(|id| *id == Some(ids[2]))
-        .unwrap();
-    assert!(view.scroll_panel_at(row as u16, 3));
-    let expanded = view.position();
-    assert!(view.mouse_select(0));
-    assert!(view.back());
-    let folded = view.position();
-    view.render(120, 24, &ui(), true);
-    assert_eq!(view.snapshot()["tool_groups"][0]["expanded"], false);
-    view.restore_position(&expanded);
-    view.render(120, 24, &ui(), true);
-    assert_eq!(view.events[0].group_panel.offset(), offset);
-    assert_eq!(view.events[2].panel.offset(), 6);
-    assert_eq!(view.selected, Some(ids[2]));
-    assert!(view.toggle());
-    view.render(120, 24, &ui(), true);
-    assert_eq!(view.events[2].panel.offset(), 37);
-    view.restore_position(&folded);
-    view.render(120, 24, &ui(), true);
-    assert_eq!(view.selected_group, Some(ids[0]));
-    assert_eq!(view.snapshot()["tool_groups"][0]["expanded"], false);
+fn adjacent_commands_preserve_fold_inner_scroll_and_canvas_positions() {
+    for width in [120, 48] {
+        let mut view = view();
+        let first = command(&mut view, "first", 40);
+        let second = command(&mut view, "second", 40);
+        view.render(width, 24, &ui(), true);
+        assert!(view.tool_groups().is_empty());
+        assert_eq!(view.visible_ids(), vec![first, second]);
+        view.selected = Some(first);
+        view.selected_group = None;
+        view.follow = false;
+        view.reveal = true;
+        let folded = view.position();
+        assert!(view.open());
+        view.render(width, 24, &ui(), true);
+        assert_eq!(view.events[0].panel.offset(), 0);
+        let other_offset = view.events[1].panel.offset();
+        assert!(view.scroll_selected_panel(3));
+        view.render(width, 24, &ui(), true);
+        assert_eq!(view.events[0].panel.offset(), 3);
+        assert_eq!(view.events[1].panel.offset(), other_offset);
+        let row = view
+            .panel_hit_rows
+            .iter()
+            .position(|id| *id == Some(first))
+            .unwrap();
+        assert!(view.scroll_panel_at(row as u16, 3));
+        let expanded = view.position();
+        assert!(view.toggle());
+        view.render(width, 24, &ui(), true);
+        assert!(!view.events[0].chat_expanded);
+        assert_eq!(view.events[0].panel.offset(), 37);
+        view.restore_position(&expanded);
+        view.render(width, 24, &ui(), true);
+        assert!(view.events[0].chat_expanded);
+        assert_eq!(view.events[0].panel.offset(), 6);
+        assert_eq!(view.selected, Some(first));
+        assert!(view.selected_group.is_none());
+        view.restore_position(&folded);
+        view.render(width, 24, &ui(), true);
+        assert!(!view.events[0].chat_expanded);
+        assert_eq!(view.events[0].panel.offset(), 37);
+        assert_eq!(view.events[1].panel.offset(), other_offset);
+    }
 }
 
 #[test]
-fn adjacent_tool_details_reveal_long_redacted_source_tail_at_all_widths() {
+fn standalone_command_details_reveal_long_redacted_source_tail_at_all_widths() {
     for width in [120, 48] {
         let mut view = view();
         command(&mut view, "first", 3);
@@ -282,8 +309,11 @@ fn adjacent_tool_details_reveal_long_redacted_source_tail_at_all_widths() {
             crate::client::render::render_event_for_test("shell", &event, usize::from(width))
                 .unwrap();
         view.ingest_event("shell", &event, &transcript);
-        open_group(&mut view);
-        view.select(2);
+        assert!(view.tool_groups().is_empty());
+        view.selected = Some(view.events[1].id);
+        view.selected_group = None;
+        view.follow = false;
+        view.reveal = true;
         assert!(view.open());
         let head = view.render(width, 24, &ui(), true).join("\n");
         assert!(head.contains("head-marker"), "{head}");
@@ -305,7 +335,7 @@ fn adjacent_tool_details_reveal_long_redacted_source_tail_at_all_widths() {
 fn adjacent_tool_window_state_is_bounded_by_retained_events() {
     let mut view = view();
     for index in 0..MAX_EVENTS + 30 {
-        command(&mut view, &format!("job{index}"), 0);
+        tool(&mut view, &format!("job{index}"), 0);
         view.render(48, 20, &ui(), false);
     }
     assert_eq!(view.events.len(), MAX_EVENTS);
@@ -319,4 +349,44 @@ fn adjacent_tool_window_state_is_bounded_by_retained_events() {
     assert!(view.total_rows <= 15);
     view.clear();
     assert!(view.tool_groups().is_empty() && view.group_hit_rows.is_empty());
+}
+
+#[test]
+fn adjacent_commands_remain_visible_without_expanding_a_tool_group() {
+    for width in [120, 48] {
+        let mut view = view();
+        let first = command(&mut view, "check", 1);
+        let second = command(&mut view, "status", 0);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"check","exit_code":0}),
+            b"[OK] shell check exit=0\n",
+        );
+        let rows = view.render(width, 24, &ui(), false);
+        let text = rows.join("\n");
+        assert!(view.tool_groups().is_empty());
+        assert_eq!(view.visible_ids(), vec![first, second]);
+        assert!(
+            text.contains("cargo check") && text.contains("cargo status"),
+            "{text}"
+        );
+        assert!(
+            text.contains("check-00") && text.contains("Show details"),
+            "{text}"
+        );
+        assert!(!text.contains("Tools ·"), "{text}");
+        assert!(
+            rows.iter().all(|row| {
+                UnicodeWidthStr::width(unstyled(row).as_str()) <= usize::from(width)
+            })
+        );
+        view.selected = Some(second);
+        view.selected_group = None;
+        assert!(view.open());
+        view.render(width, 24, &ui(), true);
+        assert!(!view.events[0].chat_expanded);
+        assert!(view.events[1].chat_expanded);
+        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        assert_eq!(view.events[1].meta.status, Some(Status::Running));
+    }
 }
