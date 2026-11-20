@@ -423,13 +423,10 @@ mod tests {
             assert!(Source::default().blocking(|| send(arguments)).unwrap_err()
                 .starts_with("history_owner_missing:"));
 
-            history::release_current().unwrap();
-            history::record("user", "Other conversation").unwrap();
-            let other = history::current().unwrap().unwrap().metadata.id;
             let document: Presentation = serde_json::from_value(json!({
                 "title":"Result", "blocks":[{"type":"text","text":"Final panel"}]
             })).unwrap();
-            let panel = source.blocking(|| send_presentation(
+            let panel = source.clone().blocking(|| send_presentation(
                 json!({"text":"Final panel","kind":"answer","idempotency_key":"final-panel"}),
                 document,
             )).unwrap();
@@ -439,6 +436,15 @@ mod tests {
             let original = history::read(&owner).unwrap();
             assert_eq!(original.messages.iter().filter(|message| message.role == "assistant").count(), 2);
             assert_eq!(original.messages.last().unwrap().content, "Final panel");
+            history::release_current().unwrap();
+            history::record("user", "Other conversation").unwrap();
+            let other = history::current().unwrap().unwrap().metadata.id;
+            let released = source.blocking(|| send(json!({
+                "text":"Cannot write after owner release", "kind":"answer",
+                "idempotency_key":"released-owner",
+            }))).unwrap_err();
+            assert!(released.starts_with("history_owner_released:"), "{released}");
+            assert_eq!(history::read(&owner).unwrap().messages, original.messages);
             let other = history::read(&other).unwrap();
             assert_eq!(other.messages.len(), 1);
             assert_eq!(other.messages[0].role, "user");

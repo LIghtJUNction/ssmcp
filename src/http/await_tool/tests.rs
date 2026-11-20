@@ -157,24 +157,29 @@ fn arguments_reject_duplicate_targets_and_multiple_inbox_observations() {
 }
 
 #[test]
-fn user_input_and_finish_remain_single_target_transactions_in_both_modes() {
+fn user_input_stays_single_target_and_finish_is_retired_in_both_modes() {
     let user = json!({"type":"user_input", "reason":"Review the next step", "notify":false});
     let finish = json!({"type":"finish", "request_id":"question_1"});
     for mode in ["any", "all"] {
-        for target in [&user, &finish] {
-            assert!(
-                Arguments::parse(json!({
-                    "client_id":"fixture_client", "mode":mode, "targets":[target]
-                }))
-                .is_ok()
-            );
-            reject(
-                json!({"client_id":"fixture_client", "mode":mode, "targets":[
-                    target, {"type":"exec", "job_id":"exec_1"}
-                ]}),
-            );
+        assert!(
+            Arguments::parse(json!({
+                "client_id":"fixture_client", "mode":mode, "targets":[user]
+            }))
+            .is_ok()
+        );
+        reject(
+            json!({"client_id":"fixture_client", "mode":mode, "targets":[
+                user, {"type":"exec", "job_id":"exec_1"}
+            ]}),
+        );
+        for targets in [json!([finish]), json!([user, finish])] {
+            let error = Arguments::parse(json!({
+                "client_id":"fixture_client", "mode":mode, "targets":targets
+            }))
+            .err()
+            .expect("finish target is retired");
+            assert!(error.starts_with("tool_retired:"), "{error}");
         }
-        reject(json!({"client_id":"fixture_client", "mode":mode, "targets":[user, finish]}));
     }
 }
 

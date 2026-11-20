@@ -691,14 +691,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn user_wait_answer_hook_uses_real_reauthorized_host_replies() {
+    async fn native_answers_preserve_reauthorized_replies_without_continuation_hooks() {
         let mut fixture = Fixture::new().await;
-        for (kind, duplicate, error, forged, expected) in [
-            ("progress", false, false, false, false),
-            ("answer", false, false, false, true),
-            ("answer", true, false, false, false),
-            ("answer", false, true, false, false),
-            ("answer", false, false, true, false),
+        for (kind, duplicate, error, forged) in [
+            ("progress", false, false, false),
+            ("answer", false, false, false),
+            ("answer", true, false, false),
+            ("answer", false, true, false),
+            ("answer", false, false, true),
         ] {
             let run = AuditRun::new(
                 "return await say(client,{kind:'answer',text:'fixture'});",
@@ -718,15 +718,10 @@ mod tests {
             } else {
                 json!({"isError":error,"structuredContent":{"accepted":true,"duplicate":duplicate,"message_id":"native_reply"}})
             };
-            fixture.reply(call, value).await;
-            task.await.unwrap().unwrap();
-            let response = append(original(), &run);
-            assert_eq!(
-                response["structuredContent"]
-                    .get("continuation_reminder")
-                    .is_some(),
-                expected
-            );
+            fixture.reply(call, value.clone()).await;
+            assert_eq!(task.await.unwrap().unwrap(), value);
+            assert_eq!(append(original(), &run), original());
+            assert_eq!(run.user_wait_reserve_bytes(), 0);
         }
         fixture.close().await;
     }
