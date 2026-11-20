@@ -1539,6 +1539,10 @@ impl State {
             bytes,
         );
     }
+    fn log_identified_message(&mut self, id: &str, role: &str, text: &str, bytes: &[u8]) {
+        self.events.ingest_identified_message(id, role, text, bytes);
+        self.log_raw(bytes);
+    }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
         self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
