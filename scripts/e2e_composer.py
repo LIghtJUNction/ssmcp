@@ -241,9 +241,6 @@ class Composer(Dashboard):
         front.until(lambda shot: visible_recipient in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
-        expected_target = member["agent_id"] if member is not None else None
-        self.check(self.ui("/display/conversation")["target"] == expected_target,
-                   "recipient selection retains the exact registered identity independently of its label")
         self.check(self.ui("/display/conversation")["target"]
                    == (None if member is None else member["agent_id"]),
                    "Enter selects the exact member and closes the agent panel")
