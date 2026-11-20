@@ -1,6 +1,8 @@
 //! Nonblocking terminal sender. Only broker receipts mean queued or delivered.
 mod groups;
 #[cfg(test)]
+pub(super) mod test_connection;
+#[cfg(test)]
 mod tests;
 use crate::wire::messages::{Command, Receipt, Recipient, Reply, Status};
 use serde::Serialize;
@@ -134,6 +136,25 @@ impl Manager {
         }
         self.request_with_visibility(Command::List {}, quiet)
     }
+    fn send_to_account(
+        &mut self,
+        recipient_id: &str,
+        expected: &(String, String),
+        text: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        if self.recipients.iter().any(|recipient| {
+            recipient.id == recipient_id
+                && (recipient.account.provider != expected.0
+                    || recipient.account.subject != expected.1)
+        }) {
+            return Err(
+                "Recipient account changed · select the recipient again; draft retained".into(),
+            );
+        }
+        self.send(recipient_id, text, request_id)
+    }
+
     fn send(&mut self, recipient_id: &str, text: &str, request_id: &str) -> Result<(), String> {
         let command = Command::Send {
             recipient_id: recipient_id.into(),
@@ -418,9 +439,15 @@ pub(crate) fn watch_recipients(visible: bool) {
 pub(crate) fn refresh() -> Result<(), String> {
     state().refresh()
 }
-pub(crate) fn send(recipient_id: &str, text: &str, request_id: &str) -> Result<(), String> {
-    state().send(recipient_id, text, request_id)
+pub(crate) fn send(
+    recipient_id: &str,
+    expected: &(String, String),
+    text: &str,
+    request_id: &str,
+) -> Result<(), String> {
+    state().send_to_account(recipient_id, expected, text, request_id)
 }
+
 pub(crate) const MAX_GROUP_RECIPIENTS: usize = groups::MAX_TARGETS;
 pub(crate) fn send_group(
     recipients: &[Recipient],

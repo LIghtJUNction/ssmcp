@@ -156,6 +156,47 @@ pub(super) struct SavedDraft {
     pub target: Option<String>,
     #[serde(default)]
     pub native_recipient: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_account: Option<(String, String)>,
+    // Some(empty) preserves the group destination after its members are cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_group: Option<Vec<SavedRecipient>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedRecipient {
+    pub id: String,
+    pub provider: String,
+    pub subject: String,
+}
+
+impl SavedRecipient {
+    pub fn validate_group(items: &[Self]) -> Result<(), String> {
+        if items.len() > super::messaging::MAX_GROUP_RECIPIENTS {
+            return Err("A saved group contains more than 32 recipients".into());
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for item in items {
+            crate::wire::messages::parse_recipient(&item.id)?;
+            validate_saved_account(&item.provider, &item.subject)?;
+            if !ids.insert(item.id.as_str()) {
+                return Err("A saved group contains duplicate recipient identities".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_saved_account(provider: &str, subject: &str) -> Result<(), String> {
+    if provider != "github"
+        || subject.len() > 20
+        || !subject.bytes().all(|byte| byte.is_ascii_digit())
+        || !subject.parse::<u64>().is_ok_and(|id| id > 0)
+    {
+        return Err("Invalid saved recipient account identity".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,6 +206,10 @@ pub(super) struct DraftContext {
     pub target: Option<String>,
     #[serde(default)]
     pub native_recipient: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_account: Option<(String, String)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_group: Option<Vec<SavedRecipient>>,
     pub parked: Option<SavedDraft>,
 }
 
@@ -202,6 +247,20 @@ impl DraftContext {
         {
             crate::wire::messages::parse_recipient(recipient)
                 .map_err(|_| "invalid native draft recipient")?;
+        }
+        for (provider, subject) in self.native_account.iter().chain(
+            self.parked
+                .iter()
+                .filter_map(|draft| draft.native_account.as_ref()),
+        ) {
+            validate_saved_account(provider, subject)?;
+        }
+        for group in self.send_group.iter().chain(
+            self.parked
+                .iter()
+                .filter_map(|draft| draft.send_group.as_ref()),
+        ) {
+            SavedRecipient::validate_group(group)?;
         }
         Ok(())
     }
@@ -2985,8 +3044,9 @@ mod tests {
                 text: "parked request".into(),
                 cursor: 6,
                 target: Some("another_agent".into()),
-                native_recipient: None,
+                ..Default::default()
             }),
+            ..DraftContext::default()
         };
         manager.begin_reload().unwrap();
         assert!(manager.submit("blocked during reload", None).is_err());
@@ -3378,7 +3438,7 @@ mod tests {
                     text: "界".into(),
                     cursor: 1,
                     target: None,
-                    native_recipient: None,
+                    ..Default::default()
                 }),
                 ..DraftContext::default()
             },
@@ -3387,7 +3447,7 @@ mod tests {
                     text: "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
                     cursor: 0,
                     target: None,
-                    native_recipient: None,
+                    ..Default::default()
                 }),
                 ..DraftContext::default()
             },
@@ -3396,7 +3456,7 @@ mod tests {
                     text: String::new(),
                     cursor: 0,
                     target: Some("bad target".into()),
-                    native_recipient: None,
+                    ..Default::default()
                 }),
                 ..DraftContext::default()
             },

@@ -1,13 +1,17 @@
 //! Explicit native recipients and receipts; message text never enters file or shell expansion.
 use super::*;
-use crate::client::messaging as transport;
+use crate::{client::messaging as transport, wire::messages::Recipient};
 
 pub(super) struct Pending {
     request_id: String,
     recipient_id: String,
     body: String,
-    original: steering::SavedDraft,
-    revision: u64,
+    stamp: InputStamp,
+}
+
+enum Body<'a> {
+    Literal(&'a str),
+    WithOptionalMention(&'a str),
 }
 
 fn account(entry: &Value) -> Option<(String, String)> {
@@ -111,6 +115,10 @@ impl State {
         #[cfg(test)]
         if let Some(snapshot) = &self.conversation.native_fixture {
             return snapshot.clone();
+        }
+        #[cfg(test)]
+        if let Some(connection) = &self.conversation.native_connection {
+            return connection.snapshot();
         }
         if self.preview {
             json!({"available":false,"connected":false,"recipients":[],"outgoing":[]})
@@ -281,6 +289,7 @@ impl State {
             Ok(recipient) => {
                 self.conversation.native_recipient = Some(id.into());
                 self.conversation.native_account = account(&recipient);
+                self.chat_recipient_changed(false);
                 self.chat_change_view(View::Activity);
                 self.conversation.content_focus = false;
                 self.notice = Some(format!(
@@ -381,40 +390,58 @@ impl State {
 
     pub(super) fn chat_native_submit(&mut self, text: &str) {
         self.dirty = true;
+        if let Err(error) = self.chat_send_native(Body::WithOptionalMention(text)) {
+            self.notice = Some(error);
+        }
+    }
+
+    pub(super) fn chat_native_force_send(&mut self, text: &str) -> Result<(), String> {
+        self.chat_send_native(Body::Literal(text))
+    }
+
+    fn chat_send_native(&mut self, text: Body<'_>) -> Result<(), String> {
         if self.conversation.native_pending.is_some() {
-            self.notice = Some("Waiting for the native message receipt · draft retained".into());
-            return;
+            return Err("Waiting for the native message receipt · draft retained".into());
         }
-        let Some(id) = self.conversation.native_recipient.clone() else {
-            return;
-        };
-        let recipient = match self.native_descriptor(&id) {
-            Ok(recipient) => recipient,
-            Err(error) => {
-                self.notice = Some(error);
-                return;
+        if self.chat_group_pending() || self.conversation.force_task.is_some() {
+            return Err("Waiting for the current message receipt · draft retained".into());
+        }
+        let id = self
+            .conversation
+            .native_recipient
+            .clone()
+            .ok_or("Select an exact native recipient first")?;
+        let recipient = self.native_descriptor(&id)?;
+        let body = match text {
+            Body::Literal(body) => {
+                if self.chat_native_account().is_none() {
+                    return Err(
+                        "Select this native recipient again to verify its account · draft retained"
+                            .into(),
+                    );
+                }
+                body
             }
+            Body::WithOptionalMention(text) => message_body(text, &recipient),
         };
-        let body = message_body(text, &recipient).to_owned();
         if body.trim().is_empty() {
-            self.notice = Some("Write a message after choosing the recipient".into());
-            return;
+            return Err("Write a message after choosing the recipient".into());
         }
-        if self.preview {
-            self.notice = Some("Preview does not send native messages · draft retained".into());
-            return;
+        if !self.chat_native_sending_enabled() {
+            return Err("Preview does not send native messages · draft retained".into());
         }
+        let expected = account(&recipient).ok_or("Native recipient account is unavailable")?;
+        self.conversation.native_account = Some(expected.clone());
         let request_id = if let Some(retry) = &self.conversation.native_retry
             && retry.recipient_id == id
             && retry.body == body
+            && retry.stamp.native_account.as_ref() == Some(&expected)
         {
             retry.request_id.clone()
         } else {
             let mut bytes = [0u8; 16];
-            if let Err(error) = crate::platform::random_bytes(&mut bytes) {
-                self.notice = Some(format!("Could not create a message request ID: {error}"));
-                return;
-            }
+            crate::platform::random_bytes(&mut bytes)
+                .map_err(|error| format!("Could not create a message request ID: {error}"))?;
             format!(
                 "ui-{}",
                 bytes
@@ -426,11 +453,10 @@ impl State {
         let pending = Pending {
             request_id: request_id.clone(),
             recipient_id: id.clone(),
-            body: body.clone(),
-            original: self.chat_saved_draft(),
-            revision: self.conversation.composer.revision(),
+            body: body.into(),
+            stamp: self.chat_composer_stamp(),
         };
-        match transport::send(&id, &body, &request_id) {
+        match self.chat_transport_send(&id, &expected, body, &request_id) {
             Ok(()) => {
                 self.conversation.native_pending = Some(pending);
                 self.conversation.native_retry = None;
@@ -439,10 +465,54 @@ impl State {
             }
             Err(error) => {
                 self.conversation.native_retry = Some(pending);
-                self.notice = Some(error);
+                return Err(error);
             }
         }
         self.dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn chat_native_sending_enabled(&self) -> bool {
+        #[cfg(test)]
+        if self.conversation.native_connection.is_some() {
+            return true;
+        }
+        !self.preview
+    }
+
+    fn chat_transport_send(
+        &mut self,
+        id: &str,
+        account: &(String, String),
+        body: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(connection) = &mut self.conversation.native_connection {
+            return connection.send(id, account, body, request_id);
+        }
+        transport::send(id, account, body, request_id)
+    }
+
+    pub(super) fn chat_transport_send_group(
+        &mut self,
+        recipients: &[Recipient],
+        body: &str,
+        request_id: &str,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(connection) = &mut self.conversation.native_connection {
+            return connection.send_group(recipients, body, request_id);
+        }
+        transport::send_group(recipients, body, request_id)
+    }
+
+    pub(super) fn chat_transport_retry_group(&mut self, request_id: &str) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(connection) = &mut self.conversation.native_connection {
+            return connection.retry_group(request_id);
+        }
+        transport::retry_group(request_id)
     }
 
     pub(super) fn chat_poll_native(&mut self) {
@@ -487,16 +557,11 @@ impl State {
                         panel::safe_text(field(receipt, "error"))
                     ));
                 } else {
-                    let same = self.conversation.composer.text() == pending.original.text
-                        && self.conversation.composer.cursor() == pending.original.cursor
-                        && self.conversation.composer.revision() == pending.revision
-                        && self.conversation.target == pending.original.target
-                        && self.conversation.native_recipient == pending.original.native_recipient
-                        && self.conversation.editing.is_none();
+                    let same = self.chat_composer_stamp() == pending.stamp;
                     if same {
                         self.conversation.composer.take_text();
                     }
-                    self.conversation.composer.remember(&pending.original.text);
+                    self.conversation.composer.remember(&pending.stamp.text);
                     let mut record = format!("\n[MESSAGE] #{}\n", pending.request_id);
                     for row in markdown::rows(&pending.body, self.geometry.left, &self.ui) {
                         let _ = writeln!(record, "{row}");
@@ -532,6 +597,11 @@ impl State {
         }
         if self.conversation.native_pending.is_some() {
             return Some("Submitting native message · draft retained".into());
+        }
+        if self.conversation.send_to_group {
+            return Some(
+                "Group destination · /send <text> · /group list reviews recipients".into(),
+            );
         }
         let selected = self.conversation.native_recipient.as_deref()?;
         if let Some(receipt) = &self.conversation.native_last
@@ -578,8 +648,7 @@ mod tests {
             recipient_id: "client:1111111111111111111111111111111111111111111111111111111111111111"
                 .into(),
             body: body.into(),
-            original: state.chat_saved_draft(),
-            revision: state.conversation.composer.revision(),
+            stamp: state.chat_composer_stamp(),
         }
     }
 
@@ -657,10 +726,11 @@ mod tests {
         state.chat_native_select(&entry);
         let saved = state.chat_saved_draft();
         state.conversation.native_recipient = None;
+        state.conversation.native_account = None;
         state.chat_restore_draft(saved.clone());
         assert_eq!(state.conversation.native_recipient, saved.native_recipient);
+        assert_eq!(state.conversation.native_account, saved.native_account);
         assert_eq!(state.conversation.composer.text(), saved.text);
-        state.conversation.native_account = Some(("github".into(), "123".into()));
         state.conversation.native_fixture.as_mut().unwrap()["recipients"][0]["account"]["subject"] =
             json!("456");
         assert!(

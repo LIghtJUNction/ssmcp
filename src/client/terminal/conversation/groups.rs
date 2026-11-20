@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 mod reload;
 pub(super) use reload::ReloadGroups;
-use reload::SavedRecipient;
+use steering::SavedRecipient;
 
 #[derive(Default)]
 pub(super) struct Selection {
@@ -14,7 +14,7 @@ pub(super) struct Selection {
     restoring: Option<Vec<SavedRecipient>>,
     restore_error: Option<String>,
     pending: Option<Pending>,
-    retry: Option<Pending>,
+    retry: BTreeMap<String, Pending>,
     last: Option<String>,
     observed: Option<Value>,
 }
@@ -23,8 +23,7 @@ struct Pending {
     request_id: String,
     recipients: Vec<Recipient>,
     body: String,
-    original: steering::SavedDraft,
-    revision: u64,
+    stamp: InputStamp,
 }
 
 pub(super) fn arguments(text: &str) -> Option<&str> {
@@ -42,7 +41,10 @@ pub(super) fn retains_draft(text: &str) -> bool {
     })
 }
 
-fn same_selection(left: &[Recipient], right: &[Recipient]) -> bool {
+fn same_selection<'a>(
+    left: &[Recipient],
+    right: impl ExactSizeIterator<Item = &'a Recipient>,
+) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(a, b)| {
             a.id == b.id
@@ -52,15 +54,14 @@ fn same_selection(left: &[Recipient], right: &[Recipient]) -> bool {
 }
 
 impl State {
-    fn group_recipient(&self, id: &str) -> Result<Recipient, String> {
-        let snapshot = self.native_snapshot();
+    fn group_recipient(snapshot: &Value, id: &str) -> Result<Recipient, String> {
         if snapshot["available"] != true || snapshot["connected"] != true {
             return Err(
                 "Group messaging is unavailable on this connection; selection and draft retained"
                     .into(),
             );
         }
-        let value = items(&snapshot, "recipients")
+        let value = items(snapshot, "recipients")
             .into_iter()
             .find(|entry| field(entry, "id") == id)
             .ok_or("Choose an exact recipient from the current Sessions page")?;
@@ -88,7 +89,7 @@ impl State {
                 self.notice = Some("A group contains at most 32 exact recipients".into());
                 return;
             }
-            match self.group_recipient(id) {
+            match Self::group_recipient(&self.native_snapshot(), id) {
                 Ok(recipient) => {
                     self.conversation
                         .groups
@@ -102,6 +103,7 @@ impl State {
             }
         }
         self.conversation.groups.cancel_restoration();
+        self.chat_recipient_changed(true);
         self.notice = Some(format!(
             "{} selected · Space toggles · g composes · /group clear resets",
             self.conversation.groups.selected.len()
@@ -131,18 +133,19 @@ impl State {
             return;
         }
         let current = self.conversation.composer.text();
-        let text = if arguments(current).is_some_and(|args| args.starts_with("send ")) {
-            current.to_owned()
-        } else {
-            format!("/group send {current}")
-        };
-        if text.len() > crate::wire::MAX_USER_MESSAGE_BYTES {
-            self.notice = Some(
-                "The draft is too long for the group command prefix; your text is unchanged".into(),
-            );
-            return;
+        if !arguments(current).is_some_and(|args| args.starts_with("send "))
+            && listener::body(current).is_none()
+        {
+            let text = format!("/group send {current}");
+            if !self.conversation.composer.set_text(&text) {
+                self.notice = Some(
+                    "The draft is too long for the group command prefix; your text is unchanged"
+                        .into(),
+                );
+                return;
+            }
         }
-        self.conversation.composer.set_text(&text);
+        self.chat_recipient_changed(true);
         self.chat_change_view(View::Activity);
         self.conversation.content_focus = false;
         self.notice = Some(format!(
@@ -173,8 +176,9 @@ impl State {
                     .into(),
             );
         }
+        let snapshot = self.native_snapshot();
         self.conversation.groups.selected.values().map(|expected| {
-            let current = self.group_recipient(&expected.id)?;
+            let current = Self::group_recipient(&snapshot, &expected.id)?;
             if current.account.provider != expected.account.provider
                 || current.account.subject != expected.account.subject
             {
@@ -215,7 +219,11 @@ impl State {
         Ok(())
     }
 
-    fn group_send(&mut self, body: &str) -> Result<(), String> {
+    pub(super) fn chat_group_pending(&self) -> bool {
+        self.conversation.groups.pending.is_some()
+    }
+
+    pub(super) fn group_send(&mut self, body: &str) -> Result<(), String> {
         if self.conversation.groups.pending.is_some() {
             return Err("Waiting for this group's service receipts; your draft is retained".into());
         }
@@ -224,24 +232,33 @@ impl State {
                 "Wait for the current single-message receipt before sending a group".into(),
             );
         }
+        if self.conversation.force_task.is_some() {
+            return Err("Waiting for the listener's receipt · draft retained".into());
+        }
         crate::wire::messages::validate_text(body)?;
-        let recipients = self.group_current_selection()?;
-        if self.preview {
+        if !self.chat_native_sending_enabled() {
             return Err("Preview does not send group messages".into());
         }
+        let selected = &self.conversation.groups.selected;
         let retry = self
             .conversation
             .groups
             .retry
-            .as_ref()
-            .filter(|pending| {
-                pending.body == body && same_selection(&pending.recipients, &recipients)
+            .values()
+            .find(|pending| {
+                self.conversation.groups.restoring.is_none()
+                    && !pending.recipients.is_empty()
+                    && pending.body == body
+                    && same_selection(&pending.recipients, selected.values())
             })
-            .map(|pending| pending.request_id.clone());
-        let request_id = if let Some(id) = retry {
-            transport::retry_group(&id)?;
-            id
+            .map(|pending| (pending.request_id.clone(), pending.recipients.clone()));
+        let (request_id, recipients) = if let Some((id, recipients)) = retry {
+            // The group transport revalidates each failed child before dispatch.
+            // An accepted child does not have to stay online for another child to retry.
+            self.chat_transport_retry_group(&id)?;
+            (id, recipients)
         } else {
+            let recipients = self.group_current_selection()?;
             let mut bytes = [0u8; 16];
             crate::platform::random_bytes(&mut bytes)
                 .map_err(|error| format!("Could not create a group request ID: {error}"))?;
@@ -252,17 +269,16 @@ impl State {
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>()
             );
-            transport::send_group(&recipients, body, &id)?;
-            id
+            self.chat_transport_send_group(&recipients, body, &id)?;
+            (id, recipients)
         };
         self.conversation.groups.pending = Some(Pending {
             request_id: request_id.clone(),
             recipients,
             body: body.into(),
-            original: self.chat_saved_draft(),
-            revision: self.conversation.composer.revision(),
+            stamp: self.chat_composer_stamp(),
         });
-        self.conversation.groups.retry = None;
+        self.conversation.groups.retry.remove(&request_id);
         self.conversation.groups.last = Some(request_id);
         self.notice = Some(
             "Group accepted locally · awaiting individual service receipts · draft retained".into(),
@@ -285,10 +301,13 @@ impl State {
             }
             "send" => self.group_send(rest)?,
             "retry" => {
-                if self.conversation.groups.pending.is_some() {
-                    return Err("A group is still waiting for receipts".into());
+                if self.conversation.groups.pending.is_some()
+                    || self.conversation.native_pending.is_some()
+                    || self.conversation.force_task.is_some()
+                {
+                    return Err("A message is still waiting for receipts".into());
                 }
-                if self.preview { return Err("Preview does not retry group messages".into()); }
+                if !self.chat_native_sending_enabled() { return Err("Preview does not retry group messages".into()); }
                 let id = if rest.trim().is_empty() {
                     self.conversation.groups.last.clone().ok_or("No group is available to retry")?
                 } else {
@@ -298,13 +317,14 @@ impl State {
                 let groups = items(&snapshot, "groups");
                 let group = groups.iter().find(|group| field(group, "request_id") == id)
                     .ok_or("Group receipt is no longer retained")?;
-                transport::retry_group(&id)?;
+                self.chat_transport_retry_group(&id)?;
+                let recipients = self.conversation.groups.retry.remove(&id)
+                    .map(|pending| pending.recipients).unwrap_or_default();
                 self.conversation.groups.pending = Some(Pending {
-                    request_id:id.clone(), recipients:Vec::new(), body:field(group,"text").into(),
-                    original:self.chat_saved_draft(), revision:self.conversation.composer.revision(),
+                    request_id:id.clone(), recipients, body:field(group,"text").into(),
+                    stamp:self.chat_composer_stamp(),
                 });
                 self.conversation.groups.last = Some(id);
-                self.conversation.groups.retry = None;
                 self.notice = Some("Retrying only unconfirmed failed targets with their original request IDs".into());
             }
             "status" => self.group_status((!rest.trim().is_empty()).then_some(rest.trim()))?,
@@ -317,7 +337,7 @@ impl State {
                 if let Some(restoring) = &self.conversation.groups.restoring {
                     text.push_str("Saved selection waiting for current-directory verification:\n");
                     for recipient in restoring {
-                        let _ = writeln!(text, "{}", recipient.id());
+                        let _ = writeln!(text, "{}", recipient.id);
                     }
                     if let Some(error) = &self.conversation.groups.restore_error {
                         let _ = writeln!(text, "\n{}", panel::safe_text(error));
@@ -336,14 +356,16 @@ impl State {
                 if !rest.trim().is_empty() { return Err("Use /group clear without arguments".into()); }
                 self.conversation.groups.selected.clear();
                 self.conversation.groups.cancel_restoration();
+                self.chat_recipient_changed(self.conversation.send_to_group);
                 self.notice = Some("Group selection cleared · submitted groups keep their original recipients".into());
             }
             "add" => {
                 let ids: Vec<_> = rest.split_whitespace().collect();
                 if ids.is_empty() { return Err("Use /group add EXACT_ID [EXACT_ID ...]".into()); }
                 let mut selected = self.conversation.groups.selected.clone();
+                let snapshot = self.native_snapshot();
                 for id in ids {
-                    let recipient = self.group_recipient(id)?;
+                    let recipient = Self::group_recipient(&snapshot, id)?;
                     selected.insert(id.into(), recipient);
                 }
                 if selected.len() > transport::MAX_GROUP_RECIPIENTS {
@@ -351,6 +373,7 @@ impl State {
                 }
                 self.conversation.groups.selected = selected;
                 self.conversation.groups.cancel_restoration();
+                self.chat_recipient_changed(true);
                 self.notice = Some(format!("{} exact recipients selected", self.conversation.groups.selected.len()));
             }
             "remove" => {
@@ -358,13 +381,14 @@ impl State {
                 if ids.is_empty() { return Err("Use /group remove EXACT_ID [EXACT_ID ...]".into()); }
                 for id in &ids { crate::wire::messages::parse_recipient(id)?; }
                 if let Some(restoring) = &mut self.conversation.groups.restoring {
-                    restoring.retain(|recipient| !ids.contains(&recipient.id()));
+                    restoring.retain(|recipient| !ids.contains(&recipient.id.as_str()));
                     self.conversation.groups.restore_error = None;
                     let snapshot = self.native_snapshot();
                     self.chat_restore_group_selection(&snapshot);
                 } else {
                     for id in ids { self.conversation.groups.selected.remove(id); }
                 }
+                self.chat_recipient_changed(self.conversation.send_to_group);
                 self.notice = Some(format!("{} exact recipients selected", self.conversation.groups.selected.len()));
             }
             "save" | "use" => {
@@ -388,6 +412,7 @@ impl State {
                         .collect::<Result<BTreeMap<_, _>, _>>()?;
                     self.conversation.groups.selected = selected;
                     self.conversation.groups.cancel_restoration();
+                    self.chat_recipient_changed(true);
                     self.notice = Some(format!("Selected group {name} · {} exact recipients", self.conversation.groups.selected.len()));
                 }
             }
@@ -431,20 +456,7 @@ impl State {
             .count();
         let pending = self.conversation.groups.pending.take().unwrap();
         let complete = accepted == targets.len();
-        let current: Vec<_> = self
-            .conversation
-            .groups
-            .selected
-            .values()
-            .cloned()
-            .collect();
-        let same = self.conversation.composer.text() == pending.original.text
-            && self.conversation.composer.cursor() == pending.original.cursor
-            && self.conversation.composer.revision() == pending.revision
-            && self.conversation.target == pending.original.target
-            && self.conversation.native_recipient == pending.original.native_recipient
-            && self.conversation.editing.is_none()
-            && (pending.recipients.is_empty() || same_selection(&pending.recipients, &current));
+        let same = self.chat_composer_stamp() == pending.stamp;
         if complete && same {
             self.conversation.composer.take_text();
         }
@@ -468,7 +480,10 @@ impl State {
             }
         ));
         if !complete {
-            self.conversation.groups.retry = Some(pending);
+            self.conversation
+                .groups
+                .retry
+                .insert(pending.request_id.clone(), pending);
         }
         self.chat_persist_draft();
         self.dirty = true;

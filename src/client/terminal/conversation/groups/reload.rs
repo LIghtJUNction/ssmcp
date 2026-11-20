@@ -2,14 +2,6 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct SavedRecipient {
-    id: String,
-    provider: String,
-    subject: String,
-}
-
 impl From<&Recipient> for SavedRecipient {
     fn from(recipient: &Recipient) -> Self {
         Self {
@@ -21,24 +13,7 @@ impl From<&Recipient> for SavedRecipient {
 }
 
 impl SavedRecipient {
-    fn validate(&self) -> Result<(), String> {
-        crate::wire::messages::parse_recipient(&self.id)?;
-        if self.provider != "github"
-            || self.subject.len() > 20
-            || !self.subject.bytes().all(|byte| byte.is_ascii_digit())
-            || !self.subject.parse::<u64>().is_ok_and(|id| id > 0)
-        {
-            return Err("Invalid saved group account identity".into());
-        }
-        Ok(())
-    }
-
-    pub(super) fn id(&self) -> &str {
-        &self.id
-    }
-
     pub(super) fn resolve(&self, snapshot: &Value) -> Result<Recipient, String> {
-        self.validate()?;
         if snapshot["available"] != true || snapshot["connected"] != true {
             return Err(
                 "The new connection has not loaded an authorized recipient directory".into(),
@@ -81,20 +56,7 @@ pub(in crate::client::terminal::conversation) struct ReloadGroups {
 
 impl ReloadGroups {
     pub(in crate::client::terminal::conversation) fn validate(&self) -> Result<(), String> {
-        fn recipients(items: &[SavedRecipient]) -> Result<(), String> {
-            if items.len() > transport::MAX_GROUP_RECIPIENTS {
-                return Err("A saved group contains more than 32 recipients".into());
-            }
-            let mut ids = std::collections::BTreeSet::new();
-            for item in items {
-                item.validate()?;
-                if !ids.insert(item.id.as_str()) {
-                    return Err("A saved group contains duplicate recipient identities".into());
-                }
-            }
-            Ok(())
-        }
-        recipients(&self.selected)?;
+        SavedRecipient::validate_group(&self.selected)?;
         if self.saved.len() > 16 {
             return Err("A reload checkpoint contains more than 16 named groups".into());
         }
@@ -105,19 +67,39 @@ impl ReloadGroups {
             if members.is_empty() {
                 return Err("A named group has no selected recipients".into());
             }
-            recipients(members)?;
+            SavedRecipient::validate_group(members)?;
         }
         Ok(())
     }
 }
 
 impl Selection {
+    pub(in crate::client::terminal::conversation) fn saved_selection(&self) -> Vec<SavedRecipient> {
+        self.restoring
+            .clone()
+            .unwrap_or_else(|| self.selected.values().map(SavedRecipient::from).collect())
+    }
+
+    pub(in crate::client::terminal::conversation) fn restore_selection(
+        &mut self,
+        recipients: Vec<SavedRecipient>,
+    ) {
+        if self.saved_selection() != recipients {
+            self.selected.clear();
+            self.restoring = (!recipients.is_empty()).then_some(recipients);
+            self.restore_error = None;
+        }
+    }
+
+    pub(in crate::client::terminal::conversation) fn len(&self) -> usize {
+        self.restoring
+            .as_ref()
+            .map_or(self.selected.len(), Vec::len)
+    }
+
     pub(in crate::client::terminal::conversation) fn reload_snapshot(&self) -> ReloadGroups {
         ReloadGroups {
-            selected: self
-                .restoring
-                .clone()
-                .unwrap_or_else(|| self.selected.values().map(SavedRecipient::from).collect()),
+            selected: self.saved_selection(),
             saved: self.saved.clone(),
         }
     }
@@ -159,7 +141,7 @@ impl State {
                 self.conversation.groups.selected = current;
                 self.conversation.groups.cancel_restoration();
                 self.notice = Some(format!(
-                    "Restored {} exact group recipients after current-directory verification · Enter still required to send",
+                    "Restored {} exact group recipients after current-directory verification · g composes",
                     self.conversation.groups.selected.len()
                 ));
                 self.dirty = true;
@@ -204,13 +186,17 @@ mod tests {
             .unwrap();
         state.chat_group_command("save one").unwrap();
         state.conversation.groups.last = Some("old-request-must-not-restore".into());
-        state.conversation.groups.retry = Some(Pending {
+        let pending = Pending {
             request_id: "old-request-must-not-restore".into(),
             recipients: vec![recipient(1, false)],
             body: "old-body-must-not-restore".into(),
-            original: state.chat_saved_draft(),
-            revision: state.conversation.composer.revision(),
-        });
+            stamp: state.chat_composer_stamp(),
+        };
+        state
+            .conversation
+            .groups
+            .retry
+            .insert(pending.request_id.clone(), pending);
         let saved = state.conversation.groups.reload_snapshot();
         let encoded = serde_json::to_value(&saved).unwrap();
         let identity = &encoded["selected"][0];
@@ -224,7 +210,7 @@ mod tests {
         state.conversation.groups.restore(saved).unwrap();
         assert!(state.conversation.groups.selected.is_empty());
         assert!(state.conversation.groups.pending.is_none());
-        assert!(state.conversation.groups.retry.is_none());
+        assert!(state.conversation.groups.retry.is_empty());
         assert!(state.conversation.groups.last.is_none());
         assert!(state.conversation.groups.observed.is_none());
     }
@@ -247,9 +233,51 @@ mod tests {
         assert_eq!(state.conversation.groups.selected.len(), 3);
         assert!(state.conversation.groups.restoring.is_none());
         assert!(state.conversation.groups.pending.is_none());
-        assert!(state.conversation.groups.retry.is_none());
+        assert!(state.conversation.groups.retry.is_empty());
         assert_eq!(state.native_snapshot()["groups"], json!([]));
         assert_eq!(state.native_snapshot()["outgoing"], json!([]));
+    }
+
+    #[test]
+    fn send_group_intent_survives_canvas_and_draft_restoration_and_rechecks_accounts() {
+        let mut state = state();
+        let thread = recipient(1, true);
+        state
+            .chat_group_command(&format!("add {}", thread.id))
+            .unwrap();
+        state.conversation.composer.set_text("/send  original 中文");
+        state.conversation.composer.left();
+        let draft = state.chat_saved_draft();
+        assert_eq!(draft.send_group.as_ref().unwrap()[0].id, thread.id);
+        state.canvas_focus(View::Audit);
+        state.canvas_focus(View::Activity);
+        assert_eq!(state.chat_saved_draft(), draft);
+
+        // A parked draft keeps its own exact group even if the passive roster
+        // was changed while that draft was out of the composer.
+        state.chat_group_command("clear").unwrap();
+        state
+            .chat_group_command(&format!("add {}", recipient(2, false).id))
+            .unwrap();
+        let saved = state.conversation.groups.reload_snapshot();
+        let encoded = serde_json::to_value(&draft).unwrap();
+        state.conversation.groups.restore(saved).unwrap();
+        state.chat_restore_draft(serde_json::from_value(encoded).unwrap());
+        assert_eq!(state.chat_saved_draft(), draft);
+        assert!(state.group_current_selection().is_err());
+
+        let mut wrong_account = state.native_snapshot();
+        wrong_account["recipients"][1]["account"]["subject"] = json!("99");
+        state.chat_restore_group_selection(&wrong_account);
+        assert!(state.group_current_selection().is_err());
+        assert_eq!(state.chat_saved_draft(), draft);
+        let verified = state.native_snapshot();
+        state.chat_restore_group_selection(&verified);
+        let selection = state.group_current_selection().unwrap();
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection[0].id, thread.id);
+        assert_eq!(state.chat_saved_draft(), draft);
+        assert!(!state.chat_group_pending());
     }
 
     #[test]

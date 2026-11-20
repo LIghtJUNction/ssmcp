@@ -161,7 +161,7 @@ impl Manager {
             let delivered = target.last.as_ref().is_some_and(|last| {
                 matches!(
                     last["confirmed_status"].as_str(),
-                    Some("included" | "acknowledged" | "expired")
+                    Some("queued" | "included" | "acknowledged" | "expired")
                 ) || last["connection_closed"] == true
             });
             if failed && !delivered {

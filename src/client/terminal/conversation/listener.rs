@@ -109,22 +109,31 @@ impl Drop for Task {
 impl State {
     pub(super) fn chat_force_send(&mut self, text: &str) -> Result<(), String> {
         if text.trim().is_empty() {
-            return Err("用法：/send <正文>；强制发送给当前会话监听程序".into());
-        }
-        if self.conversation.native_recipient.is_some() {
-            return Err(
-                "发送失败：此收件人不支持 /send；请明确选择 Next caller 或已登记的线程，草稿和收件人已保留"
-                    .into(),
-            );
-        }
-        if self.preview {
-            return Err("预览不会发送消息".into());
+            return Err("用法：/send <正文>；发送给当前选定的收件人".into());
         }
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
             return Err("发送失败：当前连接正在关闭，草稿已保留".into());
         }
-        if self.conversation.editing.is_some() || self.conversation.submitting.is_some() {
+        if self.conversation.editing.is_some()
+            || self.conversation.submitting.is_some()
+            || self.conversation.recalling.is_some()
+        {
             return Err("发送失败：请先完成当前队列消息的编辑或提交，草稿已保留".into());
+        }
+        if self.conversation.force_task.is_some() {
+            return Err("正在等待监听程序确认，草稿已保留".into());
+        }
+        if self.chat_group_pending() || self.conversation.native_pending.is_some() {
+            return Err("正在等待原生消息回执，草稿已保留".into());
+        }
+        if self.conversation.send_to_group {
+            return self.group_send(text);
+        }
+        if self.conversation.native_recipient.is_some() {
+            return self.chat_native_force_send(text);
+        }
+        if self.preview {
+            return Err("预览不会发送消息".into());
         }
         if let Some(target) = self
             .conversation
@@ -135,11 +144,8 @@ impl State {
         {
             return Err("发送失败：没有对应指定 agent 的监听程序；草稿已保留".into());
         }
-        if self.conversation.force_task.is_some() {
-            return Err("正在等待监听程序确认，草稿已保留".into());
-        }
         steering::validate_text(text)?;
-        let stamp = self.chat_input_stamp().ok_or("发送失败：当前输入不可用")?;
+        let stamp = self.chat_composer_stamp();
         let task = Task::start(stamp, text.into(), self.conversation.target.as_deref())?;
         self.conversation.force_task = Some(task);
         self.notice = Some("正在发送给监听程序…等待接收确认，草稿已保留".into());
@@ -168,10 +174,8 @@ impl State {
         let detail = match result {
             Ok(completed) => {
                 if completed.receipt.status == Status::Accepted {
-                    let unchanged = self.chat_input_stamp().as_ref() == Some(stamp);
-                    self.conversation
-                        .composer
-                        .remember(&format!("/send {source}"));
+                    let unchanged = self.chat_composer_stamp() == *stamp;
+                    self.conversation.composer.remember(&stamp.text);
                     if unchanged {
                         self.conversation.composer.take_text();
                     }
@@ -327,52 +331,11 @@ mod tests {
     }
 
     #[test]
-    fn force_listener_submit_rejects_a_native_recipient_without_sending_or_rerouting() {
-        let original = "/send 保留此收件人\n    @missing.txt $missing-skill\n";
-        let mut state = preview(original);
-        let recipient = format!("client:{}", "a".repeat(64));
-        state.conversation.native_recipient = Some(recipient.clone());
-        state.conversation.native_account = Some(("github".into(), "fixture-account".into()));
-        state.conversation.target = Some("previous-thread".into());
-        let stamp = state.chat_input_stamp().unwrap();
-        let saved = state.chat_saved_draft();
-
-        state.chat_submit();
-
-        assert!(state.notice.as_deref().is_some_and(|notice| {
-            notice.starts_with("发送失败：此收件人不支持 /send")
-                && notice.contains("Next caller 或已登记的线程")
-        }));
-        assert_eq!(state.conversation.composer.text(), original);
-        assert_eq!(state.chat_input_stamp().unwrap(), stamp);
-        assert_eq!(state.chat_saved_draft(), saved);
-        assert_eq!(
-            state.conversation.native_recipient.as_deref(),
-            Some(recipient.as_str())
-        );
-        assert_eq!(
-            state.conversation.native_account,
-            Some(("github".into(), "fixture-account".into()))
-        );
-        assert!(state.conversation.native_pending.is_none());
-        assert!(state.conversation.native_retry.is_none());
-        assert!(state.conversation.force_task.is_none());
-        assert!(state.conversation.submitting.is_none());
-        assert!(state.actions.is_empty());
-        assert!(
-            state.events.snapshot()["events"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn force_listener_accepted_receipt_clears_only_the_unchanged_draft() {
         let source = "@\"中文 空格.txt\"\n    code\n";
         let original = format!("/send {source}");
         let mut unchanged = preview(&original);
-        let stamp = unchanged.chat_input_stamp().unwrap();
+        let stamp = unchanged.chat_composer_stamp();
         unchanged.chat_finish_force_send(&stamp, source, completed(Status::Accepted));
         assert!(unchanged.conversation.composer.is_empty());
         assert_eq!(unchanged.notice.as_deref(), Some("监听程序已接收"));
@@ -380,7 +343,7 @@ mod tests {
 
         for mode in ["new text", "same text edited again", "new target"] {
             let mut state = preview(&original);
-            let stamp = state.chat_input_stamp().unwrap();
+            let stamp = state.chat_composer_stamp();
             match mode {
                 "new text" => {
                     state.conversation.composer.set_text("New unsent draft");
@@ -393,10 +356,10 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            let after_edit = state.chat_input_stamp().unwrap();
+            let after_edit = state.chat_composer_stamp();
             assert_ne!(after_edit, stamp);
             state.chat_finish_force_send(&stamp, source, completed(Status::Accepted));
-            assert_eq!(state.chat_input_stamp().unwrap(), after_edit, "{mode}");
+            assert_eq!(state.chat_composer_stamp(), after_edit, "{mode}");
             assert_eq!(state.notice.as_deref(), Some("监听程序已接收"));
             assert!(state.actions.is_empty());
         }
@@ -407,9 +370,9 @@ mod tests {
         for status in [Status::Rejected, Status::Failed, Status::Unknown] {
             let original = "/send @\"中文 空格.txt\"\n    code\n";
             let mut state = preview(original);
-            let stamp = state.chat_input_stamp().unwrap();
+            let stamp = state.chat_composer_stamp();
             state.chat_finish_force_send(&stamp, body(original).unwrap(), completed(status));
-            assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            assert_eq!(state.chat_composer_stamp(), stamp);
             assert!(
                 state
                     .notice
@@ -556,7 +519,7 @@ mod tests {
         ] {
             let original = "/send 请创建 @missing.txt";
             let mut state = preview(original);
-            let stamp = state.chat_input_stamp().unwrap();
+            let stamp = state.chat_composer_stamp();
             let mut result = completed(status).unwrap();
             result.reference_warnings = vec!["@missing.txt: file unavailable".into()];
             state.chat_finish_force_send(&stamp, body(original).unwrap(), Ok(result));
@@ -568,7 +531,7 @@ mod tests {
             } else {
                 assert!(notice.starts_with("发送"));
                 assert!(!notice.contains("引用提示"));
-                assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+                assert_eq!(state.chat_composer_stamp(), stamp);
             }
         }
     }
@@ -578,24 +541,24 @@ mod tests {
         let mut state = preview("/send Keep this recipient");
         state.preview = false;
         state.conversation.target = Some("agent_exact".into());
-        let before = state.chat_input_stamp().unwrap();
+        let before = state.chat_composer_stamp();
         assert!(
             state
                 .chat_command("/send Keep this recipient")
                 .unwrap_err()
                 .contains("指定 agent")
         );
-        assert_eq!(state.chat_input_stamp().unwrap(), before);
+        assert_eq!(state.chat_composer_stamp(), before);
         state.conversation.target = None;
         state.conversation.editing = Some("queued-message".into());
-        let before = state.chat_input_stamp().unwrap();
+        let before = state.chat_composer_stamp();
         assert!(
             state
                 .chat_command("/send Keep this recipient")
                 .unwrap_err()
                 .contains("队列消息")
         );
-        assert_eq!(state.chat_input_stamp().unwrap(), before);
+        assert_eq!(state.chat_composer_stamp(), before);
         assert!(state.actions.is_empty());
         assert!(state.conversation.force_task.is_none());
     }
@@ -604,7 +567,7 @@ mod tests {
         for status in [Status::Failed, Status::Unknown] {
             let original = "/send Keep the original draft after reconnect";
             let mut state = preview(original);
-            let stamp = state.chat_input_stamp().unwrap();
+            let stamp = state.chat_composer_stamp();
             let mut receipt = completed(status).unwrap().receipt;
             receipt.code = "connection_ended".into();
             receipt.detail = match status {
@@ -616,7 +579,7 @@ mod tests {
             }
             .into();
             state.chat_show_interrupted_force_send(receipt);
-            assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            assert_eq!(state.chat_composer_stamp(), stamp);
             assert!(state.actions.is_empty());
             assert!(state.conversation.force_task.is_none());
             assert!(
@@ -654,7 +617,7 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            assert_eq!(state.chat_composer_stamp(), stamp);
             assert!(state.actions.is_empty());
         }
     }
