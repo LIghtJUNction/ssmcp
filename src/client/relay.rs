@@ -16,6 +16,8 @@ use tokio_tungstenite::{
 };
 
 pub(super) const AUTH_EXPIRED: &str = "ssmcp authorization expired or revoked";
+pub(super) const LEGACY_ACCOUNT_ALLOW: &str =
+    "allow entries must use username@github; only GitHub is supported";
 const UNSUPPORTED: &str = "server does not support account clients; upgrade ssmcpd";
 
 const QUOTA_CODE: &str = "traffic_quota_exceeded:";
@@ -48,7 +50,11 @@ impl std::fmt::Display for PermanentFailure {
 impl std::error::Error for PermanentFailure {}
 
 pub(super) fn failure(message: String) -> crate::Error {
-    if message == AUTH_EXPIRED || message == UNSUPPORTED || is_quota_failure(&message) {
+    if message == AUTH_EXPIRED
+        || message == UNSUPPORTED
+        || message == LEGACY_ACCOUNT_ALLOW
+        || is_quota_failure(&message)
+    {
         Box::new(PermanentFailure(message))
     } else {
         message.into()

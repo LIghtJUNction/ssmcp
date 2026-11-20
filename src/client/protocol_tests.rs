@@ -38,6 +38,8 @@ if scenario == "unsupported-detail":
     reject(unsupported + "; server requires version 8")
 if scenario == "auth":
     reject("GitHub access policy denied")
+if scenario == "legacy-account-allow":
+    reject("allow entries must use username@github; only GitHub is supported")
 if scenario == "near-match":
     reject(unsupported + " ")
 if scenario == "case-variant":
@@ -467,4 +469,32 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
             close(registration).await;
         }
     }
+}
+
+#[tokio::test]
+async fn legacy_account_format_rejection_is_permanent_and_reaps_the_peer() {
+    let fixture = Fixture::new();
+    let mut registered = false;
+    let (result, attempts) = fixture
+        .register(
+            "legacy-account-allow",
+            &metadata(true),
+            &mut registered,
+            READY_LIMIT,
+        )
+        .await;
+    let error = registration_error(result);
+    assert_eq!(attempts, 1);
+    assert!(!registered);
+    assert_eq!(error.to_string(), relay::LEGACY_ACCOUNT_ALLOW);
+    assert!(error.downcast_ref::<relay::PermanentFailure>().is_some());
+    let (result, _) = fixture
+        .register(
+            "session-access",
+            &metadata(true),
+            &mut registered,
+            READY_LIMIT,
+        )
+        .await;
+    close(result.unwrap().unwrap()).await;
 }

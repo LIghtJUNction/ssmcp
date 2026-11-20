@@ -219,6 +219,7 @@ class Fixture:
         credential.update(overrides)
         path = auth / (hashlib.sha256(self.origin.encode()).hexdigest() + ".json")
         private(path, json.dumps(credential))
+        private(auth / "default", self.origin)
         env = dict(self.base_env)
         env.update(
             PATH=str(directory / "empty-path"),
@@ -228,7 +229,7 @@ class Fixture:
             XDG_DATA_HOME=str(directory / "data"),
             SSMCP_AUTH_HOME=str(auth),
             SSMCP_SESSION_HOME=str(directory / "sessions"),
-            NO_COLOR="1", TERM="dumb",
+            NO_COLOR="1", TERM="dumb", SHELL="/bin/sh",
         )
         return directory, env, path
 
@@ -254,7 +255,7 @@ class Fixture:
                    (path.read_bytes() if path.exists() else None) == before)
         return text
 
-    def spawn(self, name, allow, compat=False, **overrides):
+    def spawn(self, name, allow, compat=False, bare=False, **overrides):
         directory, env, path = self.client_environment(name, **overrides)
         before = path.read_bytes()
         stdout = directory / "stdout.log"
@@ -264,6 +265,8 @@ class Fixture:
         args = self.args("--name", name, "--allow", allow, "--reconnect-delay", "1")
         if compat:
             args.append("--account-compat")
+        if bare:
+            args = [str(self.client)]
         process = subprocess.Popen(
             args, cwd=directory, env=env, stdin=subprocess.DEVNULL,
             stdout=out, stderr=err, start_new_session=True,
@@ -279,18 +282,43 @@ class Fixture:
                     value = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(value, dict) and "client_id" in value and value.get("name") == name:
+                if isinstance(value, dict) and "client_id" in value and (bare or value.get("name") == name):
                     return value
             return None
         info = wait_for(connection, name + " backend-ready connection", timeout=30)
-        self.check(name + "_keeps_saved_credential", path.read_bytes() == before)
+        self.check(name + "_keeps_saved_credential",
+                   json.loads(path.read_bytes()) == json.loads(before) if bare else path.read_bytes() == before)
         return process, info, stdout, stderr, directory
 
     def call(self, subject, client_id, directory, marker):
-        return self.api("POST", "/api/client/call", subject, {
-            "client_id": client_id, "name": "ssmcp.exec.run",
-            "arguments": {"command": ["/bin/printf", marker], "cwd": str(directory), "wait_ms": 1000},
+        status, result = self.api("POST", "/api/client/call", subject, {
+            "client_id": client_id, "name": "ssmcp.exec.start",
+            "arguments": {"command": ["/bin/printf", marker], "cwd": str(directory)},
         })
+        if status != 200:
+            return status, result
+        data = result.get("structuredContent", result)
+        job_id = data.get("job_id") or data.get("id")
+        if not job_id:
+            return status, result
+        output = b""
+        cursor = 0
+        for _ in range(20):
+            status, result = self.api("POST", "/api/client/call", subject, {
+                "client_id": client_id, "name": "ssmcp.exec.read",
+                "arguments": {"job_id": job_id, "stdout_cursor": cursor, "wait_ms": 1000, "max_bytes": 1024},
+            })
+            if status != 200:
+                return status, result
+            data = result.get("structuredContent", result)
+            output += base64.b64decode(data.get("stdout_base64", ""), validate=True)
+            cursor = data.get("stdout_cursor", cursor)
+            snapshot = data.get("snapshot", {})
+            if snapshot.get("running") is False or snapshot.get("state") in ("completed", "failed"):
+                return status, {"stdout": output.decode(errors="replace"), "snapshot": {
+                    key: snapshot.get(key) for key in ("state", "running", "exit_code", "timed_out")
+                }}
+        raise AssertionError("synthetic native job did not finish")
 
     def self_only(self):
         args = ["--account-compat", "--allow", self.allowed]
@@ -326,14 +354,42 @@ class Fixture:
         self.check("another_subject_cannot_call_known_client_id", status == 404)
         status, _ = self.api("POST", "/api/client/logout", "123", {})
         self.check("synthetic_owner_revocation_accepted", status == 200)
-        wait_for(lambda: process.poll() is not None, "revoked compatibility client exits", timeout=10)
-        self.check("revoked_compatibility_exits_without_reauthorization", process.returncode != 0,
-                   exit_code=process.returncode)
+        if self.label.startswith("old"):
+            wait_for(lambda: process.poll() is not None, "revoked compatibility client exits", timeout=10)
+            self.check("revoked_compatibility_exits_without_reauthorization", process.returncode != 0,
+                       exit_code=process.returncode)
+        else:
+            whoami_status, _ = self.api("GET", "/api/client/whoami", "123")
+            call_status, _ = self.call("123", client_id, directory, "MUST-NOT-RUN")
+            self.check("revoked_controller_whoami_and_call_are_denied",
+                       whoami_status == 401 and call_status == 401,
+                       whoami_status=whoami_status, call_status=call_status,
+                       controlled_socket_still_running=process.poll() is None)
+            # Current relays deliberately keep controlled sockets independent
+            # of controller logins. Close only this fixture's owned process.
+            self.stop(process)
         self.rejected("revoked_saved_login", args)
         self.check("compatibility_never_claims_or_changes_accounts",
                    (self.root / "portal/accounts.json").read_bytes() == self.accounts_before)
         self.check("unrelated_account_and_daemon_remain_available",
                    self.server.poll() is None and self.api("GET", "/api/client/whoami", "124")[0] == 200)
+
+    def default_self(self):
+        process, info, stdout, stderr, directory = self.spawn(
+            "bare-default", self.allowed, bare=True,
+        )
+        logs = stdout.read_text(errors="replace") + stderr.read_text(errors="replace")
+        self.check("zero_argument_default_uses_same_verified_account",
+                   info.get("account_compat") is True and info.get("allow") == [self.allowed]
+                   and "login_code" not in info)
+        self.check("zero_argument_default_retries_legacy_format_only_once",
+                   logs.count("Older relay: reconnecting once") == 1)
+        status, result = self.call("123", info["client_id"], directory, "bare-default-ok")
+        self.check("zero_argument_default_executes_real_native_tool",
+                   status == 200 and "bare-default-ok" in json.dumps(result), status=status)
+        status, _ = self.call("124", info["client_id"], directory, "MUST-NOT-RUN")
+        self.check("zero_argument_default_does_not_add_another_subject", status == 404)
+        self.stop(process)
 
     def anonymous_multi(self):
         # The real daemon requires a public HTTPS origin. A raw local wire peer
@@ -402,6 +458,8 @@ def main():
     parser.add_argument("--new-server", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, default=Path("/var/tmp"))
+    parser.add_argument("--check-default", action="store_true")
+    parser.add_argument("--server-version", choices=("old", "new", "both"), default="both")
     args = parser.parse_args()
     for path in (args.client, args.old_server, args.new_server):
         if not path.is_file():
@@ -427,6 +485,8 @@ def main():
                 ["git", "show", OLD_COMMIT + ":src/code_mode.js"], cwd=SOURCE,
             ))
             for label, server in (("old-0.10.13", old), ("new-main", args.new_server.resolve())):
+                if args.server_version != "both" and not label.startswith(args.server_version):
+                    continue
                 directory = root / label
                 directory.mkdir(mode=0o700)
                 fixture = Fixture(directory, server, args.client.resolve(), label)
@@ -437,6 +497,8 @@ def main():
                                          ["--allow", fixture.allowed])
                     else:
                         fixture.anonymous_multi()
+                    if label.startswith("old") and args.check_default:
+                        fixture.default_self()
                     fixture.self_only()
                 finally:
                     fixture.close()
