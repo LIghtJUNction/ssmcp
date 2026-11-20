@@ -1913,6 +1913,7 @@ impl EventView {
                         page,
                         palette: &palette,
                         ui,
+                        diff_mode: self.diff_mode,
                         selected: self.selected,
                         selected_group: self.selected_group,
                         focused,
