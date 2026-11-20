@@ -195,7 +195,8 @@ def quiet(sessions, seconds=0.4):
 
 
 def badge(session):
-    return set(re.findall(r"foreground (on|off) · background on", session.screen))
+    return {"on" if state == "开启" else "off"
+            for state in re.findall(r"电脑控制：(开启|关闭)", session.screen)}
 
 
 def inside(args):
@@ -266,7 +267,7 @@ def inside(args):
             check("local_slash_on_updates_both_idle_badges")
             capture("slash-on")
             first.write(b"/computer status\r")
-            until(sessions, lambda: "Foreground on" in first.screen and "Super+Alt+C" in first.screen,
+            until(sessions, lambda: "电脑控制：开启" in first.screen and "Super+Alt+C" in first.screen,
                   "status command describes the state and shortcut")
             assert cli()["generation"] == on["generation"]
             check("slash_status_is_read_only_and_visible")

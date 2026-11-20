@@ -2388,7 +2388,7 @@ impl State {
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
                 "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
-                "Super+Alt+C Toggle shared foreground computer input; background stays on".into(),
+                "Super+Alt+C 切换电脑控制（当前桌面的鼠标和键盘）".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),

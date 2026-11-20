@@ -42,14 +42,14 @@ pub(crate) fn execute(command: Command) -> Result<Value, String> {
 
 pub(crate) fn describe(status: &Value) -> String {
     if let Some(error) = status["error"].as_str() {
-        return format!("Foreground off · background on · shared control unavailable: {error}");
+        return format!("电脑控制：关闭 · 无法读取开关状态：{error}");
     }
     format!(
-        "Foreground {} · background on · shared by this OS user's ssmcp sessions · Super+Alt+C toggles",
+        "电脑控制：{} · 当前桌面的鼠标和键盘 · Super+Alt+C 切换 · 同一系统用户的会话共用",
         if status["enabled"] == true {
-            "on"
+            "开启"
         } else {
-            "off"
+            "关闭"
         }
     )
 }
@@ -80,12 +80,12 @@ mod tests {
     }
 
     #[test]
-    fn computer_status_distinguishes_shared_foreground_from_background() {
+    fn computer_status_describes_desktop_control_in_plain_language() {
         let on = describe(&json!({"enabled":true,"background_enabled":true}));
-        assert!(on.contains("Foreground on") && on.contains("background on"));
-        assert!(on.contains("OS user") && on.contains("Super+Alt+C"));
+        assert!(on.contains("电脑控制：开启") && on.contains("鼠标和键盘"));
+        assert!(on.contains("同一系统用户") && on.contains("Super+Alt+C"));
         assert!(!on.contains("seconds") && !on.contains("any input"));
         let failed = describe(&json!({"enabled":false,"error":"cannot read state"}));
-        assert!(failed.contains("Foreground off") && failed.contains("unavailable"));
+        assert!(failed.contains("电脑控制：关闭") && failed.contains("无法读取开关状态"));
     }
 }
