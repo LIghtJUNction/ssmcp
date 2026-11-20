@@ -389,6 +389,106 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
 }
 
 #[test]
+fn reload_folded_following_tool_group_reopens_at_tail_without_native_replay() {
+    let click_header = |screen: &str, heading: &str| Key::Mouse {
+        button: 0,
+        x: 8,
+        y: screen
+            .lines()
+            .position(|row| row.contains(heading))
+            .unwrap() as u16,
+        release: false,
+    };
+    for cols in [120, 48] {
+        let mut before = fixture(cols);
+        let initial = display(&mut before).screen().contents();
+        let events = before.events.snapshot();
+        let group = &events["tool_groups"][0];
+        assert_eq!(group["expanded"], true);
+        assert_eq!(group["following"], true);
+        let saved_tail = group["scroll"].as_u64().unwrap();
+        assert!(
+            saved_tail > 0 && initial.contains("python3 -c"),
+            "{initial}"
+        );
+        assert_eq!(
+            saved_tail,
+            group["rows"].as_u64().unwrap() - group["visible_rows"].as_u64().unwrap()
+        );
+        let draft = before.chat_saved_draft();
+        assert!(draft.cursor < draft.text.len());
+        let queue = before.chat_data()["queue"].clone();
+        save_preview(&mut before, "reload-following-before-fold");
+
+        before.chat_key(click_header(&initial, "▾ Tools · 5 calls"));
+        let folded = display(&mut before).screen().contents();
+        assert!(folded.contains("▸ Tools · 5 calls") && !folded.contains("python3 -c"));
+        assert_eq!(
+            before.events.snapshot()["tool_groups"][0]["following"],
+            true
+        );
+        let bytes = serde_json::to_vec(&before.chat_reload_snapshot()).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-frame-secret"));
+
+        let mut after = preview(32, cols);
+        after.chat_apply_reload_snapshot(serde_json::from_slice(&bytes).unwrap(), Vec::new(), None);
+        after.chat_restore_draft(draft.clone());
+        after.chat_restore_reload_input();
+        let folded = display(&mut after).screen().contents();
+        let restored = after.events.snapshot();
+        let group = &restored["tool_groups"][0];
+        assert_eq!(group["expanded"], false);
+        assert_eq!(group["following"], true);
+        assert_eq!(group["stats"]["unknown"], 5);
+        let commands = restored["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["command"] == true)
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), 5);
+        assert!(
+            commands
+                .iter()
+                .all(|event| { event["historical"] == true && event["connection_ended"] == true })
+        );
+        assert_ne!(group["members"], events["tool_groups"][0]["members"]);
+        assert!(
+            folded.contains("▸ Tools · 5 calls")
+                && !folded.contains("python3 -c")
+                && folded.contains(&draft.text),
+            "{folded}"
+        );
+        assert_eq!(after.chat_saved_draft(), draft);
+        assert_eq!(after.chat_data()["queue"], queue);
+        assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+        save_preview(&mut after, "reload-following-after-folded");
+
+        after.chat_key(click_header(&folded, "▸ Tools · 5 calls"));
+        let reopened = display(&mut after).screen().contents();
+        let shown = &after.events.snapshot()["tool_groups"][0];
+        assert_eq!(shown["expanded"], true);
+        assert_eq!(shown["members"], group["members"]);
+        assert_eq!(shown["following"], true, "{reopened}");
+        assert_eq!(shown["scroll"], saved_tail);
+        assert_eq!(
+            saved_tail,
+            shown["rows"].as_u64().unwrap() - shown["visible_rows"].as_u64().unwrap()
+        );
+        assert!(
+            reopened.contains("python3 -c")
+                && reopened.contains(&draft.text)
+                && !reopened.contains("private-frame-secret"),
+            "{reopened}"
+        );
+        assert_eq!(after.chat_saved_draft(), draft);
+        assert_eq!(after.chat_data()["queue"], queue);
+        assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+        save_preview(&mut after, "reload-following-after-reopen");
+    }
+}
+
+#[test]
 fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_readable() {
     let mut before = fixture(120);
     let draft = before.chat_saved_draft();
