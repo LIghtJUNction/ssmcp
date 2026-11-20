@@ -463,6 +463,8 @@ struct Arguments {
     context: Option<String>,
     json: bool,
     interactive: bool,
+    remote: bool,
+    help: bool,
     no_browser: bool,
     name: Option<String>,
     client: Option<String>,
@@ -499,7 +501,8 @@ impl Arguments {
                 }
                 Some("--json") => result.json = true,
                 Some("-i" | "--interactive") => result.interactive = true,
-                Some("--remote") => {}
+                Some("--remote") => result.remote = true,
+                Some("--help" | "-h") => result.help = true,
                 Some("--no-browser") => result.no_browser = true,
                 Some("--name") => result.name = Some(value()?),
                 Some("--client") => result.client = Some(value()?),
@@ -1314,35 +1317,40 @@ fn standalone_interactive(args: &[OsString]) -> bool {
     interactive
 }
 
+fn remote_session_args(args: &[OsString]) -> Option<&[OsString]> {
+    if !args.first().is_some_and(|arg| arg == "sessions") {
+        return None;
+    }
+    let rest = if args.get(1).is_some_and(|arg| arg == "list") {
+        &args[2..]
+    } else {
+        &args[1..]
+    };
+    // The same arity-aware parser distinguishes selectors from --title/--client
+    // values. A saved-session command such as create is never an account list.
+    let parsed = Arguments::parse(rest).ok()?;
+    (parsed.remote || parsed.interactive).then_some(rest)
+}
+
 /// Account commands run before legacy parsing; a valued -i keeps SSH semantics.
 pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     let Some(first) = args.first().and_then(|v| v.to_str()) else {
         return Ok(false);
     };
+    let remote_sessions = remote_session_args(args);
     let (operation, rest, interactive) = match first {
         "login" | "logout" | "whoami" | "list" | "ls" => (first, &args[1..], false),
-        "sessions"
-            if args
-                .iter()
-                .any(|a| a == "--remote" || a == "-i" || a == "--interactive") =>
-        {
-            let rest = if args.get(1).is_some_and(|a| a == "list") {
-                &args[2..]
-            } else {
-                &args[1..]
-            };
-            ("list", rest, false)
-        }
+        "sessions" if remote_sessions.is_some() => ("list", remote_sessions.unwrap(), false),
         _ if standalone_interactive(args) => ("list", args, true),
         _ => return Ok(false),
     };
-    if rest.iter().any(|a| a == "--help" || a == "-h") {
+    let mut options = Arguments::parse(rest)?;
+    if options.help {
         println!(
-            "ssmcp login [--server URL] [--no-browser] [--name NAME]\nssmcp whoami [--server URL] [--json]\nssmcp logout [--server URL] [--json]\nssmcp list [--server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--server URL] [--client ID] [--terminal ID]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
+            "ssmcp login [--context NAME | --server URL] [--no-browser] [--name NAME]\nssmcp whoami [--context NAME | --server URL] [--json]\nssmcp logout [--context NAME | --server URL] [--json]\nssmcp list [--context NAME | --server URL] [--json | -i] [--client ID] [--terminal ID]\nssmcp -i [--context NAME | --server URL] [--client ID] [--terminal ID]\n\nlogout clears the selected server\'s saved login, including when offline.\nIts result reports whether remote revocation was confirmed; other independent logins are preserved."
         );
         return Ok(true);
     }
-    let mut options = Arguments::parse(rest)?;
     options.server = super::connection_context::remote_server(
         options.context.as_deref(),
         options.server.as_deref(),
@@ -1364,6 +1372,36 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn context_saved_create_values_cannot_select_remote_account_dispatch() {
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+        for flag in ["--remote", "-i", "--interactive"] {
+            assert!(
+                remote_session_args(&args(&[
+                    "sessions",
+                    "create",
+                    "build",
+                    "--context",
+                    "work",
+                    "--title",
+                    flag
+                ]))
+                .is_none()
+            );
+            assert!(remote_session_args(&args(&["sessions", "list", "--client", flag])).is_none());
+        }
+        for values in [
+            vec!["sessions", "list", "--remote"],
+            vec!["sessions", "--context", "work", "--remote"],
+            vec!["sessions", "list", "--interactive"],
+            vec!["sessions", "list", "--remote", "--help"],
+        ] {
+            assert!(remote_session_args(&args(&values)).is_some());
+        }
+        let literal_help = Arguments::parse(&args(&["--client", "--help"])).unwrap();
+        assert!(!literal_help.help);
+        assert_eq!(literal_help.client.as_deref(), Some("--help"));
+    }
     #[test]
     fn interactive_help_explains_selection_and_the_local_detach_key() {
         let help = interactive_selection_help();

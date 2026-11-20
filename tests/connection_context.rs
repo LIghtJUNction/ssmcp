@@ -333,7 +333,7 @@ fn context_local_options_keep_loopback_foreground_and_context_root_rules() {
     home.failure(
         &["--context", "work", "--title", "--context"],
         None,
-        "choose a username to connect",
+        "no saved sign-in",
     );
 }
 
@@ -388,4 +388,51 @@ fn context_cli_non_unicode_environment_cannot_choose_a_fallback() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()["name"],
         "work"
     );
+}
+
+#[test]
+fn context_cli_explicit_selection_can_recover_a_stale_default() {
+    let home = Home::new();
+    home.contexts();
+    let path = home.0.join("config.toml");
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("current = \"work\"", "current = \"missing\"");
+    fs::write(&path, text).unwrap();
+    home.failure(
+        &["context", "show", "--json"],
+        None,
+        "unknown connection context",
+    );
+    let explicit = home.json(&["--context", "work", "context", "show", "--json"], None);
+    assert_eq!(explicit["name"], "work");
+    assert_eq!(explicit["selection_source"], "command_line");
+    home.success(&["context", "use", "--default"], None);
+    assert_eq!(
+        home.json(&["context", "show", "--json"], None)["selection_source"],
+        "legacy"
+    );
+}
+
+#[test]
+fn context_saved_creation_does_not_treat_a_title_as_a_remote_selector() {
+    let home = Home::new();
+    home.contexts();
+    for title in ["--remote", "-i", "--interactive"] {
+        home.failure(
+            &[
+                "--context",
+                "work",
+                "sessions",
+                "create",
+                "build",
+                "--title",
+                title,
+                "--allow",
+                "alice@other.example",
+            ],
+            None,
+            "allow target belongs to",
+        );
+    }
 }

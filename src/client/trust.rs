@@ -26,10 +26,10 @@ const KEY_LIMIT: usize = 16 * 1024;
 const MAX_SERVERS: usize = 128;
 const MAX_KEYS: usize = 16;
 const HELP: &str = "Usage:
-  ssmcp trust add --server URL --public-key FILE
-  ssmcp trust add --server URL --pin sha256//BASE64
+  ssmcp trust add [--context NAME | --server URL] --public-key FILE
+  ssmcp trust add [--context NAME | --server URL] --pin sha256//BASE64
   ssmcp trust list
-  ssmcp trust remove --server URL
+  ssmcp trust remove [--context NAME | --server URL]
   ssmcp trust path
 
 Import the HTTPS endpoint's PEM PUBLIC KEY or its SHA-256 SPKI fingerprint.

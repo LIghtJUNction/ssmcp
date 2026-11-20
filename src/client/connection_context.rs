@@ -102,7 +102,9 @@ impl Store {
             Endpoint::parse(&entry.endpoint)?;
         }
         if let Some(name) = &self.current {
-            self.named(name, "current")?;
+            // A stale default must fail when selected, but an explicit valid
+            // context (or `use --default`) can still recover the configuration.
+            validate_name(name)?;
         }
         Ok(())
     }
@@ -163,7 +165,7 @@ pub(super) fn remote_server(cli: Option<&str>, explicit: Option<&str>) -> Result
         Some(Selection {
             endpoint: Endpoint::Local,
             ..
-        }) => Err("this command requires an HTTPS account; the selected context is local".into()),
+        }) => Err("this command requires an HTTPS relay; the selected context is local".into()),
         None => Ok(explicit.map(str::to_owned)),
     }
 }
@@ -461,8 +463,9 @@ mod tests {
         }
         let mut invalid = store;
         invalid.current = Some("missing".into());
-        assert!(invalid.validate().is_err());
+        assert!(invalid.validate().is_ok());
         assert!(invalid.select(None, None).is_err());
+        assert!(invalid.select(Some("work"), None).is_ok());
     }
 
     #[cfg(unix)]
