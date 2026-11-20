@@ -1,6 +1,8 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
 mod host_control;
 mod isolated;
+mod routing;
+mod windows_identity;
 mod zuse_backend;
 pub use zuse_backend::worker_entry;
 #[cfg(target_os = "macos")]
@@ -487,26 +489,41 @@ impl Computer {
         }
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
         let operation = async {
-            // zuse 0.1.0 lacks the partial-injection release and externally-held
-            // key guards provided by these native adapters. Keep their input
-            // semantics until the library exposes an equivalent receipt.
+            if name == "ssmcp.computer.status" {
+                parse::<Empty>(args)?;
+                #[cfg(windows)]
+                let native = Some(
+                    windows::perform(&self.root, name, json!({})).await?["structuredContent"]
+                        .clone(),
+                );
+                #[cfg(target_os = "macos")]
+                let native = Some(
+                    macos::perform(&self.root, name, json!({})).await?["structuredContent"].clone(),
+                );
+                #[cfg(not(any(windows, target_os = "macos")))]
+                let native = None;
+                return Ok(result(routing::status(
+                    std::env::consts::OS,
+                    self.session,
+                    zuse_backend::status(self).await,
+                    native,
+                )));
+            }
+            // Preserve verified foreground identity, partial-injection release
+            // and externally-held input guards until zuse has equivalent receipts.
             #[cfg(windows)]
-            if host_control::input_tool(name) || name == "ssmcp.computer.status" {
+            if routing::platform_input("windows", name) {
                 return windows::perform(&self.root, name, args).await;
             }
             #[cfg(target_os = "macos")]
-            if host_control::input_tool(name) || name == "ssmcp.computer.status" {
+            if routing::platform_input("macos", name) {
                 return macos::perform(&self.root, name, args).await;
-            }
-            if name == "ssmcp.computer.status" {
-                parse::<Empty>(args)?;
-                return Ok(result(zuse_backend::status(self).await));
             }
             if name == "ssmcp.computer.screenshot" {
                 let screenshot: Screenshot = parse(args.clone())?;
                 if screenshot.cursor {
                     // Preserve explicit cursor capture where the older adapter
-                    // supports it; zuse 0.1.0 captures without cursor compositing.
+                    // supports it; zuse captures without cursor compositing.
                     #[cfg(windows)]
                     return windows::perform(&self.root, name, args).await;
                     #[cfg(target_os = "macos")]

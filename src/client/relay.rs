@@ -74,9 +74,10 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{}",
+                "{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
-                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+                crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
+                crate::wire::messages::CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -103,7 +104,9 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
     if capabilities.iter().enumerate().any(|(index, value)| {
         !matches!(
             *value,
-            crate::wire::SESSION_ACCESS_CAPABILITY | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+            crate::wire::SESSION_ACCESS_CAPABILITY
+                | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+                | crate::wire::messages::CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;

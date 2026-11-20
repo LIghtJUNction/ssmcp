@@ -17,6 +17,7 @@ pub(super) fn body(text: &str) -> Option<&str> {
 struct Completed {
     receipt: Receipt,
     history_error: Option<String>,
+    reference_warnings: Vec<String>,
 }
 
 pub(super) struct Task {
@@ -40,8 +41,9 @@ impl Task {
         let task_source = source.clone();
         let task = handle.spawn(async move {
             let outcome = async {
-                let text = runtime.expand_references(&task_source).await?;
-                let ticket = receiver::submit(target, task_source.clone(), text)?;
+                let prepared = runtime.prepare_references(&task_source).await?;
+                let reference_warnings = prepared.warnings;
+                let ticket = receiver::submit(target, task_source.clone(), prepared.text)?;
                 let receipt = ticket.wait().await?;
                 let history_error = if receipt.status == Status::Accepted {
                     let id = receipt.delivery_id.clone();
@@ -60,6 +62,7 @@ impl Task {
                 Ok(Completed {
                     receipt,
                     history_error,
+                    reference_warnings,
                 })
             }
             .await;
@@ -97,6 +100,12 @@ impl State {
     pub(super) fn chat_force_send(&mut self, text: &str) -> Result<(), String> {
         if text.trim().is_empty() {
             return Err("用法：/send <正文>；强制发送给当前会话监听程序".into());
+        }
+        if self.conversation.native_recipient.is_some() {
+            return Err(
+                "发送失败：此收件人不支持 /send；请明确选择 Next caller 或已登记的线程，草稿和收件人已保留"
+                    .into(),
+            );
         }
         if self.preview {
             return Err("预览不会发送消息".into());
@@ -163,11 +172,17 @@ impl State {
                     record.push_str("  监听程序已接收\n\n");
                     self.log_message("user", source, record.as_bytes());
                 }
-                if let Some(error) = completed.history_error {
-                    format!("{}；历史记录未保存：{error}", completed.receipt.detail)
-                } else {
-                    completed.receipt.detail
+                let mut detail = completed.receipt.detail;
+                if completed.receipt.status == Status::Accepted
+                    && !completed.reference_warnings.is_empty()
+                {
+                    detail.push_str("；引用提示：");
+                    detail.push_str(&completed.reference_warnings.join("；"));
                 }
+                if let Some(error) = completed.history_error {
+                    let _ = write!(detail, "；历史记录未保存：{error}");
+                }
+                detail
             }
             Err(error) if error.starts_with("发送") => error,
             Err(error) => format!("发送失败：{error}；草稿已保留"),
@@ -212,6 +227,7 @@ mod tests {
                 .into(),
             },
             history_error: None,
+            reference_warnings: Vec::new(),
         })
     }
 
@@ -238,6 +254,47 @@ mod tests {
                 .starts_with("用法：/send")
         );
         assert_eq!(state.conversation.composer.text(), "/send   ");
+    }
+
+    #[test]
+    fn force_listener_submit_rejects_a_native_recipient_without_sending_or_rerouting() {
+        let original = "/send 保留此收件人\n    @missing.txt $missing-skill\n";
+        let mut state = preview(original);
+        let recipient = format!("client:{}", "a".repeat(64));
+        state.conversation.native_recipient = Some(recipient.clone());
+        state.conversation.native_account = Some(("github".into(), "fixture-account".into()));
+        state.conversation.target = Some("previous-thread".into());
+        let stamp = state.chat_input_stamp().unwrap();
+        let saved = state.chat_saved_draft();
+
+        state.chat_submit();
+
+        assert!(state.notice.as_deref().is_some_and(|notice| {
+            notice.starts_with("发送失败：此收件人不支持 /send")
+                && notice.contains("Next caller 或已登记的线程")
+        }));
+        assert_eq!(state.conversation.composer.text(), original);
+        assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+        assert_eq!(state.chat_saved_draft(), saved);
+        assert_eq!(
+            state.conversation.native_recipient.as_deref(),
+            Some(recipient.as_str())
+        );
+        assert_eq!(
+            state.conversation.native_account,
+            Some(("github".into(), "fixture-account".into()))
+        );
+        assert!(state.conversation.native_pending.is_none());
+        assert!(state.conversation.native_retry.is_none());
+        assert!(state.conversation.force_task.is_none());
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        assert!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -296,6 +353,33 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        }
+    }
+
+    #[test]
+    fn force_listener_reference_notices_follow_only_an_accepted_receipt() {
+        for status in [
+            Status::Accepted,
+            Status::Rejected,
+            Status::Failed,
+            Status::Unknown,
+        ] {
+            let original = "/send 请创建 @missing.txt";
+            let mut state = preview(original);
+            let stamp = state.chat_input_stamp().unwrap();
+            let mut result = completed(status).unwrap();
+            result.reference_warnings = vec!["@missing.txt: file unavailable".into()];
+            state.chat_finish_force_send(&stamp, body(original).unwrap(), Ok(result));
+            let notice = state.notice.as_deref().unwrap();
+            if status == Status::Accepted {
+                assert!(notice.starts_with("监听程序已接收；引用提示："));
+                assert!(notice.contains("@missing.txt: file unavailable"));
+                assert!(state.conversation.composer.is_empty());
+            } else {
+                assert!(notice.starts_with("发送"));
+                assert!(!notice.contains("引用提示"));
+                assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            }
         }
     }
 

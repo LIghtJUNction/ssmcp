@@ -1,4 +1,14 @@
-//! Bounded, nonblocking questions for the local user. No tool can answer for them.
+//! Bounded questions, authenticated answers, and explicit finish decisions.
+mod delivery;
+mod requests;
+mod workflow;
+pub(crate) use delivery::attach as attach_answers;
+#[cfg(test)]
+pub(crate) use requests::{AgentActor, FinishDecision, FinishView};
+pub(crate) use requests::{
+    AnswerDelivery, DecisionActor, FinishChoice, FinishStatus, QuestionKind, QuestionView,
+};
+use requests::{RequestScope, Routing};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -65,6 +75,7 @@ struct ReadRequest {
 struct Record {
     question: Question,
     idempotency_key: Option<String>,
+    routing: Option<Routing>,
 }
 
 impl Record {
@@ -76,7 +87,31 @@ impl Record {
             + question.options.iter().map(String::len).sum::<usize>()
             + question.answer.as_ref().map_or(0, String::len)
             + self.idempotency_key.as_ref().map_or(0, String::len)
+            + self.routing.as_ref().map_or(0, Routing::bytes)
             + 256
+    }
+
+    fn view(&self) -> QuestionView {
+        self.routing.as_ref().map_or_else(
+            || requests::legacy_view(self.question.clone()),
+            |routing| routing.view(self.question.clone()),
+        )
+    }
+
+    fn visible_to(&self, caller: Option<&RequestScope>, local: bool) -> bool {
+        local
+            || self.routing.as_ref().map_or(caller.is_none(), |routing| {
+                caller.is_some_and(|caller| routing.scope.same_account(caller))
+            })
+    }
+
+    fn reclaimable(&self) -> bool {
+        self.question.state != QuestionState::Pending
+            && self.routing.as_ref().is_none_or(|routing| {
+                !routing.scope.has_thread()
+                    || routing.answer_revision == 0
+                    || routing.answer_delivered
+            })
     }
 }
 
@@ -84,6 +119,8 @@ impl Record {
 struct Queue {
     records: VecDeque<Record>,
     revision: u64,
+    connection: Option<(String, u64)>,
+    finish_waiting: std::collections::HashMap<String, usize>,
 }
 
 fn state() -> &'static Mutex<Queue> {
@@ -207,10 +244,7 @@ impl Queue {
         let protected = self
             .records
             .iter()
-            .filter(|record| {
-                record.question.state == QuestionState::Pending
-                    || protect == Some(record.question.id.as_str())
-            })
+            .filter(|record| !record.reclaimable() || protect == Some(record.question.id.as_str()))
             .map(Record::bytes)
             .sum::<usize>();
         if protected.saturating_add(extra) > MAX_TOTAL_BYTES {
@@ -225,8 +259,7 @@ impl Queue {
                 .records
                 .iter()
                 .position(|record| {
-                    record.question.state != QuestionState::Pending
-                        && protect != Some(record.question.id.as_str())
+                    record.reclaimable() && protect != Some(record.question.id.as_str())
                 })
                 .ok_or("question queue capacity reached")?;
             self.records.remove(index);
@@ -235,20 +268,67 @@ impl Queue {
     }
 
     fn ask(&mut self, request: AskRequest) -> Result<(Question, bool), String> {
+        self.ask_for(request, None, QuestionKind::Question)
+    }
+
+    fn ask_for(
+        &mut self,
+        request: AskRequest,
+        scope: Option<RequestScope>,
+        kind: QuestionKind,
+    ) -> Result<(Question, bool), String> {
+        if let Some(scope) = &scope {
+            self.validate_scope(scope)?;
+            if kind == QuestionKind::Finish && !scope.has_thread() {
+                return Err(
+                    "finish_thread_required: an account alone cannot select an asking agent".into(),
+                );
+            }
+        } else if kind == QuestionKind::Finish {
+            return Err(
+                "finish_thread_required: finish requests need a verified agent thread".into(),
+            );
+        }
         if let Some(key) = &request.idempotency_key
-            && let Some(record) = self
-                .records
-                .iter()
-                .find(|record| record.idempotency_key.as_ref() == Some(key))
+            && let Some(record) = self.records.iter().find(|record| {
+                record.idempotency_key.as_ref() == Some(key)
+                    && match (&record.routing, &scope) {
+                        (None, None) => true,
+                        (Some(routing), Some(scope)) => routing.scope.same_thread(scope),
+                        _ => false,
+                    }
+            })
         {
             let question = &record.question;
             if question.question != request.question
                 || question.title != request.title
                 || question.options != request.options
+                || record
+                    .routing
+                    .as_ref()
+                    .map_or(QuestionKind::Question, |r| r.kind)
+                    != kind
             {
                 return Err("idempotency key already belongs to a different question".into());
             }
             return Ok((question.clone(), false));
+        }
+        if kind == QuestionKind::Finish
+            && let Some(scope) = &scope
+            && let Some(record) = self.records.iter().find(|record| {
+                record.routing.as_ref().is_some_and(|routing| {
+                    routing.scope.same_thread(scope)
+                        && matches!(
+                            routing.finish_status,
+                            Some(FinishStatus::Pending | FinishStatus::Approved)
+                        )
+                })
+            })
+        {
+            if record.question.question == request.question {
+                return Ok((record.question.clone(), false));
+            }
+            return Err("finish_already_pending: resume or cancel the existing request".into());
         }
         if self.pending_count() >= MAX_PENDING {
             return Err(
@@ -271,6 +351,7 @@ impl Queue {
                 answered_at_ms: None,
             },
             idempotency_key: request.idempotency_key,
+            routing: scope.map(|scope| Routing::new(scope, kind)),
         };
         self.reserve(record.bytes(), 1, None)?;
         let question = record.question.clone();
@@ -280,7 +361,19 @@ impl Queue {
     }
 
     fn finish(&mut self, id: &str, answer: Option<&str>) -> Result<Question, String> {
+        self.finish_for(id, answer, None)
+    }
+
+    fn finish_for(
+        &mut self,
+        id: &str,
+        answer: Option<&str>,
+        caller: Option<&RequestScope>,
+    ) -> Result<Question, String> {
         identifier(id)?;
+        if let Some(caller) = caller {
+            self.validate_scope(caller)?;
+        }
         if let Some(text) = answer {
             validate_text(text, MAX_ANSWER_BYTES, "answer")?;
         }
@@ -289,6 +382,25 @@ impl Queue {
             .iter()
             .find(|record| record.question.id == id)
             .ok_or("question is no longer retained")?;
+        if record
+            .routing
+            .as_ref()
+            .is_some_and(|routing| routing.kind == QuestionKind::Finish)
+        {
+            return Err(
+                "finish_decision_required: use an explicit yes/no decision, not answer text".into(),
+            );
+        }
+        if let Some(caller) = caller
+            && record
+                .routing
+                .as_ref()
+                .is_none_or(|routing| !routing.scope.same_account(caller))
+        {
+            return Err(
+                "question_access_denied: another account, connection, or unowned question".into(),
+            );
+        }
         let expected_state = if answer.is_some() {
             QuestionState::Answered
         } else {
@@ -302,7 +414,11 @@ impl Queue {
             }
             return Err("question has already been answered or skipped".into());
         }
-        self.reserve(answer.map_or(0, str::len), 0, Some(id))?;
+        self.reserve(
+            answer.map_or(0, str::len) + usize::from(record.routing.is_some()) * 1024,
+            0,
+            Some(id),
+        )?;
         let record = self
             .records
             .iter_mut()
@@ -311,38 +427,70 @@ impl Queue {
         record.question.state = expected_state;
         record.question.answer = answer.map(str::to_owned);
         record.question.answered_at_ms = Some(now_ms());
+        if let Some(routing) = &mut record.routing {
+            routing.answer_actor = Some(caller.map_or(DecisionActor::Human, RequestScope::actor));
+            routing.answer_revision = routing.answer_revision.saturating_add(1);
+            routing.answer_delivered = false;
+        }
+        let question = record.question.clone();
+        let target = record
+            .routing
+            .as_ref()
+            .map(|routing| routing.scope.requester.thread_id.clone())
+            .filter(|id| !id.is_empty());
         self.revision = self.revision.saturating_add(1);
-        Ok(record.question.clone())
+        if caller.is_none() {
+            // A human answer supplies new information to its asking thread.
+            // It is not silently covered by an older completion approval.
+            self.invalidate_finishes(target.as_deref(), "new_human_question_answer");
+        }
+        Ok(question)
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> Value {
         json!({
             "schema_version": 1,
             "revision": self.revision,
             "pending_count": self.pending_count(),
-            "questions": self.records.iter().map(|record| &record.question).collect::<Vec<_>>(),
+            "questions": self.records.iter().map(Record::view).collect::<Vec<_>>(),
         })
     }
 
+    #[cfg(test)]
     fn read(&self, request: ReadRequest) -> Result<Value, String> {
+        self.read_for(request, None, true)
+    }
+
+    fn read_for(
+        &self,
+        request: ReadRequest,
+        caller: Option<&RequestScope>,
+        local: bool,
+    ) -> Result<Value, String> {
         if let Some(id) = request.id {
             let question = &self
                 .records
                 .iter()
-                .find(|record| record.question.id == id)
+                .find(|record| record.question.id == id && record.visible_to(caller, local))
                 .ok_or("question is no longer retained")?
-                .question;
+                .view();
             return Ok(json!({"schema_version":1,"revision":self.revision,"question":question}));
         }
         let records = self
             .records
             .iter()
+            .filter(|record| record.visible_to(caller, local))
             .filter(|record| {
                 request
                     .state
                     .is_none_or(|state| state == record.question.state)
             })
             .collect::<Vec<_>>();
+        let pending_count = records
+            .iter()
+            .filter(|record| record.question.state == QuestionState::Pending)
+            .count();
         let offset = request.offset.unwrap_or(0);
         if offset > records.len() {
             return Err("question page offset exceeds the filtered list length".into());
@@ -350,20 +498,21 @@ impl Queue {
         let mut page = Vec::new();
         let mut bytes: usize = 512;
         for record in records.iter().skip(offset).take(request.limit.unwrap_or(8)) {
-            let size = serde_json::to_vec(&record.question)
+            let view = record.view();
+            let size = serde_json::to_vec(&view)
                 .map_err(|_| "cannot serialize question")?
                 .len();
             if bytes.saturating_add(size) > MAX_PAGE_BYTES {
                 break;
             }
             bytes += size;
-            page.push(&record.question);
+            page.push(view);
         }
         let next_offset = offset + page.len();
         Ok(json!({
             "schema_version":1,
             "revision":self.revision,
-            "pending_count":self.pending_count(),
+            "pending_count":pending_count,
             "questions":page,
             "total":records.len(),
             "offset":offset,
@@ -372,11 +521,44 @@ impl Queue {
     }
 }
 
+fn caller_scope() -> Result<Option<RequestScope>, String> {
+    let Some(scope) = crate::runtime::call_scope::current() else {
+        return Ok(None);
+    };
+    if scope.attribution().is_none() {
+        return Ok(None);
+    }
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    let (id, _) = queue
+        .connection
+        .as_ref()
+        .ok_or("question_scope_expired: no current connection")?;
+    let caller = if scope.thread().is_some() {
+        RequestScope::from_call(&scope)?
+    } else {
+        RequestScope::account_only(&scope, id)?
+    };
+    queue.validate_scope(&caller)?;
+    Ok(Some(caller))
+}
+
 pub(crate) fn snapshot() -> Value {
-    state()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .snapshot()
+    let local = crate::runtime::call_scope::current().is_none();
+    let caller = match caller_scope() {
+        Ok(caller) => caller,
+        Err(error) => {
+            return json!({"schema_version":1,"questions":[],"pending_count":0,"error":error});
+        }
+    };
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    let visible: Vec<_> = queue
+        .records
+        .iter()
+        .filter(|record| record.visible_to(caller.as_ref(), local))
+        .collect();
+    json!({"schema_version":1,"revision":queue.revision,
+        "pending_count":visible.iter().filter(|r| r.question.state == QuestionState::Pending).count(),
+        "questions":visible.iter().map(|r|r.view()).collect::<Vec<_>>()})
 }
 
 pub(crate) fn pending_count() -> usize {
@@ -407,18 +589,161 @@ pub(crate) fn get(id: &str) -> Option<Question> {
         .map(|record| record.question.clone())
 }
 
-pub(crate) fn answer(id: &str, text: &str) -> Result<Question, String> {
+/// Local UI projection; native reads apply the verified caller filter separately.
+pub(crate) fn retained_views() -> Vec<QuestionView> {
     state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .finish(id, Some(text))
+        .records
+        .iter()
+        .map(Record::view)
+        .collect()
+}
+
+pub(crate) fn get_view(id: &str) -> Option<QuestionView> {
+    state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .records
+        .iter()
+        .find(|record| record.question.id == id)
+        .map(Record::view)
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FinishWaitSnapshot {
+    pub connection_id: Option<String>,
+    pub active: Vec<FinishWaitEntry>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FinishWaitEntry {
+    pub request_id: String,
+}
+
+pub(crate) fn finish_wait_snapshot() -> FinishWaitSnapshot {
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    FinishWaitSnapshot {
+        connection_id: queue
+            .connection
+            .as_ref()
+            .map(|(id, generation)| format!("{id}:{generation}")),
+        active: queue
+            .records
+            .iter()
+            .filter(|record| {
+                queue.finish_waiting.contains_key(&record.question.id)
+                    && record.routing.as_ref().is_some_and(|routing| {
+                        !routing.scope_expired
+                            && routing.finish_status == Some(FinishStatus::Pending)
+                    })
+            })
+            .map(|record| FinishWaitEntry {
+                request_id: record.question.id.clone(),
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn decide_finish(
+    id: &str,
+    choice: FinishChoice,
+    comment: Option<&str>,
+) -> Result<QuestionView, String> {
+    let result = state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .decide_finish_for(id, choice, comment, None)?;
+    // The terminal handler already owns its State lock and sets its own dirty
+    // flag. Only wake remote waiters here; never re-enter the terminal mutex.
+    workflow::notify();
+    Ok(result)
+}
+
+pub(crate) fn connect(connection_id: &str) {
+    let generation = super::harness::local_runtime()
+        .ok()
+        .map_or(0, |(runtime, _)| runtime.connection_generation());
+    let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.invalidate_finishes(None, "connection_changed");
+    for record in &mut queue.records {
+        if let Some(routing) = &mut record.routing {
+            routing.scope_expired = true;
+        }
+    }
+    queue.connection = Some((connection_id.into(), generation));
+    drop(queue);
+    changed();
+}
+
+pub(crate) fn disconnect() {
+    let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.invalidate_finishes(None, "disconnected");
+    for record in &mut queue.records {
+        if let Some(routing) = &mut record.routing {
+            routing.scope_expired = true;
+        }
+    }
+    queue.connection = None;
+    drop(queue);
+    changed();
+}
+
+pub(crate) fn user_input(target: Option<&str>) {
+    if state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .invalidate_finishes(target, "new_user_input")
+    {
+        workflow::notify();
+    }
+}
+
+fn changed() {
+    workflow::notify();
+    crate::client::terminal::invalidate();
+}
+
+pub(crate) fn answer(id: &str, text: &str) -> Result<Question, String> {
+    let answer = state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .finish(id, Some(text))?;
+    workflow::notify();
+    Ok(answer)
 }
 
 pub(crate) fn skip(id: &str) -> Result<Question, String> {
-    state()
+    let question = state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .finish(id, None)
+        .finish(id, None)?;
+    workflow::notify();
+    Ok(question)
+}
+
+pub(super) async fn finish_request(arguments: Value) -> Result<Value, String> {
+    workflow::finish(arguments).await
+}
+
+pub(super) fn agent_answer(arguments: Value) -> Result<Value, String> {
+    workflow::answer(arguments)
+}
+
+pub(super) fn acknowledge_answers(arguments: Value) -> Result<Value, String> {
+    delivery::acknowledge(arguments)
+}
+
+pub(super) fn delivery_peek(arguments: Value) -> Result<Value, String> {
+    delivery::peek(arguments)
+}
+
+pub(super) fn authorize_completion() -> Result<String, String> {
+    workflow::authorize_completion()
+}
+
+pub(super) fn message_scope() -> Option<String> {
+    workflow::message_scope()
 }
 
 fn history_text(question: &Question) -> String {
@@ -457,6 +782,8 @@ fn enqueue(
         "state":question.state,
         "created":created,
         "blocking":false,
+            "automatic_delivery":false,
+            "delivery_note":"No verified asking thread; read this legacy question explicitly with ssmcp.ui.questions",
         "pending_count":pending_count,
         "question":question,
         "answer_with":"Shift+Up opens questions in the local client",
@@ -466,6 +793,24 @@ fn enqueue(
 
 pub(super) fn ask(arguments: Value) -> Result<Value, String> {
     let request = parse_ask(arguments)?;
+    if let Some(scope) = caller_scope()? {
+        let automatic_delivery = scope.has_thread();
+        let (question, created) = state()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .ask_for(request, Some(scope), QuestionKind::Question)?;
+        if created {
+            let _ = super::history::record("assistant", &history_text(&question));
+            changed();
+        }
+        return Ok(
+            json!({"schema_version":1,"id":question.id,"created":created,
+            "state":question.state,"blocking":false,"automatic_delivery":automatic_delivery,
+            "delivery_note":if automatic_delivery { "Replies are delivered to the verified requesting thread" } else { "No verified asking thread; read manually with ssmcp.ui.questions, or bind a collab member for future automatic replies" },
+            "question":get_view(&question.id),"answer_with":"Shift+Up opens questions in the local client",
+            "read_with":"ssmcp.ui.questions"}),
+        );
+    }
     enqueue(state(), request, |question| {
         if let Err(error) = super::history::record("assistant", &history_text(question)) {
             super::super::terminal::notice(&format!(
@@ -477,10 +822,12 @@ pub(super) fn ask(arguments: Value) -> Result<Value, String> {
 
 pub(super) fn read(arguments: Value) -> Result<Value, String> {
     let request = parse_read(arguments)?;
+    let local = crate::runtime::call_scope::current().is_none();
+    let caller = caller_scope()?;
     state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .read(request)
+        .read_for(request, caller.as_ref(), local)
 }
 
 pub(super) fn parse_message(arguments: Value) -> Result<String, String> {
@@ -498,10 +845,10 @@ pub(super) fn parse_message(arguments: Value) -> Result<String, String> {
 pub(super) fn tools() -> Vec<Value> {
     let identifier =
         json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
-    vec![
+    let mut tools = vec![
         json!({
             "name":"ssmcp.ui.ask",
-            "description":"Queue a question for this client's local user and return immediately with an ID. Multiple questions can remain pending while you continue working. The user opens questions with Shift+Up, answers in the TUI, or skips them. Read the result later with ssmcp.ui.questions; do not hold a tool call open waiting for an answer. Markdown question text and up to eight suggested answers are supported; the user can always write a different answer. An idempotency_key reuses a retained question with exactly matching content. State belongs to this client process, survives connection reconnects, and ends on process restart. At most 32 pending and 64 retained questions share a 256 KiB budget; oldest completed history is reclaimed first.",
+            "description":"Queue a question for this client's local user and return immediately with an ID. Multiple questions can remain pending while you continue working. The user opens questions with Shift+Up, answers in the TUI, or skips them. Read the result later with ssmcp.ui.questions; do not hold a tool call open waiting for an answer. Markdown question text and up to eight suggested answers are supported; the user can always write a different answer. An idempotency_key reuses a retained question with exactly matching content. Verified threads receive typed question_answers on their next eligible native call, separate from user requirements. Reads do not consume answers. Unbound callers receive an explicit manual-read response, never next-caller routing. Records survive reconnect for local review, but old delivery scopes expire. State ends on process restart. At most 32 pending and 64 retained questions share a 256 KiB budget; oldest completed history is reclaimed first.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,"required":["question"],
                 "properties":{
@@ -515,7 +862,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.questions",
-            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped; only the local user's TUI writes answers. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Completed history may be reclaimed to respect the 64-record / 256 KiB budget, and all state ends on client process restart.",
+            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. The local user or another verified agent in the same client/account can answer; actor origin is retained. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,
                 "properties":{
@@ -532,7 +879,11 @@ pub(super) fn tools() -> Vec<Value> {
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         }),
         super::messages::tool(),
-    ]
+    ];
+    tools.extend(workflow::tools());
+    tools.push(delivery::tool());
+    tools.push(delivery::peek_tool());
+    tools
 }
 
 #[cfg(test)]
@@ -745,7 +1096,18 @@ mod tests {
     #[test]
     fn tools_do_not_offer_a_way_to_impersonate_the_users_answer() {
         let catalog = tools();
-        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog.len(), 7);
+        for tool in &catalog {
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["additionalProperties"], false);
+            for field in ["actor", "origin", "role", "agent", "thread_id", "subject"] {
+                assert!(
+                    schema["properties"].get(field).is_none(),
+                    "{} must not accept a caller-supplied {field}",
+                    tool["name"]
+                );
+            }
+        }
         let ask = &catalog[0]["inputSchema"];
         assert!(ask["properties"].get("answer").is_none());
         let read = &catalog[1];

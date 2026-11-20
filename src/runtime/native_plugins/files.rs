@@ -36,8 +36,18 @@ impl Files {
         self.context.enable_default_skill_sources()
     }
 
+    pub(crate) async fn prepare_references(
+        &self,
+        text: &str,
+    ) -> Result<references::PreparedReferences, String> {
+        references::prepare(text, &self.workspace, &self.context).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
-        references::expand(text, &self.workspace, &self.context).await
+        self.prepare_references(text)
+            .await
+            .map(|prepared| prepared.text)
     }
 
     pub(crate) async fn reference_completions(
@@ -337,13 +347,27 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(
-            fixture
-                .files
-                .expand_references("@../context/SKILL.md")
-                .await
-                .is_err()
+        let expanded = fixture
+            .files
+            .expand_references("@../context/SKILL.md")
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::client::references::source(&expanded),
+            "@../context/SKILL.md"
         );
+        assert_eq!(crate::client::references::warnings(&expanded).len(), 1);
+        let encoded = expanded
+            .split_once("<ssmcp-references-v1>\n")
+            .unwrap()
+            .1
+            .strip_suffix("\n</ssmcp-references-v1>")
+            .unwrap();
+        let payload: Value = serde_json::from_str(encoded).unwrap();
+        let reference = &payload["references"][0];
+        assert_eq!(reference["status"], "unavailable");
+        assert!(reference.get("read").is_none());
+        assert!(reference.get("preview").is_none());
         assert!(
             fixture
                 .files

@@ -18,6 +18,7 @@ include = [
     "/docs/workspaces.md",
     "/docs/context.md",
     "/docs/code-mode.md",
+    "/docs/finish-and-questions.md",
     "/docs/rtk.md",
     "/docs/validation-live-context-rtk.md",
     "/docs/session-control.md",
@@ -73,6 +74,8 @@ include = [
     "/docs/reports/ssmcp-iteration-20261118*",
     "/scripts/e2e_questions.py",
     "/scripts/e2e_input_history.py",
+    "/scripts/e2e_message_references.py",
+    "/scripts/e2e_interactions.py",
     "/scripts/e2e_presentations.py",
     "/scripts/e2e_image_fallback.py",
     "/scripts/e2e_context_memory.py",
@@ -83,6 +86,7 @@ include = [
     "/scripts/test_client_bootstrap.py",
     "/scripts/e2e_account_relay.py",
     "/scripts/e2e_account_compat.py",
+    "/scripts/e2e_account_gateway.py",
     "/scripts/e2e_account_interactive.py",
     "/scripts/test_installers.py",
     "/scripts/test_installer_download_bounds.py",
@@ -98,6 +102,7 @@ include = [
     "/scripts/e2e_browser_setup.py",
     "/scripts/e2e_private_desktop.py",
     "/scripts/e2e_zuse_worker.py",
+    "/scripts/private_xvfb.py",
     "/docs/reports/zuse-integration-20261120/**",
     "/docs/browser-desktop.md",
     "/docs/validation-cua-client-capabilities.md",
@@ -169,10 +174,10 @@ exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
 resolver = "3"
 
 [dependencies]
-zuse = { package = "zuse-computer", version = "=0.1.0", path = "crates/zuse", default-features = false, features = ["std"] }
+zuse = { package = "zuse-computer", version = "=0.2.2", path = "crates/zuse", default-features = false, features = ["std"] }
 ztuio = { version = "=0.1.0", path = "crates/ztuio" }
-zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
-zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
+zharness = { version = "=0.5.1", path = "crates/zharness", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.1", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"

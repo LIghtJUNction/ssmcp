@@ -2,8 +2,9 @@
 //!
 //! The library's OS handles remain inside a short-lived worker. Environment is
 //! selected at spawn, never changed in the multithreaded client. Closing stdin
-//! cancels between native calls; the worker finishes a key/chord or restores a
-//! temporary X11 key map before acknowledging cleanup and exiting.
+//! cancels between native calls. X11 text is one whole-string library call:
+//! cancellation after dispatch cannot undo input, and cleanup is acknowledged
+//! only after that call returns or the owned worker's failure is recorded.
 use super::*;
 use std::{
     io::{BufRead, Write},
@@ -485,6 +486,9 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
         );
     }
     let mut metadata = metadata.unwrap_or_else(|| native["result"].clone());
+    if operation == "windows" {
+        normalize_window_identities(native["backend"].as_str().unwrap_or(""), &mut metadata)?;
+    }
     if let Some(object) = metadata.as_object_mut() {
         object.insert("engine".into(), json!("zuse"));
         object.insert("engine_version".into(), json!(zuse::VERSION));
@@ -769,15 +773,27 @@ fn execute(
         }
         "type" => {
             let value: TypeText = parse(args)?;
-            if value.text.len() > 16384 || value.text.contains('\0') {
-                return Err("invalid literal text".into());
-            }
-            let mut buffer = [0u8; 4];
-            for character in value.text.chars() {
+            validate_literal_text(backend, &value.text)?;
+            if backend == "x11" {
+                // The pinned zuse adapter chooses keys or confirmed AT-SPI
+                // delivery for the entire string before any input. Splitting
+                // here could type a prefix before a later scalar is refused.
                 cancellation.check()?;
-                if let Err(error) = desktop.type_text(character.encode_utf8(&mut buffer)) {
+                if let Err(error) = desktop.type_text(&value.text) {
                     *cleanup_ok = input_error_precedes_effect(backend, &error, true);
                     return Err(error);
+                }
+                if cancellation.check().is_err() {
+                    return Err("zuse operation cancelled after X11 text dispatch; text may have changed; do not retry".into());
+                }
+            } else {
+                let mut buffer = [0u8; 4];
+                for character in value.text.chars() {
+                    cancellation.check()?;
+                    if let Err(error) = desktop.type_text(character.encode_utf8(&mut buffer)) {
+                        *cleanup_ok = input_error_precedes_effect(backend, &error, true);
+                        return Err(error);
+                    }
                 }
             }
             json!({})
@@ -822,12 +838,45 @@ fn execute(
     Ok(json!({"result":result,"backend":backend}))
 }
 
+fn validate_literal_text(backend: &str, text: &str) -> Result<(), String> {
+    if text.len() > 16384 || text.contains('\0') {
+        return Err("invalid literal text".into());
+    }
+    if backend == "wayland" {
+        // zuse 0.2.1 validates the whole string before creating a virtual keyboard.
+        // Keep that guarantee when splitting native calls for cancellation.
+        for (offset, character) in text.char_indices() {
+            if character.is_control() && !matches!(character, '\t' | '\n' | '\r') {
+                return Err(format!(
+                    "unsupported control U+{:04X} at byte {offset}; text permits only Tab, LF and CR",
+                    character as u32
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool {
-    // zuse 0.1.0 has String errors. These branches are verified against the
-    // pinned library: they return before key injection or keyboard-map writes.
+    // zuse 0.2.1 (d930769) has String errors. These branches are verified
+    // against the pinned library and return before any native input mutation.
     // Unknown native/runtime errors remain unconfirmed and keep input locked.
     if backend == "x11" {
-        return error == "XTest extension library unavailable"
+        // x11_input::unsupported wraps only failures before its first mutation.
+        // Match its complete outer envelope, before worker_main bounds errors.
+        // The post-mutation uncertain envelope must never be treated as clean.
+        let text_refused = typing
+            && (error
+                .strip_prefix("Unsupported X11 Unicode text: ")
+                .and_then(|reason| reason.strip_suffix("; no input was sent"))
+                .is_some_and(|reason| !reason.is_empty())
+                || matches!(
+                    error,
+                    "Unsupported X11 Unicode text on a remote display; no input was sent"
+                        | "X11 focus, target identity or geometry changed; no input was sent"
+                ));
+        return text_refused
+            || error == "XTest extension library unavailable"
             || (!typing
                 && (error.starts_with("unknown X11 keysym ")
                     || (error.starts_with("key ")
@@ -835,8 +884,33 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
             || (typing
                 && matches!(
                     error,
-                    "invalid X11 keyboard-map range" | "could not read X11 keyboard mapping"
+                    "invalid X11 keyboard-map range"
+                        | "could not read X11 keyboard mapping"
+                        | "invalid X11 keyboard mapping width"
+                        | "Shift is absent from the X11 keyboard map"
                 ));
+    }
+    if backend == "wayland" {
+        // In zuse 0.2.0 (557ea46), these exact state checks precede shortcut
+        // dispatch and virtual-keyboard creation. A generic prefix could also
+        // accept a new error or appended restoration failure, so keep it exact.
+        return matches!(
+            error,
+            "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
+                | "unsupported_state: a keyboard key is held; release it before input"
+                | "unsupported_state: compositor cannot report held keyboard keys"
+                | "unsupported_state: Wayland keys require Hyprland keyboard-state inspection"
+                | "unsupported_state: cannot parse compositor keyboard state"
+                | "unsupported_state: compositor keyboard state is unavailable"
+                | "unsupported_state: too many keyboards to inspect"
+                | "unsupported_state: Caps Lock is enabled; disable it before input"
+                | "unsupported_state: Num Lock is enabled; disable it before input"
+                | "unsupported_state: Caps Lock state is unavailable"
+                | "unsupported_state: Num Lock state is unavailable"
+                | "unsupported_state: keyboard layout group must be 0 before input"
+                | "unsupported_state: keyboard layout group is unavailable"
+                | "unsupported_state: a unique main keyboard is required"
+        );
     }
     if backend == "win32" && !typing {
         return error.starts_with("unknown key ") || error == "function key must be F1..F24";
@@ -889,6 +963,22 @@ fn with_button<T>(
     outcome
 }
 
+// Normalize only the public adapter boundary. Internal worker focus continues
+// to use zuse's native handle, while the Windows host adapter verifies HWND+PID.
+fn normalize_window_identities(backend: &str, metadata: &mut Value) -> Result<(), String> {
+    if backend != "win32" {
+        return Ok(());
+    }
+    let windows = metadata["windows"]
+        .as_array_mut()
+        .ok_or("zuse returned no Windows window list")?;
+    for window in windows {
+        let id = super::windows_identity::from_zuse(&window["window_id"], &window["pid"])?;
+        window["window_id"] = json!(id);
+    }
+    Ok(())
+}
+
 fn windows_value(desktop: &zuse::platform::Desktop) -> Result<Value, String> {
     let raw = desktop.windows()?;
     if raw.len() > 4 * 1024 * 1024 {
@@ -917,12 +1007,14 @@ impl CaptureDirectory {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let path = std::env::temp_dir().join(format!("ssmcp-zuse-{}-{suffix}", std::process::id()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder.create(&path).map_err(|error| error.to_string())?;
         Ok(Self(path))
     }
@@ -1039,9 +1131,32 @@ fn encode_capture(
     Err("screenshot exceeds 400 KiB after bounded downscaling; select a smaller region".into())
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod wayland_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_enumeration_issues_the_identity_required_by_native_focus() {
+        let native = json!({"windows":[{"window_id":"0x1a2b","pid":42,"title":"Editor"}]});
+        let mut value = native.clone();
+        normalize_window_identities("win32", &mut value).unwrap();
+        let id = value["windows"][0]["window_id"].as_str().unwrap();
+        assert_eq!(
+            super::super::windows_identity::parse(id).unwrap(),
+            (0x1a2b, 42)
+        );
+        assert_eq!(value["windows"][0]["pid"], 42);
+        assert!(
+            normalize_window_identities("win32", &mut json!({"windows":[{"window_id":"0x1a2b"}]}))
+                .is_err()
+        );
+        let mut x11 = native.clone();
+        normalize_window_identities("x11", &mut x11).unwrap();
+        assert_eq!(x11, native, "other backends retain their native window IDs");
+    }
 
     #[test]
     #[ignore = "selected explicitly by the native worker transport in unit-test builds"]
@@ -1189,6 +1304,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn x11_text_refusals_are_clean_only_before_the_first_mutation() {
+        for error in [
+            "Unsupported X11 Unicode text: no focused editable control; no input was sent",
+            "Unsupported X11 Unicode text: could not load libatspi.so.0: unavailable; no input was sent",
+            "Unsupported X11 Unicode text on a remote display; no input was sent",
+            "X11 focus, target identity or geometry changed; no input was sent",
+            "invalid X11 keyboard mapping width",
+            "Shift is absent from the X11 keyboard map",
+        ] {
+            assert!(input_error_precedes_effect("x11", error, true), "{error}");
+            assert!(!input_error_precedes_effect("x11", error, false), "{error}");
+        }
+    }
+
+    #[test]
+    fn x11_text_error_classifier_rejects_uncertain_or_extended_messages() {
+        for error in [
+            "Unsupported X11 Unicode text: missing completion suffix",
+            "Unsupported X11 Unicode text: ; no input was sent",
+            "Unsupported X11 Unicode text: no focused editable control; no input was sent; cleanup failed",
+            "X11 Unicode insertion was not fully confirmed: Unsupported X11 Unicode text: changed target; no input was sent",
+            "X11 focus, target identity or geometry changed",
+            "native input may have changed; no input was sent",
+            "zuse operation cancelled after X11 text dispatch; text may have changed; do not retry",
+        ] {
+            assert!(!input_error_precedes_effect("x11", error, true), "{error}");
+        }
     }
 
     #[test]

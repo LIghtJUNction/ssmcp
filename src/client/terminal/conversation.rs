@@ -10,6 +10,8 @@ mod history;
 mod listener;
 mod login;
 pub(super) mod logout;
+mod messaging;
+mod paste;
 mod questions;
 mod queue;
 mod receipts;
@@ -65,6 +67,7 @@ struct InputStamp {
     view: View,
     question: Option<String>,
     target: Option<String>,
+    native_recipient: Option<String>,
     editing: Option<String>,
     text: String,
     cursor: usize,
@@ -93,6 +96,14 @@ pub(super) struct Conversation {
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
+    native_recipient: Option<String>,
+    native_account: Option<(String, String)>,
+    native_pending: Option<messaging::Pending>,
+    native_retry: Option<messaging::Pending>,
+    native_last: Option<Value>,
+    native_refreshed: bool,
+    #[cfg(test)]
+    native_fixture: Option<Value>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
     recalling: Option<String>,
@@ -104,6 +115,8 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
+    paste_recovery: Option<String>,
+    retrying_paste: bool,
     login_task: Option<crate::client::account::login::Task>,
     access_request: Option<u64>,
     pub(super) logout_task: Option<logout::Task>,
@@ -113,6 +126,15 @@ pub(super) struct Conversation {
     restored: bool,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
+    finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
+    finish_button_rows: Vec<(
+        u16,
+        String,
+        crate::client::interface::questions::FinishChoice,
+    )>,
+    drawn_questions: Vec<String>,
+    #[cfg(test)]
+    question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
@@ -125,8 +147,9 @@ impl Conversation {
         json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
-            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
+            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),
+            "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
@@ -191,17 +214,19 @@ fn recipients(value: &Value, observed: &[crate::client::render::CallerGroup]) ->
 }
 
 fn agent_key(value: &Value) -> String {
-    if field(value, "kind") == "observed" {
-        format!("caller:{}", field(value, "key"))
-    } else {
-        format!("member:{}", field(value, "agent_id"))
+    match field(value, "kind") {
+        "observed" => format!("caller:{}", field(value, "key")),
+        "native" => format!("native:{}", field(value, "id")),
+        _ => format!("member:{}", field(value, "agent_id")),
     }
 }
 
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        recipients(data, &self.caller_tracker.groups(&observed, data))
+        let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        entries.extend(self.chat_native_entries());
+        entries
     }
 
     fn chat_saved_draft(&self) -> steering::SavedDraft {
@@ -209,6 +234,7 @@ impl State {
             text: self.conversation.composer.text().into(),
             cursor: self.conversation.composer.cursor(),
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
         }
     }
 
@@ -218,6 +244,8 @@ impl State {
             && self.conversation.composer.left()
         {}
         self.conversation.target = draft.target;
+        self.conversation.native_recipient = draft.native_recipient;
+        self.conversation.native_account = None;
     }
 
     pub(super) fn chat_data(&self) -> Value {
@@ -264,7 +292,7 @@ impl State {
         self.dirty = true;
     }
 
-    fn chat_accepted(&mut self, id: String, text: String) {
+    fn chat_accepted(&mut self, id: String, text: String, warnings: Vec<String>) {
         let text = references::source(&text).to_owned();
         self.conversation.composer.remember(&text);
         if self.conversation.view == View::History {
@@ -274,7 +302,11 @@ impl State {
         for line in markdown::rows(&text, self.geometry.left, &self.ui) {
             let _ = writeln!(record, "{line}");
         }
-        record.push_str("  queued · waiting for the next eligible tool response\n\n");
+        record.push_str("  queued · waiting for the next eligible tool response\n");
+        for warning in &warnings {
+            let _ = writeln!(record, "  Reference notice: {}", panel::safe_text(warning));
+        }
+        record.push('\n');
         self.log_message("user", &text, record.as_bytes());
         if self
             .conversation
@@ -285,7 +317,14 @@ impl State {
             self.conversation.submitting = None;
         }
         // Even identical text may be a deliberately typed next request.
-        self.notice = Some("Queued · delivered with the next eligible tool response".into());
+        self.notice = Some(if warnings.is_empty() {
+            "Queued · delivered with the next eligible tool response".into()
+        } else {
+            format!(
+                "Queued · reference notice: {}",
+                panel::safe_text(&warnings.join(" · "))
+            )
+        });
         self.dirty = true;
     }
 
@@ -309,6 +348,8 @@ impl State {
             self.conversation.composer.set_text(&text);
         }
         self.conversation.target = target;
+        self.conversation.native_recipient = None;
+        self.conversation.native_account = None;
         self.conversation.editing = Some(id);
         self.conversation.content_focus = false;
         self.notice = Some("Editing · this request is held until you press Enter".into());
@@ -326,11 +367,13 @@ impl State {
                 text,
                 cursor,
                 target: context.target,
+                native_recipient: context.native_recipient,
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
             self.conversation.restored = true;
         }
+        self.chat_poll_native();
         if self.preview {
             return;
         }
@@ -342,8 +385,12 @@ impl State {
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
-                steering::UiEvent::Accepted { id, text } => {
-                    self.chat_accepted(id, text);
+                steering::UiEvent::Accepted {
+                    id,
+                    text,
+                    reference_warnings,
+                } => {
+                    self.chat_accepted(id, text, reference_warnings);
                 }
                 steering::UiEvent::Editable { id, text } => {
                     let data = steering::snapshot();
@@ -413,6 +460,7 @@ impl State {
                 editing: self.conversation.editing.clone(),
                 target: self.conversation.target.clone(),
                 parked: self.conversation.parked.clone(),
+                native_recipient: self.conversation.native_recipient.clone(),
             });
         }
     }
@@ -443,14 +491,25 @@ impl State {
     }
 
     fn chat_select_target(&mut self) {
+        self.chat_native_refresh();
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
-        let target = self.conversation.target.as_deref().unwrap_or("next");
-        self.conversation.selected = entries
-            .iter()
-            .position(|entry| field(entry, "agent_id") == target)
-            .unwrap_or(0);
-        self.conversation.selected_agent = entries.get(self.conversation.selected).map(agent_key);
+        if let Some(id) = &self.conversation.native_recipient {
+            let key = format!("native:{id}");
+            self.conversation.selected = entries
+                .iter()
+                .position(|entry| agent_key(entry) == key)
+                .unwrap_or(0);
+            self.conversation.selected_agent = Some(key);
+        } else {
+            let target = self.conversation.target.as_deref().unwrap_or("next");
+            self.conversation.selected = entries
+                .iter()
+                .position(|entry| field(entry, "agent_id") == target)
+                .unwrap_or(0);
+            self.conversation.selected_agent =
+                entries.get(self.conversation.selected).map(agent_key);
+        }
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
@@ -488,12 +547,14 @@ impl State {
                 self.help = true;
                 self.conversation.content_focus = true;
             }
+            "/message" | "/recipients" => self.chat_native_picker(rest)?,
             "/paste" => {
                 if !rest.is_empty() {
                     return Err("Use /paste without arguments to read your local clipboard".into());
                 }
                 self.chat_start_input(attachments::Source::Clipboard, true)?;
             }
+            "/paste-retry" => self.chat_retry_paste(rest)?,
             "/attach" => {
                 self.chat_start_input(attachments::source_argument(rest)?, true)?;
             }
@@ -706,7 +767,9 @@ impl State {
             && !self.selection
             && !self.help
             && self.conversation.view != View::Questions
-            && !self.conversation.content_focus;
+            && !self.conversation.content_focus
+            && self.conversation.native_recipient.is_none()
+            && !self.chat_native_has_mention();
         self.conversation.composer.refresh_completions(enabled);
     }
 
@@ -774,7 +837,7 @@ impl State {
             self.dirty = true;
             return;
         }
-        if user_wait::arguments(&text).is_some() {
+        if self.conversation.native_recipient.is_none() && user_wait::arguments(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }
@@ -787,6 +850,9 @@ impl State {
             return;
         }
         if self.chat_wait_for_input() {
+            return;
+        }
+        if self.chat_native_pick_mention(&text) {
             return;
         }
         self.chat_refresh_completions();
@@ -836,7 +902,7 @@ impl State {
             // Force-send retains the exact draft until an accepted receipt.
             return;
         }
-        if self.conversation.editing.is_none() {
+        if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
                     if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
@@ -850,6 +916,10 @@ impl State {
                 }
                 Ok(false) => {}
             }
+        }
+        if self.conversation.native_recipient.is_some() {
+            self.chat_native_submit(&text);
+            return;
         }
         if self.preview {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
@@ -915,6 +985,12 @@ impl State {
                         }
                         return;
                     }
+                    if field(&agent, "kind") == "native" {
+                        self.chat_native_select(&agent);
+                        return;
+                    }
+                    self.conversation.native_recipient = None;
+                    self.conversation.native_account = None;
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
                     self.chat_change_view(View::Activity);
@@ -1775,6 +1851,7 @@ impl State {
                 None
             },
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
             editing: self.conversation.editing.clone(),
             text: editor.text().into(),
             cursor: editor.cursor(),
@@ -1802,6 +1879,12 @@ impl State {
         let copying = matches!(&source, attachments::Source::Copy(_));
         let context = matches!(&source, attachments::Source::Context { .. });
         let inserts = !copying && !context;
+        if inserts
+            && self.conversation.paste_recovery.is_some()
+            && !self.conversation.retrying_paste
+        {
+            return Err("A previous paste is retained · use /paste-retry, or /paste-retry discard before importing more input".into());
+        }
         if self.conversation.view == View::Questions && inserts {
             self.question_paste_len()?;
         }
@@ -1863,7 +1946,21 @@ impl State {
         result: Result<attachments::Loaded, String>,
     ) {
         let unchanged = expected.is_some() && self.chat_input_stamp().as_ref() == expected;
+        let retrying = std::mem::take(&mut self.conversation.retrying_paste);
+        if retrying && matches!(&result, Ok(attachments::Loaded::Reference { .. })) {
+            self.conversation.paste_recovery = None;
+        }
         match result {
+            Ok(attachments::Loaded::RetainedText { text, error }) => {
+                if unchanged && let Some(command) = original_command {
+                    self.conversation.composer.set_text(command);
+                }
+                self.conversation.paste_recovery = Some(text);
+                self.notice = Some(format!(
+                    "{error} · {}",
+                    self.chat_paste_recovery_hint().unwrap()
+                ));
+            }
             Ok(attachments::Loaded::Copied) => {
                 self.notice = Some("Latest agent message copied to the system clipboard".into());
             }
@@ -1930,14 +2027,18 @@ impl State {
                 if unchanged && let Some(command) = original_command {
                     self.conversation.composer.set_text(command);
                 }
-                self.notice = Some(format!("Local input failed: {error}"));
+                let recovery = self
+                    .chat_paste_recovery_hint()
+                    .map(|hint| format!(" · {hint}"))
+                    .unwrap_or_default();
+                self.notice = Some(format!("Local input failed: {error}{recovery}"));
             }
         }
         self.dirty = true;
     }
 
     fn chat_paste_text(&mut self, text: &str) -> Result<(), String> {
-        let large = text.len() > 8 * 1024;
+        let large = references::paste::should_store(text);
         let question = self.conversation.view == View::Questions;
         let used = if question {
             self.question_paste_len()?
@@ -1958,7 +2059,20 @@ impl State {
             }
             // File creation/fsync happens on the shared async input job. The
             // completion stamp protects edits, answers and recipient changes.
-            return self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            let result = self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            if let Err(error) = result {
+                if self.conversation.input_task.is_none()
+                    && self.conversation.paste_recovery.is_none()
+                {
+                    self.conversation.paste_recovery = Some(text.to_owned());
+                    return Err(format!(
+                        "{error} · {}",
+                        self.chat_paste_recovery_hint().unwrap()
+                    ));
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         let accepted = if question {
             self.question_paste(text)
@@ -2174,6 +2288,9 @@ impl State {
                 ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
             ];
         };
+        if field(selected, "kind") == "native" {
+            return self.chat_native_details(selected);
+        }
         let observed = field(selected, "kind") == "observed";
         let next = field(selected, "agent_id") == "next";
         let mut details = vec![
@@ -2259,7 +2376,7 @@ impl State {
                     PanelTone::Normal,
                 ),
             ]);
-            if id == target {
+            if id == target && self.conversation.native_recipient.is_none() {
                 details.push(("● Current recipient".into(), PanelTone::Accent));
             }
             details.extend([
@@ -2325,10 +2442,20 @@ impl State {
             .filter(|entry| field(entry, "kind") == "observed")
             .count();
         let mut rows = vec![self.chat_line(
-            &format!(
-                "  Agents · {} members · {callers} callers",
-                items(data, "agents").len()
-            ),
+            &if entries.iter().any(|entry| field(entry, "kind") == "native") {
+                format!(
+                    "  Recipients · {} native inboxes / agents",
+                    entries
+                        .iter()
+                        .filter(|entry| field(entry, "kind") == "native")
+                        .count()
+                )
+            } else {
+                format!(
+                    "  Agents · {} members · {callers} callers",
+                    items(data, "agents").len()
+                )
+            },
             PanelTone::Heading,
             list_width,
         )];
@@ -2340,7 +2467,14 @@ impl State {
             } else {
                 " "
             };
-            let current = !observed && field(entry, "agent_id") == target;
+            let native = field(entry, "kind") == "native";
+            let current = if native {
+                self.conversation.native_recipient.as_deref() == Some(field(entry, "id"))
+            } else {
+                !observed
+                    && self.conversation.native_recipient.is_none()
+                    && field(entry, "agent_id") == target
+            };
             let symbol = if current {
                 "● "
             } else if observed {
@@ -2357,7 +2491,17 @@ impl State {
             } else {
                 format!(" {marker} {symbol}{}", field(entry, "name"))
             };
-            let subtitle = if observed {
+            let subtitle = if native {
+                format!(
+                    "     {} · {}",
+                    if field(entry, "native_kind") == "account_inbox" {
+                        "Inbox"
+                    } else {
+                        "Verified agent"
+                    },
+                    panel::safe_text(field(&entry["account"], "login"))
+                )
+            } else if observed {
                 format!("     {} calls · {}", entry["calls"], field(entry, "status"))
             } else if field(entry, "agent_id") == "next" {
                 "     Next eligible response".into()
@@ -2570,7 +2714,12 @@ impl State {
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
             prompt.lines[0] =
-                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
+                self.chat_input_line(&format!("❯ {}", self.question_input_hint()), g.left);
+        } else if self.conversation.native_recipient.is_some()
+            && input.is_empty()
+            && !prompt.lines.is_empty()
+        {
+            prompt.lines[0] = self.chat_input_line("❯ Message text · Enter sends", g.left);
         }
         self.conversation.reference_stamp = Some(reference_stamp);
         self.conversation.reference_rows = std::mem::take(&mut prompt.references)
@@ -2593,6 +2742,9 @@ impl State {
                     .unwrap_or_else(|| "offline recipient".into())
             })
             .unwrap_or_else(|| "next caller".into());
+        if let Some(native_label) = self.chat_native_label() {
+            label = native_label;
+        }
         if self.conversation.view == View::Questions {
             label = self
                 .conversation
@@ -2608,8 +2760,13 @@ impl State {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
-                let priority_hint =
-                    self.notice.is_some() || scroll_hint.is_some() || wait_hint.is_some();
+                let paste_hint = self.chat_paste_recovery_hint();
+                let native_hint = self.chat_native_hint();
+                let priority_hint = self.notice.is_some()
+                    || scroll_hint.is_some()
+                    || wait_hint.is_some()
+                    || paste_hint.is_some()
+                    || native_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2617,6 +2774,8 @@ impl State {
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = wait_hint { return hint; }
+                    if let Some(hint) = paste_hint { return hint; }
+                    if let Some(hint) = native_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
@@ -2632,11 +2791,7 @@ impl State {
                             else { "↑↓ select · Enter resume · Esc back".into() };
                     }
                     if self.conversation.view == View::Questions {
-                        return if self.conversation.detail {
-                            "Enter answer · Shift+↑ next · Esc list · Tab browse".into()
-                        } else {
-                            "↑↓ select · Enter answer · Delete skip · Esc back".into()
-                        };
+                        return self.question_navigation_hint().into();
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
@@ -2968,12 +3123,40 @@ mod tests {
         assert_eq!(state.conversation.composer.text(), "next draft");
         input(&mut state, b" stays");
         let next = state.chat_saved_draft();
-        state.chat_accepted("held".into(), "amended".into());
+        state.chat_accepted("held".into(), "amended".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), next);
         assert!(state.conversation.submitting.is_none());
         let divider = mode_divider(&mut state);
         assert!(divider.trim_start().starts_with("Edit"));
         assert!(!divider.contains("pending") && !divider.contains("Enter sends"));
+    }
+
+    #[test]
+    fn full_budget_raw_reference_ack_shows_notice_without_rewriting_source_or_new_draft() {
+        let tail = " @missing.txt";
+        let source = format!(
+            "{}{tail}",
+            "x".repeat(crate::wire::MAX_USER_MESSAGE_BYTES - tail.len())
+        );
+        let mut state = preview(32, 120);
+        state.conversation.composer.set_text("newer unsent draft");
+        state.chat_accepted(
+            "full_budget_request".into(),
+            source.clone(),
+            vec!["@missing.txt: file not found".into()],
+        );
+        assert_eq!(state.conversation.composer.text(), "newer unsent draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Queued · reference notice:")
+        );
+        assert!(state.notice.as_deref().unwrap().contains("@missing.txt"));
+        assert_eq!(references::source(&source), source);
+        let rendered = display(&mut state).screen().contents();
+        assert!(rendered.contains("reference notice") || rendered.contains("Reference notice"));
     }
 
     #[test]
@@ -4024,6 +4207,7 @@ mod tests {
             text: "界x\\".into(),
             cursor: "界".len(),
             target: None,
+            native_recipient: None,
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界x\\");
@@ -4032,6 +4216,7 @@ mod tests {
             text: "界\\tail".into(),
             cursor: "界\\".len(),
             target: None,
+            native_recipient: None,
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界\ntail");
@@ -4115,6 +4300,7 @@ mod tests {
             text: "继续review".into(),
             cursor: "继续re".len(),
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.chat_restore_draft(original.clone());
         state.conversation.view = View::Queue;
@@ -4206,7 +4392,11 @@ mod tests {
                 state.conversation.composer.set_text("下一条 draft");
                 state.conversation.composer.left();
                 let draft = state.chat_saved_draft();
-                state.chat_accepted("follow-request".into(), "newly sent request".into());
+                state.chat_accepted(
+                    "follow-request".into(),
+                    "newly sent request".into(),
+                    Vec::new(),
+                );
                 display(&mut state);
                 assert_eq!(state.events.snapshot()["rows_below"], 0);
                 state.log_message("assistant", &"New assistant reply 中文 ".repeat(30), b"");
@@ -4247,7 +4437,7 @@ mod tests {
             state.conversation.composer.set_text("保留 this draft");
             state.conversation.composer.left();
             let draft = state.chat_saved_draft();
-            state.chat_accepted("follow-request".into(), "send then read".into());
+            state.chat_accepted("follow-request".into(), "send then read".into(), Vec::new());
             state.log_message("assistant", &"A later reply 中文 ".repeat(40), b"");
             state.log_event(
                 "fixture",
@@ -4287,7 +4477,7 @@ mod tests {
             assert!(state.conversation.composer.is_empty());
             input(&mut state, next.as_bytes());
             assert_eq!(state.conversation.composer.text(), next);
-            state.chat_accepted("request_one".into(), "first".into());
+            state.chat_accepted("request_one".into(), "first".into(), Vec::new());
             assert_eq!(
                 state.conversation.composer.text(),
                 next,
@@ -4304,6 +4494,7 @@ mod tests {
             text: "原稿 A".into(),
             cursor: "原".len(),
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.conversation.parked = Some(parked.clone());
         state.conversation.editing = Some("request_b".into());
@@ -4314,7 +4505,7 @@ mod tests {
         assert!(state.conversation.parked.is_none());
         input(&mut state, b"next");
         let following = state.chat_saved_draft();
-        state.chat_accepted("request_b".into(), "edited B".into());
+        state.chat_accepted("request_b".into(), "edited B".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), following);
     }
 
@@ -4594,6 +4785,7 @@ mod tests {
             text: "parked request".into(),
             cursor: 6,
             target: None,
+            native_recipient: None,
         });
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.composer.text(), "/re");
@@ -4739,6 +4931,7 @@ mod tests {
             text: "previous draft".into(),
             cursor: 4,
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.conversation.parked = Some(parked.clone());
         let queue = state.chat_data()["queue"].clone();
