@@ -850,7 +850,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
-            self.native_messages.close_client(session.client_id());
+            self.native_messages.close_connection(session);
             session.collaboration.close();
             session.steering.close();
             session.disconnect.notify_one();
@@ -1302,6 +1302,9 @@ impl Broker {
                             }
                         }
                         _ = expiry.tick() => {
+                            // Reuse this bounded connection heartbeat; no task,
+                            // remote lookup, or mailbox polling is required.
+                            self.refresh_native_connection(&session);
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
                             for id in expired {
                                 if let Some(call) = pending.remove(&id) {
@@ -1320,6 +1323,7 @@ impl Broker {
                         } else {
                             Err("session access controls were not negotiated on this controlled connection".into())
                         };
+                        if result.is_ok() { self.refresh_native_connection(&session); }
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
                     }
                     Some(Frame::Messages { id, command }) => {
@@ -1410,7 +1414,7 @@ impl Broker {
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
-        self.native_messages.close_client(session.client_id());
+        self.native_messages.close_connection(&session);
         session.collaboration.close();
         session.steering.close();
         let mut sessions = self.sessions.write().await;

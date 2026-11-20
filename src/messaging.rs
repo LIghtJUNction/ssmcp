@@ -7,8 +7,8 @@ use crate::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::VecDeque,
-    sync::{Mutex, Weak},
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex, Weak},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -16,8 +16,10 @@ const MAX_BYTES: usize = 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_MESSAGES: usize = 4096;
 
+#[derive(Clone)]
 pub(crate) struct Proof {
     pub(crate) connection: Weak<Session>,
+    pub(crate) destination: Weak<Session>,
     pub(crate) identity: Identity,
     pub(crate) sender: Sender,
 }
@@ -29,10 +31,67 @@ struct Entry {
     bytes: usize,
 }
 
+impl Entry {
+    fn pending(&self) -> bool {
+        matches!(
+            self.message.receipt.status,
+            Status::Queued | Status::Included
+        )
+    }
+
+    fn release_body(&mut self) {
+        // clear() would retain the allocation. Recompute the serialized quota
+        // cost as escaped text and receipt timestamps do not have raw-text size.
+        self.message.text = String::new();
+        self.recount();
+    }
+
+    fn recount(&mut self) {
+        self.bytes = serde_json::to_vec(&self.message)
+            .expect("typed native message serializes")
+            .len();
+    }
+
+    fn expire(&mut self) {
+        if self.pending() {
+            self.message.receipt.status = Status::Expired;
+            self.message.receipt.updated_at_ms = now_ms();
+            self.release_body();
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     entries: VecDeque<Entry>,
     bytes: usize,
+}
+
+struct ConnectionPair {
+    source: Weak<Session>,
+    destination: Weak<Session>,
+}
+
+impl ConnectionPair {
+    fn matches(&self, entry: &Entry) -> bool {
+        Weak::ptr_eq(&self.source, &entry.proof.connection)
+            && Weak::ptr_eq(&self.destination, &entry.proof.destination)
+    }
+}
+
+impl State {
+    fn expire_matching(&mut self, invalid: impl Fn(&Entry) -> bool) {
+        let mut previous = 0usize;
+        let mut retained = 0usize;
+        for entry in &mut self.entries {
+            if entry.pending() && invalid(entry) {
+                previous += entry.bytes;
+                entry.expire();
+                retained += entry.bytes;
+            }
+        }
+        self.bytes = self.bytes.saturating_sub(previous).saturating_add(retained);
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +133,54 @@ fn receives(message: &Message, identity: &Identity, agent_id: Option<&str>) -> b
 }
 
 impl Hub {
+    fn check_pending(
+        &self,
+        selected: impl Fn(&Entry) -> bool,
+        valid: impl Fn(&Proof, &Recipient) -> bool,
+    ) -> HashMap<String, ConnectionPair> {
+        let pending: Vec<_> = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .iter()
+            .filter(|entry| entry.pending() && selected(entry))
+            .map(|entry| {
+                (
+                    entry.message.receipt.message_id.clone(),
+                    entry.proof.clone(),
+                    entry.message.recipient.clone(),
+                )
+            })
+            .collect();
+        let mut checked = HashMap::new();
+        let mut invalid = HashMap::new();
+        // Session/ACL/collaboration checks may take their own locks. Never
+        // perform them with the mailbox mutex held, and never copy message text.
+        for (id, proof, recipient) in pending {
+            let pair = ConnectionPair {
+                source: proof.connection.clone(),
+                destination: proof.destination.clone(),
+            };
+            if valid(&proof, &recipient) {
+                checked.insert(id, pair);
+            } else {
+                invalid.insert(id, pair);
+            }
+        }
+        if !invalid.is_empty() {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .expire_matching(|entry| {
+                    invalid
+                        .get(&entry.message.receipt.message_id)
+                        .is_some_and(|pair| pair.matches(entry))
+                });
+        }
+        checked
+    }
+
     pub(crate) fn enqueue(
         &self,
         proof: Proof,
@@ -97,17 +204,31 @@ impl Hub {
         let canonical = serde_json::to_vec(&(&recipient.id, &text)).map_err(|e| e.to_string())?;
         let fingerprint: [u8; 32] = Sha256::digest(canonical).into();
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = state.entries.iter().find(|entry| {
+        if let Some(index) = state.entries.iter().position(|entry| {
             same_sender(&entry.message.sender, &proof.sender)
                 && entry.message.receipt.request_id == request_id
         }) {
+            let entry = &mut state.entries[index];
             if entry.fingerprint != fingerprint {
                 return Err(
                     "request_id was already used for different message content or recipient".into(),
                 );
             }
+            let previous = entry.bytes;
+            if !Weak::ptr_eq(&entry.proof.connection, &proof.connection)
+                || !Weak::ptr_eq(&entry.proof.destination, &proof.destination)
+            {
+                // A retry never moves an accepted message to a replacement
+                // connection, even when a future transport reuses its ID.
+                entry.expire();
+            }
+            let retained = entry.bytes;
             let mut receipt = entry.message.receipt.clone();
             receipt.duplicate = true;
+            state.bytes = state
+                .bytes
+                .saturating_sub(previous)
+                .saturating_add(retained);
             return Ok(receipt);
         }
         // Keep unacknowledged messages. Only terminal receipts may leave the
@@ -191,7 +312,14 @@ impl Hub {
         Ok(receipt)
     }
 
-    pub(crate) fn outgoing(&self, sender: &Sender) -> Vec<Receipt> {
+    pub(crate) fn outgoing(
+        &self,
+        sender: &Sender,
+        valid: impl Fn(&Proof, &Recipient) -> bool,
+    ) -> Vec<Receipt> {
+        // Only this authenticated sender's receipts are inspected or returned.
+        // No recipient poll is needed to retire an undeliverable message.
+        self.check_pending(|entry| same_sender(&entry.message.sender, sender), valid);
         self.0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -202,8 +330,13 @@ impl Hub {
             .collect()
     }
 
-    pub(crate) fn status(&self, sender: &Sender, id: &str) -> Option<Receipt> {
-        self.outgoing(sender)
+    pub(crate) fn status(
+        &self,
+        sender: &Sender,
+        id: &str,
+        valid: impl Fn(&Proof, &Recipient) -> bool,
+    ) -> Option<Receipt> {
+        self.outgoing(sender, valid)
             .into_iter()
             .find(|receipt| receipt.message_id == id)
     }
@@ -223,10 +356,15 @@ impl Hub {
             budget,
             include_delivered,
         } = delivery;
+        let checked = self.check_pending(
+            |entry| entry.message.recipient.client_id == client_id,
+            valid,
+        );
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
         let mut used = 0usize;
-        let mut reclaimed = 0usize;
+        let mut previous = 0usize;
+        let mut retained = 0usize;
         for entry in &mut state.entries {
             if entry.message.recipient.client_id != client_id {
                 continue;
@@ -236,13 +374,12 @@ impl Hub {
             {
                 continue;
             }
-            if !valid(&entry.proof, &entry.message.recipient) {
-                entry.message.receipt.status = Status::Expired;
-                entry.message.receipt.updated_at_ms = now_ms();
-                let released = entry.message.text.len();
-                entry.message.text.clear();
-                entry.bytes = entry.bytes.saturating_sub(released);
-                reclaimed += released;
+            if checked
+                .get(&entry.message.receipt.message_id)
+                .is_none_or(|pair| !pair.matches(entry))
+            {
+                // A concurrently enqueued item was not in this authenticated
+                // snapshot. Leave it queued for the next response.
                 continue;
             }
             if !receives(&entry.message, identity, agent_id) {
@@ -261,10 +398,16 @@ impl Hub {
                 continue;
             }
             used += bytes;
+            previous += entry.bytes;
             entry.message = message.clone();
+            entry.recount();
+            retained += entry.bytes;
             result.push(message);
         }
-        state.bytes = state.bytes.saturating_sub(reclaimed);
+        state.bytes = state
+            .bytes
+            .saturating_sub(previous)
+            .saturating_add(retained);
         result
     }
 
@@ -274,17 +417,30 @@ impl Hub {
         identity: &Identity,
         agent_id: Option<&str>,
         id: &str,
+        valid: impl Fn(&Proof, &Recipient) -> bool,
     ) -> Result<Receipt, String> {
+        let checked = self.check_pending(
+            |entry| {
+                entry.message.receipt.message_id == id
+                    && entry.message.recipient.client_id == client_id
+                    && receives(&entry.message, identity, agent_id)
+            },
+            valid,
+        );
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = state
+        let index = state
             .entries
-            .iter_mut()
-            .find(|entry| {
+            .iter()
+            .position(|entry| {
                 entry.message.receipt.message_id == id
                     && entry.message.recipient.client_id == client_id
                     && receives(&entry.message, identity, agent_id)
             })
             .ok_or("message is unavailable for this recipient")?;
+        let entry = &mut state.entries[index];
+        if entry.pending() && checked.get(id).is_none_or(|pair| !pair.matches(entry)) {
+            return Err("message connection changed before acknowledgement".into());
+        }
         if entry.message.receipt.status == Status::Queued {
             return Err("message has not been included in a recipient response".into());
         }
@@ -292,6 +448,7 @@ impl Hub {
             return Err("message authorization or connection expired".into());
         }
         let duplicate = entry.message.receipt.status == Status::Acknowledged;
+        let previous = entry.bytes;
         if !duplicate {
             let timestamp = now_ms();
             entry.message.receipt.status = Status::Acknowledged;
@@ -300,33 +457,64 @@ impl Hub {
         }
         let mut receipt = entry.message.receipt.clone();
         receipt.duplicate = duplicate;
-        let released = entry.message.text.len();
-        entry.message.text.clear();
-        entry.bytes = entry.bytes.saturating_sub(released);
-        state.bytes = state.bytes.saturating_sub(released);
+        entry.release_body();
+        let retained = entry.bytes;
+        state.bytes = state
+            .bytes
+            .saturating_sub(previous)
+            .saturating_add(retained);
         Ok(receipt)
     }
 
-    pub(crate) fn close_client(&self, client_id: &str) {
+    pub(crate) fn close_connection(&self, connection: &Arc<Session>) {
+        let connection = Arc::downgrade(connection);
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let mut reclaimed = 0usize;
-        for entry in &mut state.entries {
-            if (entry.message.recipient.client_id == client_id
-                || entry.message.sender.client_id == client_id)
-                && matches!(
-                    entry.message.receipt.status,
-                    Status::Queued | Status::Included
-                )
-            {
-                entry.message.receipt.status = Status::Expired;
-                entry.message.receipt.updated_at_ms = now_ms();
-                let released = entry.message.text.len();
-                entry.message.text.clear();
-                entry.bytes = entry.bytes.saturating_sub(released);
-                reclaimed += released;
-            }
-        }
-        state.bytes = state.bytes.saturating_sub(reclaimed);
+        // A delayed old-connection teardown cannot expire messages accepted
+        // for a replacement Arc that happens to have the same public ID.
+        state.expire_matching(|entry| {
+            Weak::ptr_eq(&entry.proof.connection, &connection)
+                || Weak::ptr_eq(&entry.proof.destination, &connection)
+        });
+    }
+
+    pub(crate) fn refresh_connection(
+        &self,
+        connection: &Arc<Session>,
+        valid: impl Fn(&Proof, &Recipient) -> bool,
+    ) {
+        let connection = Arc::downgrade(connection);
+        self.check_pending(
+            |entry| {
+                Weak::ptr_eq(&entry.proof.connection, &connection)
+                    || Weak::ptr_eq(&entry.proof.destination, &connection)
+            },
+            valid,
+        );
+    }
+
+    pub(crate) fn close_member(
+        &self,
+        connection: &Arc<Session>,
+        identity: &Identity,
+        agent_id: &str,
+    ) {
+        let connection = Arc::downgrade(connection);
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .expire_matching(|entry| {
+                (Weak::ptr_eq(&entry.proof.connection, &connection)
+                    && same_account(&entry.message.sender.account, identity)
+                    && entry
+                        .message
+                        .sender
+                        .agent
+                        .as_ref()
+                        .is_some_and(|agent| agent.id == agent_id))
+                    || (Weak::ptr_eq(&entry.proof.destination, &connection)
+                        && same_account(&entry.message.recipient.account, identity)
+                        && entry.message.recipient.agent_id.as_deref() == Some(agent_id))
+            });
     }
 }
 
@@ -396,6 +584,7 @@ mod tests {
         let identity = identity("123");
         Proof {
             connection: Weak::new(),
+            destination: Weak::new(),
             identity: identity.clone(),
             sender: Sender {
                 kind: origin,
@@ -523,28 +712,58 @@ mod tests {
             .unwrap();
         assert!(receive(&hub, 'b', "123", None, 0).is_empty());
         assert!(
-            hub.acknowledge(&"b".repeat(64), &identity("123"), None, &receipt.message_id)
-                .is_err()
+            hub.acknowledge(
+                &"b".repeat(64),
+                &identity("123"),
+                None,
+                &receipt.message_id,
+                |_, _| true
+            )
+            .is_err()
         );
         let delivered = receive(&hub, 'b', "123", None, 10000);
         assert_eq!(delivered[0].receipt.status, Status::Included);
         assert!(
-            hub.acknowledge(&"b".repeat(64), &identity("456"), None, &receipt.message_id)
-                .is_err()
+            hub.acknowledge(
+                &"b".repeat(64),
+                &identity("456"),
+                None,
+                &receipt.message_id,
+                |_, _| true
+            )
+            .is_err()
         );
         assert!(
-            hub.acknowledge(&"c".repeat(64), &identity("123"), None, &receipt.message_id)
-                .is_err()
+            hub.acknowledge(
+                &"c".repeat(64),
+                &identity("123"),
+                None,
+                &receipt.message_id,
+                |_, _| true
+            )
+            .is_err()
         );
         let ack = hub
-            .acknowledge(&"b".repeat(64), &identity("123"), None, &receipt.message_id)
+            .acknowledge(
+                &"b".repeat(64),
+                &identity("123"),
+                None,
+                &receipt.message_id,
+                |_, _| true,
+            )
             .unwrap();
         assert_eq!(ack.status, Status::Acknowledged);
         assert!(!ack.duplicate);
         assert!(
-            hub.acknowledge(&"b".repeat(64), &identity("123"), None, &receipt.message_id)
-                .unwrap()
-                .duplicate
+            hub.acknowledge(
+                &"b".repeat(64),
+                &identity("123"),
+                None,
+                &receipt.message_id,
+                |_, _| true
+            )
+            .unwrap()
+            .duplicate
         );
     }
 
@@ -575,7 +794,9 @@ mod tests {
             .is_empty()
         );
         assert_eq!(
-            hub.status(&sender, &receipt.message_id).unwrap().status,
+            hub.status(&sender, &receipt.message_id, |_, _| true)
+                .unwrap()
+                .status,
             Status::Expired
         );
         assert!(receive(&hub, 'b', "123", None, 10000).is_empty());
@@ -587,9 +808,11 @@ mod tests {
                 "r2".into(),
             )
             .unwrap();
-        hub.close_client(&"a".repeat(64));
+        hub.outgoing(&sender, |_, _| false);
         assert_eq!(
-            hub.status(&sender, &next.message_id).unwrap().status,
+            hub.status(&sender, &next.message_id, |_, _| true)
+                .unwrap()
+                .status,
             Status::Expired
         );
         assert!(receive(&hub, 'c', "123", None, 10000).is_empty());
@@ -617,7 +840,8 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            hub.outgoing(&proof(Origin::Agent, None).sender).len(),
+            hub.outgoing(&proof(Origin::Agent, None).sender, |_, _| true)
+                .len(),
             messages::MAX_MESSAGES
         );
     }
@@ -646,5 +870,76 @@ mod tests {
             "agent"
         );
         assert_eq!(response["structuredContent"]["result"], "ok");
+    }
+
+    #[test]
+    fn sender_refresh_releases_allocations_once_and_preserves_acknowledged_history() {
+        let hub = Hub::default();
+        let sender = proof(Origin::Agent, None).sender;
+        let acknowledged = hub
+            .enqueue(
+                proof(Origin::Agent, None),
+                recipient('b', "123", None),
+                "already read".into(),
+                "acknowledged".into(),
+            )
+            .unwrap();
+        receive(&hub, 'b', "123", None, 10000);
+        hub.acknowledge(
+            &"b".repeat(64),
+            &identity("123"),
+            None,
+            &acknowledged.message_id,
+            |_, _| true,
+        )
+        .unwrap();
+        for index in 0..2 {
+            hub.enqueue(
+                proof(Origin::Agent, None),
+                recipient('b', "123", None),
+                "\\\"\n".repeat(1024),
+                format!("pending_{index}"),
+            )
+            .unwrap();
+        }
+        let before = hub.0.lock().unwrap().bytes;
+        let receipts = hub.outgoing(&sender, |_, _| false);
+        assert_eq!(receipts[0].status, Status::Acknowledged);
+        assert!(
+            receipts[1..]
+                .iter()
+                .all(|receipt| receipt.status == Status::Expired)
+        );
+        let retained = {
+            let state = hub.0.lock().unwrap();
+            assert!(
+                state
+                    .entries
+                    .iter()
+                    .all(|entry| entry.message.text.capacity() == 0)
+            );
+            assert_eq!(
+                state.bytes,
+                state
+                    .entries
+                    .iter()
+                    .map(|entry| serde_json::to_vec(&entry.message).unwrap().len())
+                    .sum::<usize>()
+            );
+            assert!(state.bytes < before);
+            state.bytes
+        };
+        hub.outgoing(&sender, |_, _| false);
+        assert_eq!(
+            hub.0.lock().unwrap().bytes,
+            retained,
+            "terminal receipts must not release the same bytes twice"
+        );
+        assert_eq!(
+            hub.status(&sender, &acknowledged.message_id, |_, _| false)
+                .unwrap()
+                .status,
+            Status::Acknowledged
+        );
     }
 }
