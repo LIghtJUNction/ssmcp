@@ -63,7 +63,7 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 客户端主动建立 HTTPS/WSS 连接，无需在设备上开放入站端口。保持终端或后台客户端运行，就能使用它的工作区和工具。
 
 ```sh
-ssmcp list       # 查看已授权的在线设备
+ssmcp list       # 查看已授权的在线进程与已登记线程
 ssmcp -i         # 进入一台设备的交互终端
 ssmcp whoami    # 查看当前账号
 ```
@@ -149,7 +149,8 @@ ssmcp context use here
 | 压缩与分支 | `/compact [摘要]`、`/fork [名称]`、`/switch CONTEXT_ID` |
 | 查看原生工具 | `/pi`、`/cc`、`/codex` 列出真实目录；`TOOL {...}` 显式调用 |
 | 浏览工具输出 | 默认显示状态与最多两行已脱敏结果；点击 `Click expand` 或选中后按 Enter 展开 |
-| 查看详细日志 | `/logs` 或鼠标右键打开 Logs；Esc 或再次按右键返回原页 |
+| 查看成员历史 | 在成员列表右键点击进程或线程，查看该真实身份的记录；Esc 返回 |
+| 查看详细日志 | `/logs` 打开 Logs；其他对话页可用右键切换日志 |
 | 展开状态侧栏 | **F3** 或 `/sidebar`；再按一次收起，F8 保存当前设置 |
 | 复制与帮助 | `/copy` 复制最近回复；**F7** 原生选择；`/help` 打开完整帮助 |
 
@@ -164,6 +165,25 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 分支上下文保留消息来源 ID 与内容哈希，并限制保存和返回的大小。`/compact` 可使用本地抽取或你提供的摘要；`/fork` 和 `/switch` 管理分支。它们不启动模型，也不重放历史任务。[上下文与分支](docs/context-memory.md)
 
 未选择接收人时，用户要求由下一次符合条件的单个调用领取；选择成员后，仅绑定该成员身份的调用能领取。**已交付**表示要求进入了工具响应，执行进度仍需由接收者反馈。[输入与交付语义](docs/client-input.md) · [成员协作](docs/agent-collaboration.md)
+
+### 从命令行连接对话与传递结果
+
+`ssmcp list` 按进程和已登记线程显示树形目录，远程 `attach` 默认连接所选对象的聊天输入与输出。进程输入发给选定目录中的主接收入口及已登记线程；线程输入只发给确切的成员 ID。数字引用最近一次列表，保留 5 分钟；显示名称不会被当成线程身份。[选择规则](docs/client-accounts.md#选择进程与线程)
+
+~~~sh
+ssmcp list
+ssmcp attach thread THREAD_ID
+ssmcp send process PROCESS_ID '检查当前改动' | ssmcp wait --any
+ssmcp send thread THREAD_ID '整理当前结论' |
+  ssmcp wait --gather |
+  ssmcp send thread NEXT_THREAD_ID --stdin
+~~~
+
+`send` 输出请求回执，`wait` 输出接收者的实际最终回复。可以等待任意一条、全部，或用 `--count N` 等待 N 个输入的结果；确认收到输入和进度更新都不算完成。输入在接收者下一次符合条件的原生调用响应中交付，这些命令不启动模型；停止等待或退出 attach 也不取消尚未完成的工作。[收发与等待](docs/client-accounts.md#发送输入与等待实际回复)
+
+聊天收发需要中继与接收端客户端同时支持相应接口，仅更新本机程序不会更新远端服务。请求和回复保存在服务端的有界内存中，最长保留 1 小时，服务端重启会丢失这批状态。原有 Shell 终端仍可用 `ssmcp -i` 或 `ssmcp attach process PROCESS_ID --terminal main`；本地保存会话使用 `ssmcp attach --local NAME`。[兼容与保留边界](docs/client-accounts.md#聊天接口的兼容与保留边界)
+
+成员历史只展示当前进程保留、能够核对真实身份的事件。旧记录中无法确定成员归属的内容留在进程视图，不会按显示名称分配给某个线程。[线程历史](docs/client-accounts.md#查看线程历史)
 
 ### 定时更新 Git 上游
 

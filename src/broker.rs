@@ -8,6 +8,7 @@ mod attribution;
 mod attribution_tests;
 mod management;
 mod messaging;
+pub(crate) mod session_io;
 mod traffic;
 pub(crate) mod wait_display;
 use crate::{
@@ -173,6 +174,8 @@ pub struct Session {
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
     tool_summary_advertised: AtomicBool,
+    io_reply_advertised: AtomicBool,
+    thread_history_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
@@ -227,6 +230,14 @@ impl Session {
 
     pub(crate) fn tool_summary_advertised(&self) -> bool {
         self.tool_summary_advertised.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn io_reply_advertised(&self) -> bool {
+        self.io_reply_advertised.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn thread_history_advertised(&self) -> bool {
+        self.thread_history_advertised.load(Ordering::Acquire)
     }
 
     pub fn supports_controller(&self) -> bool {
@@ -321,7 +332,7 @@ impl Session {
         operation: Operation,
         controller: Option<Controller>,
     ) -> CallResult {
-        self.call_with_actor(operation, controller, None, true, None)
+        self.call_with_actor(operation, controller, None, true, None, None)
             .await
     }
 
@@ -339,13 +350,46 @@ impl Session {
             }
             _ => None,
         };
-        self.call_with_actor(operation, controller, actor, true, Some(authorization))
-            .await
+        self.call_with_actor(
+            operation,
+            controller,
+            actor,
+            true,
+            Some(authorization),
+            None,
+        )
+        .await
+    }
+
+    /// Freeze the exact caller before dispatching a request-correlated reply.
+    /// A concurrent bind in the same JavaScript run cannot relabel its result.
+    pub(crate) async fn call_with_bound_authorization(
+        &self,
+        operation: Operation,
+        controller: Option<Controller>,
+        authorization: &Authorization,
+        binding: Option<crate::code_mode::RunBinding>,
+    ) -> CallResult {
+        let actor = match authorization {
+            Authorization::Identity(identity) if crate::management::valid_identity(identity) => {
+                Some(identity.subject.as_str())
+            }
+            _ => None,
+        };
+        self.call_with_actor(
+            operation,
+            controller,
+            actor,
+            true,
+            Some(authorization),
+            Some(binding),
+        )
+        .await
     }
 
     /// Internal handle teardown must proceed even if audit storage is unavailable.
     pub(crate) async fn call_cleanup(&self, operation: Operation) -> CallResult {
-        self.call_with_actor(operation, None, None, false, None)
+        self.call_with_actor(operation, None, None, false, None, None)
             .await
     }
 
@@ -356,6 +400,7 @@ impl Session {
         actor_subject: Option<&str>,
         audit_required: bool,
         authorization: Option<&Authorization>,
+        frozen_binding: Option<Option<crate::code_mode::RunBinding>>,
     ) -> CallResult {
         if authorization
             .is_some_and(|authorization| !authorization.is_live() || !authorization.permits(self))
@@ -365,9 +410,11 @@ impl Session {
         operation.validate()?;
         let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
         // A later collab.bind in the same run must not reattribute this reply.
-        let binding = audit_run
-            .as_ref()
-            .and_then(|run| run.binding(self.client_id()));
+        let binding = frozen_binding.unwrap_or_else(|| {
+            audit_run
+                .as_ref()
+                .and_then(|run| run.binding(self.client_id()))
+        });
         let reply_agent = binding.as_ref().map(|binding| binding.agent_id.clone());
         let attribution = self.control_attribution(authorization, binding.as_ref())?;
         let controller =
@@ -517,6 +564,31 @@ impl Session {
                 return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
             }
         }
+        if catalog_query
+            && let Ok(value) = &result
+            && value["isError"] != true
+            && let Some(tools) = value.get("tools").and_then(Value::as_array)
+        {
+            if tools
+                .iter()
+                .any(|tool| tool["name"] == crate::client::interface::reply::TOOL)
+            {
+                self.io_reply_advertised.store(true, Ordering::Release);
+            }
+            if tools.iter().any(|tool| {
+                tool["name"] == "ssmcp.ui.history"
+                    && tool["inputSchema"]["oneOf"]
+                        .as_array()
+                        .is_some_and(|variants| {
+                            variants
+                                .iter()
+                                .any(|variant| variant["properties"]["action"]["const"] == "thread")
+                        })
+            }) {
+                self.thread_history_advertised
+                    .store(true, Ordering::Release);
+            }
+        }
         if let Ok(value) = &result
             && value["isError"] != true
             && ((catalog_query
@@ -582,6 +654,7 @@ pub struct Broker {
     pub bridges: Arc<crate::bridge::Bridges>,
     pub(crate) awaiting: crate::http::await_tool::Registry,
     native_messages: crate::messaging::Hub,
+    pub(crate) session_io: session_io::Hub,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
@@ -646,6 +719,7 @@ impl Broker {
             bridges: Arc::new(crate::bridge::Bridges::default()),
             awaiting: crate::http::await_tool::Registry::default(),
             native_messages: crate::messaging::Hub::default(),
+            session_io: session_io::Hub::default(),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             code_mode_runner: None,
@@ -769,6 +843,8 @@ impl Broker {
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
             tool_summary_advertised: AtomicBool::new(false),
+            io_reply_advertised: AtomicBool::new(false),
+            thread_history_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1170,6 +1246,8 @@ impl Broker {
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
             tool_summary_advertised: AtomicBool::new(false),
+            io_reply_advertised: AtomicBool::new(false),
+            thread_history_advertised: AtomicBool::new(false),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -2059,6 +2137,8 @@ mod tests {
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
             tool_summary_advertised: AtomicBool::new(false),
+            io_reply_advertised: AtomicBool::new(false),
+            thread_history_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),

@@ -77,9 +77,11 @@ Start
   ssmcp                         Reuse your last authorized account
   ssmcp local                   Run a local MCP session on Linux
   ssmcp alice@relay.example     Connect and sign in when needed
-  ssmcp list                    List your online devices
+  ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
-  ssmcp attach ID|NAME|N        Attach to a listed device or saved local session
+  ssmcp attach [process|thread] ID|N   Attach to remote chat
+  ssmcp send [process|thread] ID|N TEXT   Submit chat input; print its receipt
+  ssmcp wait [REQUEST_ID ...]   Print actual replies; accepts piped receipts
 
 Manage
   config · whoami · logout      Account and server settings
@@ -118,7 +120,12 @@ Usage: ssmcp username@server [options]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
-       ssmcp attach [ID|NAME|N|list] [--local|--remote] [--read-only]
+       ssmcp attach [process|thread] ID|N [--remote] [--read-only]
+       ssmcp attach --local NAME [--read-only]
+       ssmcp attach process ID|N --terminal TERMINAL_ID [--read-only]
+       ssmcp send [process|thread] ID|N [TEXT|--stdin] [--wait] [--json]
+       ssmcp wait [REQUEST_ID ...] [--stdin] [--any|--all|--count N]
+                  [--timeout SECONDS] [--json] [--server URL]
        ssmcp computer [on|off|toggle|status] [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
@@ -186,7 +193,9 @@ Examples:
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp sessions create shared --allow alice@ssmcp.lmm.best
-  ssmcp attach workstation
+  ssmcp attach --local workstation
+  ssmcp attach thread THREAD_ID
+  ssmcp send process PROCESS_ID 'Review the patch' | ssmcp wait --count 2
   ssmcp sessions close workstation
 
 On the controlled device, use --allow username@relay-server. No login or invitation
@@ -208,11 +217,24 @@ your account, and logout removes the selected server's saved login. Other server
 and independent logins are preserved. --no-browser prints the authorization URL.
 An update or a controlled-device restart does not grant a new controller identity.
 
-ssmcp list shows remotely controllable sessions; sessions list shows local saved
-sessions. Use attach ID, a unique NAME, or an index from the last list. --remote
-and --local choose the target scope explicitly. Remote attach opens the selected
-PTY, not the original chat panel. --read-only sends no input or terminal resize.
-Ctrl-] leaves remote interactive control; Ctrl-C is sent to its terminal.
+ssmcp list shows authorized processes and their registered threads. Numbers bind
+the last displayed directory for 5 minutes. Full IDs work directly; exact unique
+process names also work. Display names never identify a thread.
+Remote attach opens chat stdin/stdout. Process input fans out to its selected main
+and registered threads; thread input reaches only that exact recipient. Enter
+submits input. Ctrl-] or Ctrl-C detaches; pending requests remain running.
+Use -i or attach process ID --terminal TERMINAL_ID for a remote shell PTY;
+Ctrl-C reaches that shell. --read-only sends no chat/terminal input or resize.
+sessions list and bare attach show saved local sessions. Existing local names
+work offline; --local selects them explicitly, and --remote selects online chat.
+send prints a receipt. wait prints actual final replies: --any waits for one,
+--all/--gather for all, and --count N for N distinct input results. Progress and
+delivery acknowledgements are not completion. --json prints result JSONL.
+Input is delivered on the recipient's next eligible native call; no model is
+started. Stopping attach or wait never cancels the remaining work.
+Chat I/O requires an upgraded relay and recipient client. Requests and outputs
+have bounded live-server-memory retention of at most 1 hour; a server restart
+loses pending requests and retained replies.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
 an MCP client and sign in as an allowed account. --allow cannot use --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -470,7 +492,7 @@ impl Options {
             return Err("ssmcp local currently requires Linux".into());
         }
         #[cfg(target_os = "linux")]
-        let (mut listen, mut public_url) = (None, None);
+        let (mut listen, mut public_url, mut socket) = (None, None, None);
         let mut destination = None;
         let mut server = None;
         let mut context = None;
@@ -528,6 +550,23 @@ impl Options {
                     return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
                 }
                 Some("--ssh") => ssh = true,
+                #[cfg(target_os = "linux")]
+                Some("--socket") => {
+                    if socket.is_some() {
+                        return Err("--socket may be supplied only once".into());
+                    }
+                    socket = Some(
+                        args.next_if(|value| !value.to_string_lossy().starts_with('-'))
+                            .map(std::path::PathBuf::from),
+                    );
+                }
+                #[cfg(target_os = "linux")]
+                Some(value) if value.starts_with("--socket=") => {
+                    if socket.is_some() {
+                        return Err("--socket may be supplied only once".into());
+                    }
+                    socket = Some(Some(std::path::PathBuf::from(&value["--socket=".len()..])));
+                }
                 #[cfg(target_os = "linux")]
                 Some("--listen") => {
                     let value = args.next().ok_or("--listen requires IP:PORT")?;
@@ -752,6 +791,12 @@ impl Options {
         let mut local = local_mode.then(local::Settings::default);
         #[cfg(target_os = "linux")]
         {
+            if let Some(path) = socket {
+                local
+                    .as_mut()
+                    .ok_or("--socket is only available with a local connection")?
+                    .set_socket(path)?;
+            }
             if let Some(value) = listen {
                 local
                     .as_mut()
@@ -2180,14 +2225,23 @@ impl Transport<'_> {
                 &format!("Connecting to {server} with an explicit account allow list"),
             ),
             #[cfg(target_os = "linux")]
-            Self::Local(host) => render::status(
-                "local",
-                "Progress",
-                &format!(
-                    "Starting local MCP at {} with private OS-user transport",
-                    host.origin
-                ),
-            ),
+            Self::Local(host) => {
+                render::status(
+                    "local",
+                    "Progress",
+                    &format!(
+                        "Starting local MCP at {} with private OS-user transport",
+                        host.origin
+                    ),
+                );
+                if let Some(path) = &host.socket {
+                    render::status(
+                        "socket",
+                        "Info",
+                        &format!("MCP HTTP socket: {}", path.display()),
+                    );
+                }
+            }
         }
     }
 
@@ -2413,6 +2467,7 @@ async fn connect_inner(
         management,
     )
     .and_then(|runtime| {
+        runtime.bind_client_id(&client_id)?;
         runtime.configure_timing(time_observation_supported, wait_display_supported)?;
         runtime.enable_default_skill_sources()?;
         Ok(runtime)
@@ -2874,6 +2929,58 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_socket_option_accepts_default_and_custom_paths_without_eating_flags() {
+        let default =
+            Options::parse(["local", "--socket", "--name", "socket-fixture"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        assert!(default.is_local());
+        assert_eq!(default.name.as_deref(), Some("socket-fixture"));
+        assert_eq!(
+            default
+                .local
+                .as_ref()
+                .unwrap()
+                .socket_path()
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "mcp.sock"
+        );
+        for args in [
+            vec!["local", "--socket", "/tmp/private/mcp.sock"],
+            vec!["local", "--socket=/tmp/private/mcp.sock"],
+        ] {
+            let parsed = Options::parse(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                parsed.local.as_ref().unwrap().socket_path(),
+                Some(std::path::Path::new("/tmp/private/mcp.sock"))
+            );
+        }
+        let title = Options::parse(["local", "--title", "--socket"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(title.title.as_deref(), Some("--socket"));
+        assert!(title.local.as_ref().unwrap().socket_path().is_none());
+        for args in [
+            vec!["local", "--socket=relative.sock"],
+            vec!["local", "--socket="],
+            vec!["local", "--socket", "--socket"],
+            vec![
+                "--server",
+                "https://remote.example",
+                "--socket",
+                "/tmp/private/mcp.sock",
+            ],
+        ] {
+            assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn local_options_do_not_select_or_persist_a_remote_account() {

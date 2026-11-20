@@ -9,7 +9,7 @@ use crate::{
 use std::{
     future::Future,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -23,6 +23,8 @@ tokio::task_local! {
 #[derive(Debug)]
 pub(crate) struct CallScope {
     connection: u64,
+    client_id: Option<String>,
+    native_tool: OnceLock<String>,
     request_id: u64,
     run_id: Option<String>,
     attribution: Option<ControlAttribution>,
@@ -54,8 +56,19 @@ pub(super) fn connection() -> u64 {
 }
 
 impl CallScope {
+    #[cfg(test)]
     pub(super) fn from_relay(
         connection: u64,
+        request_id: u64,
+        attribution: Option<&ControlAttribution>,
+        context: Option<&CodeContext>,
+    ) -> Result<Arc<Self>, String> {
+        Self::from_relay_for_client(connection, None, request_id, attribution, context)
+    }
+
+    pub(crate) fn from_relay_for_client(
+        connection: u64,
+        client_id: Option<&str>,
         request_id: u64,
         attribution: Option<&ControlAttribution>,
         context: Option<&CodeContext>,
@@ -82,8 +95,17 @@ impl CallScope {
                 })
             })
             .transpose()?;
+        if let (Some(client_id), Some(thread)) = (client_id, &thread)
+            && client_id != thread.session_id()
+        {
+            return Err("thread scope belongs to a different native connection".into());
+        }
         let mut scope = Self {
             connection,
+            client_id: client_id
+                .map(str::to_owned)
+                .or_else(|| thread.as_ref().map(|thread| thread.session_id().to_owned())),
+            native_tool: OnceLock::new(),
             request_id,
             run_id: context.map(|context| context.run_id.clone()),
             attribution: attribution.cloned(),
@@ -96,6 +118,19 @@ impl CallScope {
 
     pub(crate) fn connection(&self) -> u64 {
         self.connection
+    }
+
+    /// Frozen from the relay registration, never a display name or tool argument.
+    pub(crate) fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    pub(crate) fn set_native_tool(&self, name: &str) {
+        let _ = self.native_tool.set(name.to_owned());
+    }
+
+    pub(crate) fn native_tool(&self) -> Option<&str> {
+        self.native_tool.get().map(String::as_str)
     }
 
     pub(crate) fn request_id(&self) -> u64 {
@@ -116,6 +151,7 @@ impl CallScope {
 
     pub(crate) fn same_call(&self, other: &Self) -> bool {
         self.connection() == other.connection()
+            && self.client_id() == other.client_id()
             && self.request_id() == other.request_id()
             && self.run_id() == other.run_id()
             && self.attribution() == other.attribution()
@@ -345,7 +381,32 @@ mod tests {
         let scope = CallScope::from_relay(7, 1, Some(&attribution), Some(&context)).unwrap();
         assert_eq!(scope.thread().unwrap().session_id(), "session_fixture");
         assert_eq!(scope.thread().unwrap().thread_id(), agent_id);
+        assert_eq!(scope.client_id(), Some("session_fixture"));
+        assert!(
+            CallScope::from_relay_for_client(
+                7,
+                Some("other_connection"),
+                1,
+                Some(&attribution),
+                Some(&context)
+            )
+            .is_err()
+        );
         attribution.agent.as_mut().unwrap().id = format!("agent_{}", "b".repeat(32));
         assert!(CallScope::from_relay(7, 1, Some(&attribution), Some(&context)).is_err());
+    }
+
+    #[test]
+    fn main_scope_freezes_registered_client_and_native_tool_without_display_inference() {
+        let attribution = source("123", 1).attribution().unwrap().clone();
+        let client = "a".repeat(64);
+        let scope = CallScope::from_relay_for_client(9, Some(&client), 4, Some(&attribution), None)
+            .unwrap();
+        assert_eq!(scope.client_id(), Some(client.as_str()));
+        assert!(scope.thread().is_none());
+        scope.set_native_tool("ssmcp.fs.stat");
+        scope.set_native_tool("forged later label");
+        assert_eq!(scope.native_tool(), Some("ssmcp.fs.stat"));
+        assert_eq!(scope.attribution().unwrap().account.subject, "123");
     }
 }

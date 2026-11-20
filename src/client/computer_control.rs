@@ -6,14 +6,14 @@ use super::interface::computer::{self, Command};
 const HELP: &str = "\
 Usage: ssmcp computer [on|off|toggle|status] [--json]
 
-Control foreground computer use for this machine and operating-system user.
-The explicit switch is shared by all ssmcp sessions and stays set until changed.
-Background computer use is always available independently of this switch.
+允许或禁止 AI 控制当前桌面的鼠标和键盘。
+这台电脑上同一系统用户的 ssmcp 会话共用开关，直到你再次更改。
+独立桌面与浏览器工具仍可使用。
 
-  on       Allow foreground input
-  off      Stop allowing foreground input
-  toggle   Switch foreground input on or off
-  status   Show the current switch (default)
+  on       开启当前桌面的键鼠控制
+  off      关闭当前桌面的键鼠控制
+  toggle   切换电脑控制开关
+  status   查看当前开关状态（默认）
 
 Bind Super+Alt+C in your desktop to: ssmcp computer toggle
 In terminals with enhanced keyboard reporting, the same shortcut works in chat.

@@ -43,6 +43,47 @@ ssmcp local --listen 127.0.0.1:8765
 
 `127.0.0.1` 指向访问者自己的机器。云端托管的 MCP 客户端不能因此访问你的电脑；把回环地址粘贴到云端页面不会创建隧道。需要跨机器访问时，使用现有的远程模式，或者配置下面的局域网 HTTPS 入口。
 
+## 通过 Unix socket 连接
+
+`ssmcp local --socket` 额外监听一个供本机程序连接的 HTTP/MCP Unix socket。省略路径时，程序使用下表中的默认位置，并在启动消息中显示实际路径；不带 `--socket` 的本地会话继续只提供原有回环 HTTP 入口。参数实现见[本地模式选项](../src/client/local.rs)和 [socket 监听器](../src/client/local/socket.rs)。
+
+| 启动环境 | 默认 socket 路径 |
+|---|---|
+| 已设置 `XDG_RUNTIME_DIR` | `$XDG_RUNTIME_DIR/ssmcp/mcp.sock` |
+| 未设置 `XDG_RUNTIME_DIR` | `/tmp/ssmcp-<有效 UID>/mcp.sock` |
+
+```sh
+ssmcp local --socket
+```
+
+`--socket PATH` 或 `--socket=PATH` 可以指定其他绝对路径。父目录须已存在、属于当前有效 UID，且权限恰好为 `0700`；程序不会修改已有目录的权限。下面的命令先创建一个私有目录，再以其中的 socket 作为入口：
+
+```sh
+socket_dir="$(mktemp -d /tmp/ssmcp-mcp.XXXXXX)"
+ssmcp local --socket "$socket_dir/mcp.sock" --listen 127.0.0.1:8765
+```
+
+Unix socket 承载的仍是 HTTP，请求地址和认证方式与终端显示的 MCP 地址相同。对上面的固定端口示例，在另一个终端将 `PATH` 换成实际 socket 路径，即可检查 HTTP 连通性；访问 MCP 用户路径还需完成原有的一次性连接码 OAuth 流程，并携带访问令牌。`curl --unix-socket` 只选择连接通道，不改变 URL 中的主机名或端口；服务继续校验 `Host`、`Origin` 和令牌，回环监听也继续可用。路由依据见[本地 HTTP 入口](../src/http.rs)。
+
+```sh
+curl --unix-socket PATH http://127.0.0.1:8765/healthz
+```
+
+Unix socket 模式使用回环 HTTP 作为授权来源，因此 `--socket` 与 `--public-url` 不能同时使用。后者为已有 TLS 反向代理选择 HTTPS 来源，而当前 Unix socket 监听器承载明文 HTTP；参数校验会明确拒绝这种组合。
+
+Socket 文件只允许相同有效 UID 的进程连接。默认目录权限为 `0700`，socket 权限为 `0600`；完整路径最多 107 字节，文件名最多 64 字节，文件名字符限于 ASCII 字母、数字、`.`、`-` 和 `_`。路径祖先不能是符号链接，也不能允许不受信任的用户写入。已设置但不安全或过长的 `XDG_RUNTIME_DIR` 会明确报错，此时可用 `--socket PATH` 选择一个合适的私有目录。权限与路径检查见[监听器](../src/client/local/socket.rs)和[共享 socket 绑定代码](../src/local_socket.rs)。
+
+已有监听器占用路径时，新会话会报错并保留原监听器。只有属于当前用户、权限符合要求且连接被明确拒绝的旧 socket 才会被回收；普通文件、符号链接和替换后的 socket 都不会被覆盖。正常关闭会移除本次监听器持有的 socket，私有目录和协调后续启动的锁文件可以保留。多个本地会话需要使用不同的自定义 socket 路径。清理行为见[绑定与释放实现](../src/local_socket.rs)。
+
+`scripts/e2e_local_socket.py` 提供针对该入口的独立验收。它使用已有可执行文件、物理 PTY 和临时配置，通过默认路径与自定义路径完成真实 OAuth、MCP 初始化及工具列表请求，并检查活动路径冲突、失效 socket 恢复和退出清理；运行入口见[测试脚本](../scripts/e2e_local_socket.py)。
+
+```sh
+python3 scripts/e2e_local_socket.py \
+  --bin-dir /path/to/bin \
+  --decoder /path/to/vt_snapshot \
+  --report /path/to/new-local-socket-report.json
+```
+
 ## 使用 `NAME.local`
 
 `.local` 名称和 HTTPS 入口是两个独立条件。名称解析告诉客户端连接哪台机器，TLS 则验证连接的服务器并加密流量。仅修改显示地址不能完成其中任何一步。

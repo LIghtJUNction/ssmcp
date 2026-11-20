@@ -31,6 +31,7 @@ struct Position {
     question_id: Option<String>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_archived: bool,
+    scoped_history: Option<history::ScopedHistoryHandle>,
     selected_history: Option<String>,
     audit: crate::client::audit_view::AuditPosition,
     events: events::EventPosition,
@@ -273,6 +274,7 @@ impl State {
                             question_id: None,
                             history,
                             history_archived: position.history_archived,
+                            scoped_history: None,
                             selected_history: position.selected_history,
                             audit: Default::default(),
                             events: position.events.position(&self.events),
@@ -310,6 +312,7 @@ impl State {
             question_id: self.conversation.question_id.clone(),
             history: self.conversation.history.clone(),
             history_archived: self.conversation.history_archived,
+            scoped_history: self.conversation.scoped_history.clone(),
             selected_history: (self.conversation.view == View::History)
                 .then(|| {
                     self.conversation
@@ -370,6 +373,7 @@ impl State {
             self.conversation.question_id = position.question_id;
             self.conversation.history = position.history;
             self.conversation.history_archived = position.history_archived;
+            self.conversation.scoped_history = position.scoped_history;
             self.audit.restore_position(&position.audit);
             self.events.restore_position(&position.events);
             if let Some(logs) = position.logs {
@@ -382,6 +386,7 @@ impl State {
                 self.conversation.tasks.restore_position(&tasks);
             }
         } else {
+            self.conversation.scoped_history = None;
             self.conversation.content_focus = view != View::Activity;
             self.conversation.selected = 0;
             self.conversation.selected_agent = None;
@@ -423,7 +428,7 @@ impl State {
         self.conversation.list_count = 0;
         self.help = false;
         self.notice = None;
-        if view == View::History && !self.preview {
+        if view == View::History && self.conversation.scoped_history.is_none() && !self.preview {
             let filter = if self.conversation.history_archived {
                 crate::client::interface::history::archive::Filter::Archived
             } else {
