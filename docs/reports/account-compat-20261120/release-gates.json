@@ -1,0 +1,29 @@
+{
+  "schema": "ssmcp.release-preparation.v1",
+  "version": "0.10.15",
+  "base_main": "f38d9d1b10e69d0d1a596c85105e4bb6699b0dff",
+  "readonly_preflight_source": "c474c94c2e4bb0457c5deaa0280a3fe224c1c5b2",
+  "deployment_policy": "0.10.15 is always deferred by Release policy",
+  "checks": [
+    {
+      "test_file": "test_release.py",
+      "exit_code": 0,
+      "tests": 84,
+      "seconds": 4.13
+    },
+    {
+      "test_file": "test_server_deploy.py",
+      "exit_code": 0,
+      "tests": 20,
+      "seconds": 0.168
+    },
+    {
+      "test_file": "test_server_upgrade_inspection.py",
+      "exit_code": 0,
+      "tests": 5,
+      "seconds": 0.098
+    }
+  ],
+  "tag_created": false,
+  "production_deployed": false
+}
