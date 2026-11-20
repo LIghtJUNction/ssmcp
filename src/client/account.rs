@@ -1548,7 +1548,6 @@ mod tests {
         assert!(select_client(&entries, "same").is_err());
         assert!(select_client(&entries, "3").is_err());
     }
-    #[cfg(unix)]
     async fn logout_fixture(
         root: &Path,
         status: StatusCode,
