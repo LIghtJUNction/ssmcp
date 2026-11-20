@@ -1,0 +1,17 @@
+{
+  "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "command": [
+    "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "--exact",
+    "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "duration_seconds": 6.276,
+  "log": {
+    "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/opencode-exact-replay.log",
+    "sha256": "96c77ac896946346b1803ed013f9341cfb6f5bb66b7c796873247c99c721bc5c"
+  },
+  "libtest_sha256": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9"
+}
