@@ -337,6 +337,12 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 );
             }
             assert!(!screen.contains("private-frame-secret"));
+            assert!(screen.contains("Keep this draft"), "{screen}");
+            assert!(
+                screen
+                    .lines()
+                    .all(|line| unicode_width::UnicodeWidthStr::width(line) <= usize::from(cols))
+            );
             assert_eq!(after.conversation.snapshot()["draft"], draft_display);
             assert_eq!(after.chat_data()["queue"], queue);
             assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
