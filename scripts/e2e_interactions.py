@@ -113,9 +113,9 @@ class Interactions(InputHistory):
         return self.wait_state(front, lambda item: item["view"] == "agents",
                                "the explicit native recipient picker")
 
-    def messages_call(self, action, client_id, arguments=None):
+    def messages_call(self, action, client_id, arguments=None, *, agent=None):
         result = self.response("return await messages.%s(%s, %s);" % (
-            action, json.dumps(client_id), json.dumps(arguments or {})))
+            action, json.dumps(client_id), json.dumps(arguments or {})), agent=agent)
         reply = result["structuredContent"]["result"]
         if not isinstance(reply, dict) or reply.get("isError"):
             raise AssertionError("native messages helper did not return a successful typed reply")
@@ -338,7 +338,48 @@ class Interactions(InputHistory):
         self.quiet_until(front, lambda shot: "Acknowledged by recipient" in text(shot),
                          "explicit recipient acknowledgement refreshes the source without input")
         self.capture_pair(front, "native-acknowledged", "Acknowledged")
-        return descriptor["id"]
+
+        self.open_picker(front)
+        member = self.public_call("collab", {
+            "action": "join", "client_id": destination,
+            "name": "PTY-native-agent", "role": "receiver"})
+        self.sensitive.append(member["token"])
+        self.quiet_until(front, lambda shot: "PTY-native-agent" in text(shot),
+                         "the idle picker also refreshes a newly verified agent without a key")
+        agent_id = "agent:" + destination + ":" + member["agent_id"]
+        self.open_picker(front, agent_id)
+        state = self.ui("/display/conversation")
+        self.check(state["selected_agent"] == "native:" + agent_id
+                   and state["native_recipient"] == descriptor["id"],
+                   "highlighting a verified agent does not replace the selected account inbox")
+        self.capture_pair(front, "native-agent-picker", "PTY-native-agent")
+        front.send(ENTER)
+        self.wait_state(front, lambda item: item["view"] == "activity"
+                        and item["native_recipient"] == agent_id,
+                        "explicitly selecting the exact verified native agent")
+        agent_text = "VERIFIED_AGENT_ONLY 中文原文"
+        self.replace_short(front, agent_text)
+        front.send(ENTER)
+        self.quiet_until(front, lambda shot: "Queued by service" in text(shot),
+                         "a verified-agent send obtains its own service receipt without another key")
+        wrong = self.response("return await call(%s, 'terminal.status', {});" % json.dumps(destination))
+        self.check(not wrong["structuredContent"].get("native_messages"),
+                   "an unbound call on the same account and device cannot take an exact-agent message")
+        binding = {"client_id": destination, "id": member["agent_id"], "token": member["token"]}
+        exact = self.response("return await call(%s, 'terminal.status', {});" % json.dumps(destination),
+                              agent=binding)
+        received = exact["structuredContent"].get("native_messages", [])
+        self.check(len(received) == 1 and received[0]["text"] == agent_text
+                   and received[0]["recipient"]["id"] == agent_id
+                   and received[0]["recipient"]["kind"] == "agent",
+                   "only the selected verified agent receives the message through its actual bound call")
+        self.quiet_until(front, lambda shot: "Included in recipient tool response" in text(shot),
+                         "the verified-agent delivery updates the source without input")
+        self.messages_call("ack", destination,
+                           {"message_id": received[0]["receipt"]["message_id"]}, agent=binding)
+        self.quiet_until(front, lambda shot: "Acknowledged by recipient" in text(shot),
+                         "the exact agent's acknowledgement refreshes independently")
+        return agent_id
 
     def private_pastes(self, front, recipient_id):
         boundary = "x" * 4093 + "中"
