@@ -5,6 +5,7 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 mod management;
+mod messaging;
 mod traffic;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
@@ -545,6 +546,7 @@ impl Session {
 pub struct Broker {
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
+    native_messages: crate::messaging::Hub,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
@@ -606,6 +608,7 @@ impl Broker {
             identities,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
+            native_messages: crate::messaging::Hub::default(),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             code_mode_runner: None,
@@ -847,6 +850,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
+            self.native_messages.close_client(session.client_id());
             session.collaboration.close();
             session.steering.close();
             session.disconnect.notify_one();
@@ -1052,12 +1056,17 @@ impl Broker {
         let access_owner = registration.map(|registration| registration.identity.clone());
         let access_supported = peer.as_ref().is_some_and(|peer| peer.session_access);
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
+        let native_messages =
+            registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let mut capabilities = Vec::new();
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
         }
         if control_attribution {
             capabilities.push(wire::CONTROL_ATTRIBUTION_CAPABILITY.into());
+        }
+        if native_messages {
+            capabilities.push(wire::messages::CAPABILITY.into());
         }
         let login_code = if restricted {
             String::new()
@@ -1313,6 +1322,14 @@ impl Broker {
                         };
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
                     }
+                    Some(Frame::Messages { id, command }) => {
+                        let result = if native_messages {
+                            self.local_message_command(&session, registration, command).await
+                        } else {
+                            Err("native messaging was not negotiated on this authenticated connection".into())
+                        };
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::MessagesReply { id, result })).await??;
+                    }
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
                         let frame = Frame::SteeringReply { id, result };
@@ -1393,6 +1410,7 @@ impl Broker {
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
+        self.native_messages.close_client(session.client_id());
         session.collaboration.close();
         session.steering.close();
         let mut sessions = self.sessions.write().await;
