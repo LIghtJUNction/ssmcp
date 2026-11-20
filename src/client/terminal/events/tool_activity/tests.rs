@@ -1,5 +1,4 @@
 use super::super::{EventScope, EventView, MAX_EVENTS, Status, Ui, unstyled};
-use crate::client::render::Renderer;
 use serde_json::json;
 use unicode_width::UnicodeWidthStr;
 
@@ -211,9 +210,9 @@ fn adjacent_tool_details_reveal_long_redacted_source_tail_at_all_widths() {
         let event =
             json!({"type":"exec.started","job_id":"long","command":["python3","-c",script]});
         let original = event.clone();
-        let mut renderer = Renderer::new(false, false, usize::from(width));
-        let mut transcript = Vec::new();
-        renderer.event(&mut transcript, "shell", &event).unwrap();
+        let transcript =
+            crate::client::render::render_event_for_test("shell", &event, usize::from(width))
+                .unwrap();
         view.ingest_event("shell", &event, &transcript);
         view.render(width, 24, &ui(), true);
         assert!(view.open());
