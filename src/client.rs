@@ -2480,7 +2480,13 @@ async fn connect_inner(
                             result = Err("native call finished but its result exceeds the 4 MiB bridge frame limit; do not blindly repeat a mutating call, inspect native state or request a smaller output page".into());
                         }
                         if let Err(error) = &result {
-                            call_scope.scope(async { render::status("ssmcp", "Error", error); }).await;
+                            call_scope.scope(async {
+                                render::scoped_event(
+                                    "ssmcp",
+                                    &serde_json::json!({"type":"ssmcp.status","level":"Error","message":error}),
+                                    crate::runtime::call_scope::Source::capture(),
+                                );
+                            }).await;
                         }
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
