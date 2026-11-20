@@ -111,7 +111,7 @@ def column(shot):
     # Read the final exact page tuple, independently of the project title.
     header = shot["rows"][0].split("│", 1)[0]
     matches = list(re.finditer(
-        r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
+        r"\b(sessions|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
         header, re.IGNORECASE,
     ))
     if matches:
@@ -473,8 +473,8 @@ def main():
                   "the removed command neither opens a view nor submits its text")
             clear_draft(preview)
             preview.send(b"\x1b[D")
-            agents = preview.until(lambda s: column(s) == ("agents", 1, 8)
-                                   and "Reviewer" in body_text(s), "Left entering the adjacent Agents column")
+            agents = preview.until(lambda s: column(s) == ("sessions", 1, 8)
+                                   and "Reviewer" in body_text(s), "Left entering the adjacent Sessions column")
             check("Next caller" in body_text(agents) and "Builder" in body_text(agents)
                   and agents["hide_cursor"], "the agent panel shows selectable named recipients")
             save_shot(args.out, "agents", agents)
@@ -483,7 +483,7 @@ def main():
                                      "Escape returning to the default conversation")
             check("Message the agent" in prompt_text(returned), "closing agents restores the empty composer")
             preview.send("切换保留 界".encode() + b"\x01\x1b[D")
-            preview.until(lambda s: column(s) == ("agents", 1, 8)
+            preview.until(lambda s: column(s) == ("sessions", 1, 8)
                           and "切换保留 界" in prompt_text(s), "opening agents with a Unicode draft")
             preview.send(b"\x1b[B\r")
             chosen = preview.until(lambda s: "To Builder" in text(s)
