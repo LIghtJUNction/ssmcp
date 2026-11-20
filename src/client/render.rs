@@ -170,51 +170,38 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 }
 
 pub(crate) fn message(text: &str) {
-    let _ = agent_message(text, super::interface::messages::Kind::Progress, None, None);
+    if let Err(error) = agent_message(
+        text,
+        super::interface::messages::Kind::Progress,
+        None,
+        None,
+        crate::runtime::call_scope::Source::capture(),
+    ) {
+        super::terminal::notice(&format!("Message history could not be saved: {error}"));
+    }
 }
 
-/// An identified API reply is persisted once in the existing JSONL conversation.
-pub(crate) fn message_identified(
-    text: &str,
-    kind: super::interface::messages::Kind,
-    id: &str,
-) -> Result<(), String> {
-    agent_message(text, kind, Some(id), None)
-}
-
-pub(crate) fn presentation_identified(
-    text: &str,
-    kind: super::interface::messages::Kind,
-    id: &str,
-    presentation: &super::presentation::Presentation,
-) -> Result<(), String> {
-    agent_message(text, kind, Some(id), Some(presentation))
-}
-
-fn agent_message(
+/// Save to the admitted owner before publishing the corresponding local event.
+pub(crate) fn agent_message(
     text: &str,
     kind: super::interface::messages::Kind,
     id: Option<&str>,
     presentation: Option<&super::presentation::Presentation>,
-) -> Result<(), String> {
-    let saved = match id {
-        Some(id) => super::interface::history::record_agent(id, text),
-        None => super::interface::history::record("assistant", text),
-    };
-    if let Err(error) = &saved {
-        super::terminal::notice(&format!("Message history could not be saved: {error}"));
-    }
+    source: crate::runtime::call_scope::Source,
+) -> Result<bool, String> {
+    let owner = source.require_owner()?.clone();
+    let id = super::interface::history::record_owned_agent(&owner, id, text)?;
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
-    let mut event = json!({"type":"ssmcp.message","format":"markdown","text":text,"kind":kind});
-    if let Some(id) = id {
-        event["message_id"] = json!(id);
-    }
+    let mut event = json!({
+        "type":"ssmcp.message", "format":"markdown", "text":text, "kind":kind, "message_id":id,
+    });
     if let Some(document) = presentation {
         event["format"] = json!("intelligence_ui.v1");
         event["presentation"] =
             serde_json::to_value(document).expect("a typed presentation serializes");
     }
-    crate::session::attach::record_event("agent", &event);
+    let display_source = source.display();
+    crate::session::attach::record_event("agent", &event, display_source.history.local_id());
     let width = terminal_width().min(1000) as u16;
     let (raw, mut ui) = {
         let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
@@ -254,10 +241,10 @@ fn agent_message(
         }
         let _ = writeln!(bytes);
     }
-    publish_event("agent", &event, &bytes, None, None);
-    // No terminal or history lock is held while the /copy cache is updated.
-    super::interface::messages::remember_last(text);
-    saved
+    publish_event("agent", &event, &bytes, None, display_source);
+    Ok(super::interface::history::remember_visible_reply(
+        &owner, text,
+    ))
 }
 
 /// Sanitize a diagnostic without changing native consumers or event archives.
@@ -273,10 +260,7 @@ pub(super) fn diagnostic_text(value: &Value) -> Option<String> {
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
-    if reserved_control_event(value) {
-        return;
-    }
-    emit_event(label, value, false, None);
+    emit_event(label, value, EventOrigin::Native, Default::default());
 }
 
 pub(crate) fn reserved_control_event(value: &Value) -> bool {
@@ -286,31 +270,47 @@ pub(crate) fn reserved_control_event(value: &Value) -> bool {
 }
 
 pub(crate) fn trusted_event(label: &str, value: &Value) {
-    emit_event(label, value, true, None);
+    emit_event(label, value, EventOrigin::Control, Default::default());
 }
 
 /// The metadata is supplied by native code, never recovered from event JSON.
-pub(crate) fn scoped_event(
+pub(crate) fn scoped_event(label: &str, value: &Value, source: crate::runtime::call_scope::Source) {
+    emit_event(label, value, EventOrigin::Native, source.display());
+}
+
+/// The attach reader supplies projection metadata from its private envelope.
+pub(crate) fn replay_event(
     label: &str,
     value: &Value,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::DisplaySource,
 ) {
-    if !reserved_control_event(value) {
-        emit_event(label, value, false, scope);
-    }
+    emit_event(label, value, EventOrigin::Replay, source);
+}
+
+#[derive(Clone, Copy)]
+enum EventOrigin {
+    Native,
+    Control,
+    Replay,
 }
 
 fn emit_event(
     label: &str,
     value: &Value,
-    trusted_control: bool,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    origin: EventOrigin,
+    source: crate::runtime::call_scope::DisplaySource,
 ) {
+    let trusted_control = matches!(origin, EventOrigin::Control);
+    if !trusted_control && reserved_control_event(value) {
+        return;
+    }
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
     }
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
-    crate::session::attach::record_event(label, value);
+    if !matches!(origin, EventOrigin::Replay) {
+        crate::session::attach::record_event(label, value, source.history.local_id());
+    }
     let dashboard = super::terminal::active();
     let width = terminal_width();
     let mut bytes = Vec::new();
@@ -324,7 +324,7 @@ fn emit_event(
             .then(|| renderer.panel_snapshot(Instant::now()));
         (snapshot, renderer.auth_diagnostics.take_updates())
     };
-    publish_event(label, value, &bytes, snapshot, scope);
+    publish_event(label, value, &bytes, snapshot, source);
     super::terminal::diagnostics(&diagnostics);
 }
 
@@ -392,9 +392,9 @@ fn publish_event(
     value: &Value,
     bytes: &[u8],
     snapshot: Option<PanelSnapshot>,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::DisplaySource,
 ) {
-    if !super::terminal::log_event(label, value, bytes, scope) && !bytes.is_empty() {
+    if !super::terminal::log_event(label, value, bytes, source) && !bytes.is_empty() {
         let mut out = io::stderr().lock();
         let _ = out.write_all(bytes);
         let _ = out.flush();
@@ -413,6 +413,17 @@ fn publish(bytes: &[u8], snapshot: Option<PanelSnapshot>) {
     if let Some(snapshot) = snapshot {
         super::terminal::set_panel(snapshot);
     }
+}
+
+#[cfg(test)]
+pub(super) fn render_event_for_test(
+    label: &str,
+    value: &Value,
+    width: usize,
+) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    Renderer::new(false, false, width).event(&mut output, label, value)?;
+    Ok(output)
 }
 
 #[derive(Default)]
@@ -2590,6 +2601,56 @@ fn debug_metadata(value: &Value) -> Value {
 /// A bounded description, never a giant JSON dump in the default transcript.
 fn command_label(command: &Value) -> String {
     command::Command::new(command).summary()
+}
+
+/// Retain a redacted display copy even when concise logs omit inline source.
+/// Native argv is never modified or executed by this presentation helper.
+pub(crate) fn interactive_command_source(event: &Value) -> Option<String> {
+    let rpc = event.get("request").unwrap_or(event);
+    let value = if matches!(
+        event["type"].as_str(),
+        Some("exec.started" | "ssmcp.exec.started")
+    ) {
+        event.get("command")?
+    } else if rpc["method"] == "command/exec" {
+        let params = &rpc["params"];
+        let params = params.get("arguments").unwrap_or(params);
+        params.get("command").or_else(|| params.get("cmd"))?
+    } else {
+        return None;
+    };
+    if !value.is_string() && !value.is_array() {
+        return None;
+    }
+    let redacted = crate::audit::event(serde_json::json!({"command":value}));
+    let command = command::Command::new(&redacted["command"]);
+    let mut source = format!("cmd={}\n", command_source_literal(&command.invocation));
+    if let Some(script) = command.script {
+        let lines = script.split('\n').collect::<Vec<_>>();
+        source.push_str(&format!("script · {} lines\n", lines.len()));
+        for (index, line) in lines.iter().enumerate() {
+            source.push_str(&format!(
+                "{} │ {}\n",
+                index + 1,
+                command_source_literal(line)
+            ));
+        }
+    }
+    Some(source)
+}
+
+/// Commands may contain terminal controls as literal argv bytes. Show those
+/// controls visibly; never let them change a source line, color or output tag.
+fn command_source_literal(text: &str) -> String {
+    let mut literal = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_control() {
+            literal.extend(ch.escape_default());
+        } else {
+            literal.push(ch);
+        }
+    }
+    literal
 }
 
 fn json_record(text: &str) -> bool {

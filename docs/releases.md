@@ -212,6 +212,7 @@ Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`�
 | --- | --- |
 | zplugin-macros → zplugin → zharness | 独立仓库发布；SSMCP 的发布预检要求使用的 zplugin、zharness 精确版本已存在且未撤回 |
 | ztuio → ssmcp | ztuio 由独立仓库发布；应用预检要求精确版本存在且未撤回，应用工作流只上传 ssmcp |
+| zuse-computer → ssmcp | 桌面引擎由独立仓库发布；当前精确依赖为 0.2.2，应用预检同样要求版本存在且未撤回，并核对固定子模块与锁文件；SSMCP 工作流不重新发布该依赖 |
 
 独立库的 registry 版本应对应其仓库的固定源码，SSMCP 不从消费方仓库重新发布依赖。应用源码包通过实际 registry 依赖打包验证；已发布应用的摘要必须与验证包一致，冲突时停止。
 
@@ -237,4 +238,4 @@ GitHub Release 先创建或找回 draft，上传完整附件并检查大小、�
 | crates 包已发布 | crates.io 精确版本、未撤回状态与匹配 checksum |
 | 已安装或已部署 | 目标机器上的安装/服务版本与独立回执 |
 
-发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。当前工作流不会自动把制品部署到生产 relay，也不会因为推送源码就声称用户客户端已更新。
+发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。0.10.15–0.10.21 在当前工作流的 deferred_versions 中，正式发布仍保留预编译归档和包发布，但不会自动部署生产 relay。其他版本是否部署取决于工作流的部署策略与 deploy_server 输入；维护者应核对当次 validate 输出。发布、服务端部署和客户端安装分别记录结果，源码推送不代表服务或用户客户端已更新。

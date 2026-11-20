@@ -136,7 +136,7 @@ impl Completion {
 }
 
 struct RequestScope {
-    native_call: Option<Arc<super::call_scope::CallScope>>,
+    source: super::call_scope::Source,
     harness: Option<HarnessCall>,
     request_id: Option<String>,
 }
@@ -144,7 +144,7 @@ struct RequestScope {
 impl RequestScope {
     fn capture() -> Self {
         Self {
-            native_call: super::call_scope::current(),
+            source: super::call_scope::Source::capture(),
             harness: HarnessCall::current(),
             request_id: crate::observability::REQUEST_ID.try_with(Clone::clone).ok(),
         }
@@ -158,15 +158,9 @@ impl RequestScope {
                 future.await
             }
         };
-        // The executor is a different thread/LocalSet. This Rust-only Arc is
-        // captured from the validated caller; it never enters plugin ABI JSON.
-        let attributed = async {
-            if let Some(scope) = &self.native_call {
-                scope.scope(observed).await
-            } else {
-                observed.await
-            }
-        };
+        // The executor is a different thread/LocalSet. The authenticated caller
+        // and local history are retained in Rust and never enter plugin ABI JSON.
+        let attributed = self.source.clone().scope(observed);
         if let Some(request_id) = &self.request_id {
             crate::observability::REQUEST_ID
                 .scope(request_id.clone(), attributed)

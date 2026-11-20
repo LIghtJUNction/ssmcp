@@ -34,7 +34,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from e2e_account_relay import IDENTITY, wait_for
-from e2e_composer import Composer, ENTER, LEFT, UP, input_text, visible_record
+from e2e_composer import Composer, ENTER, LEFT, UP, editing_queue, input_text, visible_record
 from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import Decoder, Frontend, sha256, text
 
@@ -332,7 +332,7 @@ class RelayComposer(Composer):
 
         editable = self.submit(front, "RELAY_COMPOSER_EDIT_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: "Edit queue" in text(shot)
+        front.until(lambda shot: editing_queue(shot, "next caller")
                                  and editable["text"] in input_text(shot),
                     "server-confirmed relay takeback before editing")
         self.check(self.record(self.queue(), message_id=editable["id"])["status"] == "editing",
@@ -340,8 +340,7 @@ class RelayComposer(Composer):
         self.check(not self.messages(self.work()), "an editing relay requirement is withheld at the actual response boundary")
         revised = "RELAY_COMPOSER_EDIT_REVISED 界"
         front.send(b"\x01\x0b" + revised.encode() + ENTER)
-        front.until(lambda shot: "Queued · delivered" in shot["rows"][-1],
-                    "acceptance of the revised relay draft")
+        self.wait_submitted(front, revised)
         self.activate_column(front, "queue")
         front.until(lambda shot: visible_record(shot, revised, "queued", editable["id"]),
                     "revised relay requirement acknowledged under the same identity")

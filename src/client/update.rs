@@ -1,4 +1,6 @@
 //! Explicit self-update through the bundled, checksum-verifying installers.
+mod notice;
+pub(super) use notice::{ConnectionVersions, report_connection};
 use std::{
     cmp::Ordering,
     ffi::OsString,
@@ -42,26 +44,10 @@ struct Version([u64; 3]);
 
 impl Version {
     fn parse(value: &str) -> crate::Result<Self> {
-        let mut parts = value.strip_prefix('v').unwrap_or(value).split('.');
-        let mut numbers = [0; 3];
-        for number in &mut numbers {
-            let part = parts
-                .next()
-                .ok_or("release version must be MAJOR.MINOR.PATCH")?;
-            if part.is_empty()
-                || !part.bytes().all(|b| b.is_ascii_digit())
-                || (part.len() > 1 && part.starts_with('0'))
-            {
-                return Err("release version must be stable MAJOR.MINOR.PATCH".into());
-            }
-            *number = part
-                .parse()
-                .map_err(|_| "release version number is too large")?;
-        }
-        if parts.next().is_some() {
-            return Err("release version must be MAJOR.MINOR.PATCH".into());
-        }
-        Ok(Self(numbers))
+        let version = crate::wire::versions::Version::parse(value)
+            .filter(|version| version.stable() && !value.contains('+'))
+            .ok_or("release version must be stable MAJOR.MINOR.PATCH")?;
+        Ok(Self(version.core))
     }
     fn tag(self) -> String {
         format!("v{}.{}.{}", self.0[0], self.0[1], self.0[2])

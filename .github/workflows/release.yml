@@ -104,8 +104,11 @@ jobs:
           deferred_versions = {
               "0.10.15": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
               "0.10.16": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+              "0.10.17": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+              "0.10.18": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
               "0.10.19": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
               "0.10.20": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+              "0.10.21": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
           }
           deferred = deferred_versions.get(version)
           deploy = "true" if publish == "true" and requested and deferred is None else "false"
@@ -359,6 +362,9 @@ jobs:
   publish_release:
     needs: [validate, finalize]
     if: needs.validate.outputs.publish == 'true'
+    concurrency:
+      group: github-release-publication
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

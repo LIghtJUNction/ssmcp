@@ -147,7 +147,7 @@ impl Process {
         });
         Ok(backend)
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_exec_projection(
         &self,
     ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {
@@ -391,7 +391,7 @@ impl Process {
                 .call_scoped(
                     &native_name,
                     arguments,
-                    crate::runtime::call_scope::current(),
+                    crate::runtime::call_scope::current_source(),
                 )
                 .await
                 .map(result),

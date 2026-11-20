@@ -38,6 +38,10 @@ struct Request {
     kind: Kind,
     #[serde(default)]
     idempotency_key: Option<String>,
+    #[serde(skip)]
+    scope: Option<String>,
+    #[serde(skip)]
+    owner: Option<super::history::HistoryOwner>,
 }
 fn parse(arguments: Value) -> Result<Request, String> {
     let request: Request = serde_json::from_value(arguments)
@@ -79,9 +83,13 @@ struct Receipt {
     id: String,
     kind: Kind,
     history_saved: bool,
+    shown: bool,
+    finish_request_id: Option<String>,
 }
 struct Deduplication {
     key: String,
+    scope: Option<String>,
+    owner: Option<super::history::HistoryOwner>,
     fingerprint: [u8; 32],
     receipt: Receipt,
 }
@@ -99,7 +107,9 @@ impl Cache {
         let Some(key) = &request.idempotency_key else {
             return Ok(None);
         };
-        let Some(previous) = self.receipts.iter().find(|entry| entry.key == *key) else {
+        let Some(previous) = self.receipts.iter().find(|entry| {
+            entry.key == *key && entry.scope == request.scope && entry.owner == request.owner
+        }) else {
             return Ok(None);
         };
         if previous.fingerprint != fingerprint(request, presentation) {
@@ -124,6 +134,8 @@ impl Cache {
         }
         self.receipts.push_back(Deduplication {
             key: key.clone(),
+            scope: request.scope.clone(),
+            owner: request.owner.clone(),
             fingerprint: fingerprint(request, presentation),
             receipt,
         });
@@ -143,11 +155,12 @@ fn cache() -> &'static Mutex<Cache> {
 
 fn response(receipt: &Receipt, duplicate: bool) -> Value {
     json!({
-        "shown":true, "accepted":true, "message_id":receipt.id,
+        "shown":receipt.shown, "accepted":true, "message_id":receipt.id,
         "kind":receipt.kind, "duplicate":duplicate,
         "history_saved":receipt.history_saved,
+        "finish_request_id":receipt.finish_request_id,
         "terminal_active":crate::client::terminal::active(),
-        "note":"Accepted for local display; this does not prove the user read it."
+        "note":if receipt.shown {"Accepted for local display; this does not prove the user read it."} else {"Saved to the original local conversation, which is not currently selected."}
     })
 }
 
@@ -168,7 +181,13 @@ fn send_with_presentation(
     arguments: Value,
     presentation: Option<Presentation>,
 ) -> Result<Value, String> {
-    let request = parse(arguments)?;
+    let mut request = parse(arguments)?;
+    request.scope = super::questions::message_scope();
+    let source = crate::runtime::call_scope::Source::capture();
+    request.owner = Some(source.require_owner()?.clone());
+    if request.kind == Kind::Answer && request.scope.is_none() {
+        return Err("finish_thread_required: bind a verified collab agent and obtain request_finish approval before an explicit final reply".into());
+    }
     let previous = cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -177,20 +196,26 @@ fn send_with_presentation(
         return Ok(response(&receipt, true));
     }
     let id = message_id()?;
-    let saved = match presentation.as_ref() {
-        Some(document) => crate::client::render::presentation_identified(
-            &request.text,
-            request.kind,
-            &id,
-            document,
-        ),
-        None => crate::client::render::message_identified(&request.text, request.kind, &id),
+    // The local queue lock linearizes this one-use completion with new input.
+    // A duplicate receipt above does not consume a second approval.
+    let finish_request_id = if request.kind == Kind::Answer {
+        Some(super::questions::authorize_completion()?)
+    } else {
+        None
     };
-    let history_saved = saved.is_ok();
+    let shown = crate::client::render::agent_message(
+        &request.text,
+        request.kind,
+        Some(&id),
+        presentation.as_ref(),
+        source,
+    )?;
     let receipt = Receipt {
         id,
         kind: request.kind,
-        history_saved,
+        history_saved: true,
+        shown,
+        finish_request_id,
     };
     cache().lock().unwrap_or_else(|e| e.into_inner()).remember(
         &request,
@@ -223,7 +248,7 @@ pub(super) fn restore_copy(messages: &[super::history::Message]) {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.message",
-        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. The message uses the same JSONL conversation history as /resume; no second message history is created. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text and kind within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
+        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Explicit answer requires a verified thread and one approved request_finish decision; it consumes that approval once. Progress does not require completion approval. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text and kind within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
         "inputSchema":{
             "type":"object","required":["text"],"additionalProperties":false,
             "properties":{
@@ -248,6 +273,8 @@ mod tests {
             id: format!("message_{index:032x}"),
             kind: Kind::Answer,
             history_saved: true,
+            shown: true,
+            finish_request_id: None,
         }
     }
     #[test]
@@ -285,6 +312,20 @@ mod tests {
                 .is_err()
         );
         assert_eq!(cache.receipts.len(), 1);
+    }
+
+    #[test]
+    fn final_reply_retry_receipts_cannot_be_borrowed_by_another_thread() {
+        let mut cache = Cache::default();
+        let mut first = request("Verified final result", "answer", "same-key");
+        first.scope = Some("connection:room:github:42:thread-a".into());
+        cache.remember(&first, receipt(1), None);
+        let mut other = request("Verified final result", "answer", "same-key");
+        other.scope = Some("connection:room:github:42:thread-b".into());
+        assert!(cache.previous(&other, None).unwrap().is_none());
+        assert_eq!(cache.previous(&first, None).unwrap(), Some(receipt(1)));
+        other.scope = None;
+        assert!(cache.previous(&other, None).unwrap().is_none());
     }
     #[test]
     fn identical_plain_text_with_different_layout_is_not_an_idempotent_retry() {

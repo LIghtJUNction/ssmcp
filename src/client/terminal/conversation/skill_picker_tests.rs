@@ -202,7 +202,7 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         assert_eq!(references[0]["path"], ".agents/skills/chosen/SKILL.md");
         assert!(!expanded.contains("unselected"));
         assert!(!expanded.contains("Private instructions"));
-        let prepared = steering::prepare_publish(id, expanded.clone())
+        let prepared = steering::prepare_publish(id, expanded.clone().into())
             .unwrap()
             .unwrap();
         assert!(steering::sent(id));
@@ -241,6 +241,69 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
             transport.try_recv().is_err(),
             "the picker did not create a second request"
         );
+        state.chat_updates();
+        assert!(state.conversation.submitting.is_none());
+        fs::write("notes.txt", "Existing file preview.").unwrap();
+        let draft = "请检查 @notes.txt，@\"新 文件.rs\"，按 $chosen 和 $missing 完成";
+        state.keyboard(draft.as_bytes(), Instant::now(), false);
+        assert_eq!(state.conversation.composer.text(), draft);
+        state.keyboard(b"\r", Instant::now(), false);
+        assert!(state.conversation.composer.text().is_empty());
+        let Some(steering::Transport::Wire { id }) = transport.recv().await else {
+            panic!("missing references still publish the complete request");
+        };
+        let Some(SteeringCommand::Publish { text, .. }) = steering::pending_command(id) else {
+            panic!("the missing-reference request must be publishable");
+        };
+        assert_eq!(text, draft);
+        let expanded = runtime.expand_references(&text).await.unwrap();
+        assert_eq!(references::source(&expanded), draft);
+        assert_eq!(references::warnings(&expanded).len(), 2);
+        assert!(expanded.contains("Existing file preview."));
+        let prepared = steering::prepare_publish(id, expanded.clone().into())
+            .unwrap()
+            .unwrap();
+        assert!(steering::sent(id));
+        let acknowledged = queue.command(ROOM, vec![], prepared).unwrap();
+        steering::reply(id, Ok(acknowledged)).unwrap();
+        state.chat_updates();
+        assert!(state.conversation.submitting.is_none());
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("Queued · reference notice:")
+        );
+        assert!(state.conversation.composer.text().is_empty());
+
+        let delivered = queue.claim(
+            ROOM,
+            "missing-reference-run",
+            None,
+            crate::steering::MAX_DELIVERY_MESSAGES,
+            crate::steering::MAX_DELIVERY_BYTES,
+        );
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0]["text"], expanded);
+        assert_eq!(delivered[0]["source"], "client_user");
+        assert_eq!(
+            references::source(delivered[0]["text"].as_str().unwrap()),
+            draft
+        );
+        assert!(
+            queue
+                .claim(
+                    ROOM,
+                    "missing-reference-repeat",
+                    None,
+                    crate::steering::MAX_DELIVERY_MESSAGES,
+                    crate::steering::MAX_DELIVERY_BYTES,
+                )
+                .is_empty()
+        );
+        assert!(transport.try_recv().is_err());
+
         steering::disconnect();
         runtime.shutdown().await;
     });

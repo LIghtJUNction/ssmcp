@@ -1,14 +1,15 @@
-//! Collaboration uses authenticated HTTP without native calls or code_mode workers.
+//! Collaboration runs in the broker without code_mode workers.
+//! Authenticated response finalization may make a read-only native question probe.
 #![cfg(target_os = "linux")]
 
 use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,
-    wire::{self, ClientMetadata, Frame, Mode},
+    wire::{self, ClientMetadata, Frame, Mode, Operation},
 };
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -32,7 +33,8 @@ struct Server {
     owner: String,
     task: JoinHandle<()>,
     clients: Vec<Client>,
-    native_calls: Arc<AtomicUsize>,
+    question_probes: Arc<Mutex<Vec<String>>>,
+    unexpected_native_calls: Arc<Mutex<Vec<Operation>>>,
     rpc_id: AtomicUsize,
 }
 impl Server {
@@ -53,7 +55,8 @@ impl Server {
             owner: String::new(),
             task,
             clients: Vec::new(),
-            native_calls: Arc::new(AtomicUsize::new(0)),
+            question_probes: Arc::new(Mutex::new(Vec::new())),
+            unexpected_native_calls: Arc::new(Mutex::new(Vec::new())),
             rpc_id: AtomicUsize::new(1),
         }
     }
@@ -89,20 +92,32 @@ impl Server {
         };
         self.owner = url.rsplit('/').next().unwrap().into();
         let token = self.oauth_login(&url, &login_code).await;
-        let calls = self.native_calls.clone();
+        let question_probes = self.question_probes.clone();
+        let unexpected_native_calls = self.unexpected_native_calls.clone();
+        let native_client_id = client_id.clone();
         let task = tokio::spawn(async move {
             while let Ok(Some(frame)) = wire::read_frame(&mut reader).await {
-                if let Frame::Call { id, .. } = frame {
-                    calls.fetch_add(1, Ordering::Relaxed);
-                    if wire::write_frame(
-                        &mut writer,
-                        &Frame::Reply {
-                            id,
-                            result: Err("collaboration must remain in the broker".into()),
-                        },
-                    )
-                    .await
-                    .is_err()
+                if let Frame::Call { id, operation, .. } = frame {
+                    let result = match operation {
+                        Operation::CallTool { name, arguments }
+                            if name == "ssmcp.ui.question_delivery" && arguments == json!({}) =>
+                        {
+                            question_probes
+                                .lock()
+                                .unwrap()
+                                .push(native_client_id.clone());
+                            // This legacy socket fixture has no authenticated native
+                            // question store. A read-only probe must not block collab.
+                            Err("typed question delivery is unavailable in this fixture".into())
+                        }
+                        operation => {
+                            unexpected_native_calls.lock().unwrap().push(operation);
+                            Err("collaboration must remain in the broker".into())
+                        }
+                    };
+                    if wire::write_frame(&mut writer, &Frame::Reply { id, result })
+                        .await
+                        .is_err()
                     {
                         break;
                     }
@@ -251,6 +266,29 @@ impl Server {
         assert_eq!(body["result"]["isError"], true, "{body}");
         assert!(body["result"]["structuredContent"]["messages"].is_null());
     }
+    async fn rejected_without_native_calls(&self, issuer: usize, action: &str, arguments: Value) {
+        let probes_before = self.question_probes.lock().unwrap().len();
+        self.rejected(issuer, action, arguments).await;
+        assert_eq!(
+            self.question_probes.lock().unwrap().len(),
+            probes_before,
+            "invalid credentials must not trigger even a read-only native probe"
+        );
+        self.assert_no_unexpected_native_calls();
+    }
+    fn assert_no_unexpected_native_calls(&self) {
+        let calls = self.unexpected_native_calls.lock().unwrap();
+        assert!(calls.is_empty(), "unexpected native operations: {calls:?}");
+    }
+    fn assert_native_calls(&self, client_id: &str, expected_probes: usize) {
+        self.assert_no_unexpected_native_calls();
+        let probes = self.question_probes.lock().unwrap();
+        assert_eq!(probes.len(), expected_probes, "question probes: {probes:?}");
+        assert!(
+            probes.iter().all(|target| target == client_id),
+            "question probe reached another client: {probes:?}"
+        );
+    }
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -364,11 +402,15 @@ async fn members_exchange_private_and_broadcast_messages_with_ack_and_retry() {
 
     let mut invalid = credentials(&room, &b);
     invalid["token"] = json!("0".repeat(64));
-    server.rejected(0, "receive", invalid).await;
-    // The second OAuth grant has the same Linux endpoint but a different owner.
-    server.rejected(1, "receive", credentials(&room, &b)).await;
     server
-        .rejected(0, "receive", credentials(&other_room, &b))
+        .rejected_without_native_calls(0, "receive", invalid)
+        .await;
+    // The second OAuth grant has the same Linux endpoint but a different owner.
+    server
+        .rejected_without_native_calls(1, "receive", credentials(&room, &b))
+        .await;
+    server
+        .rejected_without_native_calls(0, "receive", credentials(&other_room, &b))
         .await;
 
     let mut ack = credentials(&room, &b);
@@ -411,7 +453,9 @@ async fn members_exchange_private_and_broadcast_messages_with_ack_and_retry() {
         json!([])
     );
     server.call("leave", credentials(&room, &c)).await;
-    server.rejected(0, "receive", credentials(&room, &c)).await;
+    server
+        .rejected_without_native_calls(0, "receive", credentials(&room, &c))
+        .await;
     assert_eq!(
         server.call("list", json!({"client_id":room})).await["agents"]
             .as_array()
@@ -419,7 +463,9 @@ async fn members_exchange_private_and_broadcast_messages_with_ack_and_retry() {
             .len(),
         2
     );
-    assert_eq!(server.native_calls.load(Ordering::Relaxed), 0);
+    // Seventeen successful bound actions and the authenticated idempotency
+    // conflict may probe. Leaving retires the binding before finalization.
+    server.assert_native_calls(&room, 18);
 }
 
 #[tokio::test]
@@ -465,7 +511,8 @@ async fn five_waiting_agents_do_not_block_a_sender() {
         assert_eq!(inbox["messages"][0]["message_id"], sent["message_id"]);
         assert_eq!(inbox["messages"][0]["payload"], "wake every receiver");
     }
-    assert_eq!(server.native_calls.load(Ordering::Relaxed), 0);
+    // One sender and five receivers finalize independently of code_mode workers.
+    server.assert_native_calls(&room, 6);
 }
 
 #[tokio::test]
@@ -494,5 +541,5 @@ async fn disconnect_all_ends_waiting_receivers_and_revokes_old_room_access() {
     assert!(body["result"]["structuredContent"]["messages"].is_null());
     let (status, _) = server.raw(0, "list", json!({"client_id":room})).await;
     assert_eq!(status, 401);
-    assert_eq!(server.native_calls.load(Ordering::Relaxed), 0);
+    server.assert_native_calls(&room, 0);
 }

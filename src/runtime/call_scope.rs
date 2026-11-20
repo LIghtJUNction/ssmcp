@@ -2,7 +2,10 @@
 //!
 //! This is an in-process capability, never deserialized from tool arguments.
 //! Run IDs correlate presentation; they do not grant access to any resource.
-use crate::wire::{CodeContext, ControlAttribution};
+use crate::{
+    client::interface::history::{self, HistoryId, HistoryOwner},
+    wire::{CodeContext, ControlAttribution},
+};
 use std::{
     future::Future,
     sync::{
@@ -14,7 +17,7 @@ use std::{
 static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
 
 tokio::task_local! {
-    static CURRENT: Option<Arc<CallScope>>;
+    static CURRENT: Source;
 }
 
 #[derive(Debug)]
@@ -24,6 +27,7 @@ pub(crate) struct CallScope {
     run_id: Option<String>,
     attribution: Option<ControlAttribution>,
     thread: Option<ThreadScope>,
+    history: Option<Result<HistoryOwner, String>>,
 }
 
 /// Accepted only from the relay's verified participant binding, never tool JSON.
@@ -78,13 +82,16 @@ impl CallScope {
                 })
             })
             .transpose()?;
-        Ok(Arc::new(Self {
+        let mut scope = Self {
             connection,
             request_id,
             run_id: context.map(|context| context.run_id.clone()),
             attribution: attribution.cloned(),
             thread,
-        }))
+            history: None,
+        };
+        scope.history = Some(history::capture(Some(&scope)));
+        Ok(Arc::new(scope))
     }
 
     pub(crate) fn connection(&self) -> u64 {
@@ -118,18 +125,105 @@ impl CallScope {
     /// Tokio does not inherit this scope across spawn/spawn_blocking. A native
     /// owner must explicitly retain this Arc for work that outlives its call.
     pub(crate) async fn scope<F: Future>(self: &Arc<Self>, future: F) -> F::Output {
-        CURRENT.scope(Some(self.clone()), future).await
+        Source {
+            call: Some(self.clone()),
+            history: self.history.clone(),
+        }
+        .scope(future)
+        .await
     }
 }
 
-/// Preserve a captured native call across a known blocking worker boundary.
-/// An absent capture deliberately does not inherit any ambient source.
-pub(crate) fn blocking<F: FnOnce() -> R, R>(scope: Option<Arc<CallScope>>, work: F) -> R {
-    CURRENT.sync_scope(scope, work)
+/// Retained event provenance. Local ownership and authenticated creator are independent.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Source {
+    pub(crate) call: Option<Arc<CallScope>>,
+    history: Option<Result<HistoryOwner, String>>,
+}
+
+impl Source {
+    /// New work inherits any explicit context, including an unowned context.
+    pub(crate) fn capture() -> Self {
+        CURRENT.try_with(Clone::clone).unwrap_or_else(|_| Self {
+            call: None,
+            history: Some(history::capture(None)),
+        })
+    }
+
+    pub(crate) fn owner(&self) -> Option<&HistoryOwner> {
+        self.history.as_ref()?.as_ref().ok()
+    }
+
+    pub(crate) fn display(&self) -> DisplaySource {
+        DisplaySource {
+            call: self.call.clone(),
+            history: self.owner().map_or(DisplayHistory::Global, |owner| {
+                DisplayHistory::Local(owner.display_id())
+            }),
+        }
+    }
+
+    pub(crate) fn require_owner(&self) -> Result<&HistoryOwner, String> {
+        self.history
+            .as_ref()
+            .ok_or_else(|| "history_owner_missing: no local history was captured".to_owned())?
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    pub(crate) async fn scope<F: Future>(self, future: F) -> F::Output {
+        CURRENT.scope(self, future).await
+    }
+
+    pub(crate) fn blocking<F: FnOnce() -> R, R>(self, work: F) -> R {
+        CURRENT.sync_scope(self, work)
+    }
+}
+
+/// Display routing for a local conversation, global activity or legacy attach replay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DisplayHistory {
+    #[default]
+    NoSelection,
+    Local(HistoryId),
+    LegacyAttach,
+    Global,
+}
+
+impl DisplayHistory {
+    pub(crate) fn local_id(&self) -> Option<&HistoryId> {
+        match self {
+            Self::Local(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// Local display provenance. Attach replay does not recreate a call scope.
+#[derive(Clone)]
+pub(crate) struct DisplaySource {
+    pub(crate) call: Option<Arc<CallScope>>,
+    pub(crate) history: DisplayHistory,
+}
+
+impl Default for DisplaySource {
+    fn default() -> Self {
+        Self {
+            call: None,
+            history: DisplayHistory::Global,
+        }
+    }
+}
+
+pub(crate) fn current_source() -> Source {
+    CURRENT.try_with(Clone::clone).unwrap_or_default()
 }
 
 pub(crate) fn current() -> Option<Arc<CallScope>> {
-    CURRENT.try_with(Clone::clone).ok().flatten()
+    CURRENT
+        .try_with(|source| source.call.clone())
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -195,7 +289,7 @@ mod tests {
                         .await
                         .unwrap()
                 );
-                blocking(None, || assert!(current().is_none()));
+                Source::default().blocking(|| assert!(current().is_none()));
                 assert!(current().is_some());
                 let retained = current().unwrap();
                 let inherited = tokio::spawn(async move {

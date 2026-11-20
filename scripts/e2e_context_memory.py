@@ -168,12 +168,15 @@ try {
                    and Path(initial["workspace"]["path"]) == self.workspace.resolve(),
                    "context is initialized in the exact startup workspace")
 
+        # The source is historical assistant context, not a final-answer request.
+        # Keep the JSONL identity/digest and retry checks independent of completion grants.
         source_text = "CONTEXT_SOURCE: implement the native conversation and preserve Unicode 界面."
         _, answer = self.native("ssmcp.ui.message", {
-            "text": source_text, "kind": "answer", "idempotency_key": "context_source",
+            "text": source_text, "kind": "progress", "idempotency_key": "context_source",
         })
         receipt = answer["structuredContent"]
         self.check(not answer.get("isError") and receipt["accepted"] is True
+                   and receipt["kind"] == "progress"
                    and receipt["history_saved"] is True and receipt["duplicate"] is False,
                    "a real assistant message enters the shared durable conversation through its native tool")
         sessions = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
@@ -194,7 +197,7 @@ try {
                    "assistant context carries the actual JSONL conversation, message identity and text digest")
         count = len(captured["recent"])
         self.native("ssmcp.ui.message", {
-            "text": source_text, "kind": "answer", "idempotency_key": "context_source",
+            "text": source_text, "kind": "progress", "idempotency_key": "context_source",
         })
         self.check(len(self.current()["recent"]) == count and history_path.read_bytes() == source_journal,
                    "idempotent message retry duplicates neither the context source nor its shared JSONL")

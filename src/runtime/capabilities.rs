@@ -218,7 +218,7 @@ fn native_limits() -> Value {
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
             "audit_source_max_bytes":65536,
-            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.history","ssmcp.ui.harness"],
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.answer","ssmcp.ui.finish","ssmcp.ui.question_ack","ssmcp.ui.question_delivery","ssmcp.ui.history","ssmcp.ui.history_archive","ssmcp.ui.history_update","ssmcp.ui.harness"],
             "get_projection_max_bytes":8192,
             "queue_message_max_bytes":crate::wire::MAX_USER_MESSAGE_BYTES,
             "queue_pending_max":crate::wire::MAX_USER_MESSAGES,
@@ -529,7 +529,7 @@ terminal, file and output calls retain their normal delivery behavior. Source au
 native queries. Queue and source lifecycle support require the current wire protocol v7; other wire versions are rejected.\n\n\
 To communicate in the user's ssmcp terminal, call(clientId,'ssmcp.ui.message',{text}) with your Markdown reply; \
 the client renders it locally and records the assistant message. Use ssmcp.ui.ask for a nonblocking question, \
-then ssmcp.ui.questions to retrieve its answer; the user opens the queue with Shift+Up. Do not wait inside \
+receive typed question_answers on the next verified native call, or read without consuming via ssmcp.ui.questions; the user opens the queue with Shift+Up. Before an explicit final answer, use public request_finish with a reason and verified thread; pending timeout never approves. Do not wait inside \
 code_mode or fabricate an answer. ssmcp.ui.history lists or reads versioned JSONL conversations; /resume \
 continues one locally without replaying tools or restoring a remote model thread. The composer accepts \
 @file and $skill references. Read images with ssmcp.fs.read_image, then image(result); do not print base64.\n\n\

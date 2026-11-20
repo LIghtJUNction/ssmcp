@@ -17,7 +17,7 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 
-const MAX_REQUEST: usize = 4096;
+const MAX_REQUEST: usize = 64 * 1024;
 const MAX_RESPONSE: usize = 256 * 1024;
 const MAX_CONNECTIONS: usize = 16;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
@@ -133,7 +133,7 @@ async fn request(hub: Arc<Hub>, mut stream: UnixStream, generation: u64) -> io::
     if length == 0 || length > MAX_REQUEST {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "listener request exceeds 4096 bytes",
+            "listener request exceeds 65536 bytes",
         ));
     }
     let mut bytes = vec![0; length];

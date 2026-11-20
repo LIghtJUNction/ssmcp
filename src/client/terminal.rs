@@ -22,6 +22,9 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
+pub(super) use conversation::reload_state::{
+    Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
+};
 mod events;
 mod footer;
 mod guide;
@@ -38,7 +41,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
+const COPY_HINT: &str = "Copy mode · drag then terminal Copy · Alt+C/F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
@@ -125,6 +128,7 @@ impl Session {
             state.account = AccountStatus::Loading;
         }
         state.graphics = images::Graphics::environment(&options);
+        state.chat_restore_reload_state();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -234,6 +238,11 @@ impl Drop for Session {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .chat_capture_reload_state();
         if let Some(global) = DISPLAY.get() {
             let mut global = global.lock().unwrap_or_else(|e| e.into_inner());
             if global
@@ -274,6 +283,16 @@ pub(super) fn begin_link_metrics(
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         state.link_metrics.begin(generation, client_id, status);
+        if generation > state.conversation.process_generation {
+            state.conversation.process_generation = generation;
+            state.conversation.process_id = if client_id.len() == 64
+                && client_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                client_id.into()
+            } else {
+                String::new()
+            };
+        }
         state.dirty = true;
     }
 }
@@ -286,6 +305,22 @@ pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::
             .unwrap_or_else(|error| error.into_inner());
         let changed = state.link_metrics.update(generation, status);
         state.dirty |= changed;
+    }
+}
+
+pub(super) fn set_connection_versions(versions: super::update::ConnectionVersions) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let notice = versions
+            .update_message()
+            .unwrap_or_else(|| versions.summary());
+        // Preserve a more urgent local recovery or authentication notice.
+        state.notice.get_or_insert(notice);
+        state.connection_versions = Some(versions);
+        state.dirty = true;
     }
 }
 
@@ -348,6 +383,17 @@ pub(super) fn invalidate() {
     }
 }
 
+pub(super) fn history_description_changed() {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.conversation.history_list_stale = true;
+        state.dirty = true;
+    }
+}
+
 pub(super) fn log_width() -> Option<usize> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
@@ -379,7 +425,7 @@ pub(super) fn log_event(
     label: &str,
     value: &serde_json::Value,
     bytes: &[u8],
-    scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::DisplaySource,
 ) -> bool {
     let Some(shared) = shared() else {
         return false;
@@ -388,8 +434,68 @@ pub(super) fn log_event(
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.log_scoped_event(label, value, bytes, scope);
+    state.log_scoped_event(label, value, bytes, source);
     true
+}
+
+/// A listener result is scoped output, not an agent finish decision or user input.
+/// Lock order is Terminal -> Hub -> History; publication cannot move to a new view.
+pub(crate) fn listener_result(
+    receipt: &super::interface::listener::ReplyReceipt,
+    label: &str,
+    source: &str,
+    text: &str,
+) -> bool {
+    let event = serde_json::json!({
+        "type":"ssmcp.message","role":"assistant","kind":"execution_result",
+        "author":label,"text":text,"source":"local_listener",
+        "message_id":receipt.message_id,"delivery_id":receipt.delivery_id,
+        "connection_id":receipt.connection_id,"conversation_id":receipt.conversation_id,
+        "execution_state":receipt.execution_state,"task_completion_approved":false,
+    });
+    let header = format!(
+        "\n[LISTENER] {label} · {}\n",
+        receipt.execution_state.as_str()
+    );
+    if let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bytes = header.into_bytes();
+        for row in markdown::rows(text, state.geometry.left.max(1), &state.ui) {
+            bytes.extend_from_slice(row.as_bytes());
+            bytes.push(b'\n');
+        }
+        bytes.push(b'\n');
+        state.sync_history_owner();
+        super::interface::listener::with_current_reply(receipt, || {
+            if !shared.alive.load(Ordering::Acquire) {
+                return false;
+            }
+            let history = super::interface::history::HistoryId::parse(&receipt.conversation_id);
+            state.chat_log_listener_result(
+                &receipt.connection_id,
+                &receipt.delivery_id,
+                source,
+                &event,
+                &bytes,
+                history,
+            );
+            super::interface::messages::remember_last(text);
+            true
+        })
+        .unwrap_or(false)
+    } else {
+        super::interface::listener::with_current_reply(receipt, || {
+            let mut output = io::stderr().lock();
+            let shown = write!(output, "{header}{text}\n\n")
+                .and_then(|()| output.flush())
+                .is_ok();
+            if shown {
+                super::interface::messages::remember_last(text);
+            }
+            shown
+        })
+        .unwrap_or(false)
+    }
 }
 
 /// The renderer releases its lock before publishing these display-only updates.
@@ -415,7 +521,7 @@ pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
 }
 
 /// Decode outside the State lock; preview failures do not alter native output.
-pub(crate) fn image(block: &serde_json::Value) {
+pub(crate) fn image(block: &serde_json::Value, source: crate::runtime::call_scope::DisplaySource) {
     let Some(shared) = shared() else {
         return;
     };
@@ -436,7 +542,12 @@ pub(crate) fn image(block: &serde_json::Value) {
         }
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.image(preview, block["mimeType"].as_str().unwrap_or("image"));
+    state.sync_history_owner();
+    state.image(
+        preview,
+        block["mimeType"].as_str().unwrap_or("image"),
+        Some(source),
+    );
 }
 
 /// Every PTY has its own parser, including terminals that are not on screen.
@@ -612,6 +723,27 @@ pub(crate) fn notice(message: &str) {
     }
 }
 
+pub(crate) fn follow_attach_history(selection: crate::runtime::call_scope::DisplayHistory) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.follow_attach_history(selection);
+    }
+}
+
+pub(crate) fn refresh_history_owner() {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.sync_history_owner();
+        state.dirty = true;
+    }
+}
+
 pub(crate) fn clear_logs() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -643,6 +775,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
+        "versions":state.connection_versions,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
@@ -916,6 +1049,16 @@ const KEYS: &[(&[u8], Key)] = &[
     (b"\x1b[57351;3u", Key::CanvasRight),
     (b"\x1b[1;2A", Key::Questions),
     (b"\x1b[18~", Key::Select),
+    (b"\x1bc", Key::Select),
+    (b"\x1bC", Key::Select),
+    (b"\x1b[99;3u", Key::Select),
+    (b"\x1b[67;3u", Key::Select),
+    (b"\x1b[99;4u", Key::Select),
+    (b"\x1b[67;4u", Key::Select),
+    (b"\x1b[27;3;99~", Key::Select),
+    (b"\x1b[27;3;67~", Key::Select),
+    (b"\x1b[27;4;99~", Key::Select),
+    (b"\x1b[27;4;67~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
     (b"\x1b[3~", Key::Delete),
     (b"\x1b[13;2u", Key::Newline),
@@ -1236,6 +1379,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     server_origin: Option<footer::Origin>,
+    connection_versions: Option<super::update::ConnectionVersions>,
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
@@ -1245,6 +1389,8 @@ struct State {
     geometry: Geometry,
     logs: vt100::Parser,
     events: events::EventView,
+    // Attached frontends can have an unknown history before the first page or with a legacy peer.
+    attached_history: Option<crate::runtime::call_scope::DisplayHistory>,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -1278,8 +1424,10 @@ impl State {
         let conversation = conversation::Conversation::default();
         let mut state = Self {
             events: events::EventView::new(),
+            attached_history: None,
             context_label: String::new(),
             server_origin: None,
+            connection_versions: None,
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
@@ -1420,19 +1568,40 @@ impl State {
         }
         replies
     }
-    fn image(&mut self, preview: images::Preview, mime: &str) {
+    fn image(
+        &mut self,
+        preview: images::Preview,
+        mime: &str,
+        source: Option<crate::runtime::call_scope::DisplaySource>,
+    ) {
         let text = format!(
             "\n[IMAGE] {} × {} · {}\n  Image attachment\n\n",
             preview.width, preview.height, mime
         );
-        self.log(text.as_bytes());
-        self.events.attach_image(preview);
+        self.events.ingest_image(text.as_bytes(), preview, source);
+        self.log_raw(text.as_bytes());
     }
 
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
         self.log_raw(bytes);
     }
+    fn follow_attach_history(&mut self, selection: crate::runtime::call_scope::DisplayHistory) {
+        if self.attached_history.as_ref() != Some(&selection) {
+            self.events.set_history_selection(selection.clone());
+            self.attached_history = Some(selection);
+            self.dirty = true;
+        }
+    }
+
+    fn sync_history_owner(&mut self) {
+        if !self.preview && self.attached_history.is_none() {
+            let owner = super::interface::history::current_owner();
+            self.events
+                .set_history_owner(owner.map(|owner| owner.display_id()));
+        }
+    }
+
     fn log_message(&mut self, role: &str, text: &str, bytes: &[u8]) {
         self.log_event(
             "message",
@@ -1440,7 +1609,17 @@ impl State {
             bytes,
         );
     }
+    fn log_identified_message(&mut self, id: &str, role: &str, text: &str, bytes: &[u8]) {
+        self.sync_history_owner();
+        self.events.ingest_identified_message(id, role, text, bytes);
+        self.log_raw(bytes);
+    }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
+        if !self.preview && self.attached_history.is_none() {
+            let owner = super::interface::history::capture(None).ok();
+            self.events
+                .set_history_owner(owner.map(|owner| owner.display_id()));
+        }
         self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
     }
@@ -1449,9 +1628,10 @@ impl State {
         label: &str,
         value: &serde_json::Value,
         bytes: &[u8],
-        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+        source: crate::runtime::call_scope::DisplaySource,
     ) {
-        self.events.ingest_scoped_event(label, value, bytes, scope);
+        self.sync_history_owner();
+        self.events.ingest_scoped_event(label, value, bytes, source);
         self.log_raw(bytes);
     }
     fn log_raw(&mut self, bytes: &[u8]) {
@@ -1901,6 +2081,16 @@ impl State {
     fn frame(&mut self, now: Instant) -> Frame {
         let mut frame = self.base_frame(now);
         self.sleep_overlay(&mut frame);
+        if !self.preview {
+            // This frame owns visibility, including transitions away from Chat.
+            // The manager hint is safe while the terminal State lock is held.
+            super::messaging::watch_recipients(
+                self.ui.layout == Layout::Chat
+                    && self.conversation.view == conversation::View::Agents
+                    && !self.help
+                    && !self.sleep.visible,
+            );
+        }
         frame
     }
 
@@ -2038,7 +2228,7 @@ impl State {
                 "F3         Show or hide the sidebar".into(),
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
-                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
+                "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
@@ -2981,7 +3171,7 @@ mod tests {
         );
         let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
         let rejected_id = rejected.native.as_ref().unwrap().id();
-        state.image(rejected, "image/png");
+        state.image(rejected, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -2989,7 +3179,7 @@ mod tests {
             "explicitly expand the compact image preview"
         );
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
-        state.image(retained, "image/png");
+        state.image(retained, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -3029,7 +3219,7 @@ mod tests {
         let next = images::decode(&block, state.graphics.prepare_native()).unwrap();
         assert!(next.native.is_some());
         let next_id = next.native.as_ref().unwrap().id();
-        state.image(next, "image/png");
+        state.image(next, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -3174,7 +3364,7 @@ mod tests {
             "data":STANDARD.encode(bytes.into_inner()),
         });
         let image = images::decode(&block, state.graphics.prepare_native()).unwrap();
-        state.image(image, "image/png");
+        state.image(image, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(

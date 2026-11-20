@@ -4,6 +4,15 @@
 use std::{io, path::Path};
 
 pub(crate) const MAX_PASTE_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const INLINE_PASTE_BYTES: usize = 4 * 1024;
+pub(crate) const FILE_PASTE_LINES: usize = 8;
+
+/// Keep short editing gestures inline, and share one policy across both input paths.
+/// The original text is not normalized before writing the private file.
+pub(crate) fn should_store(text: &str) -> bool {
+    text.len() > INLINE_PASTE_BYTES
+        || text.lines().take(FILE_PASTE_LINES).count() >= FILE_PASTE_LINES
+}
 /// Includes @ and quotes; callers can reserve draft space before creating a file.
 pub(crate) const REFERENCE_BYTES: usize = 3 + ".ssmcp/inputs/paste-".len() + 32 + ".txt".len();
 
@@ -209,6 +218,18 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn file_policy_uses_utf8_bytes_and_complete_logical_lines() {
+        assert!(!should_store(&"x".repeat(INLINE_PASTE_BYTES)));
+        assert!(should_store(&"x".repeat(INLINE_PASTE_BYTES + 1)));
+        assert!(!should_store(&"界".repeat(INLINE_PASTE_BYTES / 3)));
+        assert!(should_store(&"界".repeat(INLINE_PASTE_BYTES / 3 + 1)));
+        assert!(!should_store(&["short"; FILE_PASTE_LINES - 1].join("\n")));
+        assert!(should_store(&["short"; FILE_PASTE_LINES].join("\n")));
+        assert!(should_store(&["界"; FILE_PASTE_LINES].join("\r\n")));
+        assert!(!should_store("two\r\nlines\r\n"));
     }
 
     #[test]

@@ -80,6 +80,8 @@ class Presentations(InputHistory):
         self.binary_dir = Path(binary_dir).resolve()
         self.copied = self.directory / "copied.txt"
         self.snapshots = []
+        self.presenter = None
+        self.completion_requests = {}
 
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
@@ -107,14 +109,59 @@ class Presentations(InputHistory):
         )
         return path
 
+    def presenter_binding(self):
+        if self.presenter is None:
+            raise AssertionError("the real presenter must be registered before native publication")
+        return {"client_id": self.client_id, "id": self.presenter["agent_id"],
+                "token": self.presenter["token"]}
+
+    def approve_completion(self, key):
+        """Use the owned physical UI for Yes; do not consume queued work in a helper call."""
+        if key in self.completion_requests:
+            return self.completion_requests[key]
+        if not isinstance(key, str):
+            raise AssertionError("every final presentation fixture needs a stable retry key")
+        queue_before = [(row["id"], row["revision"], row["status"]) for row in self.queue()["queue"]]
+        binding = self.presenter_binding()
+        request = self.public_call("request_finish", {
+            "client_id": self.client_id, "reason": "Review presentation fixture " + key,
+            "timeout_ms": 1000, "idempotency_key": "finish_" + key,
+            "agent": {"id": binding["id"], "token": binding["token"]},
+        })
+        self.check(request["timed_out"] is True and request["approved"] is False
+                   and request["decision"] is None,
+                   "a new final presentation has no approval until the owned UI decides")
+        request_id = request["request_id"]
+        front = self.last_frontend
+        front.send(b"\x1b[1;2A")
+        self.wait_state(front, lambda state: state["view"] == "questions"
+                        and state["answering"] == request_id,
+                        "Shift+Up did not open this presentation's real finish request")
+        front.until(lambda shot: "● No" in text(shot),
+                    "the presentation finish request's explicit default No")
+        front.send(b"\x1b[C\r")
+        front.until(lambda shot: "Approved" in text(shot),
+                    "the owned UI explicitly choosing Yes and confirming it")
+        for _ in range(2):
+            front.send(b"\x1b")
+            front.pump(0.12)
+        self.wait_state(front, lambda state: state["view"] == "activity",
+                        "the presentation review did not return to the retained conversation")
+        queue_after = [(row["id"], row["revision"], row["status"]) for row in self.queue()["queue"]]
+        self.check(queue_after == queue_before,
+                   "finish approval leaves queued requirements for the actual final presentation call")
+        self.completion_requests[key] = request_id
+        return request_id
+
     def native(self, name, arguments):
         result = self.response("return await call(%s, %s, %s);" % (
             json.dumps(self.client_id), json.dumps(name), json.dumps(arguments),
-        ))
+        ), agent=self.presenter_binding())
         native = result["structuredContent"]["result"]
         return result, native
 
     def present(self, payload):
+        request_id = self.approve_completion(payload.get("idempotency_key"))
         result, native = self.native("ssmcp.ui.present", payload)
         if native.get("isError"):
             raise AssertionError(f"ui.present failed: {native}")
@@ -122,6 +169,7 @@ class Presentations(InputHistory):
         self.check(acknowledgement.get("accepted") is True
                    and isinstance(acknowledgement.get("message_id"), str)
                    and acknowledgement.get("kind") == "answer"
+                   and acknowledgement.get("finish_request_id") == request_id
                    and acknowledgement.get("history_saved") is True
                    and acknowledgement.get("format") == "intelligence_ui.v1"
                    and acknowledgement.get("block_count") == len(payload["blocks"]),
@@ -216,7 +264,8 @@ class Presentations(InputHistory):
             json.dumps(self.client_id), json.dumps(arguments),
         )
         status, body, _ = self.rpc(
-            "tools/call", {"name": "code_mode", "arguments": {"code": code}}, modern=True,
+            "tools/call", {"name": "code_mode", "arguments": {
+                "code": code, "agent": self.presenter_binding()}}, modern=True,
         )
         if status != 200 or not isinstance(body, dict) or "error" in body:
             raise AssertionError(f"presentation rejection HTTP boundary failed: {status}, {body}")
@@ -239,6 +288,10 @@ class Presentations(InputHistory):
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5,
         )
         front = self.start_front("presentations")
+        self.presenter = self.public_call("collab", {
+            "action": "join", "client_id": self.client_id,
+            "name": "Presentation fixture", "role": "presenter"})
+        self.sensitive.append(self.presenter["token"])
         self.resize(front, 64, 120)
 
         wide_document = document("WIDE")
@@ -374,7 +427,7 @@ def main():
     report = {
         "schema": "ssmcp.presentation-e2e.v1", "status": "failed",
         "source_commit": source_commit, "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+        "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
         "scope": "native structured display, complete history/copy, idempotency and next-request delivery",
         "models_started": False, "production_contacted": False,
         "display_mode": "NO_COLOR owned terminal; native wide and narrow block layout",

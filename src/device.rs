@@ -386,6 +386,8 @@ pub(crate) struct DevicePeer {
     pub account: Option<Registration>,
     pub session_access: bool,
     pub control_attribution: bool,
+    pub native_messages: bool,
+    pub version_notice: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -393,6 +395,8 @@ impl From<Registration> for DevicePeer {
         Self {
             session_access: account.session_access,
             control_attribution: account.control_attribution,
+            native_messages: false,
+            version_notice: false,
             account: Some(account),
         }
     }
@@ -762,10 +766,13 @@ async fn connect(
             "anonymous_control_requires_current_client",
         ));
     }
+    let native_messages = capability_requested(&headers, wire::messages::CAPABILITY);
     let peer = DevicePeer {
         account,
         session_access,
         control_attribution,
+        native_messages,
+        version_notice: capability_requested(&headers, wire::versions::CAPABILITY),
     };
     let transport = broker
         .admit_transport()
@@ -1056,6 +1063,105 @@ mod tests {
             .await
             .unwrap();
         socket
+    }
+
+    #[tokio::test]
+    async fn version_notice_websocket_preserves_legacy_ready_and_uses_real_publication() {
+        let directory = Temporary::new();
+        let assets = directory.0.join("release");
+        std::fs::create_dir(&assets).unwrap();
+        let target = "x86_64-unknown-linux-gnu";
+        let binary = assets.join(format!("ssmcp-{target}"));
+        std::fs::write(&binary, b"fixture").unwrap();
+        std::fs::write(assets.join("release.json"), serde_json::to_vec(&json!({
+            "schema": 1, "version": "0.10.99", "wire_version": wire::VERSION,
+            "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": format!("{:x}", Sha256::digest(b"fixture"))}},
+        })).unwrap()).unwrap();
+        std::fs::set_permissions(&assets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for path in [&binary, &assets.join("release.json")] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let mut broker = Broker::with_identity_config(
+            "https://ssmcp.test".into(),
+            crate::oauth::OAuthConfig::default(),
+            Some(crate::identity::GitHubConfig {
+                client_id: "fixture".into(),
+                client_secret: "fixture".into(),
+            }),
+        )
+        .unwrap();
+        broker.portal = crate::portal::Portal::open(&directory.0).unwrap();
+        broker.client_downloads = Some(crate::client_downloads::Publisher::test_fixture(&assets));
+        let alice = Identity {
+            provider: "github".into(),
+            subject: "123".into(),
+            login: "alice".into(),
+        };
+        broker
+            .portal
+            .storage(move |store| store.login(&alice))
+            .await
+            .unwrap();
+        let login = broker
+            .portal
+            .client_storage(|store| store.login("123".into()))
+            .await
+            .unwrap()
+            .0;
+        let broker = Arc::new(broker);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::http::router(broker.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        // An actual old offer gets byte-compatible v7 field names, even though
+        // this gateway has a publication ready for newer clients.
+        let mut old = open_socket(&base, &login, vec![]).await;
+        let ready = receive(&mut old).await.unwrap();
+        let encoded = serde_json::to_value(ready).unwrap();
+        assert_eq!(encoded.as_object().unwrap().len(), 5);
+        assert!(encoded.get("capabilities").is_none());
+        assert!(encoded.get("version_notice").is_none());
+        old.close(None).await.unwrap();
+
+        let offered = [
+            wire::SESSION_ACCESS_CAPABILITY,
+            wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            wire::versions::CAPABILITY,
+        ];
+        let mut current = open_socket_with_capabilities(&base, &login, vec![], &offered).await;
+        let wire::Frame::Ready {
+            version_notice: Some(notice),
+            capabilities,
+            ..
+        } = receive(&mut current).await.unwrap()
+        else {
+            panic!("negotiated version notice");
+        };
+        assert_eq!(capabilities, offered);
+        assert_eq!(notice.server_version, env!("CARGO_PKG_VERSION"));
+        let published = notice.published_client.unwrap();
+        assert_eq!(published.version, "0.10.99");
+        assert_eq!(published.targets, [target]);
+        current.close(None).await.unwrap();
+
+        // A missing or partially published executable cannot become an update
+        // hint and must not prevent otherwise compatible clients connecting.
+        std::fs::remove_file(binary).unwrap();
+        let mut incomplete = open_socket_with_capabilities(&base, &login, vec![], &offered).await;
+        let wire::Frame::Ready {
+            version_notice: Some(notice),
+            ..
+        } = receive(&mut incomplete).await.unwrap()
+        else {
+            panic!("server version remains available without a publication");
+        };
+        assert_eq!(notice.server_version, env!("CARGO_PKG_VERSION"));
+        assert!(notice.published_client.is_none());
+        incomplete.close(None).await.unwrap();
+        broker.disconnect_all().await;
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]

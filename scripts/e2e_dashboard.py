@@ -201,17 +201,18 @@ class Frontend:
         self.decoder.request(op="resize", rows=rows, cols=cols)
 
     def disconnect(self):
-        self.send(b"\x03")
         deadline = time.monotonic() + 8
+        self.send(b"\x03")
         answered = set()
+        notice_prefixes = (("Input cleared", "Answer cleared"), ("Press Ctrl+C again",))
         while self.process.poll() is None and time.monotonic() < deadline:
             self.pump(0.05)
             if self.process.poll() is not None:
                 break
-            footer = self.snapshot()["rows"][-1]
-            for notice in ("cleared · queued requests kept", "Press Ctrl+C again to exit"):
-                if notice in footer and notice not in answered:
-                    answered.add(notice)
+            footer = self.decoder.request(op="snapshot")["rows"][-1].lstrip()
+            for prefixes in notice_prefixes:
+                if prefixes not in answered and footer.startswith(prefixes):
+                    answered.add(prefixes)
                     self.send(b"\x03")
                     break
         if self.process.poll() is None:

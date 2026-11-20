@@ -5,6 +5,8 @@ use std::io;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 mod attribution;
+pub mod messages;
+pub mod versions;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
 
 /// The sole supported wire protocol, including controller, source audit and steering.
@@ -545,6 +547,8 @@ pub enum Frame {
         // Strict v7 clients must receive exactly the original Ready field set.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         capabilities: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version_notice: Option<versions::Notice>,
     },
     Access {
         id: u64,
@@ -553,6 +557,14 @@ pub enum Frame {
     AccessReply {
         id: u64,
         result: Result<AccessSnapshot, String>,
+    },
+    Messages {
+        id: u64,
+        command: messages::Command,
+    },
+    MessagesReply {
+        id: u64,
+        result: Result<messages::Reply, String>,
     },
     Steering {
         id: u64,
