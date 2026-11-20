@@ -226,11 +226,9 @@ mod tests {
         assert!(should_store(&"x".repeat(INLINE_PASTE_BYTES + 1)));
         assert!(!should_store(&"界".repeat(INLINE_PASTE_BYTES / 3)));
         assert!(should_store(&"界".repeat(INLINE_PASTE_BYTES / 3 + 1)));
-        assert!(!should_store(
-            &vec!["short"; FILE_PASTE_LINES - 1].join("\n")
-        ));
-        assert!(should_store(&vec!["short"; FILE_PASTE_LINES].join("\n")));
-        assert!(should_store(&vec!["界"; FILE_PASTE_LINES].join("\r\n")));
+        assert!(!should_store(&["short"; FILE_PASTE_LINES - 1].join("\n")));
+        assert!(should_store(&["short"; FILE_PASTE_LINES].join("\n")));
+        assert!(should_store(&["界"; FILE_PASTE_LINES].join("\r\n")));
         assert!(!should_store("two\r\nlines\r\n"));
     }
 
