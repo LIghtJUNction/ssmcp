@@ -217,7 +217,7 @@ class DeploymentContracts(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, "page_asset_set_changed_after_stage"):
             deploy.checks("http://127.0.0.1:8080", request)
 
-    def simulate_switch(self, *, had_managed_unit, public_failure):
+    def simulate_switch(self, *, had_managed_unit, public_failure=False, stage_only=False, changed_pid=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             install, units, folder = root / "install", root / "units", root / "run"
@@ -251,14 +251,24 @@ class DeploymentContracts(unittest.TestCase):
                        "assets": {}, "release": {"repository": deploy.REPOSITORY, "tag": TAG, "commit": COMMIT},
                        "managed_dropin_before": saved,
                        "public_baseline": {"footer_count": 1, "proxy_fragment_sha256": hashlib.sha256(deploy.proxy_fragment(old_html)).hexdigest()}}
+            if stage_only:
+                request["stage_only"] = True
+                del request["backup_sha256"]
+                (folder / "backup.tar").unlink()
             request_path = folder / "request.json"
             request_path.write_text(json.dumps(request))
             prefix = install / ("release-" + COMMIT[:12] + "-" + request["daemon_sha256"][:12])
             new_binary, new_runner = prefix / "bin/ssmcpd", prefix / "libexec/ssmcp/code-mode.js"
-            state = {"new": False, "restarts": 0}
+            state = {"new": False, "restarts": 0, "staged": False}
+            def stage(_candidate, _request):
+                state["staged"] = True
+                return {"fresh_state": True}
             def snapshot(**_):
                 if not state["new"]:
-                    return copy.deepcopy(before)
+                    current = copy.deepcopy(before)
+                    if state["staged"] and changed_pid:
+                        current["pid"] += 1
+                    return current
                 after = copy.deepcopy(before)
                 after.update(exe=str(new_binary), argv=[str(new_binary), "serve"], live_sha256=request["daemon_sha256"],
                              units={str(path): deploy.sha(path) for path in units.iterdir()},
@@ -286,7 +296,7 @@ class DeploymentContracts(unittest.TestCase):
                 return install if str(path) == "/usr/local/lib/ssmcp" else Path(path)
             with mock.patch.object(deploy, "Path", side_effect=mapped_path), mock.patch.object(deploy, "MANAGED_DROPIN", managed), \
                  mock.patch("builtins.open", side_effect=local_open), mock.patch.object(deploy, "snapshot", side_effect=snapshot), \
-                 mock.patch.object(deploy, "run", side_effect=run), mock.patch.object(deploy, "stage", return_value={"fresh_state": True}), \
+                 mock.patch.object(deploy, "run", side_effect=run), mock.patch.object(deploy, "stage", side_effect=stage), \
                  mock.patch.object(deploy, "checks", side_effect=checks), mock.patch.object(deploy, "health"), \
                  mock.patch.object(deploy, "request", return_value=(200, old_html)), \
                  mock.patch.object(deploy, "current_sha", side_effect=lambda **_: snapshot()["live_sha256"]), \
@@ -296,7 +306,19 @@ class DeploymentContracts(unittest.TestCase):
             self.assertEqual(deploy.sha(original_unit), before["units"][str(original_unit)])
             self.assertEqual(old_runner.read_bytes(), b"current production runner")
             self.assertEqual(old_binary.read_bytes(), b"current production binary")
-            if public_failure:
+            if stage_only:
+                self.assertEqual(exit_code, int(changed_pid))
+                self.assertEqual(receipt["status"], "failed" if changed_pid else "staged")
+                self.assertEqual(receipt["stage_checks"], {"fresh_state": True})
+                self.assertEqual(state["restarts"], 0)
+                self.assertEqual(managed.read_bytes(), original_managed)
+                self.assertFalse(prefix.exists())
+                self.assertNotIn("rollback_checkpoint_verified", receipt)
+                if changed_pid:
+                    self.assertEqual(receipt["failure"]["reason"], "production_changed_after_stage")
+                else:
+                    self.assertEqual(receipt["running_sha256"], before["live_sha256"])
+            elif public_failure:
                 self.assertEqual(exit_code, 1)
                 self.assertEqual(receipt["status"], "rolled_back")
                 self.assertTrue(receipt["rollback_runtime_fingerprint_verified"])
@@ -315,6 +337,12 @@ class DeploymentContracts(unittest.TestCase):
                 self.assertEqual(state["restarts"], 1)
                 self.assertIn("ExecStartPre=\nExecStartPre=" + str(new_binary) + " check-runtime", managed.read_text())
                 self.assertEqual(new_runner.read_bytes(), b"new release runner")
+
+    def test_stage_only_uses_no_backup_and_does_not_restart(self):
+        self.simulate_switch(had_managed_unit=True, stage_only=True)
+
+    def test_stage_only_requires_same_live_process(self):
+        self.simulate_switch(had_managed_unit=True, stage_only=True, changed_pid=True)
 
     def test_first_managed_deployment_preserves_manual_dropins(self):
         self.simulate_switch(had_managed_unit=False, public_failure=False)

@@ -54,3 +54,7 @@ SSH 始终启用严格主机公钥检查。缺少必需配置会直接使部署�
 ### 从 0.10.13 迁移
 
 0.10.13 的 OAuth 注册表只持久化客户端注册。已经签发的访问令牌、刷新令牌及授权族保存在该进程内存里。即使活跃 WebSocket 计数为零，重启这个版本也无法恢复这些授权。新版的 `.grants.json` 保护的是启用持久化后签发的授权，无法从旧注册表推导已有授权。参见 [0.10.13 的 OAuth 实现](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.13/src/oauth.rs) 和 [授权持久化](oauth-durability.md)。
+
+### 在生产主机隔离验收
+
+管理员可以用当前版本的 `deploy_release.py --stage-only --tag TAG --commit COMMIT --run-id RUN-ATTEMPT` 验证正式发布的候选构建。它沿用制品校验和隔离服务验收，检查线上进程及配置指纹在验收前后相同，成功回执为 `status=staged`。隔离服务结束后会清理本轮候选文件。现有部署 SSH 入口仍使用原来的命令和回执。
