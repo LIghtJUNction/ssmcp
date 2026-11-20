@@ -44,21 +44,21 @@
 
 ### 桌面账号页
 
-![桌面账号页](desktop-account.png)
+[桌面账号页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/desktop-account.png`）
 
 ### 桌面访客页
 
-![桌面访客页](desktop-guest.png)
+[桌面访客页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/desktop-guest.png`）
 
 ### 安装与连接指南
 
-![安装与连接指南](desktop-install.png)
+[安装与连接指南](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/desktop-install.png`）
 
 ### 移动端账号与异常状态
 
 | 账号 | 流量耗尽 | 小屏首次注册 |
 |---|---|---|
-| ![移动账号](mobile-account.png) | ![移动流量耗尽](mobile-exhausted.png) | ![小屏首次注册](small-mobile-registration.png) |
+| [移动账号](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/mobile-account.png`） | [移动流量耗尽](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/mobile-exhausted.png`） | [小屏首次注册](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/portal-air-20261119/small-mobile-registration.png`） |
 
 ## 代码范围
 

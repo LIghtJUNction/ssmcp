@@ -26,15 +26,15 @@
 
 ### 默认折叠
 
-![默认折叠：命令一行保留状态，编辑 diff 展开](ui-chat.png)
+[默认折叠：命令一行保留状态，编辑 diff 展开](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/compact-tools-20261118/ui-chat.png`）
 
 ### 展开一个命令
 
-![展开命令后的输出与保留的退出状态](ui-command-expanded.png)
+[展开命令后的输出与保留的退出状态](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/compact-tools-20261118/ui-command-expanded.png`）
 
 ### 原始日志模式
 
-![输入 raw 命令后的原始展开日志](ui-raw-activity.png)
+[输入 raw 命令后的原始展开日志](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/compact-tools-20261118/ui-raw-activity.png`）
 
 ## 候选构建与当前安装
 

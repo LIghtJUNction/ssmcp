@@ -61,15 +61,15 @@ VT 解码工具沿用之前冻结的只读 JSONL 工具；已比较其源文件�
 
 | 120 列 | 48 列 |
 | --- | --- |
-| [休眠](frame-sleep-120.png) / [醒后](frame-awake-120.png) | [休眠](frame-sleep-48.png) / [醒后](frame-awake-48.png) |
+| [休眠](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/frame-sleep-120.png`） / [醒后](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/frame-awake-120.png`） | [休眠](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/frame-sleep-48.png`） / [醒后](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/frame-awake-48.png`） |
 
 **真实认证 PTY。** 下列画面来自同一次通过 127 项检查的真实 CLI 会话。主代理逐张复核：两种宽度的整体压暗和中央提示完整；中文路径草稿与第二行缩进可见；点击醒后恢复正常颜色、同一草稿、1 waiting 队列及等待确认底栏。未见遮罩越界、输入区重叠或中文缺字。
 
 | 真实会话阶段 | 图像 |
 | --- | --- |
-| 三个等待请求下的 120 列休眠 | [pty-sleep-120.png](pty-sleep-120.png) |
-| 同一等待 episode 缩窄到 48 列 | [pty-sleep-48.png](pty-sleep-48.png) |
-| 完整鼠标手势唤醒，等待仍 pending | [pty-mouse-awake-120.png](pty-mouse-awake-120.png) |
+| 三个等待请求下的 120 列休眠 | [pty-sleep-120.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/pty-sleep-120.png`） |
+| 同一等待 episode 缩窄到 48 列 | [pty-sleep-48.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/pty-sleep-48.png`） |
+| 完整鼠标手势唤醒，等待仍 pending | [pty-mouse-awake-120.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png`） |
 
 ## 发现并修正的问题
 

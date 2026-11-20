@@ -54,13 +54,13 @@ local 首轮还因新工作树无法解析裸 `playwright` 包名停在浏览器
 
 新增 Rust 回归在 120、49、48 列的真实渲染状态中验证：左半区仅滚命令输出，右半区滚整段会话，其他命令窗口、草稿和光标状态保留。ANSI 来自实际终端渲染器，再由同一冻结 VT 解码器和 `render_ui_snapshot.py` 转为 PNG。
 
-协调代理已通过原生图片读取检查 [120 列左内窗](scroll-zones-left-120.png) 和 [48 列右整页](scroll-zones-page-48.png)：命令面板、后续消息和草稿清晰，未发现截断重叠；窄屏隐藏冗余提示。其余渲染图随证据保存：
+协调代理已通过原生图片读取检查 [120 列左内窗](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-left-120.png`） 和 [48 列右整页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-page-48.png`）：命令面板、后续消息和草稿清晰，未发现截断重叠；窄屏隐藏冗余提示。其余渲染图随证据保存：
 
 | 列数 | 左半区滚内部输出 | 右半区滚会话 |
 | --- | --- | --- |
-| 120 | [查看](scroll-zones-left-120.png) | [查看](scroll-zones-page-120.png) |
-| 49 | [查看](scroll-zones-left-49.png) | [查看](scroll-zones-page-49.png) |
-| 48 | [查看](scroll-zones-left-48.png) | [查看](scroll-zones-page-48.png) |
+| 120 | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-left-120.png`） | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-page-120.png`） |
+| 49 | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-left-49.png`） | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-page-49.png`） |
+| 48 | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-left-48.png`） | [查看](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/listener-integration-20261120/scroll-zones-page-48.png`） |
 
 视觉检查支持这些截图的布局结论；分区、状态保持和事件路由由 Rust 回归断言验证。
 

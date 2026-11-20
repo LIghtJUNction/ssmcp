@@ -105,8 +105,8 @@ cargo test --no-fail-fast \
 
 使用实际 Rust 门户视图和合成账号、连接数据渲染，通过独立 Chromium 检查桌面与手机布局。表单可见且有效，手机布局无水平溢出；截图中的账号与连接均为测试数据。
 
-- [桌面截图：1440 × 1755](https://github.com/LIghtJUNction/ssmcp/blob/bdda70d5efeee7375cfaa871a30a1b2a00fd8e34/docs/assets/named-accounts-admin-desktop.png)
-- [手机截图：390 × 3218](https://github.com/LIghtJUNction/ssmcp/blob/bdda70d5efeee7375cfaa871a30a1b2a00fd8e34/docs/assets/named-accounts-admin-mobile.png)
+- [桌面截图：1440 × 1755](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/named-accounts-admin-desktop.png`）
+- [手机截图：390 × 3218](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/named-accounts-admin-mobile.png`）
 
 ## 提交与部署状态
 

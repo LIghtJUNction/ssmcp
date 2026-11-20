@@ -44,7 +44,7 @@
 
 已在 GitHub 的实际 README 页面检查四个徽章和两个 SVG，六张图均加载成功；连接图的流动标记可见。两张 SVG 的 700 像素宽度静态渲染也已检查，文字没有溢出或裁切。[README 页面](https://github.com/LIghtJUNction/ssmcp#ssmcp)
 
-![GitHub 上的 README：徽章、连接架构图与配置教程入口。](assets/readme-preview.jpg)
+[GitHub 上的 README：徽章、连接架构图与配置教程入口。](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/readme-preview.jpg`）
 
 ## 验收范围
 

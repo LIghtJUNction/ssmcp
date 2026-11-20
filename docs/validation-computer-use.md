@@ -105,14 +105,14 @@ gh workflow run ci.yml --repo LIghtJUNction/ssmcp --ref main -f ref=dbb98b020b8a
 
 | 仓库图片 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| [computer-use-consent-desktop.jpg](assets/computer-use-consent-desktop.jpg) | 48726 | `7042f5cbec9a8fa2d5aca6d1b2f56a7346722de9bd433b62c4740e1fae91f392` |
-| [computer-use-consent-narrow.jpg](assets/computer-use-consent-narrow.jpg) | 37636 | `99289f0c8895bac65ed6db0e123ef05c8d691cea4600e46603e5f443b846f5b1` |
+| [computer-use-consent-desktop.jpg](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-consent-desktop.jpg`） | 48726 | `7042f5cbec9a8fa2d5aca6d1b2f56a7346722de9bd433b62c4740e1fae91f392` |
+| [computer-use-consent-narrow.jpg](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-consent-narrow.jpg`） | 37636 | `99289f0c8895bac65ed6db0e123ef05c8d691cea4600e46603e5f443b846f5b1` |
 
 图片按原字节复制，没有编辑。视觉检查没有点击真实账户授权，也没有发送物理桌面输入。
 
-![合成授权页的桌面布局](assets/computer-use-consent-desktop.jpg)
+[合成授权页的桌面布局](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-consent-desktop.jpg`）
 
-![合成授权页的 500 px 窄布局](assets/computer-use-consent-narrow.jpg)
+[合成授权页的 500 px 窄布局](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-consent-narrow.jpg`）
 
 ## 下载、镜像与安装边界
 
@@ -146,9 +146,9 @@ APT sentinel 只记录是否走到安装门，不执行软件安装。Homebrew f
 - JPEG 为 800 × 413、13711 字节。图片从原生 screenshot 的 MCP image block 返回；公网服务当前没有 `image()` 便捷 helper，这不影响已验证的原生图片返回链路。
 - 四个模型后端均显示 unavailable、tools=0；本次原生能力验收没有依赖托管模型。
 
-[computer-use-runtime-browser.jpg](assets/computer-use-runtime-browser.jpg) 保存了这次运行态截图的原字节。这是任务拥有的本地合成验证页面，不是 GitHub OAuth 真登录或真实账户授权。
+[computer-use-runtime-browser.jpg](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-runtime-browser.jpg`） 保存了这次运行态截图的原字节。这是任务拥有的本地合成验证页面，不是 GitHub OAuth 真登录或真实账户授权。
 
-![通过 ssmcp 原生接口操作的合成浏览器验证页](assets/computer-use-runtime-browser.jpg)
+[通过 ssmcp 原生接口操作的合成浏览器验证页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/computer-use-runtime-browser.jpg`）
 
 旧 `ssmcp-native-controls.service` 已于 2026-11-16 19:57:18 UTC 完成交接检查，状态为 inactive／dead、MainPID=0；新 `ssmcp-computer-use.service` 为 active／running，NRestarts=0。最终实时摘要 `development-runtime-verification.json` 的 SHA-256 为 `ca9fc4ad57172c0e73068047520ef051c0c21dd9504134788e05bf1a91f7de4a`。浏览器 JPEG 的 SHA-256 为 `d19d23713d97c825b09398c6e0050f5262da49d99c7f30941689c2a4ebeaf02e`。
 

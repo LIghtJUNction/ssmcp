@@ -40,9 +40,9 @@ cargo build --locked --bins --example vt_snapshot
 
 CUA 使用隔离 Chromium 打开本地提供的验收页面，经公共 code_mode 端点调用截图并由 image() 返回真实 MCP 图片块。结果为一张 960 × 513 的 JPEG，17,024 字节；尺寸与 MIME 同独立 metadata 一致，Base64 未进入文本日志。测试随后关闭自己拥有的浏览器。此证据验证原生 CUA 图片链路，不代表调用过 Codex 模型或未经公开的内部接口。
 
-![真实 PTY 的 build 终端画面](reports/terminal-control-2026-11-16/terminal-build.png)
+[真实 PTY 的 build 终端画面](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/terminal-control-2026-11-16/terminal-build.png`）
 
-画面中的 fixture-model 是测试输入，侧栏和页脚明确标注来源与“未调用模型”。其余画面见 [logs](reports/terminal-control-2026-11-16/terminal-logs.png)、[main](reports/terminal-control-2026-11-16/terminal-main.png)；[真实 CUA 截图](reports/terminal-control-2026-11-16/cua-browser.jpg)独立保留。
+画面中的 fixture-model 是测试输入，侧栏和页脚明确标注来源与“未调用模型”。其余画面见 [logs](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/terminal-control-2026-11-16/terminal-logs.png`）、[main](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/terminal-control-2026-11-16/terminal-main.png`）；[真实 CUA 截图](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/terminal-control-2026-11-16/cua-browser.jpg`）独立保留。
 
 既有基础端到端脚本另通过 **143 项检查，耗时 8.319 秒**，覆盖真实 OpenSSH、HTTP、PTY、工具目录精确匹配和断线进程清理。[基础运行记录](reports/terminal-control-2026-11-16/base-e2e.json)与[清理检查](reports/terminal-control-2026-11-16/base-e2e-cleanup.json)均已保存。原脚本的目录集合已补齐新增四个终端管理工具和 exec.write；Omarchy 工具保持完整。
 

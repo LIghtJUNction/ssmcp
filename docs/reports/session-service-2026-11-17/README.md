@@ -192,7 +192,7 @@ macOS/Windows 的管理员级安装、实际冷启动或登录触发未在本次
 
 以下为已安装 `ssmcp-manager` 的只读 attach 真实 VT frame 渲染，具体检查见 [manager-attach-live.json](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/reports/session-service-2026-11-17/manager-attach-live.json)。捕获只发送 Ctrl-] 分离，不向后端发送命令。
 
-![已安装管理会话的只读 attach](https://raw.githubusercontent.com/LIghtJUNction/ssmcp/main/docs/reports/session-service-2026-11-17/manager-attach-live.png)
+[已安装管理会话的只读 attach](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/session-service-2026-11-17/manager-attach-live.png`）
 
 画面保留了可选 Codex provider 的 api.x.com AuthRequired 诊断，以及旧协议下缺失 controller 信息的提示。它们是当时可见的真实输出；本次会话管理、连接与 attach 检查均按各自证据记录通过。
 

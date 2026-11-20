@@ -29,8 +29,8 @@
 
 ## 效果图
 
-- [80 列截图](https://github.com/LIghtJUNction/ssmcp/blob/1e14d8d9f8c7964a293ee47e55103ee1a3d0a2ea/docs/assets/readable-logs-80.png)
-- [100 列截图](https://github.com/LIghtJUNction/ssmcp/blob/1e14d8d9f8c7964a293ee47e55103ee1a3d0a2ea/docs/assets/readable-logs-100.png)
+- [80 列截图](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/readable-logs-80.png`）
+- [100 列截图](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/readable-logs-100.png`）
 
 截图由实际渲染器回放固定事件生成，覆盖 7 行读取脚本、83 行更新脚本、两条并行命令和一次编译失败。测试只渲染这些事件，图中的示例命令没有执行。
 

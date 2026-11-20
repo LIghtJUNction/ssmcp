@@ -38,17 +38,17 @@
 
 ### 首页（桌面）
 
-![门户首页](assets/portal-console-20261117/home-desktop.jpg)
+[门户首页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/portal-console-20261117/home-desktop.jpg`）
 
 ### 管理员（桌面，演示）
 
-![管理员控制台演示](assets/portal-console-20261117/admin-desktop-demo.jpg)
+[管理员控制台演示](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/portal-console-20261117/admin-desktop-demo.jpg`）
 
 ### 个人会话与历史（手机，演示）
 
-![个人会话演示](assets/portal-console-20261117/sessions-mobile-demo.jpg)
+[个人会话演示](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/portal-console-20261117/sessions-mobile-demo.jpg`）
 
-![历史记录演示](assets/portal-console-20261117/history-mobile-demo.jpg)
+[历史记录演示](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/portal-console-20261117/history-mobile-demo.jpg`）
 
 ## 部署边界
 

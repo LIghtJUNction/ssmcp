@@ -47,7 +47,7 @@
 
 测试回执：[验证汇总](validation.json)、[Rust 检查](rust-checks.json)、[发布构建](release-build.json)、[预览](preview.json)、[SSH 输入](composer.json)、[Relay 输入](relay-composer.json)、[仪表盘](dashboard.json)。
 
-实际渲染器示例截图：[默认界面](../../assets/client-ui.png)、[浅色界面](../../assets/client-ui-light.png)、[源码审计](../../assets/client-audit.png)。截图使用固定示例数据。
+实际渲染器示例截图：[默认界面](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui.png`）、[浅色界面](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui-light.png`）、[源码审计](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-audit.png`）。截图使用固定示例数据。
 
 ## 实际安装与上线
 

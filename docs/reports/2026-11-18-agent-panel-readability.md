@@ -18,9 +18,9 @@
 
 新调用更新已有行，选中项按稳定身份保留。鼠标点击对应上一帧实际显示的对象，避免列表异步重排时选中邻近条目。调用方的名称和模型是显示信息，不授予接收定向消息的资格。所选对象的消息状态进入侧栏，窄屏列表仍显示模型和同名成员的 ID 后缀。[使用说明](../client-ui.md#agent-面板与成员身份)
 
-![重复调用只占一个调用方条目](agent-panel-readability-20261118/agent-panel-callers.png)
+[重复调用只占一个调用方条目](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/agent-panel-readability-20261118/agent-panel-callers.png`）
 
-![同名成员保持独立，查看调用方时保留原草稿和收件人](agent-panel-readability-20261118/agent-panel-wide.png)
+[同名成员保持独立，查看调用方时保留原草稿和收件人](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/agent-panel-readability-20261118/agent-panel-wide.png`）
 
 ## 图片为什么模糊，以及本轮的处理
 
@@ -36,11 +36,11 @@
 
 新版终端验收在独立 Xvfb 中运行 ztty 0.2.1，并读取真实 X11 窗口像素。600×2400 长图的顶部、中段和底部与源图逐像素一致；2280×1728 宽图缩到 Activity 宽度后，顶部与滚动后的裁切仍逐像素一致。超限图被拒绝后，同一客户端继续显示新的 128×64 小图，像素也与源图一致；重载后不存在旧图片覆盖，协议回复不会进入输入草稿。[原生终端完整记录](agent-panel-readability-20261118/native-images-result.json)
 
-![新终端直接显示长图中的文字和单像素细节](agent-panel-readability-20261118/native-tall-top.png)
+[新终端直接显示长图中的文字和单像素细节](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/agent-panel-readability-20261118/native-tall-top.png`）
 
-![超过终端限制的图片被拒绝后，小图仍保持原生显示](agent-panel-readability-20261118/native-after-rejection.png)
+[超过终端限制的图片被拒绝后，小图仍保持原生显示](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/agent-panel-readability-20261118/native-after-rejection.png`）
 
-旧版 ztty 0.1.2 的独立对照使用同一张 600×2400 合成图，保留原始 MCP 图片文件，显示路径为字符缩略图。验收时已安装的新版位于 `~/.local/bin/ztty`，现有五个用户 ztty 进程仍运行 `/usr/bin/ztty` 0.1.2；安装新终端不会自动替换已经打开的进程。[旧版对照](agent-panel-readability-20261118/legacy-terminal-result.json) · [低清缩略图截图](agent-panel-readability-20261118/legacy-thumbnail.png)
+旧版 ztty 0.1.2 的独立对照使用同一张 600×2400 合成图，保留原始 MCP 图片文件，显示路径为字符缩略图。验收时已安装的新版位于 `~/.local/bin/ztty`，现有五个用户 ztty 进程仍运行 `/usr/bin/ztty` 0.1.2；安装新终端不会自动替换已经打开的进程。[旧版对照](agent-panel-readability-20261118/legacy-terminal-result.json) · [低清缩略图截图](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png`）
 
 ## 验收证据
 

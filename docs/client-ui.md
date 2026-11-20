@@ -396,7 +396,7 @@ hide_empty = true
 
 审计区按运行 ID 保留调用方提交的 `code_mode.code`，源码经过现有审计脱敏处理。使用 `/audit` 或 Ctrl-O 打开审计，内容区中的 ↑/↓ 选择运行记录，Enter 展开带行号与语法颜色的源码；详情中继续用 ↑/↓ 滚动，Esc 返回列表。Tab 切回输入框后，方向键用于文字编辑和历史浏览。
 
-![源码审计详情：行号与语法颜色](assets/client-audit.png)
+[源码审计详情：行号与语法颜色](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-audit.png`）
 
 *由实际渲染器回放的审计示例；示例源码不会执行。*
 
@@ -434,7 +434,7 @@ hide_empty = true
 
 ## 主题与颜色
 
-![浅色主题的客户端](assets/client-ui-light.png)
+[浅色主题的客户端](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui-light.png`）
 
 *实际渲染器的固定示例，展示浅色主题、输入框与可折叠侧栏。*
 

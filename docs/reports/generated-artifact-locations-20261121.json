@@ -26,7 +26,7 @@
   },
   "verification_notes": [
     "39 张 PNG 逐项核对原 Git blob SHA-1 与 SHA-256；上传后的 ZIP 已实际下载，并与本地归档逐字节摘要一致。",
-    "另外三个 ZIP 仅重新计算本地文件 SHA-256，并核对云盘名称、大小、MIME 与父目录；没有下载云盘内容，不能据此声称远端内容已通过哈希校验。",
+    "后续独立核验已实际下载全部四个云盘 ZIP：逐包 SHA-256 和大小匹配，39 张 PNG 与 3 个原始 ZIP 共 42 项内容的 Git blob SHA-1、大小及 SHA-256 均已核对。完整结果见 verification_receipt；这更新此前三个 ZIP 仅有元数据核验的状态。",
     "归档内部保留原文件名和目录。原始 JSON 中的历史路径、提交和哈希没有改写。",
     "云盘共享权限没有修改；链接本身不声明材料公开可访问。"
   ],
@@ -53,7 +53,9 @@
         "downloaded_archive_sha256": "901595a39482e38a30c622b115617e298058a5dabd61aa58efd97f15a2689988",
         "downloaded_archive_matches_local": true,
         "individual_png_git_blob_sha1_and_sha256_checked": true,
-        "png_bytes_modified": false
+        "png_bytes_modified": false,
+        "independent_original_git_blob_and_size_checked": true,
+        "independent_receipt_path": "docs/reports/command-await-delivery-20261120/external-evidence-verification.json"
       },
       "scope": "Historical original PNG bytes from the recorded source commit; archived without image changes, not a new or final acceptance run."
     },
@@ -73,9 +75,11 @@
       "verification": {
         "drive_metadata_checked": true,
         "local_file_rehashed": true,
-        "remote_archive_downloaded": false,
-        "downloaded_archive_sha256": null,
-        "downloaded_archive_matches_local": null
+        "remote_archive_downloaded": true,
+        "downloaded_archive_sha256": "bbbdcce805e23c5cc054708c810e7fe2aac30c3db4f4d3c7c8036588d1740109",
+        "downloaded_archive_matches_local": true,
+        "independent_original_git_blob_and_size_checked": true,
+        "independent_receipt_path": "docs/reports/command-await-delivery-20261120/external-evidence-verification.json"
       },
       "scope": "Historical native ef439/be72 verification evidence; not a later source, official zcalld release, or final SSMCP acceptance."
     },
@@ -95,9 +99,11 @@
       "verification": {
         "drive_metadata_checked": true,
         "local_file_rehashed": true,
-        "remote_archive_downloaded": false,
-        "downloaded_archive_sha256": null,
-        "downloaded_archive_matches_local": null
+        "remote_archive_downloaded": true,
+        "downloaded_archive_sha256": "f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9",
+        "downloaded_archive_matches_local": true,
+        "independent_original_git_blob_and_size_checked": true,
+        "independent_receipt_path": "docs/reports/command-await-delivery-20261120/external-evidence-verification.json"
       },
       "scope": "Prepared controller handoff; not a completed P1 product run."
     },
@@ -117,11 +123,27 @@
       "verification": {
         "drive_metadata_checked": true,
         "local_file_rehashed": true,
-        "remote_archive_downloaded": false,
-        "downloaded_archive_sha256": null,
-        "downloaded_archive_matches_local": null
+        "remote_archive_downloaded": true,
+        "downloaded_archive_sha256": "f08d35dadc127158b44e296baf72cd47584e7ee808db963843ff82d855b67142",
+        "downloaded_archive_matches_local": true,
+        "independent_original_git_blob_and_size_checked": true,
+        "independent_receipt_path": "docs/reports/command-await-delivery-20261120/external-evidence-verification.json"
       },
       "scope": "Prepared controller handoff and pure contract evidence; not completed 24-suite product acceptance."
     }
-  ]
+  ],
+  "verification_rechecked_at_utc": "2026-11-20T17:16:32.033114+00:00",
+  "verification_receipt": {
+    "repository": "LIghtJUNction/ssmcp",
+    "path": "docs/reports/command-await-delivery-20261120/external-evidence-verification.json",
+    "commit": "4478fd74a0d7f050945957066068cc49da3e6ae9",
+    "git_blob_sha1": "995395b0826c5f82f7b2feb47395825f53ecf2ea",
+    "bytes": 26235,
+    "sha256": "adbe86eacd7a8313f22421d3e75c352f2264f29e7ddf53ab6290c4543c627495",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/4478fd74a0d7f050945957066068cc49da3e6ae9/docs/reports/command-await-delivery-20261120/external-evidence-verification.json",
+    "downloaded_archive_count": 4,
+    "original_path_count": 42,
+    "identical_original_path_count": 42,
+    "product_acceptance_executed": false
+  }
 }

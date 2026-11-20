@@ -243,7 +243,7 @@ cargo run --locked --bin ssmcp -- ui preview
 <details>
 <summary>项目创作记录</summary>
 
-[原创短片《日蚀》 · 24 秒](docs/assets/ssmcp-eclipse.mp4)
+[原创短片《日蚀》 · 24 秒](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/ssmcp-eclipse.mp4`）
 
 </details>
 
