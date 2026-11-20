@@ -1,7 +1,8 @@
 //! A bounded viewport over adjacent retained tool events; no output is copied
 //! into a second history and individual event identities remain selectable.
 use super::{
-    Event, Ui, clip_plain, conversation_body, correlation::Kind, paint, semantic_text, styled_rows,
+    DiffMode, Event, Ui, clip_plain, conversation_body, correlation::Kind, diff, paint,
+    semantic_text, styled_rows,
 };
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
@@ -51,10 +52,6 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         let event = &events[index];
         owned(event)
             && event.meta.kind == Kind::Tool
-            // Authenticated groups first collect every logical member. Their
-            // display policy is applied to the whole group after summary lookup;
-            // skipping a command here would split one stable ID into fragments.
-            && (!event.meta.command || event.meta.diff || event.tool_group_id.is_some())
             && event.image.is_none()
             && !event.reload_boundary
     };
@@ -85,12 +82,19 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
             end += 1;
         }
         if members.len() > 1 || events[start].tool_group_id.is_some() {
+            // Card style never splits a logical summary group. Commands are
+            // readable immediately until the user chooses the group's fold.
+            let expanded = events[start].group_expanded
+                || (events[start].group_automatic
+                    && members
+                        .iter()
+                        .any(|index| events[*index].meta.command && !events[*index].meta.diff));
             result.push(Group {
                 start,
                 end,
                 members,
                 head: events[start].id,
-                expanded: events[start].group_expanded,
+                expanded,
                 info: None,
             });
         }
@@ -104,6 +108,7 @@ pub(super) struct Options<'a> {
     pub(super) page: usize,
     pub(super) palette: &'a str,
     pub(super) ui: &'a Ui,
+    pub(super) diff_mode: DiffMode,
     pub(super) selected: Option<u64>,
     pub(super) selected_group: Option<u64>,
     pub(super) focused: bool,
@@ -123,6 +128,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
         page,
         palette,
         ui,
+        diff_mode,
         selected,
         selected_group,
         focused,
@@ -234,7 +240,13 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
             selected_row = Some(body.len());
         }
         let expanded = event.chat_expanded;
-        let marker = if expanded { "▾" } else { "▸" };
+        let marker = if command {
+            "•"
+        } else if expanded {
+            "▾"
+        } else {
+            "▸"
+        };
         let prefix = clip_plain(
             &format!("{} {marker} ", if selected && focused { "›" } else { " " }),
             indent,
@@ -246,8 +258,6 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 "{}{}",
                 paint(&prefix, tone, ui, selected && focused),
                 if command {
-                    // The same redacted argv heading used by standalone cards
-                    // stays readable without opening each command's details.
                     event.command_heading_row(detail_width, ui)
                 } else {
                     paint(
@@ -260,12 +270,18 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
             ),
         ));
 
-        let cache_palette = format!("{palette}:tool-window:{expanded}");
+        let inset = if command {
+            2.min(detail_width.saturating_sub(1))
+        } else {
+            0
+        };
+        let content_width = detail_width.saturating_sub(inset).max(1);
+        let cache_palette = format!("{palette}:tool-window:{}:{expanded}", diff_mode.name());
         if event
             .cache
             .as_ref()
             .is_none_or(|(cached_width, cached_palette, _)| {
-                *cached_width != detail_width || *cached_palette != cache_palette
+                *cached_width != content_width || *cached_palette != cache_palette
             })
         {
             let rows = if command {
@@ -281,7 +297,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 } else {
                     styled_rows(
                         &semantic_text(&text, ui, event.meta.language),
-                        detail_width,
+                        content_width,
                         ui.color,
                     )
                 }
@@ -294,18 +310,22 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 let text = detail
                     .as_deref()
                     .unwrap_or_else(|| conversation_body(&event.text));
-                styled_rows(
-                    &semantic_text(text, ui, event.meta.language),
-                    detail_width,
-                    ui.color,
-                )
+                if event.meta.diff {
+                    diff::rows(text, detail_width, ui, event.meta.language, diff_mode)
+                } else {
+                    styled_rows(
+                        &semantic_text(text, ui, event.meta.language),
+                        detail_width,
+                        ui.color,
+                    )
+                }
             } else {
                 let mut preview = event.chat_preview(detail_width);
                 // One shared footer describes expansion for the whole window.
                 preview.pop();
                 preview
             };
-            event.cache = Some((detail_width, cache_palette, rows));
+            event.cache = Some((content_width, cache_palette, rows));
         }
         let content = &event.cache.as_ref().unwrap().2;
         if command {
@@ -321,8 +341,39 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 event.panel.scroll = Some(offset);
             }
             let panel_start = body.len();
-            for row in content.iter().skip(offset).take(event.panel.page) {
-                body.push((event.id, format!("{}{row}", " ".repeat(indent))));
+            if content.is_empty() {
+                let label = if event.meta.status == Some(super::Status::Running) {
+                    "(no output yet)"
+                } else {
+                    "(no output)"
+                };
+                body.push((
+                    event.id,
+                    format!(
+                        "{}{}",
+                        " ".repeat(indent),
+                        paint(
+                            &clip_plain(&format!("└ {label}"), detail_width),
+                            "muted",
+                            ui,
+                            false
+                        )
+                    ),
+                ));
+            }
+            for (line, row) in content
+                .iter()
+                .skip(offset)
+                .take(event.panel.page)
+                .enumerate()
+            {
+                let gutter = paint(
+                    &clip_plain(if line == 0 { "└ " } else { "  " }, inset),
+                    "muted",
+                    ui,
+                    false,
+                );
+                body.push((event.id, format!("{}{gutter}{row}", " ".repeat(indent))));
             }
             if expanded && !content.is_empty() {
                 let range = format!(
@@ -353,6 +404,23 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 // The item's title belongs to the outer scroll region. Its
                 // expanded details and footer own the inner viewport.
                 panels.push((event.id, panel_start, body.len()));
+            } else if !expanded {
+                body.push((
+                    event.id,
+                    format!(
+                        "{}{}",
+                        " ".repeat(indent),
+                        paint(
+                            &clip_plain(
+                                &event.command_preview_hint(content.len(), event.panel.page),
+                                detail_width
+                            ),
+                            "muted",
+                            ui,
+                            false,
+                        )
+                    ),
+                ));
             }
         } else {
             for row in content {

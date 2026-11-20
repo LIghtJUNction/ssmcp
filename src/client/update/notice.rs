@@ -1,7 +1,7 @@
 //! Observational connection updates. Only an explicit self-update installs code.
 use crate::wire::versions::{Notice, PublishedClient, Version};
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(in crate::client) struct ConnectionVersions {
     client_version: String,
     server_version: String,
@@ -12,7 +12,7 @@ pub(in crate::client) struct ConnectionVersions {
 }
 
 impl ConnectionVersions {
-    fn new(
+    pub(in crate::client) fn new(
         notice: Notice,
         server: &str,
         current: &str,
@@ -75,7 +75,7 @@ fn tag(value: &str) -> String {
     }
 }
 
-fn current_target() -> Option<&'static str> {
+pub(super) fn current_target() -> Option<&'static str> {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") if cfg!(target_env = "gnu") => Some("x86_64-unknown-linux-gnu"),
         ("aarch64", "linux") if cfg!(target_env = "gnu") => Some("aarch64-unknown-linux-gnu"),

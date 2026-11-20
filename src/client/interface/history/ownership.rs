@@ -211,7 +211,7 @@ pub(crate) fn current_owner() -> Option<HistoryOwner> {
     HISTORY.get().and_then(|store| store.current.get())
 }
 
-fn with_owner<T>(
+pub(super) fn with_owner<T>(
     owner: &HistoryOwner,
     operation: impl FnOnce(&mut History, &HistoryOwner) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -253,6 +253,24 @@ pub(crate) fn record_owned_agent(
     }
     super::remember_committed(committed);
     Ok(persisted_id)
+}
+
+/// A local reply stays with its question, including when that history is no
+/// longer selected. The deterministic identity prevents duplicate UI receipts.
+pub(crate) fn record_owned_answer(
+    owner: &HistoryOwner,
+    question_id: &str,
+    text: &str,
+) -> Result<String, String> {
+    let id = super::request_identity(&format!("question_answer_{question_id}"), text)?;
+    with_owner(owner, |history, owner| {
+        history
+            .record_owned(owner, "answer", text, Some(id.clone()))
+            .map(|_| ())
+    })?;
+    // Directed answers are already delivered by the question queue. They are
+    // not an unscoped input to the shared automatic memory cache.
+    Ok(id)
 }
 
 pub(crate) fn record_owned_request(

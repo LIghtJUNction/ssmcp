@@ -433,6 +433,7 @@ struct Scope {
     recipient: Recipient,
     binding: code_mode::RunBinding,
     run: code_mode::AuditRun,
+    user_wait_admitted: AtomicBool,
 }
 
 impl Scope {
@@ -481,6 +482,7 @@ impl Scope {
             recipient,
             binding,
             run,
+            user_wait_admitted: AtomicBool::new(false),
         })
     }
 
@@ -587,6 +589,23 @@ fn failure(args: &Arguments, status: Status, code: &'static str, message: &str) 
     value
 }
 
+fn target_error_status(target: &Target, error: &str) -> Status {
+    if error.starts_with("await_unknown_target:")
+        || error.starts_with("finish_request_not_found:")
+        || error.contains("unknown or expired background job")
+        || matches!(target, Target::Job { .. })
+    {
+        Status::UnknownTarget
+    } else if error == "client busy; retry later" || error.contains("already has a waiting receive")
+    {
+        // This exact native capacity error precedes dispatch. An unknown
+        // outcome after dispatch must not become a retryable observation.
+        Status::Busy
+    } else {
+        Status::Unavailable
+    }
+}
+
 async fn observe(
     scope: &Scope,
     target: &Target,
@@ -648,7 +667,7 @@ async fn observe(
                 .await
         }
         Target::UserInput { reason, notify } => {
-            user_wait::wait(
+            user_wait::wait_observed(
                 scope.broker.clone(),
                 scope.user.clone(),
                 scope.token.clone(),
@@ -660,6 +679,7 @@ async fn observe(
                     notify: *notify,
                 },
                 controller,
+                Some(&scope.user_wait_admitted),
             )
             .await
         }
@@ -675,17 +695,7 @@ async fn observe(
     let data = match data {
         Ok(data) => data,
         Err(error) => {
-            let status = if error.starts_with("await_unknown_target:")
-                || error.starts_with("finish_request_not_found:")
-                || error.contains("unknown or expired background job")
-                || matches!(target, Target::Job { .. })
-            {
-                Status::UnknownTarget
-            } else if error.contains("already has a waiting receive") {
-                Status::Busy
-            } else {
-                Status::Unavailable
-            };
+            let status = target_error_status(target, &error);
             return TargetResult::failed(target, status, "await_target_error", error);
         }
     };
@@ -903,6 +913,7 @@ pub(super) async fn wait(
         }
     }
     if status != Status::Ready
+        && scope.user_wait_admitted.load(Ordering::Acquire)
         && record
             .targets
             .iter()

@@ -25,6 +25,7 @@ import tempfile
 import time
 import zlib
 
+from e2e_account_relay import wait_for
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
 from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
@@ -728,13 +729,23 @@ class InputHistory(Composer):
         self.agents(front)
         front.until(lambda shot: "Input fixture member" in text(shot),
                     "the registered fixture member arriving in the live roster")
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, item in enumerate(roster)
-                            if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + ENTER)
+        # The Sessions native-recipient snapshot may precede the independent
+        # steering roster used for this test's exact local delivery target.
+        def matching_member():
+            matches = [item for item in self.queue()["agents"]
+                       if item["agent_id"] == member["agent_id"]]
+            return matches[0] if len(matches) == 1 else None
+
+        wait_for(matching_member, "the exact input member in the local steering roster")
+        self.highlight_recipient(front, member)
+        front.send(ENTER)
         front.until(lambda shot: "To Input fixture member" in text(shot)
                     and column(shot) == ("conversation", 2, 8),
                     "Enter selecting the exact registered fixture recipient")
+        selected = self.ui("/display/conversation")
+        self.check(selected["target"] == member["agent_id"]
+                   and selected["native_recipient"] is None,
+                   "input setup selects the exact local member rather than a native namesake")
         first_source = self.reference_scenarios(front, member)
         self.paste_scenario(front, member)
         self.attachment_handoff_scenario(front, member)

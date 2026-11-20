@@ -30,6 +30,8 @@ struct NativeAnswers {
     summary_reminded: bool,
     exec_running: bool,
     summary_probe_pause: Option<(Arc<Notify>, Arc<Notify>)>,
+    finish_operations: Vec<Value>,
+    held_replies: Vec<Frame>,
 }
 
 struct Fixture {
@@ -40,6 +42,7 @@ struct Fixture {
     agent_id: String,
     agent_token: String,
     native: Arc<Mutex<NativeAnswers>>,
+    release_held: tokio::sync::mpsc::UnboundedSender<()>,
     peer: JoinHandle<()>,
     server: JoinHandle<()>,
     _directory: Directory,
@@ -198,11 +201,26 @@ impl Fixture {
             summary_reminded: false,
             exec_running: false,
             summary_probe_pause: None,
+            finish_operations: vec![],
+            held_replies: vec![],
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
+        let (release_held, mut releases) = tokio::sync::mpsc::unbounded_channel();
         let peer = tokio::spawn(async move {
-            while let Some(frame) = receive(&mut socket).await {
+            loop {
+                let frame = tokio::select! {
+                    frame = receive(&mut socket) => {
+                        let Some(frame) = frame else { break; };
+                        frame
+                    },
+                    released = releases.recv() => {
+                        if released.is_none() { break; }
+                        let replies = std::mem::take(&mut answers.lock().unwrap().held_replies);
+                        for reply in replies { send(&mut socket, reply).await; }
+                        continue;
+                    },
+                };
                 if matches!(frame, Frame::Reject { .. }) {
                     break;
                 }
@@ -218,6 +236,8 @@ impl Fixture {
                     assert!(matches!(frame, Frame::CodeModeFinished { .. }));
                     continue;
                 };
+                let summary_exec =
+                    name == "ssmcp.exec.wait" && arguments["job_id"] == "summary-job";
                 let value = {
                     let mut state = answers.lock().unwrap();
                     state.calls.push(name.clone());
@@ -227,10 +247,9 @@ impl Fixture {
                         let attribution = attribution.expect("authenticated native attribution");
                         assert_eq!(attribution.account.subject, "42");
                         assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
-                        if matches!(
-                            name.as_str(),
-                            "ssmcp.fs.stat" | "ssmcp.exec.wait" | "ssmcp.ui.tool_summary"
-                        ) {
+                        if matches!(name.as_str(), "ssmcp.fs.stat" | "ssmcp.ui.tool_summary")
+                            || summary_exec
+                        {
                             assert_eq!(
                                 code_context
                                     .as_ref()
@@ -239,6 +258,57 @@ impl Fixture {
                             );
                         }
                         let mut output = match name.as_str() {
+                            "fixture.hold" => {
+                                assert!(
+                                    arguments["slot"]
+                                        .as_u64()
+                                        .is_some_and(|slot| slot < wire::MAX_INFLIGHT as u64)
+                                );
+                                state.held_replies.push(Frame::Reply {
+                                    id,
+                                    result: Ok(json!({"structuredContent":{
+                                        "released":true,"slot":arguments["slot"]
+                                    }})),
+                                });
+                                // Keep receiving all native calls while their real
+                                // Session permits remain owned by pending replies.
+                                continue;
+                            }
+                            "ssmcp.exec.wait" if summary_exec => {
+                                json!({"structuredContent":{"job_id":"summary-job","running":state.exec_running}})
+                            }
+                            "ssmcp.exec.wait" => {
+                                assert_eq!(arguments["job_id"], "exec_capacity_fixture");
+                                json!({"structuredContent":{
+                                    "job_id":"exec_capacity_fixture","running":false,"exit_code":0
+                                }})
+                            }
+                            "ssmcp.ui.finish" => {
+                                state.finish_operations.push(arguments.clone());
+                                assert_eq!(arguments["request_id"], state.view["id"]);
+                                match arguments["op"].as_str() {
+                                    Some("request") => {
+                                        assert_eq!(arguments["reason"], state.view["question"]);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "created":false,"request":state.view,
+                                            "timed_out":state.view["finish"]["status"]=="pending",
+                                            "default_decision":"no",
+                                            "decision":state.view["finish"]["decision"],
+                                            "approved":state.view["finish"]["approved"]
+                                        }})
+                                    }
+                                    Some("cancel") => {
+                                        state.view["finish"]["status"] = json!("cancelled");
+                                        state.view["finish"]["approved"] = json!(false);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "request":state.view,"timed_out":false
+                                        }})
+                                    }
+                                    _ => panic!("unexpected fixture finish operation"),
+                                }
+                            }
                             "ssmcp.ui.questions" => {
                                 json!({"structuredContent":{"schema_version":1,"question":state.view}})
                             }
@@ -259,10 +329,6 @@ impl Fixture {
                                 json!({"structuredContent":{"native":"kept"}})
                             }
                             "ssmcp.fs.stat" => json!({"structuredContent":{"exists":true}}),
-                            "ssmcp.exec.wait" => {
-                                assert_eq!(arguments["job_id"], "summary-job");
-                                json!({"structuredContent":{"job_id":"summary-job","running":state.exec_running}})
-                            }
                             "ssmcp.ui.tool_summary" => {
                                 assert_eq!(arguments, json!({"action":"list"}));
                                 json!({"structuredContent":{"schema_version":1,"threshold":10,
@@ -274,15 +340,16 @@ impl Fixture {
                         };
                         if matches!(
                             name.as_str(),
-                            "fixture.actual" | "ssmcp.ui.question_delivery" | "ssmcp.exec.wait"
-                        ) {
+                            "fixture.actual" | "ssmcp.ui.question_delivery"
+                        ) || summary_exec
+                        {
                             output["_meta"] = json!({"ssmcp.question_answers":{
                                 "schema_version":1,"session_id":client_id,"thread_id":expected_agent,
                                 "provider":"github","subject":"42",
                                 "answers":if state.pending {vec![state.view.clone()]} else {vec![]}
                             }});
                         }
-                        if matches!(name.as_str(), "ssmcp.fs.stat" | "ssmcp.exec.wait") {
+                        if name == "ssmcp.fs.stat" || summary_exec {
                             state.summary_calls += 1;
                             if state.summary_calls > 10 && !state.summary_reminded {
                                 state.summary_reminded = true;
@@ -320,6 +387,7 @@ impl Fixture {
             agent_id,
             agent_token,
             native,
+            release_held,
             peer,
             server,
             _directory: directory,
@@ -974,3 +1042,6 @@ async fn tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_cons
         2
     );
 }
+
+mod await_capacity;
+mod finish_receipts;

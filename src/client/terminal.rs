@@ -31,6 +31,7 @@ mod guide;
 mod images;
 pub(crate) mod markdown;
 mod sleep;
+mod update_notice;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -63,6 +64,7 @@ pub(crate) struct Session {
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
     account_probe: Option<tokio::task::JoinHandle<()>>,
+    update_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -207,11 +209,18 @@ impl Session {
                         }
                     }))
                 });
+                let update_probe = update_notice::spawn(
+                    &shared,
+                    endpoint.is_some(),
+                    io::stdout().is_terminal(),
+                    super::update::available_notice(),
+                );
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
                     account_probe,
+                    update_probe,
                 }))
             }
             Err(error) => {
@@ -233,6 +242,9 @@ impl Drop for Session {
             probe.abort();
         }
         if let Some(probe) = self.account_probe.take() {
+            probe.abort();
+        }
+        if let Some(probe) = self.update_probe.take() {
             probe.abort();
         }
         if let Some(thread) = self.thread.take() {
@@ -314,11 +326,9 @@ pub(super) fn set_connection_versions(versions: super::update::ConnectionVersion
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let notice = versions
-            .update_message()
-            .unwrap_or_else(|| versions.summary());
-        // Preserve a more urgent local recovery or authentication notice.
-        state.notice.get_or_insert(notice);
+        // Fresh metadata is always retained. Only an actually presented notice
+        // is deduplicated, and a connection summary cannot hide a release offer.
+        update_notice::connection(&mut state, &versions);
         state.connection_versions = Some(versions);
         state.dirty = true;
     }
@@ -850,7 +860,8 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let Some(shared) = shared() else {
         return serde_json::json!({"active": false});
     };
-    let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.chat_poll_goal();
     let g = state.geometry;
     let chat = state.ui.layout == Layout::Chat;
     let conversation = state.conversation.snapshot();
@@ -1497,6 +1508,8 @@ struct State {
     filter_offset: usize,
     preview: bool,
     notice: Option<String>,
+    update_notice: Option<update_notice::Notice>,
+    rendered_update_notice: Option<update_notice::Notice>,
     actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
@@ -1551,6 +1564,8 @@ impl State {
             filter_offset: 0,
             preview: false,
             notice: None,
+            update_notice: None,
+            rendered_update_notice: None,
             actions: Vec::new(),
             previous_cr: false,
             dirty: true,
@@ -2167,8 +2182,12 @@ impl State {
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        self.rendered_update_notice = None;
         let mut frame = self.base_frame(now);
         self.sleep_overlay(&mut frame);
+        if self.sleep.visible {
+            self.rendered_update_notice = None;
+        }
         if !self.preview {
             // This frame owns visibility, including transitions away from Chat.
             // The manager hint is safe while the terminal State lock is held.
@@ -2235,6 +2254,13 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let level = ["all", "commands", "errors"][usize::from(self.log_level)];
+                let idle_update = !self.help
+                    && !self.selection
+                    && !self.filter_editing
+                    && self.notice.is_none()
+                    && self.log_query.is_empty()
+                    && self.log_level == 0
+                    && self.update_notice.is_some();
                 let hint = if self.selection {
                     COPY_HINT.into()
                 } else if self.filter_editing {
@@ -2246,6 +2272,12 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
+                } else if idle_update {
+                    self.rendered_update_notice = self.update_notice.clone();
+                    self.update_notice
+                        .as_ref()
+                        .map(update_notice::Notice::text)
+                        .unwrap_or_default()
                 } else if g.cols < 100 {
                     " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
                 } else {
@@ -2257,7 +2289,7 @@ impl State {
                     self.server_origin.as_ref(),
                     connection,
                     g.cols,
-                    self.notice.is_some() || self.filter_editing,
+                    self.notice.is_some() || self.filter_editing || idle_update,
                 );
                 rows.push(self.tone(
                     if self.keyboard.logs {
@@ -2713,6 +2745,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut offset = 0;
     let mut previous = None;
     let mut previous_cell = None;
+    let mut pending_update_notice = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         if offset >= pending.len() {
@@ -2731,14 +2764,19 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                     let media = std::mem::take(&mut state.media);
                     state.dirty = false;
                     previous_cell = cell;
-                    Some((frame, media))
+                    let notice = state
+                        .rendered_update_notice
+                        .take()
+                        .filter(|_| !state.preview);
+                    Some((frame, media, notice))
                 } else {
                     None
                 };
                 (refresh, state.graphics.take_requests())
             };
             pending = requests;
-            if let Some((frame, media)) = refresh {
+            if let Some((frame, media, notice)) = refresh {
+                pending_update_notice = notice;
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
                 append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
                 previous = Some(frame);
@@ -2749,6 +2787,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             Ok(()) => {}
             Err(_) => break,
         }
+        update_notice::complete(&mut pending_update_notice, offset >= pending.len());
         std::thread::sleep(FRAME_INTERVAL);
     }
     // RestoringOutput restores alternate-screen/input state and marks the
@@ -4118,6 +4157,7 @@ mod tests {
             thread: Some(thread),
             guide_probe: None,
             account_probe: None,
+            update_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];

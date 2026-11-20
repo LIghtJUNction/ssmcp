@@ -84,6 +84,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },
     SlashCommand {
+        name: "/goal",
+        description: "Current conversation goal: /goal [set <text> | clear]",
+    },
+    SlashCommand {
         name: "/queue",
         description: "Show queued requests",
     },

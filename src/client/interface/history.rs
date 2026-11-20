@@ -1,6 +1,7 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
 pub(crate) mod descriptions;
+pub(crate) mod goals;
 mod listener;
 mod ownership;
 pub(crate) use listener::{
@@ -9,8 +10,8 @@ pub(crate) use listener::{
 #[cfg(test)]
 pub(crate) use ownership::with_test_history;
 pub(crate) use ownership::{
-    HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, record_owned_request,
-    remember_visible_reply,
+    HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, record_owned_answer,
+    record_owned_request, remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -576,6 +577,7 @@ impl History {
         }
         for (id, _lease) in reclaim {
             self.remove_description(&id, &names)?;
+            self.remove_goal(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }

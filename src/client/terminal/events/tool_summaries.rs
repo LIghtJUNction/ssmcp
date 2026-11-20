@@ -392,9 +392,6 @@ impl EventView {
             group.display.covered_call_count = group.display.call_count;
             group.reminded = None;
         }
-        // A newly labelled command window starts readable, while an explicit
-        // user fold remains authoritative across later labels and new output.
-        self.reveal_summary_commands();
         let mut receipt = self.summary_receipt(&self.summary_groups[index]);
         receipt["accepted"] = json!(true);
         receipt["duplicate"] = json!(duplicate);

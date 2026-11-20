@@ -69,6 +69,20 @@ pub(super) async fn wait(
     arguments: Arguments,
     controller: Option<Controller>,
 ) -> Result<Value, String> {
+    wait_observed(broker, user, token, client_id, arguments, controller, None).await
+}
+
+/// Admission belongs to this invocation only. A rejected duplicate must never
+/// clean up another observer's waiting state or uncommitted reservation.
+pub(super) async fn wait_observed(
+    broker: Arc<Broker>,
+    user: String,
+    token: String,
+    client_id: String,
+    arguments: Arguments,
+    controller: Option<Controller>,
+    admitted: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Value, String> {
     arguments.validate()?;
     let run = code_mode::AUDIT_RUN
         .try_with(Clone::clone)
@@ -87,6 +101,9 @@ pub(super) async fn wait(
         .await
         .map_err(|_| "the user wait recipient no longer has access")?;
     let wait_id = run.begin_user_wait(&client_id, recipient.clone(), arguments.intent)?;
+    if let Some(admitted) = admitted {
+        admitted.store(true, std::sync::atomic::Ordering::Release);
+    }
     let _permit = match session.steering.wait_permit() {
         Ok(permit) => permit,
         Err(_) => {

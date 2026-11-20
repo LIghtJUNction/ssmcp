@@ -55,6 +55,7 @@ struct Event {
     panel: CommandPanel,
     group_panel: CommandPanel,
     group_expanded: bool,
+    group_automatic: bool,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
@@ -92,8 +93,6 @@ struct CommandPanel {
     folded_scroll: Option<Option<usize>>,
     rows: usize,
     page: usize,
-    /// An explicit group fold must survive refreshes before its first paint.
-    user_folded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -102,8 +101,9 @@ struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
     group_expanded: bool,
+    // Missing in older checkpoints: their saved bool is an explicit choice.
     #[serde(default)]
-    group_user_folded: bool,
+    group_automatic: bool,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -477,6 +477,16 @@ impl Event {
     }
 }
 
+/// Bounded group reading metadata survives eviction of every saved member.
+#[derive(Clone, Debug)]
+struct ToolGroupPosition {
+    id: String,
+    expanded: bool,
+    automatic: bool,
+    scroll: Option<usize>,
+    selected: bool,
+}
+
 /// A canvas column keeps only its reading position, never another event store.
 #[derive(Clone, Debug)]
 pub(super) struct EventPosition {
@@ -489,6 +499,7 @@ pub(super) struct EventPosition {
     chat_expanded: Vec<u64>,
     read_expanded: Vec<u64>,
     panel_scroll: Vec<(u64, CommandPosition)>,
+    tool_groups: Vec<ToolGroupPosition>,
 }
 
 impl Default for EventPosition {
@@ -503,7 +514,44 @@ impl Default for EventPosition {
             chat_expanded: Vec::new(),
             read_expanded: Vec::new(),
             panel_scroll: Vec::new(),
+            tool_groups: Vec::new(),
         }
+    }
+}
+
+impl EventPosition {
+    fn panel_for(&self, event: &Event) -> Option<CommandPosition> {
+        let mut panel = self
+            .panel_scroll
+            .iter()
+            .find(|(id, _)| *id == event.id)
+            .map(|(_, panel)| *panel);
+        if let Some(group) = event
+            .tool_group_id
+            .as_ref()
+            .and_then(|id| self.tool_groups.iter().find(|group| &group.id == id))
+        {
+            // Only group reading state survives eviction of every saved member;
+            // an individual command never inherits another command's viewport.
+            let panel = panel.get_or_insert_with(CommandPosition::default);
+            panel.group_expanded = group.expanded;
+            panel.group_automatic = group.automatic;
+            panel.group_scroll = group.scroll;
+        }
+        panel
+    }
+
+    fn selected_tool_group(&self, view: &EventView) -> Option<u64> {
+        let group = self.tool_groups.iter().find(|group| group.selected)?;
+        view.events
+            .iter()
+            .find(|event| {
+                event.tool_group_id.as_ref() == Some(&group.id)
+                    && event.meta.kind == Kind::Tool
+                    && event.image.is_none()
+                    && !event.reload_boundary
+            })
+            .map(|event| event.id)
     }
 }
 
@@ -578,19 +626,13 @@ impl EventView {
                     .map(|saved| saved.display.clone());
             }
         }
-        // Keep commands readable as standalone cards until the agent explicitly
-        // labels the complete group. Apply this to the whole canonical group so
-        // mixed reads/commands never expose duplicate IDs and partial counts.
+        // A single call keeps its existing card until it has a summary.
         groups.retain(|group| {
-            let summarized = group
-                .info
-                .as_ref()
-                .is_some_and(|info| info.summary.is_some());
-            let has_command = group.members.iter().any(|index| {
-                let event = &self.events[*index];
-                event.meta.command && !event.meta.diff
-            });
-            summarized || (group.members.len() > 1 && !has_command)
+            group.members.len() > 1
+                || group
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.summary.is_some())
         });
         groups
     }
@@ -638,38 +680,16 @@ impl EventView {
         ids
     }
 
-    fn reveal_summary_commands(&mut self) {
-        for group in self.tool_groups() {
-            if group
-                .info
-                .as_ref()
-                .is_some_and(|info| info.summary.is_some())
-                && group.members.iter().any(|index| {
-                    let event = &self.events[*index];
-                    event.meta.command && !event.meta.diff
-                })
-            {
-                let head = &mut self.events[group.start];
-                if !head.group_panel.user_folded {
-                    head.group_expanded = true;
-                }
-            }
-        }
-    }
-
     fn preserve_tool_selection(&mut self) {
-        self.reveal_summary_commands();
         let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) else {
             self.selected_group = None;
             return;
         };
         if !group.expanded {
-            if !self.follow
-                && self.selected_group.is_none()
-                && !self.events[group.start].group_panel.user_folded
-            {
+            if !self.follow && self.selected_group.is_none() {
                 // A new adjacent call must not swallow an item already being read.
                 self.events[group.start].group_expanded = true;
+                self.events[group.start].group_automatic = false;
                 self.reveal = true;
             } else {
                 self.selected = Some(group.head);
@@ -679,12 +699,12 @@ impl EventView {
     }
 
     fn set_tool_expanded(&mut self, group: &tool_activity::Group, expanded: bool) -> bool {
-        let head = &mut self.events[group.start];
-        head.group_panel.user_folded = !expanded;
-        if group.expanded == expanded {
+        if group.expanded == expanded && !self.events[group.start].group_automatic {
             return false;
         }
+        let head = &mut self.events[group.start];
         head.group_expanded = expanded;
+        head.group_automatic = false;
         if expanded && head.group_panel.rows == 0 && head.group_panel.scroll.is_none() {
             head.group_panel.scroll = Some(0);
         }
@@ -917,6 +937,9 @@ impl EventView {
     }
 
     pub(super) fn position(&self) -> EventPosition {
+        let groups = tool_activity::groups(&self.events, |event| {
+            event.owned_by(&self.history_selection)
+        });
         EventPosition {
             selected: self.selected,
             selected_group: self.selected_group,
@@ -925,17 +948,38 @@ impl EventView {
             reveal: self.reveal,
             new_image: self.new_image,
             read_expanded: self.read_expanded.clone(),
+            tool_groups: groups
+                .iter()
+                .filter_map(|group| {
+                    let head = &self.events[group.start];
+                    Some(ToolGroupPosition {
+                        id: head.tool_group_id.clone()?,
+                        expanded: head.group_expanded,
+                        automatic: head.group_automatic,
+                        scroll: head.group_panel.scroll,
+                        selected: self.selected_group == Some(group.head),
+                    })
+                })
+                .take(MAX_EVENTS)
+                .collect(),
             panel_scroll: self
                 .events
                 .iter()
-                .map(|event| {
+                .enumerate()
+                .map(|(index, event)| {
+                    // Any retained member can become the head after pruning.
+                    // A saved canvas must carry the group's choice with it.
+                    let head = groups
+                        .iter()
+                        .find(|group| group.contains(index))
+                        .map_or(event, |group| &self.events[group.start]);
                     (
                         event.id,
                         CommandPosition {
                             scroll: event.panel.scroll,
-                            group_scroll: event.group_panel.scroll,
-                            group_expanded: event.group_expanded,
-                            group_user_folded: event.group_panel.user_folded,
+                            group_scroll: head.group_panel.scroll,
+                            group_expanded: head.group_expanded,
+                            group_automatic: head.group_automatic,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -951,23 +995,24 @@ impl EventView {
     }
 
     pub(super) fn restore_position(&mut self, position: &EventPosition) {
-        self.selected = position.selected;
-        self.selected_group = position.selected_group;
+        let retained_group = position.selected_tool_group(self);
+        self.selected = retained_group.or(position.selected);
+        self.selected_group = retained_group.or(position.selected_group);
         self.scroll = position.scroll;
         self.follow = position.follow;
         self.reveal = position.reveal;
         for event in &mut self.events {
             event.chat_expanded = position.chat_expanded.contains(&event.id);
-            let panel = position
-                .panel_scroll
-                .iter()
-                .find(|(id, _)| *id == event.id)
-                .map(|(_, panel)| *panel)
-                .unwrap_or_default();
+            let panel = position.panel_for(event).unwrap_or(CommandPosition {
+                // New live rows use the default for this canvas. Restored
+                // rows without reading data keep the legacy folded state.
+                group_automatic: !event.historical,
+                ..CommandPosition::default()
+            });
             event.panel.scroll = panel.scroll;
             event.group_panel.scroll = panel.group_scroll;
             event.group_expanded = panel.group_expanded;
-            event.group_panel.user_folded = panel.group_user_folded;
+            event.group_automatic = panel.group_automatic;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
@@ -1000,14 +1045,19 @@ impl EventView {
         self.group_header_hit_rows.clear();
         self.placements.clear();
         self.preserve_read_selection();
-        let visible = self.visible_ids();
-        if !self.selected.is_some_and(|id| visible.contains(&id)) {
-            self.selected = if self.follow {
+        let visible = self.selection_targets();
+        if !self
+            .selected
+            .is_some_and(|id| visible.iter().any(|(target, _)| *target == id))
+        {
+            let target = if self.follow {
                 visible.last()
             } else {
                 visible.first()
             }
             .copied();
+            self.selected = target.map(|(id, _)| id);
+            self.selected_group = target.and_then(|(id, group)| group.then_some(id));
             self.reveal = !self.follow;
         }
     }
@@ -1377,6 +1427,7 @@ impl EventView {
                 panel: CommandPanel::default(),
                 group_panel: CommandPanel::default(),
                 group_expanded: false,
+                group_automatic: true,
                 truncated,
                 tone,
                 meta,
@@ -1413,16 +1464,32 @@ impl EventView {
                 .map(tool_summaries::Group::retained_bytes)
                 .sum::<usize>();
         while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
+            // Stable IDs retain their existing migration contract. Legacy
+            // calls share only a contiguous run, so a conversation/image/log
+            // boundary must stop migration of their head's reading state.
+            let successor = self.events.front().and_then(|head| {
+                if let Some(id) = &head.tool_group_id {
+                    self.events
+                        .iter()
+                        .skip(1)
+                        .find(|event| event.tool_group_id.as_ref() == Some(id))
+                        .map(|event| event.id)
+                } else {
+                    tool_activity::groups(&self.events, |event| event.owned_by(&head.meta.history))
+                        .into_iter()
+                        .find(|group| group.start == 0)
+                        .and_then(|group| group.members.get(1).copied())
+                        .map(|index| self.events[index].id)
+                }
+            });
             let Some(event) = self.events.pop_front() else {
                 break;
             };
-            if let Some(group_id) = &event.tool_group_id
-                && let Some(next) = self
-                    .events
-                    .iter_mut()
-                    .find(|next| next.tool_group_id.as_ref() == Some(group_id))
+            if let Some(successor) = successor
+                && let Some(next) = self.events.iter_mut().find(|next| next.id == successor)
             {
                 next.group_expanded = event.group_expanded;
+                next.group_automatic = event.group_automatic;
                 next.group_panel = event.group_panel;
                 if self.selected_group == Some(event.id) {
                     self.selected_group = Some(next.id);
@@ -1919,6 +1986,7 @@ impl EventView {
                         page,
                         palette: &palette,
                         ui,
+                        diff_mode: self.diff_mode,
                         selected: self.selected,
                         selected_group: self.selected_group,
                         focused,

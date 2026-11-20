@@ -1,10 +1,14 @@
 //! Conversation-style local controls. No input is ever forwarded to a hidden PTY.
+#[cfg(test)]
+mod update_notice_tests;
+
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
 use steering::receipt::Receipt;
 mod access;
 mod canvas;
+mod goals;
 mod groups;
 mod hints;
 mod history;
@@ -88,6 +92,7 @@ pub(super) struct Conversation {
     pub(super) process_id: String,
     pub(super) process_generation: u64,
     groups: groups::Selection,
+    goal: goals::Goal,
     // The roster can outlive its use as the current /send destination.
     send_to_group: bool,
     recipient_revision: u64,
@@ -167,6 +172,7 @@ impl Conversation {
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "goal":self.goal.snapshot(),
             "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
@@ -465,6 +471,7 @@ impl State {
         self.chat_poll_login();
         self.chat_poll_access();
         self.chat_poll_logout();
+        self.chat_poll_goal();
         self.chat_poll_force_send();
         let mut failed_notice = None;
         for event in steering::take_events() {
@@ -645,6 +652,7 @@ impl State {
                 self.conversation.exit_requested = true;
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
+            "/goal" => self.chat_goal(rest)?,
             "/help" => {
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -864,6 +872,11 @@ impl State {
                 }
                 if self.preview {
                     return Err("Preview has no connected session to restart".into());
+                }
+                if self.conversation.goal.saving() {
+                    return Err(
+                        "Wait for the conversation goal to be saved before restarting".into(),
+                    );
                 }
                 // Preserve the parked request before the restart worker can run.
                 // The command itself should never reappear as a user requirement.
@@ -1417,19 +1430,16 @@ impl State {
                 return;
             }
         }
-        if !self.help && matches!(key, Key::Back | Key::Open) {
-            let editor = if self.conversation.view == View::Questions {
-                self.question_editor()
+        if !self.help
+            && self.conversation.view != View::Questions
+            && matches!(key, Key::Back | Key::Open)
+        {
+            let editor = &self.conversation.composer;
+            let at_edge = if matches!(key, Key::Back) {
+                editor.cursor() == 0
             } else {
-                Some(&self.conversation.composer)
+                editor.cursor() == editor.text().len()
             };
-            let at_edge = editor.is_none_or(|editor| {
-                if matches!(key, Key::Back) {
-                    editor.cursor() == 0
-                } else {
-                    editor.cursor() == editor.text().len()
-                }
-            });
             if self.conversation.content_focus || at_edge {
                 self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
                 return;
@@ -2686,7 +2696,23 @@ impl State {
         }
     }
 
+    fn chat_update_notice(&self) -> Option<update_notice::Notice> {
+        if self.help
+            || self.selection
+            || self.conversation.logs_open
+            || self.conversation.view != View::Activity
+            || self.conversation.content_focus
+            || !self.conversation.composer.is_empty()
+            || self.chat_menu_visible()
+            || self.conversation.composer.completion_loading()
+        {
+            return None;
+        }
+        self.update_notice.clone()
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
+        self.rendered_update_notice = None;
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
@@ -2813,11 +2839,13 @@ impl State {
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_hint = self.chat_native_hint();
+                let update_hint = self.chat_update_notice();
                 let priority_hint = self.notice.is_some()
                     || scroll_hint.is_some()
                     || wait_hint.is_some()
                     || paste_hint.is_some()
-                    || native_hint.is_some();
+                    || native_hint.is_some()
+                    || update_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2827,6 +2855,11 @@ impl State {
                     if let Some(hint) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }
+                    if let Some(hint) = update_hint {
+                        let message = hint.text();
+                        self.rendered_update_notice = Some(hint);
+                        return message;
+                    }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
@@ -2890,7 +2923,11 @@ impl State {
                     && !self.help
                     && self.conversation.canvas.is_default_conversation()
                 {
-                    format!("conversation{suffix}")
+                    self.conversation
+                        .goal
+                        .current_text()
+                        .map(|goal| format!("Goal · {goal}"))
+                        .unwrap_or_else(|| format!("conversation{suffix}"))
                 } else {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
                 };
