@@ -401,11 +401,13 @@ class InputHistory(Composer):
         self.wait_state(front, lambda state: not state["draft"]["text"], "attachment test draft did not clear")
 
         reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
-        request = {"text": reply, "kind": "answer", "idempotency_key": "handoff-reply-once"}
+        # This is copy/handoff source material, not an attempt to finish a task.
+        # Explicit completion approval is exercised by e2e_interactions.py.
+        request = {"text": reply, "kind": "progress", "idempotency_key": "handoff-reply-once"}
         receipt = self.observe("ssmcp.ui.message", request)
         duplicate = self.observe("ssmcp.ui.message", request)
         self.check(receipt["accepted"] and receipt["history_saved"] and not receipt["duplicate"]
-                   and receipt["kind"] == "answer" and duplicate["duplicate"]
+                   and receipt["kind"] == "progress" and duplicate["duplicate"]
                    and duplicate["message_id"] == receipt["message_id"],
                    "an idempotent native reply preserves its ID and is saved only once")
         pending_text = "HANDOFF_PENDING 界：尚未领取的用户要求"
@@ -652,7 +654,7 @@ def main():
     started = time.monotonic()
     report = {
         "status": "failed", "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+        "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
         "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL and resume; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (

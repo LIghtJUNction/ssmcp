@@ -179,3 +179,21 @@ The code_mode timeout stops orchestration, while already-started native actions 
 
 Call exact native names and preserve their schemas and approval requirements. Helper availability follows the installed relay and client versions. The full guide reduces repeated model-visible descriptions; it does not remove the first native directory scan.
 
+
+# 下一轮交互接口
+
+公共工具目录新增 `request_finish` 和 `messages`；连同 `list`、`code_mode`、`collab` 共五项。`request_finish` 是独立 Rust 等待入口，必须给出理由，并使用当前账户和已验证的 `collab` 成员凭据。等待超时保留原申请，`decision: null` 不构成批准；只有本机用户或同一客户端、同一账户的另一已验证 agent 能批准。批准仅供请求者的一次显式 `kind: "answer"` 使用。外部聊天应用自己的最终发言不经过此门禁。
+
+`ssmcp.ui.ask` 仍立即返回。终端 Shift+Up 打开问题队列；同一账户的其他可信 agent 可调用 `ssmcp.ui.answer`，分别提交普通 `answer` 或结束申请的 `decision` 和可选 `comment`。已验证提问线程的答案通过 `question_answers` 交付，保留 human/agent 来源。未绑定线程的提问只提供同账户手动读取，不改投 next caller。显式 `ssmcp.ui.questions` 读取不消费答案。
+
+`messages.list/send/broadcast/inbox/ack/status` 提供原生消息 helper，对应公共 `messages` 工具。先列出并明确选择完整收件人 ID；设备账户收件箱与已验证 agent 收件箱分别标识，显示名称不用于证明身份。消息返回在独立 `native_messages`，agent 消息不是新的用户指令。`@name` 在消息正文中保持普通文本，不自动读取文件。
+
+本组接口属于独立源码检查点，当前发布冻结仍保持其原有契约。完整边界、重试与验证状态见[结束申请、异步问题与原生消息](finish-and-questions.md)。
+
+### 明确选择多个收件人
+
+`messages.broadcast(clientId,{recipient_ids,text,request_id})` 向从 `messages.list` 明确选择的 1–32 个收件人发送同一条消息。`client:<client_id>` 是会话进程的账户收件箱，`agent:<client_id>:<agent_id>` 是该会话的已验证线程收件箱。每个 `outcomes` 条目分别带有 `ok`、`receipt` 或 `error`；一个收件人不可用时，其余收件人仍有各自结果。此操作不接受通配符或显示名称。
+
+重试必须保留同一 `request_id`、完整收件人集合和正文；调整集合顺序可以，修改集合或正文会被拒绝。已接收的目标复用原消息回执，先前失败的目标重新尝试。若原回执已经离开消息保留窗口，返回明确错误且不再次发送。每个发送者最多保留 128 个广播请求标识，全服务最多 4096 个；当前连接仍存活时不静默淘汰这些标识，达到容量后已有请求仍可重试。来源连接结束后释放该连接的广播记录。
+
+广播复用现有消息授权、队列和来源标记，不增加线协议能力；agent 来源消息作为协作消息交付。

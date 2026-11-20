@@ -41,7 +41,7 @@ Windows PowerShell：
 irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex
 ```
 
-也可以使用 `cargo install ssmcp --locked --bin ssmcp`。安装脚本获取已发布版本；本文的新会话能力对应仓库中的 **0.9.0 源码**。[平台与安装选项](docs/releases.md)
+也可以使用 `cargo install ssmcp --locked --bin ssmcp`。安装脚本获取已发布版本；源码构建使用下文的完整子模块检出步骤。[平台与安装选项](docs/releases.md)
 
 手动安装的客户端可以直接检查和更新：
 
@@ -220,7 +220,7 @@ hook 默认关闭，不内置额外审核流程，也不改变工具原生权限
 ## 开发
 
 ```sh
-git clone https://github.com/LIghtJUNction/ssmcp.git
+git clone --recurse-submodules https://github.com/LIghtJUNction/ssmcp.git
 cd ssmcp
 cargo build --locked --bins --example vt_snapshot
 cargo run --locked --bin ssmcp -- ui preview

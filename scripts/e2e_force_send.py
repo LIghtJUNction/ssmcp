@@ -16,7 +16,7 @@ import tempfile
 import time
 
 from e2e_input_history import (
-    InputHistory, ENTER, HOME, DOWN, PASTE_START, PASTE_END,
+    InputHistory, ENTER, HOME, PASTE_START, PASTE_END,
     REFERENCE_BEGIN, REFERENCE_END, text,
 )
 
@@ -135,11 +135,17 @@ class ForceSend(InputHistory):
         front = self.start_front("force-send")
         front.resize(28, 120)
         front.until(lambda shot: shot["size"] == [28, 120], "the wide force-send fixture")
-        member = self.public_call("collab", {
-            "action": "join", "client_id": self.client_id,
-            "name": "Exact fixture recipient", "role": "routing guard only",
+        roster = self.public_call("messages", {
+            "action": "list", "client_id": self.client_id,
         })
-        self.sensitive.append(member["token"])
+        inboxes = [entry for entry in roster["recipients"]
+                   if entry["client_id"] == self.client_id
+                   and entry["kind"] == "account_inbox" and entry["agent_id"] is None]
+        self.check(len(inboxes) == 1 and inboxes[0]["online"] and inboxes[0]["sendable"],
+                   "the server lists one exact available account inbox for this owned client")
+        native_recipient = inboxes[0]["id"]
+        self.check(native_recipient == "client:" + self.client_id,
+                   "the native routing guard uses an authoritative stable recipient ID")
         ordinary = self.submit_source(front, "Ordinary request stays in its own queue")
 
         original = '  /send @"' + path + '"\n    code\n'
@@ -167,15 +173,44 @@ class ForceSend(InputHistory):
         self.check(lease["token"] not in json.dumps(snapshot),
                    "listener status contains no lease credential")
 
-        self.draft(front, "/send @missing.txt\n")
-        front.send(ENTER)
-        front.until(lambda shot: "发送失败" in text(shot) and "missing.txt:" in text(shot),
-                    "a real missing-reference validation failure")
-        self.wait_state(front, lambda state: not state["force_pending"],
-                        "the failed reference task did not finish")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == "/send @missing.txt\n"
-                   and self.listener("status")["pending"] is None,
-                   "reference validation failure preserves its draft without offering a delivery")
+        missing_body = "@missing.txt\n"
+        missing_original = "/send " + missing_body
+        delivery_id = self.force(front, missing_original)
+        offered = self.listener("read", **lease, wait_ms=0)["delivery"]
+        repeated = self.listener("read", **lease, wait_ms=0)["delivery"]
+        self.check(offered == repeated and offered["delivery_id"] == delivery_id
+                   and offered["connection_id"] == self.client_id
+                   and offered["listener_id"] == lease["listener_id"]
+                   and offered["source_text"] == missing_body and offered["source"] == "client_user",
+                   "missing-reference delivery retains its exact listener, identity and original body")
+        raw, separator, encoded = offered["text"].partition(REFERENCE_BEGIN)
+        self.check(raw == missing_body and bool(separator) and encoded.endswith(REFERENCE_END),
+                   "missing-reference force-send reaches the receiver with an explicit reference payload")
+        reference = json.loads(encoded[:-len(REFERENCE_END)])
+        entries = reference["references"]
+        self.check(reference["schema_version"] == 1
+                   and reference["source_sha256"] == hashlib.sha256(missing_body.encode()).hexdigest()
+                   and len(entries) == 1 and entries[0]["kind"] == "file"
+                   and entries[0]["path"] == "missing.txt" and entries[0]["status"] == "unavailable"
+                   and bool(entries[0].get("warning"))
+                   and "read" not in entries[0] and "preview" not in entries[0],
+                   "the receiver gets an unavailable-file warning without fabricated contents")
+        pending = front.until(lambda shot: "等待接收确认" in text(shot),
+                              "the missing reference still waiting for the real listener ACK")
+        self.check("引用提示：" not in text(pending)
+                   and self.ui("/display/conversation")["draft"]["text"] == missing_original,
+                   "a missing-reference notice and draft clearing wait for an accepted ACK")
+        self.listener("ack", **lease, delivery_id=delivery_id, status="accepted")
+        self.receipt(front, delivery_id, "accepted")
+        self.wait_state(front, lambda state: not state["draft"]["text"],
+                        "the accepted missing-reference draft did not clear")
+        front.until(lambda shot: "监听程序已接收" in text(shot)
+                    and any("引用提示：" in row and "@missing.txt" in row for row in shot["rows"]),
+                    "the missing-reference notice rendered only after the accepted receipt")
+        self.check(not (self.workspace / "missing.txt").exists(),
+                   "accepting an unavailable reference does not create a file")
+        self.ordinary_unchanged(ordinary)
+        self.save_shot("force-missing-accepted-120", front, cells=True)
 
         body = '@"' + path + '"\n    code\n'
         original = "/send\n" + body
@@ -244,26 +279,56 @@ class ForceSend(InputHistory):
         front.until(lambda shot: shot["size"] == [24, 48], "the narrow force-send fixture")
         self.save_shot("force-unknown-48", front, cells=True)
 
-        self.draft(front, "")
-        self.agents(front)
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, entry in enumerate(roster)
-                            if entry["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + ENTER)
-        self.wait_state(front, lambda state: state["target"] == member["agent_id"],
-                        "the fixture did not select its exact recipient")
-        original = "/send Do not change this recipient"
-        self.draft(front, original)
+        # Account relay recipients now come from native messaging, not the
+        # legacy steering roster. Exercise that real picker here; the existing
+        # Rust exact-agent/thread tests retain the legacy listener-scope guard.
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120], "the native recipient guard viewport")
+        self.draft(front, "/message " + native_recipient)
         front.send(ENTER)
-        front.until(lambda shot: "指定 agent" in text(shot), "the exact-recipient force-send guard")
+        self.wait_state(front, lambda state: state["view"] == "agents"
+                        and state["selected_agent"] == "native:" + native_recipient,
+                        "the real message command did not select the exact native inbox row")
+        front.send(ENTER)
+        selected = self.wait_state(
+            front, lambda state: state["native_recipient"] == native_recipient
+            and state["focus"] == "input",
+            "the real picker did not retain the chosen native recipient",
+        )
+        inbox_before = self.public_call("messages", {
+            "action": "inbox", "client_id": self.client_id,
+        })
+        self.check(inbox_before["messages"] == [] and not inbox_before.get("user_messages"),
+                   "the owned native inbox starts empty without consuming the ordinary queue")
+        listener_before = self.listener("status")
+        original = "/send Do not change this recipient\n    @missing.txt $missing-skill\n"
+        before = self.draft(front, original)
+        front.send(ENTER)
+        front.until(lambda shot: "此收件人不支持 /send" in text(shot),
+                    "the explicit native-recipient force-send rejection")
         state = self.ui("/display/conversation")
-        self.check(state["target"] == member["agent_id"] and state["draft"]["text"] == original
-                   and self.listener("status")["pending"] is None,
-                   "force-send does not silently reroute an exact-agent draft")
+        self.check(state["native_recipient"] == native_recipient
+                   and state["target"] == selected["target"]
+                   and state["draft"] == before["draft"],
+                   "rejected force-send preserves the exact native recipient, UTF-8 draft and cursor")
+        self.check(not state["native_pending"] and not state["force_pending"],
+                   "rejected force-send starts neither a native send nor a listener task")
+        listener_after = self.listener("status")
+        self.check(listener_before["pending"] is None and listener_after["pending"] is None
+                   and listener_after["receipts"] == listener_before["receipts"],
+                   "the default listener receives no rerouted delivery or new receipt")
+        inbox_after = self.public_call("messages", {
+            "action": "inbox", "client_id": self.client_id,
+        })
+        self.check(inbox_after["messages"] == [] and not inbox_after.get("user_messages"),
+                   "the native inbox receives zero ordinary messages from the rejected /send")
+        self.ordinary_unchanged(ordinary)
+        self.save_shot("force-native-recipient-rejected-120", front, cells=True)
         self.draft(front, "")
         self.agents(front)
         front.send(HOME + ENTER)
-        self.wait_state(front, lambda state: state["target"] is None,
+        self.wait_state(front, lambda state: state["target"] is None
+                        and state["native_recipient"] is None,
                         "the fixture did not explicitly restore Next caller")
         self.listener("read", **lease, wait_ms=0)
 
@@ -315,6 +380,7 @@ def main():
         "status": "failed",
         "transport": "production account router over loopback HTTP/WebSocket; synthetic GitHub provider",
         "scope": "real CLI/PTY and explicit synthetic listener; no model invocation",
+        "routing_scenario": "real native account inbox picker rejection; registered-thread scope remains covered by Rust regressions",
         "binary_sha256": hashlib.file_digest((args.bin_dir / "ssmcp").open("rb"), "sha256").hexdigest(),
         "script_sha256": hashlib.file_digest(Path(__file__).open("rb"), "sha256").hexdigest(),
     }

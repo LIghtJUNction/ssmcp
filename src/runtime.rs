@@ -439,6 +439,14 @@ impl Runtime {
     ) -> Result<(), String> {
         self.code_audit.finish(completion)
     }
+    pub(crate) async fn prepare_references(
+        &self,
+        text: &str,
+    ) -> Result<crate::client::references::PreparedReferences, String> {
+        self.files.prepare_references(text).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
         self.files.expand_references(text).await
     }
@@ -544,6 +552,7 @@ impl Runtime {
         call_id: u64,
     ) -> Result<Value, String> {
         let started = std::time::Instant::now();
+        let caller = call_scope::current();
         let harness_call = tool
             .provider
             .is_harness()
@@ -702,7 +711,12 @@ impl Runtime {
             .await
             .ok()
             .flatten();
-        Ok(attach_context_metadata(value, context))
+        let value = attach_context_metadata(value, context);
+        Ok(crate::client::interface::questions::attach_answers(
+            value,
+            caller.as_deref(),
+            &name,
+        ))
     }
     pub async fn shutdown(&self) {
         self.registry.close();

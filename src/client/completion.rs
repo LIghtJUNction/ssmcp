@@ -102,10 +102,9 @@ pub(crate) fn query(text: &str, cursor: usize) -> Option<Query> {
             at += count;
             continue;
         }
-        let boundary = text[..at]
-            .chars()
-            .next_back()
-            .is_none_or(|previous| previous.is_whitespace() || "([{>\"'".contains(previous));
+        let boundary = text[..at].chars().next_back().is_none_or(|previous| {
+            previous.is_whitespace() || "([{>\"'（【「『，。；：！？、".contains(previous)
+        });
         if ticks != 0 || !boundary || !matches!(ch, '@' | '$') {
             at += ch.len_utf8();
             continue;
@@ -128,7 +127,10 @@ pub(crate) fn query(text: &str, cursor: usize) -> Option<Query> {
                 at = end;
                 break;
             }
-            if quote.is_none() && (next.is_whitespace() || "()[]{}<>,;!?".contains(next)) {
+            if quote.is_none()
+                && (next.is_whitespace()
+                    || "()[]{}<>,;!?（）【】「」『』，。；：！？、".contains(next))
+            {
                 end = at;
                 break;
             }
@@ -149,7 +151,7 @@ pub(crate) fn query(text: &str, cursor: usize) -> Option<Query> {
             end = at;
         }
         if cursor > start && cursor <= end {
-            if ch == '$' && prefix.starts_with(|ch: char| ch.is_ascii_digit()) {
+            if ch == '$' && quote.is_none() && prefix.starts_with(|ch: char| ch.is_ascii_digit()) {
                 return None;
             }
             return Some(Query {
@@ -177,9 +179,9 @@ pub(crate) fn query(text: &str, cursor: usize) -> Option<Query> {
 fn reference(name: &str, skill: bool, directory: bool) -> String {
     let marker = if skill { '$' } else { '@' };
     let quoted = (skill && name.starts_with(|ch: char| ch.is_ascii_digit()))
-        || name
-            .chars()
-            .any(|ch| ch.is_whitespace() || "()[]{}<>,;!?\\\"'\x60".contains(ch));
+        || name.chars().any(|ch| {
+            ch.is_whitespace() || "()[]{}<>,;!?（）【】「」『』，。；：！？、\\\"'\x60".contains(ch)
+        });
     let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
     if directory {
         if quoted {
@@ -220,7 +222,14 @@ fn matches(query: &Query, listing: &Listing) -> Matches {
         notice: if more {
             Some("Partial list · keep typing or enter a subdirectory".into())
         } else if items.is_empty() {
-            Some("No matching files or skills".into())
+            Some(
+                if query.skill {
+                    "No matching skills · you can still send"
+                } else {
+                    "No matching files · you can still send"
+                }
+                .into(),
+            )
         } else {
             None
         },
@@ -544,6 +553,58 @@ mod tests {
         assert!(query("!echo $HOME", 11).is_none());
         assert!(query("$100", 4).is_none());
     }
+    #[test]
+    fn quoted_numeric_skills_remain_editable_without_matching_currency() {
+        for text in [r#"$"007-helper""#, "$'007-helper'"] {
+            let found = query(text, text.len()).unwrap();
+            assert!(found.skill);
+            assert_eq!(found.prefix, "007-helper");
+            assert_eq!(&text[found.start..found.end], text);
+            let replacement = reference("007-review", true, false);
+            let (updated, cursor) = apply(text, text.len(), &found, &replacement, 1024).unwrap();
+            assert_eq!(updated, "$\"007-review\" ");
+            assert_eq!(cursor, updated.len());
+        }
+        for text in ["$100", "$3.50", "$007-helper"] {
+            assert!(query(text, text.len()).is_none());
+        }
+    }
+
+    #[test]
+    fn chinese_punctuation_keeps_skill_and_file_completion_local() {
+        let text = "按（$lint），检查@src/main.rs。";
+        let cursor = text.find('）').unwrap();
+        let found = query(text, cursor).unwrap();
+        assert_eq!(found.prefix, "lint");
+        assert_eq!(&text[found.start..found.end], "$lint");
+        let (updated, _) = apply(text, cursor, &found, "$lint-check ", 1024).unwrap();
+        assert_eq!(updated, "按（$lint-check ），检查@src/main.rs。");
+        assert!(query(text, cursor + '）'.len_utf8()).is_none());
+
+        let text = "检查 @src/main.rs，再按：$lint-check。";
+        let file_cursor = text.find('，').unwrap();
+        let file = query(text, file_cursor).unwrap();
+        assert!(!file.skill);
+        assert_eq!(file.prefix, "src/main.rs");
+        let skill_cursor = text.find('。').unwrap();
+        let skill = query(text, skill_cursor).unwrap();
+        assert!(skill.skill);
+        assert_eq!(skill.prefix, "lint-check");
+        assert!(query(text, text.len()).is_none());
+    }
+
+    #[test]
+    fn quoted_names_preserve_chinese_punctuation_when_completed() {
+        for (name, skill) in [("检查，发布", true), ("设计，说明.md", false)] {
+            let replacement = reference(name, skill, false);
+            assert!(replacement.contains('"'));
+            let cursor = replacement.len() - 1;
+            let found = query(&replacement, cursor).unwrap();
+            assert_eq!(found.prefix, name);
+            assert_eq!(found.skill, skill);
+        }
+    }
+
     #[test]
     fn replacement_is_local_and_rejects_stale_input_or_oversize() {
         let text = "看 @src/mai 然后测试";

@@ -4,6 +4,24 @@ computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Window
 
 当前名称统一为 `computer-use`，专用客户端与用户服务名称为 `ssmcp-computer-use`。已有调用继续使用 `ssmcp.computer.*` 和 `ssmcp.browser.*`；Omarchy 新增 `ssmcp.omarchy.*`。名称调整不改变客户端 ID 的路由规则。实现入口见 [电脑适配器](../src/computer.rs)、[浏览器适配器](../src/browser.rs)和 [Omarchy 适配器](../src/omarchy.rs)。
 
+## zuse 后端与平台适配
+
+桌面核心固定使用 `zuse-computer 0.2.2`，由 SSMCP 的受管工作进程执行。SSMCP 负责连接授权、私有桌面、输入取消与清理，以及需要保留的平台身份和结果确认。状态结果的 `zuse` 字段包含实际库版本、后端、可用性和探测失败原因；`engine_routes` 按操作给出真正使用的引擎。[zuse 适配入口](../src/computer/zuse_backend.rs) · [路由与状态汇总](../src/computer/routing.rs)
+
+| 操作 | Linux | Windows / macOS |
+| --- | --- | --- |
+| 窗口枚举 | zuse | zuse |
+| 默认截图 | zuse | zuse |
+| 聚焦与键鼠输入 | zuse | 保留 SSMCP 原生身份核验、前台确认与释放清理 |
+| 显示器信息 | SSMCP 原生适配器 | SSMCP 原生适配器 |
+| 请求 cursor=true 时的截图路由 | X11 使用 zuse；Hyprland / Wayland 使用原生适配器 | SSMCP 原生适配器 |
+
+引擎名称表示调用路径。操作能否执行，仍以对应 `capabilities` 项的 `available` 和 `reason` 为准。zuse 探测失败时，窗口枚举与默认截图会明确报告不可用。Windows/macOS 将带鼠标截图的能力单独报告为 `capabilities.screenshot_with_cursor`，保留其平台依赖和权限结果；Linux 的 `engine_routes.screenshot_with_cursor` 仅说明请求路由。X11 当前不会合成鼠标图像，截图元数据中的 `cursor: false` 如实表示这一限制。
+
+Windows 公共窗口 ID 将 zuse 返回的 HWND 与 PID 组合为 `hwnd:<hex>:<pid>`。把 `computer.windows` 返回的 ID 原样传给 `computer.focus` 即可；聚焦前和等待前台确认期间都会再次检查 PID。内部 zuse worker 继续使用自身原始 ID。macOS 保留已有的窗口几何匹配、唯一性检查和前台确认。[Windows 身份转换](../src/computer/windows_identity.rs) · [Windows 焦点确认](../src/computer/windows.rs)
+
+本次依赖升级使用 zuse 的 Desktop API。本文的浏览器 CDP 仍由 SSMCP 浏览器适配器提供；zuse 的 Browser、Android 和 iOS API 尚未接入这组桌面工具。精确依赖来源见[子模块说明](dependencies.md)。
+
 ## 默认使用私有桌面
 
 `computer` / `cua` 的观察与输入默认选择本连接拥有的私有桌面。没有私有桌面时，`status` 仅返回平台支持、`can_start` 和缺失 helper；显示器、窗口、截图及输入不会读取或操作宿主桌面，也不会因为只读请求而启动桌面。[默认分派](../src/computer/isolated.rs)

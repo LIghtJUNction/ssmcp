@@ -216,6 +216,8 @@ jobs:
             ${{ runner.temp }}/ssmcp-daemon-report*
             ${{ runner.temp }}/ssmcp-daemon-manager.log
             ${{ runner.temp }}/ssmcp-multi-user-runtime-report.json
+            target/acceptance/interactions-*/*.json
+            target/acceptance/interactions-*/*.txt
           if-no-files-found: warn
           retention-days: 14
       - run: cargo build --locked --release

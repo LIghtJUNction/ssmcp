@@ -1,0 +1,248 @@
+{
+  "schema": "ssmcp.message-references.acceptance.v1",
+  "recorded_at": "2026-11-20T15:08:13.625013+08:00",
+  "product_source_revision": "b39a8e96c7234b6fb097d388e97614a2102b9810",
+  "acceptance_source_revision": "5033cf3e3e89d24a133f18a6b2861b49a70cfc0e",
+  "production_activation": "pending maintenance approval; no production restart performed",
+  "library": {
+    "passed": 1618,
+    "failed": 0,
+    "ignored": 22,
+    "partition": {
+      "total": 1640,
+      "private": 1636,
+      "host": 4,
+      "disjoint": true,
+      "complete": true
+    }
+  },
+  "integration": {
+    "passed": 91,
+    "failed": 0,
+    "ignored": 18,
+    "targets": [
+      {
+        "target": "allow_account",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "cc_backend",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "client_resources",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "client_server_config",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "codex_backend",
+        "passed": 14,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "collaboration",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "rechecked_test_source": "5033cf3e3e89d24a133f18a6b2861b49a70cfc0e"
+      },
+      {
+        "target": "context",
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "context_helpers",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "context_runtime",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "oauth_security",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "pi_backend",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "release_client",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "resources",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "rsync",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "server_runtime",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "terminals",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "two_tools",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 7
+      },
+      {
+        "target": "workspace_bridge",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 3
+      },
+      {
+        "target": "zuse_worker_entry",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 1
+      }
+    ]
+  },
+  "rust_distinct_default_tests_passed": 1709,
+  "static_checks": {
+    "fmt": "passed",
+    "workspace_all_targets_clippy_warnings_denied": "passed",
+    "changed_collaboration_test_clippy_warnings_denied": "passed",
+    "windows_gnu_cargo_check": {
+      "status": "passed",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "--lib",
+        "--bins",
+        "--jobs",
+        "1"
+      ],
+      "windows_link_tested": false,
+      "windows_runtime_tested": false,
+      "macos_runtime_tested": false
+    }
+  },
+  "e2e": [
+    {
+      "name": "message-references",
+      "status": "passed",
+      "exit_code": 0,
+      "checks": 53,
+      "seconds": 15.17,
+      "script_sha256": "a1f1dcb659782757ea7b838bdf78a8af5ab6be8c4f34e2e8eb18cf90e59200f9"
+    },
+    {
+      "name": "force-send",
+      "status": "passed",
+      "exit_code": 0,
+      "checks": 132,
+      "seconds": 18.61,
+      "script_sha256": "af53b43c29c5808696e3d367900f0f5ba8b721a1e6de4fd553fd5f5a9ca3be14"
+    },
+    {
+      "name": "listener-transports",
+      "status": "passed",
+      "exit_code": 0,
+      "checks": 74,
+      "seconds": 7.59,
+      "script_sha256": "2931a8517a91e7235bcd67bd4981d586b3e01a04238476c749e4b1adccc55b2a"
+    },
+    {
+      "name": "desktop",
+      "status": "passed",
+      "exit_code": 0,
+      "checks": 28,
+      "seconds": 1.85,
+      "script_sha256": "c27ea79cebedf476a726aa839c632d1adef1279a3cb54b1c6a8a4a1636b1a344"
+    }
+  ],
+  "gtk": {
+    "passed_cases": 6,
+    "owned_process_cleanup": "passed",
+    "engine_version": "0.2.2"
+  },
+  "release_binaries": {
+    "ssmcp": {
+      "path": "/var/tmp/ssmcp-message-references-20261120/target/release/ssmcp",
+      "bytes": 14066832,
+      "sha256": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20"
+    },
+    "ssmcpd": {
+      "path": "/var/tmp/ssmcp-message-references-20261120/target/release/ssmcpd",
+      "bytes": 7959472,
+      "sha256": "a825d2eacc01fafcd459aa795605a80647664059bc4604ffcbcfe0395e6fa223"
+    },
+    "ssmcp-frontend": {
+      "path": "/var/tmp/ssmcp-message-references-20261120/target/release/ssmcp-frontend",
+      "bytes": 1373944,
+      "sha256": "dbb96cb89c13d4f4014bae52fccccd55053eb481f60a9599513b556c05c275ff"
+    },
+    "vt_snapshot": {
+      "path": "/var/tmp/ssmcp-message-references-20261120/target/release/examples/vt_snapshot",
+      "bytes": 439824,
+      "sha256": "d5d27919eaf2754433158467b84abcdd6259208de874396e846867f388c1577a"
+    }
+  },
+  "inputs_unchanged": true,
+  "desktop_scope": "Linux private Xvfb with real GTK/Tk and internal zuse workers; no Windows/macOS runtime or public MCP persistent recovery claim",
+  "visual_qa": {
+    "frames": 8,
+    "columns": [
+      48,
+      120
+    ],
+    "rows": 32,
+    "functional_layout": "passed",
+    "limitations": [
+      "48-column footer truncates detailed warnings; full warnings retained in structured receipts",
+      "48-column skill picker status band lacks gap between /queue and Max 1 GB"
+    ]
+  },
+  "resolved_validation_findings": [
+    "Use private 0700 /tmp except four explicit root-owned /tmp trust tests; disjoint complete library partition.",
+    "Classify only the exact empty-argument read-only question probe; reject all other native operations and invalid credentials.",
+    "Wait for the real periodic thread presence snapshot.",
+    "Read full-size queue spill after delivery; verify bounded chunks, bytes, EOF and SHA256.",
+    "Verify actual engine_version and use GTK for whole Unicode text."
+  ]
+}

@@ -488,6 +488,14 @@ const bootstrap = `(() => {
       }
     ])
   ));
+  const messages = freeze(Object.fromEntries(
+    ['list', 'send', 'broadcast', 'status', 'inbox', 'ack'].map(action => [action, (clientId, args = {}) => {
+      if (!args || typeof args !== 'object' || isArray(args) || 'action' in args) {
+        throw new Failure('messages arguments must be an object without action');
+      }
+      return builtin('messages.' + action, {...args, client_id: clientId});
+    }])
+  ));
   const workspaceResult = async (id, name, args = {}) => {
     const reply = await call(id, name, args);
     if (reply.isError) {
@@ -792,6 +800,7 @@ const bootstrap = `(() => {
     sessions: { value: sessions, enumerable: true },
     history: { value: history, enumerable: true },
     collab: { value: collab, enumerable: true },
+    messages: { value: messages, enumerable: true },
     outputs: { value: outputs, enumerable: true },
     fs: { value: fs, enumerable: true },
     context: { value: context, enumerable: true },

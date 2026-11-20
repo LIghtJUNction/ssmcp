@@ -254,11 +254,33 @@ class Transports(ForceSend):
         self.check(self.listener("status")["pending"] is None,
                    "a main-thread draft is not silently redirected to the agent listener")
         self.draft(front, "")
+        # Registration and the client's one-second steering snapshots are
+        # independent. Wait for the real legacy thread row; the native message
+        # row is a different channel and must never stand in for this listener.
+        deadline = time.monotonic() + 8
+        roster = []
+        matching = []
+        while time.monotonic() < deadline:
+            front.pump(0.03)
+            roster = self.queue()["agents"]
+            matching = [index for index, entry in enumerate(roster)
+                        if entry["agent_id"] == member["agent_id"]]
+            if matching:
+                break
+        if len(matching) != 1:
+            raise AssertionError(
+                "the registered listener thread did not appear exactly once in the real steering roster; "
+                + json.dumps({"expected_agent_id": member["agent_id"], "observed_agents": roster},
+                             ensure_ascii=False)
+            )
+        self.check(roster[matching[0]]["agent_id"] == member["agent_id"],
+                   "the real steering snapshot publishes the exact registered listener thread")
         self.agents(front)
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, entry in enumerate(roster) if entry["agent_id"] == member["agent_id"])
+        selected = 1 + matching[0]
         front.send(HOME + DOWN * selected + ENTER)
-        self.wait_state(front, lambda state: state["target"] == member["agent_id"], "select exact listener thread")
+        self.wait_state(front, lambda state: state["target"] == member["agent_id"]
+                        and state["native_recipient"] is None,
+                        "the real keyboard selection did not choose the exact listener thread")
         delivery_id = self.force(front, "/send Only the selected agent receives this")
         network.send({"op": "read", **bound_lease, "wait_ms": 0}, agent=agent)
         read = network.receive()
