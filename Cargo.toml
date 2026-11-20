@@ -82,6 +82,7 @@ include = [
     "/docs/validation-client-accounts.md",
     "/scripts/test_client_bootstrap.py",
     "/scripts/e2e_account_relay.py",
+    "/scripts/e2e_account_compat.py",
     "/scripts/e2e_account_interactive.py",
     "/scripts/test_installers.py",
     "/scripts/test_installer_download_bounds.py",
