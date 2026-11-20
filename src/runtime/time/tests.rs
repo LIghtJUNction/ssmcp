@@ -148,7 +148,7 @@ async fn timer_and_late_observation_stay_with_the_original_history_lease() {
         std::process::id(),
         clock.id
     ));
-    std::fs::create_dir_all(&path).unwrap();
+    crate::platform::private_directory(&path).unwrap();
     history::with_test_history(path.clone(), async {
         let source_a = Source::capture();
         let owner_a = Owner::from_source(&source_a);
