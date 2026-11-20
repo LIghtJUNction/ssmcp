@@ -231,6 +231,19 @@ pub(crate) fn record_owned_agent(
     Ok(())
 }
 
+pub(crate) fn record_owned_request(
+    owner: &HistoryOwner,
+    request_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    let id = super::request_identity(request_id, text)?;
+    with_owner(owner, |history, owner| {
+        history
+            .record_owned(owner, "user", text, Some(id))
+            .map(|_| ())
+    })
+}
+
 /// Check and update the leaf copy cache while selection remains stable.
 pub(crate) fn remember_visible_reply(owner: &HistoryOwner, text: &str) -> bool {
     with_owner(owner, |history, owner| {

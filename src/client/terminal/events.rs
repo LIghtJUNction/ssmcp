@@ -6,7 +6,7 @@ use crate::{
     runtime::call_scope::{DisplayHistory, DisplaySource},
 };
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[cfg(test)]
 mod command_visibility_tests;
@@ -761,13 +761,39 @@ impl EventView {
         self.prune();
         self.refresh_visibility();
         for message in messages {
-            self.ingest_identified_message(
-                &message.id,
-                &message.role,
-                &message.content,
-                b"",
-            );
+            self.ingest_identified_message(&message.id, &message.role, &message.content, b"");
         }
+    }
+
+    pub(super) fn reconcile_reload_history(
+        &mut self,
+        history: &crate::client::interface::history::Conversation,
+    ) {
+        let selection = self.history_selection.clone();
+        if selection.local_id().map(HistoryId::as_str) != Some(history.metadata.id.as_str()) {
+            return;
+        }
+        let saved_ids: HashSet<_> = history
+            .messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect();
+        let mut displayed_ids = HashSet::new();
+        self.events.retain(|event| {
+            if !event.owned_by(&selection) {
+                return true;
+            }
+            event.history_id.as_ref().is_none_or(|id| {
+                saved_ids.contains(id.as_str()) && displayed_ids.insert(id.clone())
+            })
+        });
+        self.prune();
+        for message in &history.messages {
+            if !displayed_ids.contains(&message.id) {
+                self.ingest_identified_message(&message.id, &message.role, &message.content, b"");
+            }
+        }
+        self.refresh_visibility();
     }
 
     fn refresh_visibility(&mut self) {
@@ -1039,7 +1065,8 @@ impl EventView {
             if let Some(id) = &meta.message_id
                 && self.events.iter().any(|previous| {
                     previous.owned_by(&meta.history)
-                        && previous.meta.message_id.as_ref() == Some(id)
+                        && (previous.meta.message_id.as_ref() == Some(id)
+                            || previous.history_id.as_ref() == Some(id))
                 })
             {
                 // A committed message can be read by /resume before its live

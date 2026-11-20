@@ -9,7 +9,8 @@ pub(crate) use listener::{
 #[cfg(test)]
 pub(crate) use ownership::with_test_history;
 pub(crate) use ownership::{
-    HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, remember_visible_reply,
+    HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, record_owned_request,
+    remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -229,6 +230,10 @@ fn valid_id(id: &str, prefix: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
+}
+
+pub(crate) fn valid_message_id(id: &str) -> bool {
+    valid_id(id, "message")
 }
 
 fn session_name(id: &str) -> Result<String, String> {

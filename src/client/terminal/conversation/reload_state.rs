@@ -104,6 +104,7 @@ impl State {
         &mut self,
         saved: Snapshot,
         sessions: Vec<history_store::SessionSummary>,
+        history: Option<&history_store::Conversation>,
     ) {
         self.ui = saved.ui;
         self.ui.color &= std::env::var_os("NO_COLOR").is_none();
@@ -111,6 +112,13 @@ impl State {
         self.resize(self.geometry.rows, self.geometry.cols);
         self.conversation.sessions = sessions;
         let display_notice = self.events.restore_reload_display(saved.display);
+        let log_text = self.events.reload_log_text();
+        if !log_text.is_empty() {
+            self.log_raw(log_text.as_bytes());
+        }
+        if let Some(history) = history {
+            self.events.reconcile_reload_history(history);
+        }
         self.canvas_restore_reload(saved.canvas);
         self.conversation.reload_input_history = Some(saved.input_history);
         if let Err(error) = self.conversation.groups.restore(saved.groups) {
@@ -144,20 +152,29 @@ impl State {
             self.conversation.preferred_input_rows = saved.preferred_input_rows;
             self.resize(self.geometry.rows, self.geometry.cols);
         }
-        if pending.restore_history {
+        self.sync_history_owner();
+        let history = if pending.restore_history {
             match history_store::current() {
-                Ok(Some(history)) => self.chat_rehydrate_history(&history),
-                Ok(None) => {}
+                Ok(history) => history,
                 Err(error) => {
                     pending.notice = Some(format!(
                         "Could not restore conversation: {error} · use /resume to choose history"
-                    ))
+                    ));
+                    None
                 }
             }
-        }
+        } else {
+            None
+        };
         if let Some(saved) = pending.snapshot {
-            self.chat_apply_reload_snapshot(saved, history_store::sessions().unwrap_or_default());
+            self.chat_apply_reload_snapshot(
+                saved,
+                history_store::sessions().unwrap_or_default(),
+                history.as_ref(),
+            );
             crate::client::render::configure(self.ui.clone());
+        } else if let Some(history) = history {
+            self.chat_rehydrate_history(&history);
         }
         if let Some(notice) = pending.notice {
             self.log_message(
@@ -189,6 +206,85 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_keeps_history_cards_owner_local_and_logs_global() {
+        use crate::{
+            client::interface::history::HistoryId,
+            runtime::call_scope::{DisplayHistory, DisplaySource},
+        };
+
+        let a = HistoryId::parse("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let b = HistoryId::parse("conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let a_message = "message_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b_recalled = "message_cccccccccccccccccccccccccccccccc";
+        let mut before = State::new(24, 100, &Ui::default());
+        before.events.set_history_owner(Some(a.clone()));
+        before
+            .events
+            .ingest_identified_message(a_message, "user", "A_PRIVATE_MESSAGE", b"");
+        before.events.set_history_owner(Some(b.clone()));
+        before
+            .events
+            .ingest_identified_message(b_recalled, "user", "B_RECALLED_MESSAGE", b"");
+        before.events.ingest_scoped_event(
+            "shell",
+            &json!({"type":"exec.started","job_id":"old-a-job"}),
+            b"[RUN] A_LATE_TOOL\n",
+            DisplaySource {
+                call: None,
+                history: DisplayHistory::Local(a.clone()),
+            },
+        );
+        before.events.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"old-b-job","exit_code":0}),
+            b"[OK] B_TOOL\n",
+        );
+        let encoded = serde_json::to_vec(&before.chat_reload_snapshot()).unwrap();
+        let saved: Snapshot = serde_json::from_slice(&encoded).unwrap();
+        let history = history_store::Conversation {
+            metadata: history_store::SessionMetadata {
+                schema: "ssmcp.conversation".into(),
+                schema_version: 1,
+                id: b.as_str().into(),
+                workspace: "/fixture".into(),
+                created_at_ms: 1,
+                truncated_messages: 0,
+            },
+            messages: vec![history_store::Message {
+                id: "message_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                role: "user".into(),
+                content: "B_SAVED_MESSAGE".into(),
+                kind: "input".into(),
+                created_at_ms: 1,
+                truncated: false,
+            }],
+        };
+        let mut after = State::new(24, 100, &Ui::default());
+        after.events.set_history_owner(Some(b));
+        after.chat_apply_reload_snapshot(saved, Vec::new(), Some(&history));
+
+        let chat = after.events.render(80, 24, &after.ui, false).join("\n");
+        assert!(
+            chat.contains("B_SAVED_MESSAGE") && chat.contains("B_TOOL"),
+            "{chat}"
+        );
+        for hidden in ["A_PRIVATE_MESSAGE", "A_LATE_TOOL", "B_RECALLED_MESSAGE"] {
+            assert!(!chat.contains(hidden), "{chat}");
+            after.log_query = hidden.to_ascii_lowercase();
+            let logs = after.filtered_logs().unwrap().join("\n");
+            assert!(logs.contains(hidden), "{logs}");
+        }
+        after.events.set_history_owner(Some(a));
+        let chat = after.events.render(80, 24, &after.ui, false).join("\n");
+        assert!(
+            chat.contains("A_PRIVATE_MESSAGE") && chat.contains("A_LATE_TOOL"),
+            "{chat}"
+        );
+        assert!(!chat.contains("B_SAVED_MESSAGE"), "{chat}");
+        assert!(after.events.recall_message(a_message));
+    }
 
     #[test]
     fn reload_snapshot_keeps_canvas_and_unicode_history_but_not_connection_handles() {
@@ -226,7 +322,7 @@ mod tests {
 
         let saved: Snapshot = serde_json::from_slice(&bytes).unwrap();
         let mut after = State::new(20, 70, &Ui::default());
-        after.chat_apply_reload_snapshot(saved, Vec::new());
+        after.chat_apply_reload_snapshot(saved, Vec::new(), None);
         // The existing outbox restoration still owns the draft and its cursor.
         after.chat_restore_draft(draft);
         after.chat_restore_reload_input();
@@ -257,7 +353,7 @@ mod tests {
         let restored: Snapshot = serde_json::from_value(value).unwrap();
         restored.validate().unwrap();
         let mut after = State::new(24, 80, &Ui::default());
-        after.chat_apply_reload_snapshot(restored, Vec::new());
+        after.chat_apply_reload_snapshot(restored, Vec::new(), None);
         assert!(after.conversation.groups.selected.is_empty());
         assert_eq!(
             serde_json::to_value(after.conversation.groups.reload_snapshot()).unwrap(),

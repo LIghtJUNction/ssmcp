@@ -20,6 +20,38 @@ enum DisplayKind {
     Log,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum History {
+    NoSelection,
+    Local(String),
+    LegacyAttach,
+    #[default]
+    Global,
+}
+
+impl History {
+    fn capture(history: &DisplayHistory) -> Self {
+        match history {
+            DisplayHistory::NoSelection => Self::NoSelection,
+            DisplayHistory::Local(id) => Self::Local(id.as_str().to_owned()),
+            DisplayHistory::LegacyAttach => Self::LegacyAttach,
+            DisplayHistory::Global => Self::Global,
+        }
+    }
+
+    fn restore(&self) -> DisplayHistory {
+        match self {
+            Self::NoSelection => DisplayHistory::NoSelection,
+            Self::Local(id) => {
+                HistoryId::parse(id).map_or(DisplayHistory::Global, DisplayHistory::Local)
+            }
+            Self::LegacyAttach => DisplayHistory::LegacyAttach,
+            Self::Global => DisplayHistory::Global,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Outcome {
@@ -67,12 +99,19 @@ struct Entry {
     /// Ordinal within this bounded display, never an old or native event ID.
     index: usize,
     kind: DisplayKind,
+    #[serde(default)]
+    history: History,
+    /// Exact JSONL identity for display reconciliation and confirmed recall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_id: Option<String>,
     text: String,
     summary: String,
     source: Option<Source>,
     command: bool,
     diff: bool,
     raw_message: bool,
+    #[serde(default)]
+    plain_message: bool,
     outcome: Option<Outcome>,
     interrupted: bool,
     boundary: bool,
@@ -167,6 +206,17 @@ impl Snapshot {
             valid
         });
         for entry in &mut self.entries {
+            let history = entry.history.restore();
+            entry.history = History::capture(&history);
+            if history.local_id().is_none()
+                || !matches!(entry.kind, DisplayKind::User | DisplayKind::Assistant)
+            {
+                entry.history_id = None;
+            }
+            entry.history_id = entry
+                .history_id
+                .take()
+                .filter(|id| crate::client::interface::history::valid_message_id(id));
             let (text, shortened) = safe_text(&entry.text);
             entry.text = text;
             entry.truncated |= shortened;
@@ -260,6 +310,11 @@ impl EventView {
                 Entry {
                     index,
                     kind,
+                    history: History::capture(&event.meta.history),
+                    history_id: event
+                        .history_id
+                        .clone()
+                        .or_else(|| event.meta.message_id.clone()),
                     text,
                     summary: event.chat_heading(),
                     source: event.command_source.as_ref().map(|source| Source {
@@ -269,6 +324,7 @@ impl EventView {
                     command: event.meta.command,
                     diff: event.meta.diff,
                     raw_message: event.meta.raw_message,
+                    plain_message: event.meta.plain_message,
                     outcome: event.meta.status.and_then(Outcome::capture),
                     interrupted: event.interrupted || event.meta.status == Some(Status::Running),
                     boundary: event.reload_boundary || event.image.is_some(),
@@ -322,13 +378,15 @@ impl EventView {
                     String::new()
                 },
                 raw_message: entry.raw_message,
+                plain_message: entry.plain_message,
+                history: entry.history.restore(),
+                history_message: entry.history_id.is_some(),
                 read_bookkeeping: kind == Kind::Log && entry.transparent_log,
                 command: entry.command,
                 diff: entry.diff,
                 status: entry.outcome.map(Outcome::status),
                 language: language(&entry.language),
-                // All native keys, scopes, request boundaries and identities use
-                // fresh empty defaults. This is an inert display record.
+                // Native keys, call scope and request boundaries stay empty.
                 ..Meta::default()
             };
             self.events.push_back(Event {
@@ -348,7 +406,7 @@ impl EventView {
                 meta,
                 image: None,
                 diagnostic: None,
-                history_id: None,
+                history_id: entry.history_id,
                 historical: kind == Kind::Tool,
                 interrupted: entry.interrupted,
                 reload_index: Some(entry.index),
@@ -358,6 +416,30 @@ impl EventView {
         self.prune();
         self.selected = self.visible_ids().last().copied();
         (saved.omitted || self.dropped > 0).then(|| "Some tool display history was shortened during reload; your draft and conversation are preserved.".into())
+    }
+
+    pub(in crate::client::terminal) fn reload_log_text(&self) -> String {
+        let mut text = String::new();
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.reload_index.is_some())
+        {
+            if event.meta.raw_message {
+                text.push_str(if event.meta.user {
+                    "[USER] "
+                } else {
+                    "[AGENT] "
+                });
+                text.push_str(&event.summary);
+                text.push('\n');
+            }
+            text.push_str(&event.text);
+            if !event.text.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        text
     }
 }
 

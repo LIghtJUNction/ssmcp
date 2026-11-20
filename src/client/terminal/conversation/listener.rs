@@ -1,6 +1,6 @@
 //! Explicit force-send UI; a receipt never claims that a model has run.
 use super::*;
-use crate::client::interface::history::HistoryId;
+use crate::client::interface::history::{self, HistoryId};
 use crate::client::interface::listener::{self as receiver, Receipt, Status};
 use crate::runtime::call_scope::{DisplayHistory, DisplaySource};
 use tokio::{sync::oneshot, task::JoinHandle};
@@ -40,7 +40,11 @@ impl Task {
         // committing the delivery. A replacement listener cannot inherit it.
         let target = receiver::target(selected_thread)?;
         let conversation_id = target.conversation_id.clone();
-        let history = conversation_id.as_deref().and_then(HistoryId::parse);
+        let owner = history::capture(None);
+        let history = conversation_id
+            .as_deref()
+            .and_then(HistoryId::parse)
+            .or_else(|| owner.as_ref().ok().map(|owner| owner.display_id()));
         let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
         let (sender, result) = oneshot::channel();
         let task_source = source.clone();
@@ -54,15 +58,11 @@ impl Task {
                     let id = receipt.delivery_id.clone();
                     match tokio::task::spawn_blocking(move || match conversation_id {
                         Some(conversation_id) => {
-                            crate::client::interface::history::record_request_in(
-                                &conversation_id,
-                                &id,
-                                &task_source,
-                            )
+                            history::record_request_in(&conversation_id, &id, &task_source)
                         }
-                        None => {
-                            crate::client::interface::history::record_request(&id, &task_source)
-                        }
+                        None => owner.and_then(|owner| {
+                            history::record_owned_request(&owner, &id, &task_source)
+                        }),
                     })
                     .await
                     {
@@ -234,6 +234,7 @@ impl State {
         self.conversation
             .force_displayed
             .push_back((connection.into(), delivery.into()));
+        let message_id = history::request_identity(delivery, source).ok();
         let safe = crate::audit::event(json!(source));
         let source = safe.as_str().unwrap_or("[redacted]");
         let mut record = format!("\n[USER] #{delivery}\n");
@@ -243,7 +244,7 @@ impl State {
         record.push_str("  监听程序已接收\n\n");
         let event = json!({
             "type":"ssmcp.message", "role":"user", "text":source,
-            "connection_id":connection, "delivery_id":delivery,
+            "connection_id":connection, "delivery_id":delivery, "message_id":message_id,
         });
         self.chat_project_listener_message("message", &event, record.as_bytes(), history);
     }
@@ -272,18 +273,20 @@ impl State {
     ) {
         // This can run inside the reply guard, so projection must not lock history.
         crate::session::attach::record_event(label, event, history);
-        if let Some(history) = history {
+        if history.is_none() && self.preview {
+            self.events.ingest_event(label, event, bytes);
+        } else {
             self.events.ingest_scoped_event(
                 label,
                 event,
                 bytes,
                 DisplaySource {
-                    history: DisplayHistory::Local(history.clone()),
+                    history: history
+                        .cloned()
+                        .map_or(DisplayHistory::Global, DisplayHistory::Local),
                     call: None,
                 },
             );
-        } else {
-            self.events.ingest_event(label, event, bytes);
         }
         self.log_raw(bytes);
     }
@@ -456,6 +459,14 @@ mod tests {
             for ack_first in [false, true] {
                 let source = "FAST_INPUT 中文";
                 let mut state = preview(&format!("/send {source}"));
+                let history =
+                    HistoryId::parse("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+                state.events.set_history_owner(Some(history.clone()));
+                let accepted = || {
+                    let mut result = completed(Status::Accepted).unwrap();
+                    result.history = Some(history.clone());
+                    Ok(result)
+                };
                 state.ui.layout = Layout::Chat;
                 state.ui.sidebar = false;
                 state.resize(28, width);
@@ -473,13 +484,7 @@ mod tests {
                 state.conversation.composer.set_text("UNSENT_DRAFT");
                 let draft = state.chat_saved_draft();
                 if ack_first {
-                    assert!(
-                        sender
-                            .take()
-                            .unwrap()
-                            .send(completed(Status::Accepted))
-                            .is_ok()
-                    );
+                    assert!(sender.take().unwrap().send(accepted()).is_ok());
                     state.chat_poll_force_send();
                 } else {
                     state.chat_poll_force_send();
@@ -499,19 +504,13 @@ mod tests {
                         "task_completion_approved":false,
                     }),
                     b"\n[LISTENER] local receiver\nFAST_RESULT\n\n",
-                    None,
+                    Some(history.clone()),
                 );
                 assert_eq!(state.chat_saved_draft(), draft);
                 assert_listener_input_before_result(&mut state);
                 if !ack_first {
                     assert!(state.conversation.force_task.is_some());
-                    assert!(
-                        sender
-                            .take()
-                            .unwrap()
-                            .send(completed(Status::Accepted))
-                            .is_ok()
-                    );
+                    assert!(sender.take().unwrap().send(accepted()).is_ok());
                     state.chat_poll_force_send();
                 }
                 assert!(state.conversation.force_task.is_none());

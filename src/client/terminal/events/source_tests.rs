@@ -185,6 +185,19 @@ async fn call_scope_native_exec_keeps_creator_through_concurrency_reads_and_exit
             assert!(event.meta.scope.as_ref().unwrap().same_call(expected));
         }
     }
+    let encoded = serde_json::to_vec(&view.reload_display()).unwrap();
+    let mut restored = EventView::new();
+    restored.restore_reload_display(serde_json::from_slice(&encoded).unwrap());
+    assert_eq!(restored.events.len(), view.events.len());
+    assert!(
+        restored
+            .events
+            .iter()
+            .all(|event| event.meta.scope.is_none()
+                && event.meta.keys.is_empty()
+                && event.meta.message_id.is_none()
+                && !event.meta.started)
+    );
     runtime.shutdown().await;
 }
 

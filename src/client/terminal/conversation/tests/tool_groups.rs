@@ -272,7 +272,7 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             assert!(!String::from_utf8_lossy(&bytes).contains("private-frame-secret"));
             let saved = serde_json::from_slice(&bytes).unwrap();
             let mut after = preview(32, cols);
-            after.chat_apply_reload_snapshot(saved, Vec::new());
+            after.chat_apply_reload_snapshot(saved, Vec::new(), None);
             after.chat_restore_draft(draft);
             after.chat_restore_reload_input();
             let screen = display(&mut after).screen().contents();
@@ -336,7 +336,7 @@ fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_read
         value["display"] = bad;
         let saved = serde_json::from_value(value.clone()).unwrap();
         let mut after = preview(32, 120);
-        after.chat_apply_reload_snapshot(saved, Vec::new());
+        after.chat_apply_reload_snapshot(saved, Vec::new(), None);
         after.chat_restore_draft(draft.clone());
         assert_eq!(after.conversation.composer.text(), "Keep this draft");
         assert!(
@@ -350,7 +350,7 @@ fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_read
     value.as_object_mut().unwrap().remove("display");
     let saved = serde_json::from_value(value).unwrap();
     let mut after = preview(32, 120);
-    after.chat_apply_reload_snapshot(saved, Vec::new());
+    after.chat_apply_reload_snapshot(saved, Vec::new(), None);
     after.chat_restore_draft(draft);
     assert_eq!(after.conversation.composer.text(), "Keep this draft");
     assert!(after.actions.is_empty() && after.conversation.submitting.is_none());

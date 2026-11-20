@@ -47,7 +47,10 @@ pub(super) fn stats(events: &VecDeque<Event>, group: &Group) -> Stats {
 pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -> Vec<Group> {
     let eligible = |index: usize| {
         let event = &events[index];
-        owned(event) && event.meta.kind == Kind::Tool && event.image.is_none() && !event.reload_boundary
+        owned(event)
+            && event.meta.kind == Kind::Tool
+            && event.image.is_none()
+            && !event.reload_boundary
     };
     let mut result = Vec::new();
     let mut start = 0;
@@ -61,7 +64,8 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         while end < events.len() {
             if eligible(end) && events[end].historical == events[start].historical {
                 members.push(end);
-            } else if !(owned(&events[end])
+            } else if !((owned(&events[end])
+                || events[end].meta.history == super::DisplayHistory::Global)
                 && events[end].meta.kind == Kind::Log
                 && events[end].meta.read_bookkeeping
                 && events[end].image.is_none()

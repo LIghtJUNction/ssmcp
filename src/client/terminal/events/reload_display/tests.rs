@@ -217,6 +217,26 @@ fn reload_display_invalid_preview_and_old_positions_do_not_discard_conversation(
 }
 
 #[test]
+fn reload_without_valid_owner_metadata_stays_out_of_the_selected_conversation() {
+    let mut saved = serde_json::to_value(fixture().reload_display()).unwrap();
+    saved["entries"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("history");
+    saved["entries"][1]["history"] = json!({"local":"bad-history-id"});
+    let mut restored = EventView::new();
+    restored.set_history_owner(HistoryId::parse(
+        "conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ));
+    restored.restore_reload_display(serde_json::from_value(saved).unwrap());
+    assert!(restored.visible_ids().is_empty());
+    assert_eq!(restored.events[0].meta.history, DisplayHistory::Global);
+    assert_eq!(restored.events[1].meta.history, DisplayHistory::Global);
+    restored.set_scope(EventScope::All);
+    assert_eq!(restored.visible_ids().len(), 3);
+}
+
+#[test]
 fn reload_display_keeps_transparent_read_bookkeeping_and_explicit_fold_before_first_frame() {
     let mut before = EventView::new();
     before.set_scope(EventScope::Conversation);
