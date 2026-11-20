@@ -239,6 +239,28 @@ impl Hub {
             .collect())
     }
 
+    /// Server-only recipient lookup. Private tokens never leave the registry.
+    pub(crate) fn native_members(
+        &self,
+    ) -> Result<Vec<(String, crate::wire::SteeringAgent)>, String> {
+        let state = self.locked()?;
+        Ok(state
+            .agents
+            .values()
+            .map(|agent| {
+                (
+                    agent.owner.clone(),
+                    crate::wire::SteeringAgent {
+                        agent_id: agent.id.clone(),
+                        name: agent.name.clone(),
+                        role: agent.role.clone(),
+                        status: agent.status.clone(),
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub(crate) fn bind(
         &self,
         owner: &str,
