@@ -2,6 +2,12 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
+## 当前状态（2026-11-20 20:54 UTC）
+
+[Session service 运行 44812174207](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207) 已在固定源码 `72460414a776ec70bdc8b7c124624dff8faabd5e` 上取得 Linux、Windows、macOS 三平台成功。此结论限于该次工作流；后续候选、完整组合验收和发布仍需各自的实际结果。旧 e079 Windows 失败及 89ca Clippy 失败保留原归属，后续成功不证明旧故障的具体原因。
+
+PR #156 已合并；PR #157 当前仍开放，头提交为 `32807fe15e24f828e45246cd46bcd3b88cb2f297`，与上述受测源码不同。新增输入默认值与禁用输入时的交互范围仍待实现验证；时间功能需对照已有源码补齐并验证实际 UI，详见文末本轮补记。本检查点没有新增性能比较结果，也没有 v0.10.21 已发布的证明。
+
 ## 交付内容
 
 本轮围绕终端可读性、跨任务等待和可核验的完成流程推进，另同步实际使用的 Project Z 依赖并清理四个已经合并的远端分支。已取得的功能验证分别绑定其实际受测提交；主线中的整合和迁移检查点不因此自动取得相同的验证结论。最终发布结果需要绑定最终候选提交，不能用某个功能分支的测试代替。
@@ -222,3 +228,31 @@ Windows 的完整原日志及同一固定提交中的源码已独立读取。此
 待补充：最终提交、tag、正式发布 run、Release 的 16 项资产及摘要、crates.io 版本与 checksum、报告位置。
 
 本线程未执行生产 relay 部署或活动客户端版本切换。发布包与生产进程是否已经加载该版本是两个独立事实，交付记录应分别报告。
+
+## 本轮补记（2026-11-20 20:54 UTC）
+
+### 保留失败，限定后续成功的范围
+
+[运行 44811035087](https://github.com/LIghtJUNction/ssmcp/actions/runs/44811035087) 的源码为 `89caea1a0e84b56405712bd8fc0cdf4464a4bbc2`。[Linux 原日志](https://github.com/LIghtJUNction/ssmcp/actions/runs/44811035087/job/136547317847) 唯一具体诊断为 `clippy::ptr_arg`：`src/client/connection_context.rs:175:36` 的 `normalize_args` 使用 `&mut Vec<OsString>`，Clippy 建议改成 `&mut [OsString]`；`-D warnings` 将其升为错误，步骤以 101 退出。lib 与 lib test 报告的是同一项诊断，没有产品测试结果可记为通过。
+
+后续 [运行 44812174207](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207) 为 pull_request、attempt 1，固定 head 为 `72460414a776ec70bdc8b7c124624dff8faabd5e`，于 20:37:56 UTC 完成且结论为 success。已实读 run 和 jobs 元数据；三平台的 fmt、严格 Clippy、程序构建及 native session lifecycle 步骤均成功，测试范围如下。
+
+| 平台与 job | 实际成功的测试步骤 |
+| --- | --- |
+| [Linux / 136551249545](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207/job/136551249545) | 工作区单元测试；两个独立 session / protocol 筛选步骤跳过 |
+| [Windows / 136551250113](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207/job/136551250113) | session 与 client::protocol_tests |
+| [macOS / 136551250330](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207/job/136551250330) | session 与 client::protocol_tests |
+
+这次成功不改写前文 e079 的三个超时和一次缺失记录文件 panic，也不据此认定旧故障由 Python 冷启动、系统负载或其他特定因素引起。尚未读取本次全部原始测试日志，本检查点不新增测试数量或性能数值。
+
+### 合并状态与新增目标
+
+[PR #156](https://github.com/LIghtJUNction/ssmcp/pull/156) 于 20:35:07 UTC 合并到 main，合并提交为 `90c497007f6d6f16c3dd2da6a4599c48787e5ee1`。[PR #157](https://github.com/LIghtJUNction/ssmcp/pull/157) 实读状态仍为 open，最新头提交为 `32807fe15e24f828e45246cd46bcd3b88cb2f297`。该提交的两个父提交为 `72460414` 与 `90c49700`，tree 为 `65c8239db42c0d49e48b343af901d793d0900351`。本检查点未为该头提交取得新的验收结果，不能将 724 的 CI 成功改标给它。
+
+新增需求按目标记录，尚不宣称已实现或验证：
+
+- `--input` 默认使用 `terminal`；`--agent` 默认使用 `next-caller`，内部 wire 值为 `next`。
+- 显式 `--input none` 禁用聊天框。关于相关提示 hook 和 agent 面向用户回答工具的禁用，本轮暂按同一 `--input none` 场景解释；此范围及实际行为仍待实现验证。
+- 时间功能需补齐用户可见的计时、倒计时和时间间隔行为。固定 `90c497` 的 [`runtime/time.rs`](https://github.com/LIghtJUNction/ssmcp/blob/90c497007f6d6f16c3dd2da6a4599c48787e5ee1/src/runtime/time.rs) 已有 `time.now` / `time.wait` 与基于单调时钟的倒计时；[`conversation/timing.rs`](https://github.com/LIghtJUNction/ssmcp/blob/90c497007f6d6f16c3dd2da6a4599c48787e5ee1/src/client/terminal/conversation/timing.rs) 也已有显示入口。接下来核对实际运行版本、能力协商与界面绘制，源码存在不能替代运行验收。
+
+共同最终候选的组合验收、粘贴与 Ctrl+V 性能比较、正式发布核验仍未完成；本记录不构成 v0.10.21 已发布的证明。
