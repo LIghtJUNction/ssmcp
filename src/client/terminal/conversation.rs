@@ -592,7 +592,8 @@ impl State {
             "/select" => {
                 if !rest.is_empty() {
                     return Err(
-                        "Use /select without arguments; F7 or Esc returns to the interface".into(),
+                        "Use /select without arguments; Alt+C, F7 or Esc returns to the interface"
+                            .into(),
                     );
                 }
                 self.set_selection_mode(true);
@@ -2551,7 +2552,7 @@ impl State {
     /// It is not a separate mode that can drift away from the active editor.
     fn chat_mode_label(&self, width: u16) -> &'static str {
         let (full, compact) = if self.selection {
-            ("Select · F7/Esc back", "Select")
+            ("Select · Alt+C/F7/Esc back", "Select")
         } else if self.help
             || self.conversation.content_focus
             || (self.conversation.view == View::Questions && !self.conversation.detail)
@@ -4858,6 +4859,24 @@ mod tests {
             );
             assert_eq!(screen.cell(top + 3, 4).unwrap().bgcolor(), background);
         }
+    }
+
+    #[test]
+    fn alt_c_selects_text_without_changing_draft_or_queue() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("draft remains 界");
+        let before = state.conversation.snapshot()["draft"].clone();
+        let queue = state.chat_data()["queue"].clone();
+        input(&mut state, b"\x1bc");
+        assert!(state.selection);
+        assert!(!state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.notice.as_deref(), Some(COPY_HINT));
+        input(&mut state, b"\x1bc");
+        assert!(!state.selection);
+        assert!(state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.conversation.snapshot()["draft"], before);
+        assert_eq!(state.chat_data()["queue"], queue);
+        assert!(state.conversation.input_task.is_none());
     }
 
     #[test]
