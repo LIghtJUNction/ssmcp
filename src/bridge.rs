@@ -645,6 +645,22 @@ pub async fn dispatch(
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;
     match name.as_str() {
+        name if name.starts_with("messages.") => {
+            let mut fields = arguments
+                .as_object()
+                .cloned()
+                .ok_or("messages arguments must be an object")?;
+            if fields.contains_key("action") {
+                return Err("action is selected by the messages helper".into());
+            }
+            fields.insert(
+                "action".into(),
+                serde_json::json!(&name["messages.".len()..]),
+            );
+            broker
+                .message_request(&access.user, &access.token, Value::Object(fields))
+                .await
+        }
         name if name.starts_with("collab.") => {
             let mut args = arguments
                 .as_object()
