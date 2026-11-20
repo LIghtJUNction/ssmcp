@@ -1,4 +1,10 @@
-//! Bounded, nonblocking questions for the local user. No tool can answer for them.
+//! Bounded questions, authenticated answers, and explicit finish decisions.
+mod requests;
+pub(crate) use requests::{
+    AgentActor, AnswerDelivery, DecisionActor, FinishChoice, FinishDecision, FinishStatus,
+    FinishView, QuestionKind, QuestionView,
+};
+use requests::{RequestScope, Routing};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -65,6 +71,7 @@ struct ReadRequest {
 struct Record {
     question: Question,
     idempotency_key: Option<String>,
+    routing: Option<Routing>,
 }
 
 impl Record {
@@ -76,7 +83,30 @@ impl Record {
             + question.options.iter().map(String::len).sum::<usize>()
             + question.answer.as_ref().map_or(0, String::len)
             + self.idempotency_key.as_ref().map_or(0, String::len)
+            + self.routing.as_ref().map_or(0, Routing::bytes)
             + 256
+    }
+
+    fn view(&self) -> QuestionView {
+        self.routing.as_ref().map_or_else(
+            || requests::legacy_view(self.question.clone()),
+            |routing| routing.view(self.question.clone()),
+        )
+    }
+
+    fn visible_to(&self, caller: Option<&RequestScope>, local: bool) -> bool {
+        local
+            || self.routing.as_ref().is_none_or(|routing| {
+                caller.is_some_and(|caller| routing.scope.same_account(caller))
+            })
+    }
+
+    fn reclaimable(&self) -> bool {
+        self.question.state != QuestionState::Pending
+            && self
+                .routing
+                .as_ref()
+                .is_none_or(|routing| routing.answer_revision == 0 || routing.answer_delivered)
     }
 }
 
@@ -84,6 +114,7 @@ impl Record {
 struct Queue {
     records: VecDeque<Record>,
     revision: u64,
+    connection: Option<(String, u64)>,
 }
 
 fn state() -> &'static Mutex<Queue> {
@@ -207,10 +238,7 @@ impl Queue {
         let protected = self
             .records
             .iter()
-            .filter(|record| {
-                record.question.state == QuestionState::Pending
-                    || protect == Some(record.question.id.as_str())
-            })
+            .filter(|record| !record.reclaimable() || protect == Some(record.question.id.as_str()))
             .map(Record::bytes)
             .sum::<usize>();
         if protected.saturating_add(extra) > MAX_TOTAL_BYTES {
@@ -225,8 +253,7 @@ impl Queue {
                 .records
                 .iter()
                 .position(|record| {
-                    record.question.state != QuestionState::Pending
-                        && protect != Some(record.question.id.as_str())
+                    record.reclaimable() && protect != Some(record.question.id.as_str())
                 })
                 .ok_or("question queue capacity reached")?;
             self.records.remove(index);
@@ -235,20 +262,62 @@ impl Queue {
     }
 
     fn ask(&mut self, request: AskRequest) -> Result<(Question, bool), String> {
+        self.ask_for(request, None, QuestionKind::Question)
+    }
+
+    fn ask_for(
+        &mut self,
+        request: AskRequest,
+        scope: Option<RequestScope>,
+        kind: QuestionKind,
+    ) -> Result<(Question, bool), String> {
+        if let Some(scope) = &scope {
+            self.validate_scope(scope)?;
+        } else if kind == QuestionKind::Finish {
+            return Err(
+                "finish_thread_required: finish requests need a verified agent thread".into(),
+            );
+        }
         if let Some(key) = &request.idempotency_key
-            && let Some(record) = self
-                .records
-                .iter()
-                .find(|record| record.idempotency_key.as_ref() == Some(key))
+            && let Some(record) = self.records.iter().find(|record| {
+                record.idempotency_key.as_ref() == Some(key)
+                    && match (&record.routing, &scope) {
+                        (None, None) => true,
+                        (Some(routing), Some(scope)) => routing.scope.same_thread(scope),
+                        _ => false,
+                    }
+            })
         {
             let question = &record.question;
             if question.question != request.question
                 || question.title != request.title
                 || question.options != request.options
+                || record
+                    .routing
+                    .as_ref()
+                    .map_or(QuestionKind::Question, |r| r.kind)
+                    != kind
             {
                 return Err("idempotency key already belongs to a different question".into());
             }
             return Ok((question.clone(), false));
+        }
+        if kind == QuestionKind::Finish
+            && let Some(scope) = &scope
+            && let Some(record) = self.records.iter().find(|record| {
+                record.routing.as_ref().is_some_and(|routing| {
+                    routing.scope.same_thread(scope)
+                        && matches!(
+                            routing.finish_status,
+                            Some(FinishStatus::Pending | FinishStatus::Approved)
+                        )
+                })
+            })
+        {
+            if record.question.question == request.question {
+                return Ok((record.question.clone(), false));
+            }
+            return Err("finish_already_pending: resume or cancel the existing request".into());
         }
         if self.pending_count() >= MAX_PENDING {
             return Err(
@@ -271,6 +340,7 @@ impl Queue {
                 answered_at_ms: None,
             },
             idempotency_key: request.idempotency_key,
+            routing: scope.map(|scope| Routing::new(scope, kind)),
         };
         self.reserve(record.bytes(), 1, None)?;
         let question = record.question.clone();
@@ -280,7 +350,19 @@ impl Queue {
     }
 
     fn finish(&mut self, id: &str, answer: Option<&str>) -> Result<Question, String> {
+        self.finish_for(id, answer, None)
+    }
+
+    fn finish_for(
+        &mut self,
+        id: &str,
+        answer: Option<&str>,
+        caller: Option<&RequestScope>,
+    ) -> Result<Question, String> {
         identifier(id)?;
+        if let Some(caller) = caller {
+            self.validate_scope(caller)?;
+        }
         if let Some(text) = answer {
             validate_text(text, MAX_ANSWER_BYTES, "answer")?;
         }
@@ -289,6 +371,25 @@ impl Queue {
             .iter()
             .find(|record| record.question.id == id)
             .ok_or("question is no longer retained")?;
+        if record
+            .routing
+            .as_ref()
+            .is_some_and(|routing| routing.kind == QuestionKind::Finish)
+        {
+            return Err(
+                "finish_decision_required: use an explicit yes/no decision, not answer text".into(),
+            );
+        }
+        if let Some(caller) = caller
+            && record
+                .routing
+                .as_ref()
+                .is_none_or(|routing| !routing.scope.same_account(caller))
+        {
+            return Err(
+                "question_access_denied: another account, connection, or unowned question".into(),
+            );
+        }
         let expected_state = if answer.is_some() {
             QuestionState::Answered
         } else {
@@ -302,7 +403,11 @@ impl Queue {
             }
             return Err("question has already been answered or skipped".into());
         }
-        self.reserve(answer.map_or(0, str::len), 0, Some(id))?;
+        self.reserve(
+            answer.map_or(0, str::len) + usize::from(record.routing.is_some()) * 1024,
+            0,
+            Some(id),
+        )?;
         let record = self
             .records
             .iter_mut()
@@ -311,6 +416,11 @@ impl Queue {
         record.question.state = expected_state;
         record.question.answer = answer.map(str::to_owned);
         record.question.answered_at_ms = Some(now_ms());
+        if let Some(routing) = &mut record.routing {
+            routing.answer_actor = Some(caller.map_or(DecisionActor::Human, RequestScope::actor));
+            routing.answer_revision = routing.answer_revision.saturating_add(1);
+            routing.answer_delivered = false;
+        }
         self.revision = self.revision.saturating_add(1);
         Ok(record.question.clone())
     }
@@ -320,29 +430,43 @@ impl Queue {
             "schema_version": 1,
             "revision": self.revision,
             "pending_count": self.pending_count(),
-            "questions": self.records.iter().map(|record| &record.question).collect::<Vec<_>>(),
+            "questions": self.records.iter().map(Record::view).collect::<Vec<_>>(),
         })
     }
 
     fn read(&self, request: ReadRequest) -> Result<Value, String> {
+        self.read_for(request, None, true)
+    }
+
+    fn read_for(
+        &self,
+        request: ReadRequest,
+        caller: Option<&RequestScope>,
+        local: bool,
+    ) -> Result<Value, String> {
         if let Some(id) = request.id {
             let question = &self
                 .records
                 .iter()
-                .find(|record| record.question.id == id)
+                .find(|record| record.question.id == id && record.visible_to(caller, local))
                 .ok_or("question is no longer retained")?
-                .question;
+                .view();
             return Ok(json!({"schema_version":1,"revision":self.revision,"question":question}));
         }
         let records = self
             .records
             .iter()
+            .filter(|record| record.visible_to(caller, local))
             .filter(|record| {
                 request
                     .state
                     .is_none_or(|state| state == record.question.state)
             })
             .collect::<Vec<_>>();
+        let pending_count = records
+            .iter()
+            .filter(|record| record.question.state == QuestionState::Pending)
+            .count();
         let offset = request.offset.unwrap_or(0);
         if offset > records.len() {
             return Err("question page offset exceeds the filtered list length".into());
@@ -350,20 +474,21 @@ impl Queue {
         let mut page = Vec::new();
         let mut bytes: usize = 512;
         for record in records.iter().skip(offset).take(request.limit.unwrap_or(8)) {
-            let size = serde_json::to_vec(&record.question)
+            let view = record.view();
+            let size = serde_json::to_vec(&view)
                 .map_err(|_| "cannot serialize question")?
                 .len();
             if bytes.saturating_add(size) > MAX_PAGE_BYTES {
                 break;
             }
             bytes += size;
-            page.push(&record.question);
+            page.push(view);
         }
         let next_offset = offset + page.len();
         Ok(json!({
             "schema_version":1,
             "revision":self.revision,
-            "pending_count":self.pending_count(),
+            "pending_count":pending_count,
             "questions":page,
             "total":records.len(),
             "offset":offset,
@@ -373,10 +498,17 @@ impl Queue {
 }
 
 pub(crate) fn snapshot() -> Value {
-    state()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .snapshot()
+    let local = crate::runtime::call_scope::current().is_none();
+    let caller = RequestScope::current().ok();
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    let visible: Vec<_> = queue
+        .records
+        .iter()
+        .filter(|record| record.visible_to(caller.as_ref(), local))
+        .collect();
+    json!({"schema_version":1,"revision":queue.revision,
+        "pending_count":visible.iter().filter(|r| r.question.state == QuestionState::Pending).count(),
+        "questions":visible.iter().map(|r|r.view()).collect::<Vec<_>>()})
 }
 
 pub(crate) fn pending_count() -> usize {
@@ -407,11 +539,97 @@ pub(crate) fn get(id: &str) -> Option<Question> {
         .map(|record| record.question.clone())
 }
 
-pub(crate) fn answer(id: &str, text: &str) -> Result<Question, String> {
+pub(crate) fn pending_views() -> Vec<QuestionView> {
+    retained_views()
+        .into_iter()
+        .filter(|view| view.question.state == QuestionState::Pending)
+        .collect()
+}
+
+/// Local UI projection; native reads apply the verified caller filter separately.
+pub(crate) fn retained_views() -> Vec<QuestionView> {
     state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .finish(id, Some(text))
+        .records
+        .iter()
+        .map(Record::view)
+        .collect()
+}
+
+pub(crate) fn get_view(id: &str) -> Option<QuestionView> {
+    state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .records
+        .iter()
+        .find(|record| record.question.id == id)
+        .map(Record::view)
+}
+
+pub(crate) fn decide_finish(
+    id: &str,
+    choice: FinishChoice,
+    comment: Option<&str>,
+) -> Result<QuestionView, String> {
+    let result = state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .decide_finish_for(id, choice, comment, None)?;
+    changed();
+    Ok(result)
+}
+
+pub(crate) fn connect(connection_id: &str) {
+    let generation = super::harness::local_runtime()
+        .ok()
+        .map_or(0, |(runtime, _)| runtime.connection_generation());
+    let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.invalidate_finishes(None, "connection_changed");
+    for record in &mut queue.records {
+        if let Some(routing) = &mut record.routing {
+            routing.scope_expired = true;
+        }
+    }
+    queue.connection = Some((connection_id.into(), generation));
+    drop(queue);
+    changed();
+}
+
+pub(crate) fn disconnect() {
+    let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.invalidate_finishes(None, "disconnected");
+    for record in &mut queue.records {
+        if let Some(routing) = &mut record.routing {
+            routing.scope_expired = true;
+        }
+    }
+    queue.connection = None;
+    drop(queue);
+    changed();
+}
+
+pub(crate) fn user_input(target: Option<&str>) {
+    if state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .invalidate_finishes(target, "new_user_input")
+    {
+        changed();
+    }
+}
+
+fn changed() {
+    crate::client::terminal::invalidate();
+}
+
+pub(crate) fn answer(id: &str, text: &str) -> Result<Question, String> {
+    let answer = state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .finish(id, Some(text))?;
+    changed();
+    Ok(answer)
 }
 
 pub(crate) fn skip(id: &str) -> Result<Question, String> {
@@ -457,6 +675,8 @@ fn enqueue(
         "state":question.state,
         "created":created,
         "blocking":false,
+            "automatic_delivery":false,
+            "delivery_note":"No verified asking thread; read this legacy question explicitly with ssmcp.ui.questions",
         "pending_count":pending_count,
         "question":question,
         "answer_with":"Shift+Up opens questions in the local client",
@@ -466,6 +686,22 @@ fn enqueue(
 
 pub(super) fn ask(arguments: Value) -> Result<Value, String> {
     let request = parse_ask(arguments)?;
+    if let Ok(scope) = RequestScope::current() {
+        let (question, created) = state()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .ask_for(request, Some(scope), QuestionKind::Question)?;
+        if created {
+            let _ = super::history::record("assistant", &history_text(&question));
+            changed();
+        }
+        return Ok(
+            json!({"schema_version":1,"id":question.id,"created":created,
+            "state":question.state,"blocking":false,"automatic_delivery":true,
+            "question":get_view(&question.id),"answer_with":"Shift+Up opens questions in the local client",
+            "read_with":"ssmcp.ui.questions"}),
+        );
+    }
     enqueue(state(), request, |question| {
         if let Err(error) = super::history::record("assistant", &history_text(question)) {
             super::super::terminal::notice(&format!(
@@ -477,10 +713,12 @@ pub(super) fn ask(arguments: Value) -> Result<Value, String> {
 
 pub(super) fn read(arguments: Value) -> Result<Value, String> {
     let request = parse_read(arguments)?;
+    let local = crate::runtime::call_scope::current().is_none();
+    let caller = RequestScope::current().ok();
     state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .read(request)
+        .read_for(request, caller.as_ref(), local)
 }
 
 pub(super) fn parse_message(arguments: Value) -> Result<String, String> {
