@@ -5,6 +5,7 @@ Uses prebuilt product binaries, the existing account-router fixture, and the
 independent VT decoder. No existing session, desktop, X server, or model is used.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -14,8 +15,9 @@ import signal
 import subprocess
 import tempfile
 import time
+import traceback
 
-from e2e_composer import DOWN, ENTER, HOME
+from e2e_composer import ENTER, HOME
 from e2e_dashboard import text
 from e2e_input_history import InputHistory, PASTE_END, PASTE_START
 
@@ -30,7 +32,96 @@ class MessageReferences(InputHistory):
         super().__init__(directory, binary_dir, decoder, output)
         self.frames = []
         self.frame_receipts = []
+        self.queue_artifacts = []
         self.receipts = []
+
+    def native_result(self, name, arguments):
+        if name not in ("ssmcp.ui.queue", "ssmcp.output.read"):
+            raise AssertionError("unexpected artifact observation tool")
+        result = self.response("return await call(%s, %s, %s);" % (
+            json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)))
+        if self.messages(result):
+            raise AssertionError("queue/artifact observation consumed a user requirement")
+        native = result["structuredContent"]["result"]
+        if native.get("isError"):
+            raise AssertionError(f"native observation failed: {native}")
+        return native
+
+    def read_queue_artifact(self, summary):
+        meta = summary.get("artifact", {})
+        size = meta.get("bytes")
+        if (summary.get("format") != "mcp_tool_result_json" or summary.get("output_error")
+                or meta.get("schema") != "ssmcp.output.v1"
+                or meta.get("scope") != "native_tool_result_json"
+                or meta.get("complete") is not True
+                or not isinstance(size, int) or not 0 < size <= 1024 * 1024
+                or meta.get("observed_bytes") != size
+                or meta.get("sha256_scope") != "first_bytes_snapshot"
+                or not re.fullmatch(r"[0-9a-f]{32}", str(meta.get("id", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", "")))):
+            raise AssertionError("queue spill is not a complete bounded native JSON artifact")
+        payload = bytearray()
+        chunks = 0
+        while len(payload) < size:
+            offset = len(payload)
+            native = self.native_result("ssmcp.output.read", {
+                "id": meta["id"], "offset": offset, "max_bytes": min(8192, size - offset)})
+            part = native["structuredContent"]
+            chunk = base64.b64decode(part["data_base64"], validate=True)
+            end = offset + len(chunk)
+            if (not chunk or len(chunk) > 8192 or end > size
+                    or part.get("id") != meta["id"] or part.get("offset") != offset
+                    or part.get("next_offset") != end or part.get("bytes") != len(chunk)
+                    or part.get("size") != size or part.get("complete") is not True
+                    or part.get("eof") is not (end == size)
+                    or part.get("sha256_scope") != "returned_chunk"
+                    or part.get("sha256") != hashlib.sha256(chunk).hexdigest()):
+                raise AssertionError("output.read returned an inconsistent or incomplete queue chunk")
+            payload.extend(chunk)
+            chunks += 1
+        if hashlib.sha256(payload).hexdigest() != meta["sha256"]:
+            raise AssertionError("complete queue artifact SHA-256 differs from its manifest")
+        native = json.loads(payload)
+        if not isinstance(native, dict) or not isinstance(native.get("structuredContent"), dict):
+            raise AssertionError("queue artifact is not a complete native MCP result")
+        self.queue_artifacts.append({
+            "id": meta["id"], "bytes": size, "sha256": meta["sha256"],
+            "complete": True, "chunks": chunks, "format": summary["format"]})
+        return native
+
+    def queue_headers(self):
+        path = "/steering/queue"
+        # This fixture retains its small first request; only fetch one row to
+        # obtain the array length, then use bounded scalar projections.
+        page = self.observe("ssmcp.ui.get", {"path": path, "limit": 1})
+        total = page.get("total")
+        if (page.get("schema_version") != 1 or page.get("path") != path
+                or not isinstance(total, int) or not 0 <= total <= 64):
+            raise AssertionError("invalid bounded queue projection")
+        headers = []
+        for index in range(total):
+            prefix = f"{path}/{index}"
+            headers.append({"id": self.ui(prefix + "/id"),
+                            "status": self.ui(prefix + "/status"), "index": index})
+        if len({item["id"] for item in headers}) != total:
+            raise AssertionError("queue identities were duplicated while observing")
+        return headers
+
+    def queue(self):
+        native = self.native_result("ssmcp.ui.queue", {"action": "get"})
+        data = native.get("structuredContent", {})
+        if data.get("spilled"):
+            # output.read is eligible work in code_mode. Reading it while a
+            # Next caller request is queued would consume that request.
+            if any(item["status"] != "delivered" for item in self.queue_headers()):
+                raise AssertionError("artifact reads require an entirely delivered queue")
+            native = self.read_queue_artifact(data)
+            data = native.get("structuredContent", {})
+        if (native.get("isError") or data.get("schema_version") != 1
+                or not isinstance(data.get("queue"), list)
+                or not isinstance(data.get("agents"), list)):
+            raise AssertionError("complete native result did not contain the queue schema")
+        return data
 
     def capture(self, front, name, marker, *, record=None, body_marker=None,
                 warning_marker=None):
@@ -76,10 +167,9 @@ class MessageReferences(InputHistory):
         front.resize(32, 120)
         front.pump(0.15)
 
-    def draft_matches(self, source):
+    def projection_matches(self, path, source):
         # A whole conversation projection is limited to 8 KiB. Page the string
         # so the maximum-size draft is still checked byte-for-byte before Enter.
-        path = "/display/conversation/draft/text"
         for offset in range(0, max(1, len(source)), 1024):
             page = self.observe("ssmcp.ui.get", {
                 "path": path, "offset": offset, "limit": 1024})
@@ -94,7 +184,7 @@ class MessageReferences(InputHistory):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            if self.draft_matches(source):
+            if self.projection_matches("/display/conversation/draft/text", source):
                 break
         else:
             raise AssertionError("the complete maximum-size draft was not entered\n"
@@ -105,11 +195,19 @@ class MessageReferences(InputHistory):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            created = [item for item in self.queue()["queue"] if item["id"] not in before]
-            if len(created) == 1 and created[0]["status"] == "queued":
+            headers = self.queue_headers()
+            created = [item for item in headers if item["id"] not in before]
+            if (len(created) == 1 and created[0]["status"] == "queued"
+                    and {item["id"] for item in headers} == before | {created[0]["id"]}):
+                entry = created[0]
+                path = f"/steering/queue/{entry['index']}"
+                self.check(self.projection_matches(path + "/text", source),
+                           "the exact new queue identity contains every submitted byte")
+                warnings = self.ui(path + "/reference_warnings")
                 self.wait_state(front, lambda state: not state["draft"]["text"],
                                 "the accepted maximum-size draft did not clear")
-                return created[0]
+                return {"id": entry["id"], "status": entry["status"],
+                        "text": source, "reference_warnings": warnings}
         raise AssertionError("the maximum-size requirement was not acknowledged exactly once")
 
     def received(self, front, member, record, source):
@@ -147,16 +245,15 @@ class MessageReferences(InputHistory):
             "action": "join", "client_id": self.client_id,
             "name": "Reference recipient", "role": "owned keyboard acceptance fixture"})
         self.sensitive.append(member["token"])
+        # Account-scoped members appear in the separate native inbox roster.
+        # Reference expansion belongs to the steering queue: choose its fixed
+        # Next caller row, then consume only through the bound fixture member.
         self.agents(front)
-        front.until(lambda shot: "Reference recipient" in text(shot),
-                    "the fixture recipient appearing in the real roster")
-        roster = self.queue()["agents"]
-        index = 1 + next(i for i, item in enumerate(roster)
-                         if item["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * index + ENTER)
-        self.wait_state(front, lambda state: state["target"] == member["agent_id"]
-                        and state["focus"] == "input",
-                        "keyboard selection of the exact fixture recipient")
+        front.send(HOME + ENTER)
+        self.wait_state(front, lambda state: state["target"] is None
+                        and state["native_recipient"] is None
+                        and state["view"] == "activity" and state["focus"] == "input",
+                        "keyboard selection of Next caller for the reference queue")
 
         source = "MISSING_DIRECT 请创建 @future-missing.txt"
         front.send(source)
@@ -242,10 +339,17 @@ class MessageReferences(InputHistory):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            status = self.record(self.queue(), message_id=record["id"])["status"]
+            matching = [item for item in self.queue_headers() if item["id"] == record["id"]]
+            if len(matching) != 1:
+                raise AssertionError("the exact full-budget queue identity disappeared")
+            status = matching[0]["status"]
             if status == "delivered":
                 break
         self.check(status == "delivered", "the exact full-budget queue ID is marked delivered")
+        complete = self.record(self.queue(), message_id=record["id"])
+        self.check(complete["status"] == "delivered" and complete["text"] == source
+                   and complete["reference_warnings"] == record["reference_warnings"],
+                   "the complete native queue artifact confirms the delivered identity and body")
         self.receipts.append({
             "message_id": record["id"], "source_bytes": len(source.encode()),
             "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
@@ -256,6 +360,7 @@ class MessageReferences(InputHistory):
         return {
             "status": "passed", "checks": self.checks, "frames": self.frames,
             "receipts": self.receipts, "frame_receipts": self.frame_receipts,
+            "queue_artifacts": self.queue_artifacts,
             "transport": "real account router, authenticated WebSocket, native queue and owned PTY",
             "upstream_provider": "synthetic GitHub fixture",
             "models_started": False, "existing_services_touched": False,
@@ -304,7 +409,8 @@ def main():
             report.update(harness.run())
         except Exception as error:
             report["error"] = redact(f"{type(error).__name__}: {error}")
-            print(report["error"], flush=True)
+            report["traceback"] = redact(traceback.format_exc())
+            print(report["traceback"], flush=True)
             if harness.last_frontend and not harness.last_frontend.closed:
                 try:
                     harness.save_shot("references-failure", harness.last_frontend, cells=True)
@@ -326,7 +432,7 @@ def main():
             report["error"] = "a prebuilt executable changed during acceptance"
         report.update(
             checks=harness.checks, frames=harness.frames, receipts=harness.receipts,
-            frame_receipts=harness.frame_receipts,
+            frame_receipts=harness.frame_receipts, queue_artifacts=harness.queue_artifacts,
             elapsed_seconds=round(time.monotonic() - started, 3),
             binaries_sha256_before=before, binaries_sha256_after=after,
             inputs_unchanged=before == after,
