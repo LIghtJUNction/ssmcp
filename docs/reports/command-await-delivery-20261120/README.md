@@ -48,7 +48,7 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 | --- | --- |
 | 产品代码与回归用例 | 静态审查无阻断；三个 Rust 文件的格式检查通过 |
 | Rust 回归 | 已编写 7 项，尚未在集成候选上执行 |
-| 真实终端性能脚本 | 已编写 6 个场景；AST 与独立审查通过，尚未执行 |
+| 真实终端性能脚本 | 首次基线运行未完成：负责人报告前四场景通过，第五场景受读取上限阻断；等待修正驱动后的完整比较 |
 | 真实用户内容 | 未纳入公开补丁或性能样本；测试全部使用合成输入 |
 | 提升幅度 | 尚无可比较的实测结果，不报告加速比 |
 
@@ -63,13 +63,19 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 
 ### 测量入口与基线构建
 
-终端粘贴和 Ctrl+V 需要分别测量。带终端粘贴标记的字节经过此次批处理路径；Ctrl+V 则由剪贴板适配器取得完整文本，直接进入异步保存。两条路径都会执行文件持久化，不能把终端字节处理的改善直接当作 Ctrl+V 的加速。现有剪贴板功能测试没有覆盖八行以上纯文本的性能样本，正在补充独立的 2,738 字节 Ctrl+V 用例：真实客户端只接收一个触发字节，私有模拟 wl-paste 提供合成内容。它检验实际客户端适配器与保存路径，不代表真实系统剪贴板性能。
+终端粘贴和 Ctrl+V 需要分别测量。带终端粘贴标记的字节经过此次批处理路径；Ctrl+V 则由剪贴板适配器取得完整文本，直接进入异步保存。两条路径都会执行文件持久化，不能把终端字节处理的改善直接当作 Ctrl+V 的加速。现有剪贴板功能测试没有覆盖八行以上纯文本的性能样本，已冻结独立的 2,738 字节 Ctrl+V 用例（脚本 SHA256 `434348a28727c717179ff6e49f322e8692a8e88a4107fcbcc12fc53cef298437`），实际执行仍待完成：真实客户端只接收一个触发字节，私有模拟 wl-paste 提供合成内容。它检验实际客户端适配器与保存路径，不代表真实系统剪贴板性能。
 
 实测前还发现临时目录位置会改变测量对象：默认 /tmp 是 tmpfs，用户工作区位于 /home 的 btrfs。基线与候选必须把测试目录放到与工作区相同的文件系统，并记录实际位置、st_dev 和文件系统类型；内存盘结果不足以证明磁盘持久化延迟已经改善。btrfs 子卷的 st_dev 与 mountinfo 设备字段可能不同，文件系统类型按路径所属挂载点判断。[目录与文件系统记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/paste-benchmark-filesystem-observation.json)保存原始观察及范围。
 
 修复前基线 `b156254b45c015a3994b8be1475b423167ac980f` 的 library fixture 编译实际失败，Cargo 返回 101：时间模块不能访问仅限上级模块的 invalidate，以及测试给需要 Path 的参数传入了字符串。完整输出只有这两个编译错误，未生成绑定该源码的根包可执行产物，后续 release bins 和 decoder 构建尚未进行。因此 b156 不能作为性能比较基线。[独立失败核验](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/baseline-b156-failure-review-20261120.json)保留源码、依赖、日志与精确时间；失败记录不会改写为成功。
 
-截至本检查点，唯一集成负责人已形成新的本地提交 `c53c5ea681cb0840f1c41c9e8d31489abac4fd37`：仅将 invalidate 的可见性改为 crate 内可用，并在原有 TTY 测试中显式构造 Path，两处各一行。已读完整差异及提交回执，Cargo.lock 摘要保持 `6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d`。格式检查记录通过；新提交的编译成功、可执行产物和测速结果仍须等待实际构建回执。
+唯一集成负责人随后形成 `c53c5ea681cb0840f1c41c9e8d31489abac4fd37`：仅将 invalidate 的可见性改为 crate 内可用，并在原有 TTY 测试中显式构造 Path，两处各一行。Cargo.lock 摘要保持 `6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d`。该基线已在 2026-11-20 19:09:09 UTC 完成库测试夹具、三个 release 程序及 VT decoder 的构建；独立审查核对了 34 份声明文件，并逐一核对五个保留程序与编译输出的字节数、摘要及权限。原构建回执为 39,128 字节、SHA256 `16da6d1611355d18721582451326195629a87060f6b7e9f3ccf16bdf5cd9daaa`。这次工作只完成构建，没有执行 Rust 测试、性能基准或发布验收。[独立构建审查](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/baseline-c53-build-review-20261120.json)保留当时实际读取的证据和适用范围。
+
+随后进入主线的 [PR #152](https://github.com/LIghtJUNction/ssmcp/pull/152) 对应固定提交 `cbe3d0ef1f7fbe1a26ebe367edc646cd8ef429c3`。完整树比较确认，它与 c53 只相差一份新增说明文档；产品源码、Cargo 文件、脚本、测试、工作流和四个 gitlink 均相同。提交和完整树身份仍然不同，c53 的构建回执不能改标为 cbe 的验收。[完整树对照记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/main-cbe-vs-baseline-c53-identity-20261120.json)也明确限定为这两个固定提交。
+
+本检查点另已通过 GitHub 实读主线固定提交 `b0a07b047b1532688f06b9df8423e9bfc044c405`：[PR #153](https://github.com/LIghtJUNction/ssmcp/pull/153) 已合入命名的 local / HTTPS context；其父提交 `4237eea2cab8253b8dff84d81861ba1e1adf4246` 更新了 zuse 的固定源码及锁文件。旧 c53 / 6c76 锁文件身份因此不能代表这份新主线。后续比较仍由唯一构建负责人冻结共同基线，包含最终 context、依赖和必要修复；源码合入本身不表示最终运行验收通过。
+
+首次性能基线服务在 19:31:00–19:31:15 UTC 运行后退出 1。构建负责人报告，前四个场景通过，第五个 ordinary-16k 场景在读取完整草稿投影时触及 8 KiB 上限；报告还记录 57 项检查及输入未变。这里的场景统计来自负责人的转述：独立审查尚未取得其原始 16,024 字节报告（所报 SHA256 `76e4a54d52164c89a57be0a3eba10c11138e3c20d8f730113e4ec047d5476309`）。因此该次运行保留为未完成的基线，不给出加速比；修正分页读取后，基线与候选必须使用同一套实际驱动和辅助文件重新比较。
 
 ## 验证证据
 
@@ -160,6 +166,20 @@ HTTP 封装的独立审查也限定为静态结论：预配置 TLS 只替换 TLS
 
 文本报告、清单和测试输入保留在 Git；生成截图、归档和编译产物存于外部归档或 Release 资产。最终发布报告另需填入实际发布记录，不以这些历史材料替代最终候选的门禁。
 
+## 工作目录恢复检查点
+
+2026-11-20 19:32–19:36 UTC，多个位于 GITHUB 目录下的 SSMCP 迭代工作目录先后无法访问。同一客户端上的早先读取曾成功列出 release 工作目录，后续读取则得到 ENOENT；具体原因尚未查明。主 Git 仓库及部分独立保留文件仍在。工作目录恢复、重新构建和原始运行产物恢复是不同事项。
+
+本线程和直接协作审查者从各自保留的完整原文件恢复了 16 份材料，包括粘贴补丁、原驱动、Ctrl+V 补充脚本、独立审查、旧工作稿与发布核验工具。每份恢复文件都与此前记录的完整 SHA256 一致。归档共 18 个条目，另外两个是恢复清单和范围说明；它没有重新生成缺失的原始构建回执，也没有重建原测速结果。归档大小为 158,998 字节，SHA256 为 `d23a92ff837f26bff83eaf7094c92f412c218105308ffeff6ce0056bf1fb89da`。
+
+恢复包已保存至 [Google Drive](https://drive.google.com/file/d/13Q7GXA2gBBpFnThVfL-auILA4FrL3zI0/view) 和 [文件副本](https://chatgpt.com/library?file_id=libfile_fde3_f-50324c9ad36c8191bd578d1b1139d078_e58c93d727108191bbc40d6c0d09ec81&account_id=personal)。19:49 UTC 实际下载云盘副本后再次计算摘要，字节数、SHA256 与 18 个归档条目均一致。[恢复检查点](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/workspace-recovery-20261120.json)列出每份材料及缺失项。
+
+截至此检查点，本线程尚未恢复原 c53 构建回执、完整源码和依赖输入清单、原先保留的五个二进制，以及首次性能运行的原报告与 VT 帧。独立审查 JSON 记录的是丢失前确实做过的核验，不能充当这些原文件的替代品。唯一构建负责人负责在新的工作目录恢复 Git 源码，并为后续实际构建和运行生成新的回执；共享缓存里的同名程序不能直接继承旧身份。
+
+### 发布核验工具的适用范围
+
+已恢复的 a238 发布核验工具曾通过 8 项离线测试，覆盖 23 个篡改负例；这些只验证核验逻辑，不表示真实发行已经通过。对 c53 的 [schema 与工作流静态复核](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/source-schema-recheck-c53.json)确认了当时 verified_crate 契约、19 个 job 与 16 个资产集合的兼容性。最终候选如继续修改 release.py 或工作流，仍需按实际最终内容核对；正式 tag、run、资产、官方 crate checksum 与源码身份都要等待真实发布后验证。[历史离线回执](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/verified-crate-contract-validation.json)保留原样。
+
 ## 分支清理
 
 以下四个远端分支已按已合并 PR 的精确头提交核对并删除，删除前确认没有额外提交和活动工作树占用：
@@ -175,4 +195,4 @@ HTTP 封装的独立审查也限定为静态结论：预配置 TLS 只替换 TLS
 
 待补充：最终提交、tag、正式发布 run、Release 的 16 项资产及摘要、crates.io 版本与 checksum、报告位置。
 
-现有生产 relay 和活动客户端保持运行，未在本轮切换。发布包与生产进程是否已经加载该版本是两个独立事实，交付记录应分别报告。
+本线程未执行生产 relay 部署或活动客户端版本切换。发布包与生产进程是否已经加载该版本是两个独立事实，交付记录应分别报告。

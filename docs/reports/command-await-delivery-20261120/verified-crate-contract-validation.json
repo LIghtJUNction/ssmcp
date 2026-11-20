@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "status": "offline_contract_checks_passed",
+  "recorded_at_utc": "2026-11-20T18:10:52.466863+00:00",
+  "python": "3.12.14",
+  "schema_source_commit": "5d087d1f7363fe5741f6080168037623362280e7",
+  "schema_release_py_sha256": "534a780221adddd8533ba3df35f19df834964b46ae97aad46867cfb0f7dd8900",
+  "source_files": {
+    "verify_published_candidate.before-verified-crate.py": {
+      "bytes": 9531,
+      "sha256": "d8042c6448f8d0b35c543b879bbe9bb913be3ab5fb7fd72a93157ba96a1682c8"
+    },
+    "verify_published_candidate.py": {
+      "bytes": 28307,
+      "sha256": "a23827c06034964c6ef8aa3299613f7d50cafbd6ddfb2bafeb7b50d814889394"
+    },
+    "test_verify_published_candidate.py": {
+      "bytes": 14547,
+      "sha256": "595f0d7bceb6d1ea4819fc3940c329c420d798551169b78f5c4ce4b0d49160f0"
+    },
+    "c7-release-contract-snapshot-20261121.json": {
+      "bytes": 222374,
+      "sha256": "b28e38c02709f96f6c4e6b69eb444351fbbc9c395316050c00db4c5ed3bb0679"
+    },
+    "verified-crate-contract.patch": {
+      "bytes": 37403,
+      "sha256": "7c7f871c4212349c05bf7daabfe76eda025a99cd0433734f2cc30b8c5b12e735"
+    }
+  },
+  "checks": {
+    "ast_parse": "passed",
+    "original_assertions_preserved": 34,
+    "unittest_methods_passed": 8,
+    "tamper_subcases_rejected": 23,
+    "unittest_exit_code": 0,
+    "observed_unittest_seconds": 0.077,
+    "import_side_effects": "network, Git, subprocess and report writes forbidden during import",
+    "actual_schema_sample": "valid synthetic registry graph also passed the three pure functions extracted from the bound release.py"
+  },
+  "test_command": [
+    "python3",
+    "-B",
+    "/workspace/scratch/18a2b71ce5be/ssmcp-final-validation-20261120/test_verify_published_candidate.py",
+    "-v"
+  ],
+  "not_executed": [
+    "live verifier main",
+    "network publication verification",
+    "publisher",
+    "Git mutation",
+    "Cargo",
+    "CI",
+    "PTY",
+    "model"
+  ],
+  "limitations": [
+    "Synthetic samples validate the verifier, not any release candidate.",
+    "No real finalized verified-crate receipt has been evaluated.",
+    "Graph feature selections, dependency kinds and transitive Git tree values remain the successful formal workflow metadata evidence; identities, lock edges, direct edges and declared gitlinks are checked locally.",
+    "Unknown external time v4 controller is not covered.",
+    "Recheck the helper against the actual final finalize schema before publication verification."
+  ]
+}
