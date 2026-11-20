@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-11-20T15:00:10.767147+00:00",
+  "task": "Fix stale canvas PTY assertions for the readable command and Tasks argv contracts.",
+  "status": "passed",
+  "repository": "https://github.com/LIghtJUNction/ssmcp",
+  "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/140",
+  "originating_preflight": {
+    "run_id": 44754296839,
+    "job_id": 136350165832,
+    "platform": "Linux aarch64",
+    "failure": "e2e_canvas_logs.py retained the previous command UI contract; this record is local validation, not a CI rerun."
+  },
+  "product_source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+  "product_source_tree": "a659cad36300511214c19c4650080119214ab782",
+  "fixture_revision": "38d41d400df8ba548118c5b9ce8f33552eac884b",
+  "fixture_path": "scripts/e2e_canvas_logs.py",
+  "fixture_sha256": "c4e44c42f7aa8d9dff17d9a1f1e20852c76862714fc3387003909b6c0c8c25ba",
+  "changed_product_files": [],
+  "changes": [
+    "Reuse folded_command_preview to require exactly one Ran heading, three physical output rows, the latest output and an explicit Show details action.",
+    "Check dynamic column counts and adjacency through real Queue, Audit, Tasks and Logs headers; preserve independent conversation bodies and expanded versus collapsed diff state.",
+    "Check complete ordered JSON-quoted Tasks argv rows instead of a joined Command string; preserve completed status and exit code assertions."
+  ],
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "python": "3.12.14",
+    "execution": "Real PTY running ssmcp ui preview with isolated synthetic fixture data; vt_snapshot decodes the production terminal compositor.",
+    "network_or_authentication": "No private router, real account, model, live relay, or native client used by this fixture validation."
+  },
+  "build": {
+    "source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+    "source_tree": "a659cad36300511214c19c4650080119214ab782",
+    "status": "passed",
+    "argv": [
+      "cargo",
+      "build",
+      "--offline",
+      "--locked",
+      "--bin",
+      "ssmcp",
+      "--example",
+      "vt_snapshot",
+      "--jobs",
+      "1",
+      "--message-format=json"
+    ],
+    "cargo_jobs": 1,
+    "serial_wrapper": "/workspace/scratch/18a2b71ce5be/ssmcp-cloud-rust/rustc-serial",
+    "cache_copy": "COW or independent byte copy; no source hard links",
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "exit_code": 0,
+    "seconds": 122.774,
+    "log_sha256": "adace14be0e77c24bf95c8f3a95b8772e5487674ba48a2de63386203046e3de9",
+    "artifacts": {
+      "ssmcp": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/target/debug/ssmcp",
+      "vt_snapshot": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/target/debug/examples/vt_snapshot"
+    },
+    "binaries_sha256": {
+      "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+      "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+    }
+  },
+  "checkout": {
+    "source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+    "gitlinks": [
+      " db4206d3b74e37d57ff052948962f55514081d4b crates/zharness (v0.6.0)",
+      " 00d566eedcff7b2932e90b9dfeb44910c783d305 crates/zplugin (v0.3.1)",
+      " 9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e crates/ztuio (v0.1.0)",
+      " 94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a crates/zuse (v0.2.2)"
+    ],
+    "seconds": 40.591
+  },
+  "attempts": [
+    {
+      "directory": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-original",
+      "reason": "Preserved reproduction of the original range-label failure.",
+      "invocation": {
+        "source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+        "fixture_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+        "argv": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/original/e2e_canvas_logs.py",
+          "--bin-dir",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/target/debug",
+          "--out",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-original"
+        ],
+        "exit_code": 1,
+        "seconds": 0.722,
+        "fixture_sha256": "d0ae97142499cb303004a6afbc3f9f08ea83c7c8a78f75ceb86300a24c77cb7c",
+        "helper_sha256": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "binaries_sha256_before": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "binaries_sha256_after": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "log_sha256": "6a957ec99c3b546cf9d79616d392d54768b9e04215cdbc062e8c18ff63c0e904"
+      },
+      "report": {
+        "suite": "canvas-logs-tasks",
+        "status": "failed",
+        "checks": [],
+        "error": "conversation retains user messages and result summaries while tool and diff details start collapsed",
+        "check_count": 0
+      },
+      "report_sha256": "0047bb97b3be227ceb00d768787754ac61d47ce0ad37b2a58bb4743dbfaed3af"
+    },
+    {
+      "directory": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-1",
+      "reason": "Command preview and dynamic column checks passed; the old joined-command Tasks assertion failed after 48 checks.",
+      "invocation": {
+        "source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+        "fixture_revision": "f607caaa44c1a0b996b835234998ed0d71b64ecc",
+        "argv": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-fixture-4c6178e/scripts/e2e_canvas_logs.py",
+          "--bin-dir",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/target/debug",
+          "--out",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-1"
+        ],
+        "exit_code": 1,
+        "seconds": 10.485,
+        "fixture_sha256": "c1cec00fbf903ca5f1841dab24f70a8233293155c30170469092491514734ae6",
+        "helper_sha256": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "binaries_sha256_before": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "binaries_sha256_after": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "log_sha256": "758788d5007026db72be0ad5586137f0bd3c2d9514ecf67e55869ea89eea4b98"
+      },
+      "report": {
+        "suite": "canvas-logs-tasks",
+        "status": "failed",
+        "checks": [
+          "conversation retains user messages and result summaries while tool and diff details start collapsed",
+          "background diagnostics do not appear in the conversation",
+          "ordinary Left inside the draft moves across a wide glyph without changing columns",
+          "ordinary Right inside the draft remains an editing action",
+          "diagnostic messages appear in the dedicated log panel",
+          "opening diagnostic logs preserves the shared draft and gives logs keyboard focus",
+          "right-button release does not toggle the log panel again",
+          "right-button toggling restores the conversation, draft and cursor",
+          "release after closing leaves the original column open",
+          "typing in Logs keeps its column active and focuses the shared draft",
+          "Escape restores the bookmarked column with the edited draft and cursor",
+          "the main workflow starts with all eight logical columns",
+          "Right at the draft boundary changes columns without changing text",
+          "horizontal round trip restores the original composer cursor",
+          "Alt+Left changes columns while preserving a nonempty draft",
+          "horizontal navigation stops at the first column",
+          "agent selection is retained independently in its logical column",
+          "Escape closes logs and preserves the original column selection and shared draft",
+          "choosing a recipient preserves the shared draft",
+          "audit viewport, shared recipient and draft survive horizontal navigation",
+          "narrow columns keep wide glyphs and cursor coordinates within the viewport",
+          "resizing restores the conversation with its recipient and diagnostic separation",
+          "new columns extend the canvas and share the selected recipient",
+          "queue Inspect keeps content focus on the exact request",
+          "another column of an existing view type is independent",
+          "/new and /close extend and shrink the canvas without ending the session",
+          "horizontal navigation stops at the last column without wrapping",
+          "preview restores original terminal attributes and exits cleanly",
+          "preview disables mouse reporting on exit",
+          "opening a collapsed diff shows all old and new content in the default single layout",
+          "/diff split aligns old and new changes on the same bounded row",
+          "split diff falls back to complete single-column changes below its minimum width",
+          "narrow fallback preserves the selected split preference",
+          "restoring terminal width restores the selected split diff",
+          "/diff single keeps both versions on a wide screen",
+          "single diff stays complete and bounded after narrowing",
+          "a new conversation column starts with its own collapsed tool cards",
+          "the duplicate conversation inserts a ninth column before Audit",
+          "/login preview rejection preserves composer and canvas (changed: [])",
+          "/login open preview rejection preserves composer and canvas (changed: [])",
+          "/login copy preview rejection preserves composer and canvas (changed: [])",
+          "/login link preview rejection preserves composer and canvas (changed: [])",
+          "returning to the original conversation restores expansion and preserves the rejected command draft",
+          "the duplicate conversation retains its own collapsed state after the round trip",
+          "diff and login preview restores terminal attributes and exits cleanly",
+          "the default canvas has eight columns with conversation second",
+          "/tasks opens the canonical Tasks column with explicitly fictional preview job metadata",
+          "task selection preserves the shared Unicode draft and recipient"
+        ],
+        "error": "Enter opens the selected task's status and command without launching work",
+        "check_count": 48
+      },
+      "report_sha256": "2a74013af01c121c2c5f4cd6a704d4be99f5ca8c40d7264b5794e4e7a57c7db3"
+    },
+    {
+      "directory": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-2",
+      "reason": "Complete canvas, diff/login, Tasks, and exit-alias PTY suite passed.",
+      "invocation": {
+        "source_revision": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+        "fixture_revision": "38d41d400df8ba548118c5b9ce8f33552eac884b",
+        "argv": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-fixture-4c6178e/scripts/e2e_canvas_logs.py",
+          "--bin-dir",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/target/debug",
+          "--out",
+          "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-2"
+        ],
+        "exit_code": 0,
+        "seconds": 14.609,
+        "fixture_sha256": "c4e44c42f7aa8d9dff17d9a1f1e20852c76862714fc3387003909b6c0c8c25ba",
+        "helper_sha256": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "binaries_sha256_before": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "binaries_sha256_after": {
+          "ssmcp": "7dc2100c2dfc2b4de48e7d74d53044459e005829a8908733b1fac4f4189eea0c",
+          "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30"
+        },
+        "log_sha256": "06af5528576cc08b35ff8b51a82155ad3f252ad9fab480f9796534ab1e7bf3c8"
+      },
+      "report": {
+        "suite": "canvas-logs-tasks",
+        "status": "passed",
+        "checks": [
+          "conversation retains user messages and result summaries while tool and diff details start collapsed",
+          "background diagnostics do not appear in the conversation",
+          "ordinary Left inside the draft moves across a wide glyph without changing columns",
+          "ordinary Right inside the draft remains an editing action",
+          "diagnostic messages appear in the dedicated log panel",
+          "opening diagnostic logs preserves the shared draft and gives logs keyboard focus",
+          "right-button release does not toggle the log panel again",
+          "right-button toggling restores the conversation, draft and cursor",
+          "release after closing leaves the original column open",
+          "typing in Logs keeps its column active and focuses the shared draft",
+          "Escape restores the bookmarked column with the edited draft and cursor",
+          "the main workflow starts with all eight logical columns",
+          "Right at the draft boundary changes columns without changing text",
+          "horizontal round trip restores the original composer cursor",
+          "Alt+Left changes columns while preserving a nonempty draft",
+          "horizontal navigation stops at the first column",
+          "agent selection is retained independently in its logical column",
+          "Escape closes logs and preserves the original column selection and shared draft",
+          "choosing a recipient preserves the shared draft",
+          "audit viewport, shared recipient and draft survive horizontal navigation",
+          "narrow columns keep wide glyphs and cursor coordinates within the viewport",
+          "resizing restores the conversation with its recipient and diagnostic separation",
+          "new columns extend the canvas and share the selected recipient",
+          "queue Inspect keeps content focus on the exact request",
+          "another column of an existing view type is independent",
+          "/new and /close extend and shrink the canvas without ending the session",
+          "horizontal navigation stops at the last column without wrapping",
+          "preview restores original terminal attributes and exits cleanly",
+          "preview disables mouse reporting on exit",
+          "opening a collapsed diff shows all old and new content in the default single layout",
+          "/diff split aligns old and new changes on the same bounded row",
+          "split diff falls back to complete single-column changes below its minimum width",
+          "narrow fallback preserves the selected split preference",
+          "restoring terminal width restores the selected split diff",
+          "/diff single keeps both versions on a wide screen",
+          "single diff stays complete and bounded after narrowing",
+          "a new conversation column starts with its own collapsed tool cards",
+          "the duplicate conversation inserts a ninth column before Audit",
+          "/login preview rejection preserves composer and canvas (changed: [])",
+          "/login open preview rejection preserves composer and canvas (changed: [])",
+          "/login copy preview rejection preserves composer and canvas (changed: [])",
+          "/login link preview rejection preserves composer and canvas (changed: [])",
+          "returning to the original conversation restores expansion and preserves the rejected command draft",
+          "the duplicate conversation retains its own collapsed state after the round trip",
+          "diff and login preview restores terminal attributes and exits cleanly",
+          "the default canvas has eight columns with conversation second",
+          "/tasks opens the canonical Tasks column with explicitly fictional preview job metadata",
+          "task selection preserves the shared Unicode draft and recipient",
+          "Enter opens the selected task's status and command without launching work",
+          "task details scroll inside a bounded narrow viewport",
+          "Tasks Left reaches Logs without changing the draft or recipient",
+          "Logs Right restores the task selection, detail and scroll position",
+          "Escape leaves task details while keeping the selected job and draft",
+          "Audit to Logs to Tasks to Logs then Escape returns to the original bookmarked column",
+          "task and log navigation preserves the original wide-glyph composer cursor",
+          "closing and reopening Tasks restores the canonical pair and preserves the recipient",
+          "dedicated Tasks restores a closed Logs neighbor without deleting jobs or the recipient",
+          "/new from Logs inserts after Tasks and never splits the canonical pair",
+          "closing system columns leaves the preview session alive",
+          "task-column preview restores original terminal attributes and exits cleanly",
+          "/exit extra reports an error without exiting or changing the canvas and draft",
+          "/exit exits the preview normally with code zero",
+          "/exit restores the primary screen, bracketed-paste state and visible cursor",
+          "/exit disables mouse event reporting before exit",
+          "/exit restores the original PTY termios without a signal-driven exit",
+          "/quit exits the preview normally with code zero",
+          "/quit restores the primary screen, bracketed-paste state and visible cursor",
+          "/quit disables mouse event reporting before exit",
+          "/quit restores the original PTY termios without a signal-driven exit"
+        ],
+        "check_count": 69
+      },
+      "report_sha256": "5bbcd979e86bdd300420152bbb20fd94c20c19456036ad5aa9cf95623cb161df"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "ui-canvas-conversation.png",
+      "sha256": "e49843bb084f43bf30bd55c421eddf5f3e1ef14714fbea34aaa32c406631757c",
+      "bytes": 57198,
+      "snapshot_local_path": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-2/ui-canvas-conversation.json",
+      "snapshot_sha256": "73df8d10de4459bb9fdecc4f79443615bfe30145e2dd32d0e521178302139bd8",
+      "terminal_size_rows_cols": [
+        30,
+        110
+      ],
+      "observed": "110-column conversation retains the Ran command, three physical preview rows, details action and collapsed diff."
+    },
+    {
+      "file": "ui-canvas-tasks-detail.png",
+      "sha256": "60c800f1102b330e8fd373e811d8b3b9545a674e28efae6ae68d304f630b6d5d",
+      "bytes": 70570,
+      "snapshot_local_path": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-2/ui-canvas-tasks-detail.json",
+      "snapshot_sha256": "26ab46a21278b00619a943b44adde86f36b0e3120eb416661a0eb300d18da2eb",
+      "terminal_size_rows_cols": [
+        30,
+        110
+      ],
+      "observed": "110-column Tasks inspector exposes the complete ordered argv with status and exit metadata."
+    },
+    {
+      "file": "ui-canvas-tasks-narrow.png",
+      "sha256": "41fadadb5a7d3260ba2a00a68e9e0d8a1211b7d1fed130abc36dd9fd5b7afae3",
+      "bytes": 31779,
+      "snapshot_local_path": "/workspace/scratch/18a2b71ce5be/ssmcp-canvas-validation-4c6178e/pty-patched-2/ui-canvas-tasks-narrow.json",
+      "snapshot_sha256": "f65b82ae47c00ed7b2ee8296efbb6fe33b7e5704ba786f0660643a8c14fc14f9",
+      "terminal_size_rows_cols": [
+        12,
+        60
+      ],
+      "observed": "60-column Tasks inspector retains complete argument rows after scrolling without covering the Unicode composer."
+    }
+  ],
+  "visual_review": {
+    "implementation_owner": "Opened all three rendered snapshots and verified bounded content, readable commands and separate composer.",
+    "root": "Independently opened all three PNGs; confirmed the Ran/three-row/details contract, ordered argv and narrow Unicode composer without overlap."
+  },
+  "static_review": {
+    "reviewer": "command_group_tests",
+    "fixture_sha256": "c4e44c42f7aa8d9dff17d9a1f1e20852c76862714fc3387003909b6c0c8c25ba",
+    "result": "Passed; argv equality rejects missing, additional, reordered or duplicate arguments.",
+    "bounded_downstream_scan": {
+      "files": 51,
+      "scope": "Existing e2e_*.py command, range, argv and column selectors and the remaining formal gate sequence.",
+      "result": "No additional confirmed stale-selector blocker outside the fixed canvas fixture."
+    }
+  },
+  "cleanup": {
+    "owned_fixture_processes_active": [],
+    "termios_restoration": "Passed for all four canvas fixture entry points.",
+    "exit_alias_restoration": "Both /exit and /quit returned zero and restored primary screen, bracketed paste, mouse reporting and visible cursor.",
+    "evidence_and_cache": "Original failure, intermediate failure, final reports, VT snapshots, logs and isolated target are retained under the validation directory.",
+    "live_processes": "No production or other owner processes were changed."
+  },
+  "scope_limits": [
+    "Product binaries were built from exact 4c6178eb811049ce1fce4b6d16803e0e4f7b410d; the passing Python fixture is exact 38d41d400df8ba548118c5b9ce8f33552eac884b. This is not evidence for a later merged candidate.",
+    "This local Linux x86_64 preview PTY run does not replace ARM execution, account logout integration validation, real command redaction suites, or the formal release preflight.",
+    "No product code, dependency, version, release note, authentication or isolation setting was changed. No workflow was rerun, merged, tagged, published or deployed."
+  ]
+}
