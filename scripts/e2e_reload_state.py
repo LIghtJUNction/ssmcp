@@ -70,7 +70,7 @@ class ReloadState(InputHistory):
             front, lambda state: state["draft"]["cursor"] == len(draft.encode()) - len("界".encode()),
             "the reload draft cursor did not move over the Unicode character",
         )
-        shot_before = self.save_shot("reload-before", front, cells=True)
+        shot_before = self.save_resized_shots("reload-before", front, "RELOAD_UNSENT_DRAFT")
         input_start = prompt_start(shot_before)
         old_id, old_pid = self.client_id, front.process.pid
 
@@ -92,7 +92,7 @@ class ReloadState(InputHistory):
             lambda shot: reply in text(shot) and prompt_start(shot) == input_start,
             "retained conversation text and input height in the restarted terminal",
         )
-        self.save_shot("reload-after", front, cells=True)
+        self.save_resized_shots("reload-after", front, "RELOAD_UNSENT_DRAFT")
         self.check(accepted in text(shot_after),
                    "both retained user and assistant messages return to the conversation")
         resumed = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
