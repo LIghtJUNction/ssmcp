@@ -179,9 +179,12 @@ impl Capture {
             else {
                 return body["truncated"] == true || body["has_more"] == true;
             };
-            // Native replies can arrive out of order. A newer observed revision
-            // is stronger evidence than an older list that started before it.
-            if state.revision < entry.reminder.revision {
+            // Native replies can arrive out of order. Neither an older revision
+            // nor fewer calls at the same revision may retire an earned notice.
+            if state.revision < entry.reminder.revision
+                || (state.revision == entry.reminder.revision
+                    && state.call_count < entry.reminder.call_count)
+            {
                 return true;
             }
             if state.revision > entry.reminder.revision
@@ -453,6 +456,43 @@ mod tests {
         captured.failed("a", None);
         assert!(!captured.claim_probe("a", None));
     }
+    #[test]
+    fn a_late_same_revision_list_preserves_the_notice_and_final_probe() {
+        let mut captured = Capture::default();
+        captured.observe("a", None, &native("g", 0, 11, 0));
+        let older = json!({"structuredContent":{"schema_version":1,"threshold":10,"groups":[
+            {"group_id":"g","revision":0,"call_count":10,"covered_call_count":0}
+        ]}});
+        captured.reconcile("a", None, &older);
+        let notices = captured.for_scope("a", None);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["revision"], 0);
+        assert_eq!(notices[0]["call_count"], 11);
+        assert_eq!(notices[0]["covered_call_count"], 0);
+        assert!(captured.claim_probe("a", None));
+        assert!(!captured.claim_probe("a", None));
+
+        let current = json!({"structuredContent":{"schema_version":1,"threshold":10,"groups":[
+            {"group_id":"g","revision":0,"call_count":12,"covered_call_count":0}
+        ]}});
+        captured.reconcile("a", None, &current);
+        assert_eq!(captured.for_scope("a", None)[0]["call_count"], 12);
+    }
+
+    #[test]
+    fn covered_lists_at_the_same_or_newer_revision_still_retire_notices() {
+        for revision in [0, 1] {
+            let mut captured = Capture::default();
+            captured.observe("a", None, &native("g", 0, 11, 0));
+            let covered = json!({"structuredContent":{"schema_version":1,"threshold":10,"groups":[
+                {"group_id":"g","revision":revision,"call_count":11,"covered_call_count":11}
+            ]}});
+            captured.reconcile("a", None, &covered);
+            assert!(captured.for_scope("a", None).is_empty());
+            assert!(!captured.claim_probe("a", None));
+        }
+    }
+
     #[test]
     fn a_late_older_list_cannot_retire_a_newer_revision_notice() {
         let mut captured = Capture::default();
