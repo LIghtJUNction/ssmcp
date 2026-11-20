@@ -688,6 +688,7 @@ pub async fn dispatch(
                     "collab.bind is scoped to code_mode; call it at the start of each run",
                 )?;
                 access.session(&client_id).await?;
+                run.record_connection(&session)?;
                 run.bind(&client_id, &owner, &binding.agent_id, &binding.token)?;
                 return Ok(json!({"client_id":client_id,"agent":agent,"bound":true}));
             }
