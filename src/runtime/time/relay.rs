@@ -172,7 +172,7 @@ mod tests {
             std::process::id(),
             clock.id
         ));
-        std::fs::create_dir_all(&directory).unwrap();
+        crate::platform::private_directory(&directory).unwrap();
         history::with_test_history(directory.clone(), async {
             assert!(history::current_owner().is_none());
             clock.configure(false, true);
