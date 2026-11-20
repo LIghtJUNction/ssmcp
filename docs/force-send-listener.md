@@ -1,8 +1,20 @@
 # 强制发送与单监听程序接口
 
-`/send <正文>` 显式发送当前输入，收件人由当前选择决定。本文介绍其中的程序监听器分支：输入交给当前连接中显式登记的监听程序，并等待接收回执。没有有效监听程序时，界面立即显示 **“发送失败：没有程序在监听”**。只有监听程序返回 `accepted`，界面才显示 **“监听程序已接收”**；这不表示模型已经读取、执行或完成任务。本接口不启动模型。
+`/send <正文>` 向最近一次明确选择的组、原生收件人或本地目标发送，并保留草稿等待回执。命令后一个空白分隔字符以外的正文，包括缩进和尾换行，原样用于当前发送路径。
 
-本文依次说明连接范围、消息状态、API、终端行为、接入方式和验证边界。实现入口是 [listener 状态机](../src/client/interface/listener.rs) 和 [终端发送任务](../src/client/terminal/conversation/listener.rs)。
+## 选择 `/send` 的收件人
+
+| 当前选择 | 发送路径 |
+| --- | --- |
+| 组 | 在 `/sessions` 用空格勾选精确目标，或用 `/group add`、`/group use` 选择。正文按原生文本发送，每个目标独立返回回执。 |
+| 原生收件人 | 从 `/message` 或 `/recipients` 选择账号收件箱或已验证线程。发送时复核精确连接、账号和相应线程，正文保留字面字符。 |
+| 本地目标 | 选择 `Next caller` 对应主线程监听器，或选择已登记成员并使用该线程的监听器。此路径会准备正文里的 `@file` 和 `$skill` 引用。 |
+
+选择失效、账号变化或原生能力不可用时，保留草稿并报告失败。原生单发和组发均不会改投本地监听器。
+
+组发部分成功时保留草稿，`/group status` 可查看失败的目标。在同一连接用 `/group retry [GROUP_REQUEST_ID]`，或对相同正文与选择再次提交，会沿用组与子请求 ID。已获接受回执的目标会被跳过，即使后续状态查询出错。[原生消息与组发](thread-messaging.md)
+
+以下租约和 ACK 规则适用于本地目标。没有匹配监听程序时，界面显示发送失败。界面显示 **“监听程序已接收”** 表示监听程序已返回 `accepted`，执行结果由接收程序另行报告。使用 zcalld 原生监听时，先明确选择 `Next caller`。[监听状态机](../src/client/interface/listener.rs) · [网络与私有 Unix socket](thread-listeners.md) · [zcalld 原生监听](zcalld-listener.md)
 
 ## 为什么需要独立的接收回执
 
@@ -14,7 +26,7 @@
 
 本版本把一个会话限定为客户端当前已注册的 Broker **连接生命周期**。`connection_id` 标识连接，客户端另用不对外暴露的递增代数区分每次连接初始化。重新连接会清除旧租约，旧凭据和旧投递目标都失效，即使外部连接标识被复用也不能继承旧租约。
 
-这个范围不是持久化的 `session_id` 或 `thread_id`。监听登记不会跨重新连接恢复，也不会跨多个客户端共享。未来若需要跨连接的持久会话，应另行定义身份、存储、恢复和去重协议，不能把这里的连接编号直接当作持久线程。
+监听登记绑定这次连接及登记时的账号和线程。它随重连失效，且只属于当前客户端。`thread_id` 是登记成员的逻辑 ID，未绑定登记使用主线程。
 
 每个连接最多有一个有效监听租约，以及一条等待回执的强制消息。登记与投递检查在同一状态锁内完成，两个同时登记的程序只会有一个成功。一个租约同时只允许一个进行中的 `read`；取消读取会释放这个占用，不会夺走租约。
 
@@ -56,7 +68,7 @@ stateDiagram-v2
 
 监听程序负责决定何时发送 `accepted`。如果其要求断电后仍能处理消息，应先把消息写入自己的可靠队列，再确认。ssmcp 的 `accepted` 只记录该程序的声明，既不替它完成持久化，也不证明后续业务处理成功。
 
-接受后，终端会追加用户原始正文与“监听程序已接收”提示，原始 Logs 保留 `[USER] #<delivery_id>` 及正文。客户端也尝试通过现有 `history::record_request` 写入本地 JSONL 历史；该历史保存经过现有审计脱敏的原始正文，沿用容量与会话保留限制。历史写入失败会另行提示“历史记录未保存”，但不会把已经确认的接收结果改成失败。
+接受后，客户端将用户原始正文按发送时的会话归属写入本地 JSONL，终端显示“监听程序已接收”，原始 Logs 保留 `[USER] #<delivery_id>` 及正文。历史保存经过审计脱敏的原始正文，沿用容量与会话保留限制。历史写入失败会另行提示“历史记录未保存”，接收回执仍为 `accepted`。
 
 基础接收模式的这些记录不是永久投递台账。监听回执只在内存保留最近 32 条元数据；现有历史的消息编号由投递编号与正文计算而来，没有独立保存原 `delivery_id` 字段。引用展开后的文件全文也没有另存到历史。因此 ACK 不能被解释为已经保存了完整的文件快照、可长期关联的投递记录或模型对话历史。
 
@@ -66,7 +78,7 @@ stateDiagram-v2
 
 | `op` | 请求字段 | 主要返回字段 |
 | --- | --- | --- |
-| `open` | `label`：1–96 个 UTF-8 字节，无控制字符 | `schema_version`、`connection_id`、`listener_id`、`token`、`expires_in_ms`、`heartbeat_ms`、`ack_timeout_ms` |
+| `open` | `label`（1–96 个 UTF-8 字节，无控制字符）、可选 `idempotency_key` | `schema_version`、`connection_id`、`listener_id`、`token`、`thread_id`、`expires_in_ms`、`heartbeat_ms`、`ack_timeout_ms` |
 | `read` | `listener_id`、`token`、可选 `wait_ms` | `schema_version`、`delivery` 或 `null`、`timed_out` |
 | `ack` | `listener_id`、`token`、`delivery_id`、`status`；拒收时还须有 `reason` | `schema_version`、`receipt` |
 | `close` | `listener_id`、`token` | `schema_version`、`closed: true` |
@@ -74,21 +86,23 @@ stateDiagram-v2
 
 `listener_id` 与 `delivery_id` 是 32 个十六进制字符的公开编号。`token` 是 64 个十六进制字符的秘密租约凭据，只在显式 `open` 成功时返回；它必须留在接收程序的私有内存或受保护存储中。租约凭据不是模型身份，也不能替代现有账户与会话访问授权。
 
-`read` 中的 `delivery` 包含 `delivery_id`、`connection_id`、`listener_id`、`source: "client_user"`、`source_text`、`text` 和 `created_at_ms`。`source_text` 是去掉 `/send` 与一个分隔字符后的原始正文；`text` 是相同正文经过现有 `@` 引用展开后的内容。展示时间使用 Unix 毫秒；租约与超时判断使用单调时钟，不依赖墙上时间。
+`read` 中的 `delivery` 包含 `delivery_id`、`connection_id`、`listener_id`、`cursor`、`source: "client_user"`、`source_text`、`text` 和 `created_at_ms`。`source_text` 是去掉 `/send` 与一个分隔字符后的原始正文。`text` 是经过 `@` 文件与 `$` 技能准备后的正文。展示时间使用 Unix 毫秒；租约与超时判断使用单调时钟，不依赖墙上时间。
 
 `ack.status` 只能是 `accepted` 或 `rejected`。接受时不得提供 `reason`；拒收时必须提供 1–512 个 UTF-8 字节的非空原因，且不得含控制字符。错误消息不会回显凭据。`status` 和 `ssmcp.ui.get` 的 `/listener` 投影都不会包含 token 或在途消息正文。
 
 ## 终端操作与草稿保护
 
-在输入框使用 `/send <正文>` 后按 Enter。普通文本的 Enter 行为保持原来的 Requests 队列语义。`/send` 本身没有正文时会显示用法；`/sender` 不会被误识别为这个命令。
+在输入框使用 `/send <正文>` 后按 Enter。本地目标下，普通文本仍可按 Enter 提交到 Requests 队列。`/send` 没有正文时会显示用法，`/sender` 不会被识别为这个命令。
 
 解析仅移除命令和紧随其后的一个空白分隔字符。命令前的空白可被识别，正文的其余空格、制表符与尾换行保留。例如 `  /send hello` 的正文是 `hello`，而 `/send\n    code\n` 的正文是 `    code\n`。这样发送代码块时不会丢失缩进。
 
-无监听、引用读取失败、拒收或结果未确认都会保留草稿中的文字、`@` 引用和附件引用。引用展开之前检查租约，提交时再检查同一个连接代数与监听编号；展开期间出现替代监听程序也不能悄悄接收原消息。
+输入框的 16 KiB UTF-8 上限计入命令前缀。本地监听准备后的正文也须符合 16 KiB 上限。
 
-等待回执期间可以编辑草稿。接受回执只在草稿修订号、正文、光标、目标、编辑中的队列编号和视图仍与提交时一致的情况下清空输入。把文字删掉后重新键入相同文字也属于新修订，旧 ACK 不能清掉它。
+无匹配监听、引用语法或消息大小校验失败、拒收或结果未确认都会保留草稿。缺失文件或未知技能是引用警告，正文仍可投递给匹配监听器。准备引用之前检查租约，提交时复检同一连接代数与监听编号。[输入语法与限制](client-ui.md#文件技能与长粘贴)
 
-明确选择了某个 agent 的草稿不会被改投监听程序；界面会要求先明确选择 Next caller。正在编辑或提交普通队列消息时也会拒绝强制发送，避免把队列编辑转成另一条投递路径。
+等待回执期间可以编辑草稿。只有匹配的接受回执才能清空正文、目标、修订号和光标都与提交时一致的草稿。把文字删掉后重新键入相同文字也属于新修订。原生路径以 `queued`、`included` 或 `acknowledged` 为接受回执；本地监听路径要求 `accepted`。
+
+正在取回、编辑或提交普通队列消息时，须先完成该操作才能使用 `/send`。
 
 ## 接收程序的最小工作流程
 
@@ -117,21 +131,23 @@ try {
 }
 ```
 
-这段循环应由接收程序管理自己的停止与超时。一次有时限的 `code_mode` 调用不是永久守护进程；不要把一次调用仍在运行等同于持久监听服务。这个基础循环只接收和确认消息。Linux 本地生成程序可以显式启用[范围绑定的执行结果回复](thread-listeners.md#本地生成程序的执行结果)，或使用[zcalld 原生监听](zcalld-listener.md)；模型调用由接收程序负责。持久多轮上下文、多个在途生成和跨连接恢复仍不由这条基础接收循环提供。
+这段基础循环只负责接收和确认消息。接收程序管理超时和停止。有时限的 `code_mode` 调用结束后，长期监听由接收程序维持。
+
+Linux 上同一系统用户的程序可以通过私有 Unix socket 用 `open(enable_reply: true)` 启用回复。先 `read`，对该投递返回 `accepted` ACK，再用 `reply` 提交一条 `completed` 或 `failed` 结果。原租约与回执须仍有效，原会话须仍是当前会话。认证 MCP 的 `open` 只支持普通监听。回复记录的是程序自身的执行结果，模型调用和任务结束审批仍由各自的入口处理。[本地生成程序的执行结果](thread-listeners.md#本地生成程序的执行结果)
 
 ## 自动日志与验证边界
 
 租约凭据字段固定命名为 `token`，以使用现有自动审计脱敏；凭据不进入标题、公开编号、快照或错误文案。调用者若主动打印或外传凭据，已经越过这项自动日志保护，因此示例不打印 `open` 的完整结果。
 
-| 行为声明 | 可核对的实现与验证入口 | 证据范围 |
+| 检查内容 | 验证入口 | 范围 |
 | --- | --- | --- |
-| 单监听、读取消、重复读取与 ACK 竞争 | `client::interface::listener::tests::force_listener_*` | 独立 Hub 的并发与状态机测试 |
-| 旧连接、失效凭据与 unknown 无自动重投 | 同一测试模块的 reconnect、expiry、unknown 用例 | 当前连接内协议；不声称持久线程恢复 |
-| 文本缩进与旧回执保护新草稿 | `client::terminal::conversation::listener::tests::force_listener_*` | TUI 命令解析与真实草稿状态 |
+| 单监听、读取消、重复读取与 ACK 竞争 | `client::interface::listener::tests::force_listener_*` | 独立 Hub 的并发与状态机 |
+| 旧连接、失效凭据与 unknown 无自动重投 | 同一测试模块的 reconnect、expiry、unknown 用例 | 当前连接内的租约和投递 |
+| 文本缩进与旧回执保护新草稿 | `client::terminal::conversation::listener::tests::force_listener_*` | TUI 命令解析与草稿状态 |
 | 监听观察不领取普通队列 | `code_mode::tests::ui_observation_retains_source_audit_without_claiming_user_requirements` | 观察调用的需求领取判定 |
-| 真实终端、引用展开与接收回执 | `scripts/e2e_force_send.py` | 私有账户路由与真实 PTY，合成接收程序；不调用模型 |
+| 终端中选择本地监听或原生收件人后的 `/send` | `scripts/e2e_force_send.py` | 私有账户路由、真实 PTY、合成接收程序、引用准备和收件回执 |
 
-可执行验证命令如下。测试源码存在不代表某次候选已经通过；发布验收应同时记录不可变源码 SHA、二进制 SHA、脚本 SHA 和实际结果。
+以下命令用于本地验证。具体结果记录在对应的验收报告中。
 
 ```sh
 cargo test --lib force_listener_

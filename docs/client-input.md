@@ -171,9 +171,9 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
 
 `kind` 可选，接受 `progress`（默认）或 `answer`。`progress` 可以直接报告进展；明确的最终 `answer` 必须先由同一已验证线程取得 `request_finish` 的 Yes 决定，再消费一次完成许可。成功回执的 `finish_request_id` 指向该申请，相同幂等请求重试不再消耗第二次许可。具体申请、线程绑定与取消参数见[结束申请协议](finish-and-questions.md#申请结束)。
 
-两种消息都使用固定 `[AGENT]` 标签和当前客户端的 Markdown 排版，写入同一份 JSONL 历史；历史记录仍使用 `role: "assistant"`、`kind: "agent_message"`。消息不会作为用户要求入队，外部聊天应用的发言不经过这条本地门禁。
+两种消息都使用固定 `[AGENT]` 标签和客户端的 Markdown 排版，写入其归属会话的 JSONL，记录使用 `role: "assistant"`、`kind: "agent_message"`。已验证线程的回复沿用它首次发起原生调用时绑定的本地会话。切换到其他历史后，回复仍可保存到原会话。[本地消息的会话归属](client-ui.md#本地消息与回答问题)
 
-返回值中的 `message_id` 标识该条消息。`history_saved: true` 表示它已保存为同 ID 的 JSONL 记录；保存失败时仍显示消息，并返回 `history_saved: false`。`shown` 和 `accepted` 表示本地接受显示请求，不证明用户已阅读。
+回执中的 `history_saved: true` 表示已写入与 `message_id` 同 ID 的 JSONL 记录。写入失败时工具返回错误。保存成功后，如果原会话未选中，`shown` 为 `false`。`shown: true` 表示消息已交给本地显示，回执不记录用户是否阅读。
 
 需要重试时，使用原来的 `idempotency_key`、`text` 和 `kind`。匹配的重试返回原 ID 和 `duplicate: true`，不重复显示或追加历史；同一 key 搭配不同正文或 kind 会报错。key 限 1–96 个 ASCII 字母、数字、下划线或连字符。缓存最多保留 64 个新增 key，连接重连时保留，客户端进程重启后清空；这不是跨进程的永久去重保证。正文上限为 16 KiB UTF-8，只允许换行、制表符这两种控制字符。
 
