@@ -1,6 +1,7 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
 pub(crate) mod descriptions;
+pub(crate) mod goals;
 mod listener;
 mod ownership;
 pub(crate) use listener::{
@@ -576,6 +577,7 @@ impl History {
         }
         for (id, _lease) in reclaim {
             self.remove_description(&id, &names)?;
+            self.remove_goal(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }

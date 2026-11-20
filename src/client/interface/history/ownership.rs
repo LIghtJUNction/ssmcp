@@ -209,7 +209,7 @@ pub(crate) fn current_owner() -> Option<HistoryOwner> {
     HISTORY.get().and_then(|store| store.current.get())
 }
 
-fn with_owner<T>(
+pub(super) fn with_owner<T>(
     owner: &HistoryOwner,
     operation: impl FnOnce(&mut History, &HistoryOwner) -> Result<T, String>,
 ) -> Result<T, String> {
