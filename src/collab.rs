@@ -278,6 +278,20 @@ impl Hub {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn expire_lease_for_test(&self, owner: &str, id: &str) {
+        // Test only the passage of time for an existing, real membership. Its
+        // normal lookup/purge path still decides whether it is valid afterward.
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let member = state
+            .agents
+            .get_mut(id)
+            .filter(|member| member.owner == owner)
+            .expect("existing membership for this verified fixture owner");
+        member.expires = Instant::now();
+        member.expires_at_ms = now_ms();
+    }
+
     fn locked(&self) -> Result<MutexGuard<'_, State>, String> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {

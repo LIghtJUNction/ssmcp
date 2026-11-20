@@ -706,6 +706,13 @@ pub async fn dispatch(
             if !Arc::ptr_eq(&current, &session) {
                 return Err("collaboration connection changed before response".into());
             }
+            if name == "collab.leave"
+                && result["left"] == true
+                && let Authorization::Identity(identity) = &authorization
+                && let Some(agent_id) = result["agent_id"].as_str()
+            {
+                broker.retire_native_member(&session, identity, agent_id);
+            }
             if let Some(run) = &access.audit_run {
                 run.question_delivery_server_action(&client_id);
                 run.interacted(&client_id);

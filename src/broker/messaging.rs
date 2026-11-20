@@ -106,10 +106,22 @@ impl Broker {
         self.message_authorized(target, &Authorization::Identity(identity))
     }
 
-    fn message_proof_live(&self, target: &Session, proof: &Proof, recipient: &Recipient) -> bool {
+    fn message_proof_live(
+        &self,
+        target: &Arc<Session>,
+        proof: &Proof,
+        recipient: &Recipient,
+    ) -> bool {
         let Some(source) = proof.connection.upgrade() else {
             return false;
         };
+        if proof
+            .destination
+            .upgrade()
+            .is_none_or(|original| !Arc::ptr_eq(&original, target))
+        {
+            return false;
+        }
         let authorization = Authorization::Identity(proof.identity.clone());
         if target.client_id() != recipient.client_id
             || !self.message_authorized(&source, &authorization)
@@ -143,6 +155,49 @@ impl Broker {
                     && current.account.subject == recipient.account.subject
                     && current.agent_id == recipient.agent_id
             })
+    }
+
+    fn outgoing_message_live(
+        &self,
+        source: &Arc<Session>,
+        proof: &Proof,
+        recipient: &Recipient,
+    ) -> bool {
+        if proof
+            .connection
+            .upgrade()
+            .is_none_or(|original| !Arc::ptr_eq(&original, source))
+        {
+            return false;
+        }
+        let Some(target) = proof.destination.upgrade() else {
+            return false;
+        };
+        // The receipt belongs to this sender. Recheck the original destination
+        // without enumerating devices or exposing another account's mailbox.
+        self.message_proof_live(&target, proof, recipient)
+    }
+
+    pub(super) fn refresh_native_connection(&self, connection: &Arc<Session>) {
+        // The existing connection heartbeat handles idle membership leases and
+        // ACL changes. This reads only retained proofs for this exact Arc.
+        self.native_messages
+            .refresh_connection(connection, |proof, recipient| {
+                proof
+                    .destination
+                    .upgrade()
+                    .is_some_and(|target| self.message_proof_live(&target, proof, recipient))
+            });
+    }
+
+    pub(crate) fn retire_native_member(
+        &self,
+        connection: &Arc<Session>,
+        identity: &Identity,
+        agent_id: &str,
+    ) {
+        self.native_messages
+            .close_member(connection, identity, agent_id);
     }
 
     /// Common response finalizers call this only after refreshing the caller's
@@ -360,7 +415,9 @@ impl Broker {
                 }
                 reply.receipts = self
                     .native_messages
-                    .outgoing(&sender)
+                    .outgoing(&sender, |proof, recipient| {
+                        self.outgoing_message_live(source, proof, recipient)
+                    })
                     .into_iter()
                     .rev()
                     .take(messages::MAX_MESSAGES)
@@ -384,6 +441,7 @@ impl Broker {
                 reply.receipts.push(self.native_messages.enqueue(
                     Proof {
                         connection: Arc::downgrade(source),
+                        destination: Arc::downgrade(target),
                         identity: caller.clone(),
                         sender,
                     },
@@ -395,10 +453,15 @@ impl Broker {
             Command::Status { message_id } => {
                 let receipt = self
                     .native_messages
-                    .status(&sender, &message_id)
+                    .status(&sender, &message_id, |proof, recipient| {
+                        self.outgoing_message_live(source, proof, recipient)
+                    })
                     .ok_or("message receipt is unavailable for this sender")?;
                 let (target, _) = messages::parse_recipient(&receipt.recipient_id)?;
-                if !sessions.iter().any(|session| {
+                if !matches!(
+                    receipt.status,
+                    messages::Status::Expired | messages::Status::Acknowledged
+                ) && !sessions.iter().any(|session| {
                     session.client_id() == target
                         && self.message_authorized(session, &authorization)
                 }) {
@@ -428,6 +491,7 @@ impl Broker {
                     caller,
                     sender.agent.as_ref().map(|agent| agent.id.as_str()),
                     &message_id,
+                    |proof, recipient| self.message_proof_live(source, proof, recipient),
                 )?);
             }
         }
