@@ -1,5 +1,8 @@
 //! Bounded questions, authenticated answers, and explicit finish decisions.
+mod delivery;
 mod requests;
+mod workflow;
+pub(crate) use delivery::attach as attach_answers;
 pub(crate) use requests::{
     AgentActor, AnswerDelivery, DecisionActor, FinishChoice, FinishDecision, FinishStatus,
     FinishView, QuestionKind, QuestionView,
@@ -96,17 +99,18 @@ impl Record {
 
     fn visible_to(&self, caller: Option<&RequestScope>, local: bool) -> bool {
         local
-            || self.routing.as_ref().is_none_or(|routing| {
+            || self.routing.as_ref().map_or(caller.is_none(), |routing| {
                 caller.is_some_and(|caller| routing.scope.same_account(caller))
             })
     }
 
     fn reclaimable(&self) -> bool {
         self.question.state != QuestionState::Pending
-            && self
-                .routing
-                .as_ref()
-                .is_none_or(|routing| routing.answer_revision == 0 || routing.answer_delivered)
+            && self.routing.as_ref().is_none_or(|routing| {
+                !routing.scope.has_thread()
+                    || routing.answer_revision == 0
+                    || routing.answer_delivered
+            })
     }
 }
 
@@ -274,6 +278,11 @@ impl Queue {
     ) -> Result<(Question, bool), String> {
         if let Some(scope) = &scope {
             self.validate_scope(scope)?;
+            if kind == QuestionKind::Finish && !scope.has_thread() {
+                return Err(
+                    "finish_thread_required: an account alone cannot select an asking agent".into(),
+                );
+            }
         } else if kind == QuestionKind::Finish {
             return Err(
                 "finish_thread_required: finish requests need a verified agent thread".into(),
@@ -422,10 +431,22 @@ impl Queue {
             routing.answer_revision = routing.answer_revision.saturating_add(1);
             routing.answer_delivered = false;
         }
+        let question = record.question.clone();
+        let target = record
+            .routing
+            .as_ref()
+            .map(|routing| routing.scope.requester.thread_id.clone())
+            .filter(|id| !id.is_empty());
         self.revision = self.revision.saturating_add(1);
-        Ok(record.question.clone())
+        if caller.is_none() {
+            // A human answer supplies new information to its asking thread.
+            // It is not silently covered by an older completion approval.
+            self.invalidate_finishes(target.as_deref(), "new_human_question_answer");
+        }
+        Ok(question)
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> Value {
         json!({
             "schema_version": 1,
@@ -435,6 +456,7 @@ impl Queue {
         })
     }
 
+    #[cfg(test)]
     fn read(&self, request: ReadRequest) -> Result<Value, String> {
         self.read_for(request, None, true)
     }
@@ -498,9 +520,35 @@ impl Queue {
     }
 }
 
+fn caller_scope() -> Result<Option<RequestScope>, String> {
+    let Some(scope) = crate::runtime::call_scope::current() else {
+        return Ok(None);
+    };
+    if scope.attribution().is_none() {
+        return Ok(None);
+    }
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    let (id, _) = queue
+        .connection
+        .as_ref()
+        .ok_or("question_scope_expired: no current connection")?;
+    let caller = if scope.thread().is_some() {
+        RequestScope::from_call(&scope)?
+    } else {
+        RequestScope::account_only(&scope, id)?
+    };
+    queue.validate_scope(&caller)?;
+    Ok(Some(caller))
+}
+
 pub(crate) fn snapshot() -> Value {
     let local = crate::runtime::call_scope::current().is_none();
-    let caller = RequestScope::current().ok();
+    let caller = match caller_scope() {
+        Ok(caller) => caller,
+        Err(error) => {
+            return json!({"schema_version":1,"questions":[],"pending_count":0,"error":error});
+        }
+    };
     let queue = state().lock().unwrap_or_else(|error| error.into_inner());
     let visible: Vec<_> = queue
         .records
@@ -612,7 +660,9 @@ pub(crate) fn decide_finish(
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .decide_finish_for(id, choice, comment, None)?;
-    changed();
+    // The terminal handler already owns its State lock and sets its own dirty
+    // flag. Only wake remote waiters here; never re-enter the terminal mutex.
+    workflow::notify();
     Ok(result)
 }
 
@@ -651,11 +701,12 @@ pub(crate) fn user_input(target: Option<&str>) {
         .unwrap_or_else(|error| error.into_inner())
         .invalidate_finishes(target, "new_user_input")
     {
-        changed();
+        workflow::notify();
     }
 }
 
 fn changed() {
+    workflow::notify();
     crate::client::terminal::invalidate();
 }
 
@@ -664,15 +715,41 @@ pub(crate) fn answer(id: &str, text: &str) -> Result<Question, String> {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .finish(id, Some(text))?;
-    changed();
+    workflow::notify();
     Ok(answer)
 }
 
 pub(crate) fn skip(id: &str) -> Result<Question, String> {
-    state()
+    let question = state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .finish(id, None)
+        .finish(id, None)?;
+    workflow::notify();
+    Ok(question)
+}
+
+pub(super) async fn finish_request(arguments: Value) -> Result<Value, String> {
+    workflow::finish(arguments).await
+}
+
+pub(super) fn agent_answer(arguments: Value) -> Result<Value, String> {
+    workflow::answer(arguments)
+}
+
+pub(super) fn acknowledge_answers(arguments: Value) -> Result<Value, String> {
+    delivery::acknowledge(arguments)
+}
+
+pub(super) fn delivery_peek(arguments: Value) -> Result<Value, String> {
+    delivery::peek(arguments)
+}
+
+pub(super) fn authorize_completion() -> Result<String, String> {
+    workflow::authorize_completion()
+}
+
+pub(super) fn message_scope() -> Option<String> {
+    workflow::message_scope()
 }
 
 fn history_text(question: &Question) -> String {
@@ -722,7 +799,8 @@ fn enqueue(
 
 pub(super) fn ask(arguments: Value) -> Result<Value, String> {
     let request = parse_ask(arguments)?;
-    if let Ok(scope) = RequestScope::current() {
+    if let Some(scope) = caller_scope()? {
+        let automatic_delivery = scope.has_thread();
         let (question, created) = state()
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -733,7 +811,8 @@ pub(super) fn ask(arguments: Value) -> Result<Value, String> {
         }
         return Ok(
             json!({"schema_version":1,"id":question.id,"created":created,
-            "state":question.state,"blocking":false,"automatic_delivery":true,
+            "state":question.state,"blocking":false,"automatic_delivery":automatic_delivery,
+            "delivery_note":if automatic_delivery { "Replies are delivered to the verified requesting thread" } else { "No verified asking thread; read manually with ssmcp.ui.questions, or bind a collab member for future automatic replies" },
             "question":get_view(&question.id),"answer_with":"Shift+Up opens questions in the local client",
             "read_with":"ssmcp.ui.questions"}),
         );
@@ -750,7 +829,7 @@ pub(super) fn ask(arguments: Value) -> Result<Value, String> {
 pub(super) fn read(arguments: Value) -> Result<Value, String> {
     let request = parse_read(arguments)?;
     let local = crate::runtime::call_scope::current().is_none();
-    let caller = RequestScope::current().ok();
+    let caller = caller_scope()?;
     state()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -772,10 +851,10 @@ pub(super) fn parse_message(arguments: Value) -> Result<String, String> {
 pub(super) fn tools() -> Vec<Value> {
     let identifier =
         json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
-    vec![
+    let mut tools = vec![
         json!({
             "name":"ssmcp.ui.ask",
-            "description":"Queue a question for this client's local user and return immediately with an ID. Multiple questions can remain pending while you continue working. The user opens questions with Shift+Up, answers in the TUI, or skips them. Read the result later with ssmcp.ui.questions; do not hold a tool call open waiting for an answer. Markdown question text and up to eight suggested answers are supported; the user can always write a different answer. An idempotency_key reuses a retained question with exactly matching content. State belongs to this client process, survives connection reconnects, and ends on process restart. At most 32 pending and 64 retained questions share a 256 KiB budget; oldest completed history is reclaimed first.",
+            "description":"Queue a question for this client's local user and return immediately with an ID. Multiple questions can remain pending while you continue working. The user opens questions with Shift+Up, answers in the TUI, or skips them. Read the result later with ssmcp.ui.questions; do not hold a tool call open waiting for an answer. Markdown question text and up to eight suggested answers are supported; the user can always write a different answer. An idempotency_key reuses a retained question with exactly matching content. Verified threads receive typed question_answers on their next eligible native call, separate from user requirements. Reads do not consume answers. Unbound callers receive an explicit manual-read response, never next-caller routing. Records survive reconnect for local review, but old delivery scopes expire. State ends on process restart. At most 32 pending and 64 retained questions share a 256 KiB budget; oldest completed history is reclaimed first.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,"required":["question"],
                 "properties":{
@@ -789,7 +868,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.questions",
-            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped; only the local user's TUI writes answers. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Completed history may be reclaimed to respect the 64-record / 256 KiB budget, and all state ends on client process restart.",
+            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. The local user or another verified agent in the same client/account can answer; actor origin is retained. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,
                 "properties":{
@@ -806,7 +885,11 @@ pub(super) fn tools() -> Vec<Value> {
             "annotations":{"readOnlyHint":true,"destructiveHint":false}
         }),
         super::messages::tool(),
-    ]
+    ];
+    tools.extend(workflow::tools());
+    tools.push(delivery::tool());
+    tools.push(delivery::peek_tool());
+    tools
 }
 
 #[cfg(test)]

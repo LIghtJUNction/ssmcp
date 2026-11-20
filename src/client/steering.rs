@@ -147,9 +147,9 @@ pub(super) struct SavedDraft {
 pub(super) struct DraftContext {
     pub editing: Option<String>,
     pub target: Option<String>,
-    pub parked: Option<SavedDraft>,
     #[serde(default)]
     pub native_recipient: Option<String>,
+    pub parked: Option<SavedDraft>,
 }
 
 impl DraftContext {
@@ -168,6 +168,13 @@ impl DraftContext {
                 return Err("invalid draft context identifier".into());
             }
         }
+        if self.parked.as_ref().is_some_and(|draft| {
+            draft.text.len() > MAX_USER_MESSAGE_BYTES || !draft.text.is_char_boundary(draft.cursor)
+        }) {
+            return Err("invalid or oversized parked draft".into());
+        }
+        // Persistence validates only bounded syntax. The UI and relay must
+        // resolve the exact current descriptor/account/ACL before sending.
         for recipient in [
             self.native_recipient.as_deref(),
             self.parked
@@ -179,11 +186,6 @@ impl DraftContext {
         {
             crate::wire::messages::parse_recipient(recipient)
                 .map_err(|_| "invalid native draft recipient")?;
-        }
-        if self.parked.as_ref().is_some_and(|draft| {
-            draft.text.len() > MAX_USER_MESSAGE_BYTES || !draft.text.is_char_boundary(draft.cursor)
-        }) {
-            return Err("invalid or oversized parked draft".into());
         }
         Ok(())
     }
@@ -2289,7 +2291,7 @@ mod tests {
         manager.outbox.context = DraftContext {
             editing: Some(message.id.clone()),
             target: Some("agent_one".into()),
-            native_recipient: None,
+            native_recipient: Some(format!("client:{}", "a".repeat(64))),
             parked: Some(SavedDraft {
                 text: "parked request".into(),
                 cursor: 6,

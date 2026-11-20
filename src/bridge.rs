@@ -672,6 +672,9 @@ pub async fn dispatch(
                 .ok_or("collab requires client_id from list")?;
             valid_client(&client_id)?;
             let session = access.session(&client_id).await?;
+            if let Some(run) = &access.audit_run {
+                run.record_connection(&session)?;
+            }
             if name == "collab.bind" {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -687,8 +690,10 @@ pub async fn dispatch(
                 let run = access.audit_run.as_ref().ok_or(
                     "collab.bind is scoped to code_mode; call it at the start of each run",
                 )?;
-                access.session(&client_id).await?;
-                run.record_connection(&session)?;
+                let current = access.session(&client_id).await?;
+                if !Arc::ptr_eq(&current, &session) {
+                    return Err("collaboration connection changed before binding".into());
+                }
                 run.bind(&client_id, &owner, &binding.agent_id, &binding.token)?;
                 return Ok(json!({"client_id":client_id,"agent":agent,"bound":true}));
             }
@@ -696,9 +701,13 @@ pub async fn dispatch(
                 .collaboration
                 .dispatch(&owner, &name["collab.".len()..], Value::Object(args))
                 .await?;
-            // Waiting never grants authority beyond the current token and ACL.
-            access.session(&client_id).await?;
+            // Waiting never grants authority beyond the current token, connection and ACL.
+            let current = access.session(&client_id).await?;
+            if !Arc::ptr_eq(&current, &session) {
+                return Err("collaboration connection changed before response".into());
+            }
             if let Some(run) = &access.audit_run {
+                run.question_delivery_server_action(&client_id);
                 run.interacted(&client_id);
             }
             Ok(result)
