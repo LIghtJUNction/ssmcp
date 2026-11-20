@@ -31,6 +31,11 @@ enum FinishRequest {
         #[serde(default)]
         idempotency_key: Option<String>,
     },
+    Wait {
+        request_id: String,
+        #[serde(default = "default_timeout")]
+        timeout_ms: u64,
+    },
 }
 
 fn default_timeout() -> u64 {
@@ -121,10 +126,11 @@ struct WaitGuard {
     id: String,
     scope: RequestScope,
     finished: bool,
+    cancel_on_drop: bool,
 }
 impl Drop for WaitGuard {
     fn drop(&mut self) {
-        if !self.finished {
+        if !self.finished && self.cancel_on_drop {
             let _ = cancel(&self.id, &self.scope);
         }
         let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
@@ -141,10 +147,45 @@ impl Drop for WaitGuard {
 
 pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
     object_without_nulls(&arguments)?;
-    let request: FinishRequest = serde_json::from_value(arguments)
-        .map_err(|_| "finish request accepts op request/cancel and no actor or approval fields")?;
+    let request: FinishRequest = serde_json::from_value(arguments).map_err(
+        |_| "finish request accepts op request/wait/cancel and no actor or approval fields",
+    )?;
     let scope = RequestScope::current().map_err(|error| format!(
         "{error}; join the existing client with collab.join (no model is started), then bind its returned agent_id/token"))?;
+    if let FinishRequest::Wait {
+        request_id,
+        timeout_ms,
+    } = request
+    {
+        identifier(&request_id)?;
+        if !(1..=25_000).contains(&timeout_ms) {
+            return Err("timeout_ms must be 1..=25000".into());
+        }
+        let mut changes = CHANGES.get_or_init(|| watch::channel(0).0).subscribe();
+        {
+            let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+            finish_view(&queue, &request_id, &scope)?;
+            *queue.finish_waiting.entry(request_id.clone()).or_default() += 1;
+        }
+        // A passive observer must never cancel the approval transaction on drop.
+        // The original request/cancel API retains its explicit cancellation semantics.
+        let _guard = WaitGuard {
+            id: request_id.clone(),
+            scope: scope.clone(),
+            finished: false,
+            cancel_on_drop: false,
+        };
+        changed();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let timed_out =
+            wait_for_decision(state(), &request_id, &scope, &mut changes, deadline).await?;
+        let view = finish_view(
+            &state().lock().unwrap_or_else(|error| error.into_inner()),
+            &request_id,
+            &scope,
+        )?;
+        return Ok(finish_response(&request_id, false, timed_out, view));
+    }
     if let FinishRequest::Cancel {
         request_id,
         idempotency_key,
@@ -232,6 +273,7 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
         id: id.clone(),
         scope: scope.clone(),
         finished: false,
+        cancel_on_drop: true,
     };
     *state()
         .lock()
@@ -247,11 +289,15 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
         finish_view(&queue, &id, &scope)?
     };
     guard.finished = true;
-    Ok(json!({"schema_version":1,"request_id":id,"created":created,
+    Ok(finish_response(&id, created, timed_out, view))
+}
+
+fn finish_response(id: &str, created: bool, timed_out: bool, view: QuestionView) -> Value {
+    json!({"schema_version":1,"request_id":id,"created":created,
         "request":view,"timed_out":timed_out,
         "default_decision":"no","decision":view.finish.as_ref().and_then(|finish|finish.decision.as_ref()),
         "approved":view.finish.as_ref().is_some_and(|finish|finish.approved),
-        "note":"A pending timeout is not a user decision. Resume this request ID; explicit final replies require approval. External assistant final output cannot be intercepted."}))
+        "note":"Only the local user's explicit Yes permits completion. A timeout, an agent's completion or an agent's answer is not approval. Resume this request ID after a pending timeout; after No, continue the work or wait for user input. External assistant final output cannot be intercepted."})
 }
 
 pub(super) fn answer(arguments: Value) -> Result<Value, String> {
@@ -317,7 +363,7 @@ pub(super) fn tools() -> Vec<Value> {
     vec![
         json!({
             "name":"ssmcp.ui.answer",
-            "description":"Answer a retained question or explicitly decide a finish request as the currently verified bound agent. Same client and account only. A requester cannot approve its own finish. Text yes is ordinary text and never approval. Reads do not consume answers; answers keep their human/agent origin.",
+            "description":"Answer a retained question as the currently verified bound agent in the same client and account. Ordinary answers retain their agent origin. Agents may decline a finish request with decision no, but only the local user may approve completion; decision yes from any agent is rejected. Text yes is ordinary text and never approval. Reads do not consume answers.",
             "inputSchema":{"type":"object","additionalProperties":false,"required":["id"],"properties":{
                 "id":id,"answer":{"type":"string","minLength":1,"maxLength":MAX_ANSWER_BYTES},
                 "decision":{"enum":["yes","no"]},"comment":{"type":"string","minLength":1,"maxLength":MAX_ANSWER_BYTES}},
@@ -327,11 +373,12 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.finish",
-            "description":"Native implementation of the public request_finish tool. Request/resume a reasoned finish decision using the verified thread; bounded wait 1..25000ms leaves pending unchanged on timeout. Default is No without inventing a human decision. Use the direct public tool to avoid occupying a JavaScript worker. Cancel affects only this thread's exact request.",
+            "description":"Request/resume the local user's reasoned finish decision using the current verified thread. This native entry also works when public request_finish is not exposed. collab.join registers the current participant without starting a model; bind its returned agent_id/token first. Request creates or resumes a reasoned request; wait only observes an existing request_id and its cancellation never invalidates that request. Bounded waits of 1..25000ms leave pending unchanged on timeout: resume the same ID. Only an explicit local human Yes permits completion; agent approval and timeout never do. Default No does not invent a human decision. Prefer public request_finish when exposed to avoid occupying a JavaScript worker. Cancel explicitly invalidates only this thread's exact request.",
             "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
-                "op":{"enum":["request","cancel"]},"reason":{"type":"string","minLength":1,"maxLength":MAX_QUESTION_BYTES},
+                "op":{"enum":["request","wait","cancel"]},"reason":{"type":"string","minLength":1,"maxLength":MAX_QUESTION_BYTES},
                 "request_id":id,"idempotency_key":id,"timeout_ms":{"type":"integer","minimum":1,"maximum":25000,"default":20000}},
                 "oneOf":[{"properties":{"op":{"const":"request"}},"required":["reason"]},
+                    {"properties":{"op":{"const":"wait"}},"required":["request_id"],"not":{"anyOf":[{"required":["reason"]},{"required":["idempotency_key"]}]}},
                     {"properties":{"op":{"const":"cancel"}},"required":["request_id"],"not":{"anyOf":[{"required":["reason"]},{"required":["idempotency_key"]},{"required":["timeout_ms"]}]}}]},
             "annotations":{"readOnlyHint":false,"destructiveHint":false}
         }),
