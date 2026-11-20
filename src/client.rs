@@ -1700,6 +1700,7 @@ struct RegisteredSsh {
     ready: (String, String, u64, String),
     access_supported: bool,
     messaging_supported: bool,
+    version_notice: Option<crate::wire::versions::Notice>,
 }
 
 impl RegisteredSsh {
@@ -1800,6 +1801,7 @@ async fn register_ssh(
             login_expires_in,
             client_id,
             capabilities,
+            version_notice,
         }) => (
             (url, login_code, login_expires_in, client_id),
             capabilities
@@ -1811,6 +1813,12 @@ async fn register_ssh(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::messages::CAPABILITY),
+            version_notice.filter(|notice| {
+                capabilities
+                    .iter()
+                    .any(|capability| capability == crate::wire::versions::CAPABILITY)
+                    && notice.valid()
+            }),
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1835,7 +1843,8 @@ async fn register_ssh(
         }
     };
     *registered = true;
-    let (ready, access_supported, self_only_capabilities, messaging_supported) = ready;
+    let (ready, access_supported, self_only_capabilities, messaging_supported, version_notice) =
+        ready;
     if account_compat
         && (!metadata.allow.is_empty()
             || !ready.1.is_empty()
@@ -1864,6 +1873,7 @@ async fn register_ssh(
         ready,
         access_supported,
         messaging_supported,
+        version_notice,
     }))
 }
 
@@ -2111,6 +2121,7 @@ async fn connect_inner(
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
         messaging_supported,
+        version_notice,
     } = registration;
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
@@ -2126,6 +2137,9 @@ async fn connect_inner(
                 None
             }
         };
+    if let Some(notice) = version_notice {
+        update::report_connection(notice, options.server.as_deref().unwrap_or(&url));
+    }
     terminal::set_logout_target(if options.temporary || options.is_local() {
         None
     } else {

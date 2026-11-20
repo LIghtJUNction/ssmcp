@@ -355,9 +355,20 @@ class ForceSend(InputHistory):
                    "the new network listener status contains no previous connection receipt")
         self.check(self.ui("/listener")["receipts"] == [],
                    "the new UI listener projection contains no previous connection receipt")
-        events = self.ui("/display/events")["events"]
-        self.check(sum("上次连接" in item["summary"] for item in events) == 1,
-                   "the local terminal restores the interrupted sender outcome once")
+        # Conversation snapshots contain generic headings, not message bodies.
+        # Leave and re-enter the conversation to clear the transient notice,
+        # then inspect the real retained card without editing the user's draft.
+        draft_before_navigation = self.ui("/display/conversation")["draft"]
+        self.activate_column(front, "queue")
+        self.activate_column(front, "conversation")
+        retained = front.until(
+            lambda shot: "上次连接：发送结果未确认" in text(shot)
+            and "不会自动重发" in text(shot),
+            "the interrupted sender's retained card after clearing the transient notice",
+        )
+        self.check(text(retained).count("上次连接：发送结果未确认") == 1
+                   and self.ui("/display/conversation")["draft"] == draft_before_navigation,
+                   "the real conversation renders the interrupted outcome once and keeps its draft")
         self.save_shot("force-reconnected-unknown-120", front, cells=True)
         self.check(self.ui("/display/conversation")["draft"]["text"] == original,
                    "connection loss preserves the unconfirmed force-send draft")

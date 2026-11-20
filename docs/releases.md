@@ -238,4 +238,4 @@ GitHub Release 先创建或找回 draft，上传完整附件并检查大小、�
 | crates 包已发布 | crates.io 精确版本、未撤回状态与匹配 checksum |
 | 已安装或已部署 | 目标机器上的安装/服务版本与独立回执 |
 
-发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。当前工作流不会自动把制品部署到生产 relay，也不会因为推送源码就声称用户客户端已更新。
+发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。0.10.15、0.10.16、0.10.17、0.10.18 在当前工作流的 deferred_versions 中，正式发布仍保留预编译归档和包发布，但不会自动部署生产 relay。其他版本是否部署取决于工作流的部署策略与 deploy_server 输入；维护者应核对当次 validate 输出。发布、服务端部署和客户端安装分别记录结果，源码推送不代表服务或用户客户端已更新。

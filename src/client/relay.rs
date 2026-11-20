@@ -74,10 +74,11 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{}",
+                "{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
-                crate::wire::messages::CAPABILITY
+                crate::wire::messages::CAPABILITY,
+                crate::wire::versions::CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -107,6 +108,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
             crate::wire::SESSION_ACCESS_CAPABILITY
                 | crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
                 | crate::wire::messages::CAPABILITY
+                | crate::wire::versions::CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;
@@ -359,6 +361,15 @@ mod tests {
         assert_eq!(access_capability_header(Some(&all)).unwrap(), all);
         let duplicate_messages = format!("{all},{}", crate::wire::messages::CAPABILITY);
         assert!(access_capability_header(Some(&duplicate_messages)).is_none());
+        let versions = format!("{all},{}", crate::wire::versions::CAPABILITY);
+        assert_eq!(access_capability_header(Some(&versions)).unwrap(), versions);
+        assert!(
+            access_capability_header(Some(&format!(
+                "{versions},{}",
+                crate::wire::versions::CAPABILITY
+            )))
+            .is_none()
+        );
         for invalid in [
             "control_attribution_v10",
             "control_attribution_v1,admin",
