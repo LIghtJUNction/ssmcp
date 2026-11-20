@@ -145,6 +145,7 @@ pub(super) struct Conversation {
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
+    pub(super) history_list_stale: bool,
     history_archived: bool,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
@@ -1465,12 +1466,15 @@ impl State {
                 self.filter_offset = 0;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
-            Key::Up => self.chat_page(
-                -(isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
-            Key::Down => self.chat_page(
-                (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
+            Key::Up | Key::Down => {
+                let page = if self.conversation.view == View::History && !self.conversation.detail {
+                    self.conversation.list_count
+                } else {
+                    usize::from(self.geometry.log_rows.saturating_sub(1))
+                };
+                let step = isize::try_from(page.max(1)).unwrap_or(isize::MAX);
+                self.chat_page(if matches!(key, Key::Up) { -step } else { step });
+            }
             Key::HistoryStart if self.conversation.view == View::Tasks => {
                 self.conversation
                     .tasks
@@ -2562,6 +2566,9 @@ impl State {
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
+        }
+        if self.conversation.view == View::History {
+            return self.chat_history_list_hit(usize::from(relative));
         }
         let index = usize::from(relative / 2);
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)

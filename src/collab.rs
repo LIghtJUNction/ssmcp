@@ -101,6 +101,7 @@ struct Attempt {
 enum Request {
     Join {
         name: String,
+        #[serde(alias = "summary")]
         role: Option<String>,
         #[serde(default)]
         capabilities: Vec<String>,
@@ -111,6 +112,7 @@ enum Request {
         agent_id: String,
         token: String,
         name: Option<String>,
+        #[serde(alias = "summary")]
         role: Option<String>,
         status: Option<String>,
         capabilities: Option<Vec<String>>,
@@ -158,9 +160,11 @@ impl Agent {
             "agent_id": self.id,
             "thread_id": self.id,
             "session_id": self.session_id,
+            "client_id": self.session_id,
             "pending_messages": self.inbox.len(),
             "name": self.name,
             "role": self.role,
+            "summary": self.role,
             "status": self.status,
             "capabilities": self.capabilities,
             "joined_at_ms": self.joined_at_ms,
@@ -341,7 +345,7 @@ impl Hub {
             Request::List {} => {
                 let state = self.locked()?;
                 Ok(
-                    json!({"session_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
+                    json!({"session_id":self.session_id, "client_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
                 )
             }
             Request::Update {
@@ -475,6 +479,7 @@ impl Hub {
             "agent_id":id,
             "thread_id":id,
             "session_id":self.session_id,
+            "client_id":self.session_id,
             "token":token,
             "lease_ms":LEASE_MS,
             "expires_at_ms":expires_at_ms,

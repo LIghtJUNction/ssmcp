@@ -1631,7 +1631,10 @@ impl EventView {
                     } else {
                         conversation_body(&event.text)
                     };
-                    let lines = if event.meta.raw_message && !event.meta.user {
+                    let lines = if event.meta.raw_message
+                        && !event.meta.user
+                        && !event.meta.plain_message
+                    {
                         super::markdown::rows(body, body_width as u16, ui)
                     } else {
                         styled_rows(body, body_width, ui.color)
@@ -1892,7 +1895,7 @@ impl EventView {
                     })
                 {
                     let lines = if event.meta.raw_message {
-                        if event.meta.user {
+                        if event.meta.user || event.meta.plain_message {
                             styled_rows(&event.text, body_width, ui.color)
                         } else {
                             super::markdown::rows(&event.text, body_width as u16, ui)
@@ -2396,7 +2399,7 @@ fn retained_text_with_note(bytes: &[u8], note: &str) -> (String, bool) {
 }
 
 /// Reflow only the retained display text, maintaining SGR across soft wraps.
-fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
+pub(super) fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
     let text = sanitize(text, color);
     let text = text.trim_matches('\n');
     let mut rows = Vec::new();
