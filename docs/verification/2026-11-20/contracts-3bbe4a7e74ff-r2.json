@@ -1,0 +1,20 @@
+{
+  "kind": "controller_contracts_only",
+  "status": "passed",
+  "exit_code": 0,
+  "product_acceptance_started": false,
+  "cargo_started": false,
+  "controller": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/run_bound_v3.py",
+    "sha256": "3bbe4a7e74ff9bf7305cbf4aedb49ae19a28a4bcfeed49958e9c5a1d15ffb94b"
+  },
+  "tests": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/test_run_bound_v3_r2.py",
+    "sha256": "67467048112e5344a49fedcd544f096c8d4deaefb86dcc17fdd90caf84b59570"
+  },
+  "log": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/contracts-3bbe4a7e74ff-r2.log",
+    "sha256": "922095100760fbd9071bde0751044eae544bfc4a3017d3e6807d944b68d2ca2e"
+  },
+  "elapsed_seconds": 0.511
+}

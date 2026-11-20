@@ -1,0 +1,39 @@
+{
+  "schema": "ssmcp.p1-wrapper-contract-review.v1",
+  "scope": "Two existing pure in-memory marker contract cases only. Synthetic test records are not runtime evidence or screenshots.",
+  "reviewed_at_utc": "2026-11-20T10:38:31.718602+00:00",
+  "wrapper": "/workspace/scratch/642d3049388f/ssmcp-zcalld-delivery/run_final_p1.py",
+  "wrapper_sha256": "f1a6a0eff76ad3efb7e3427918721f46427a923eb6b0737fbe640a6c0aff0783",
+  "renderer_sha256": "4f0efd6837a5bd9dee75965d39e4ade51273a8353c21da3335cd9c1de0a245b2",
+  "checks": [
+    {
+      "case": "normal marker",
+      "expected": "accepted",
+      "actual": "accepted",
+      "passed": true,
+      "reason": null,
+      "read_counts": {
+        "report.json": 1,
+        "input-history-zcalld-complete-120.json": 1,
+        "input-history-zcalld-complete-48.json": 1
+      }
+    },
+    {
+      "case": "spaced cell counterexample",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "reason": "saved P1 frame does not display the native result",
+      "read_counts": {
+        "report.json": 1,
+        "input-history-zcalld-complete-120.json": 1,
+        "input-history-zcalld-complete-48.json": 1
+      }
+    }
+  ],
+  "producer_run": false,
+  "candidate_run": false,
+  "model_run": false,
+  "final_render_performed": false,
+  "root_source_modified": false
+}
