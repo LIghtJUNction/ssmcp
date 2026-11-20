@@ -1901,6 +1901,16 @@ impl State {
     fn frame(&mut self, now: Instant) -> Frame {
         let mut frame = self.base_frame(now);
         self.sleep_overlay(&mut frame);
+        if !self.preview {
+            // This frame owns visibility, including transitions away from Chat.
+            // The manager hint is safe while the terminal State lock is held.
+            super::messaging::watch_recipients(
+                self.ui.layout == Layout::Chat
+                    && self.conversation.view == conversation::View::Agents
+                    && !self.help
+                    && !self.sleep.visible,
+            );
+        }
         frame
     }
 
