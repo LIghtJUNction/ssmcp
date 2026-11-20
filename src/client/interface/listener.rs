@@ -1,5 +1,7 @@
 //! Explicit receipt-based delivery to one program on the current connection.
 //! Ordinary code_mode replies and collaboration presence never acquire a lease.
+mod replies;
+pub(crate) use replies::{ReplyReceipt, with_current_reply};
 #[cfg(test)]
 mod scope_tests;
 #[cfg(target_os = "linux")]
@@ -44,6 +46,8 @@ pub(crate) struct Target {
     connection_id: String,
     epoch: u64,
     listener_id: String,
+    expects_reply: bool,
+    pub(crate) conversation_id: Option<String>,
 }
 
 struct Connection {
@@ -137,6 +141,7 @@ impl Caller {
 }
 
 struct OpenKey {
+    enable_reply: bool,
     owner: Owner,
     key: String,
     label: String,
@@ -145,6 +150,7 @@ struct OpenKey {
 
 // No Debug/Serialize: the credential is returned only by the explicit open call.
 struct Lease {
+    enable_reply: bool,
     id: String,
     label: String,
     token: String,
@@ -179,6 +185,9 @@ struct Ack {
 }
 
 struct Remembered {
+    conversation_id: Option<String>,
+    source: Option<String>,
+    result: Option<replies::RememberedReply>,
     epoch: u64,
     receipt: Receipt,
     ack: Option<Ack>,
@@ -214,7 +223,12 @@ impl State {
             detail,
         };
         let _ = pending.reply.send_replace(Some(receipt.clone()));
+        let conversation_id = pending.target.conversation_id;
         self.receipts.push_back(Remembered {
+            source: (status == Status::Accepted && conversation_id.is_some())
+                .then_some(pending.source),
+            conversation_id,
+            result: None,
             epoch: pending.target.epoch,
             receipt,
             ack,
@@ -276,6 +290,7 @@ impl State {
 
 #[derive(Default)]
 struct Hub {
+    reply_serial: Mutex<()>,
     state: Mutex<State>,
     changed: Notify,
 }
@@ -357,6 +372,22 @@ impl Hub {
         caller: &Caller,
         key: Option<String>,
     ) -> Result<Value, String> {
+        self.open_with_reply(label, caller, key, false)
+    }
+
+    fn open_with_reply(
+        &self,
+        label: String,
+        caller: &Caller,
+        key: Option<String>,
+        enable_reply: bool,
+    ) -> Result<Value, String> {
+        if enable_reply && !matches!(caller.owner, Owner::Local { .. }) {
+            return Err(
+                "listener_reply_local_only: execution results require the private Unix transport"
+                    .into(),
+            );
+        }
         let label = label.trim();
         if label.is_empty() || label.len() > 96 || label.chars().any(char::is_control) {
             return Err(
@@ -390,9 +421,9 @@ impl Hub {
                 .iter()
                 .find(|entry| entry.owner == caller.owner && entry.key == *key)
         {
-            if previous.label != label {
+            if previous.label != label || previous.enable_reply != enable_reply {
                 return Err(
-                    "idempotency_conflict: listener label differs from the original request".into(),
+                    "idempotency_conflict: listener label or reply capability differs from the original request".into(),
                 );
             }
             let lease = state.lease.as_ref().filter(|lease| lease.id == previous.listener_id)
@@ -405,6 +436,7 @@ impl Hub {
         let id = random(16)?;
         let token = random(32)?;
         state.lease = Some(Lease {
+            enable_reply,
             id: id.clone(),
             label: label.into(),
             token: token.clone(),
@@ -414,6 +446,7 @@ impl Hub {
         });
         if let Some(key) = key {
             state.open_keys.push_back(OpenKey {
+                enable_reply,
                 owner: caller.owner.clone(),
                 key,
                 label: label.into(),
@@ -436,7 +469,9 @@ impl Hub {
             "listener_id":lease.id,"token":lease.token,"thread_id":lease.owner.thread(),
             "expires_in_ms":lease.expires.saturating_duration_since(Instant::now()).as_millis(),
             "lease_ms":LEASE.as_millis(),"heartbeat_ms":5000,"ack_timeout_ms":ACK_WAIT.as_millis(),
-            "idempotency_retained_keys":MAX_OPEN_KEYS})
+            "idempotency_retained_keys":MAX_OPEN_KEYS,
+            "reply_supported":true,"reply_enabled":lease.enable_reply,
+            "reply_max_bytes":replies::MAX_REPLY_BYTES,"reply_kind":"execution_result"})
     }
 
     fn snapshot(&self) -> Value {
@@ -490,6 +525,8 @@ impl Hub {
             connection_id: connection.id.clone(),
             epoch: connection.epoch,
             listener_id: lease.id.clone(),
+            expects_reply: lease.enable_reply,
+            conversation_id: None,
         })
     }
 
@@ -501,6 +538,9 @@ impl Hub {
     ) -> Result<Ticket, String> {
         crate::client::steering::validate_text(&source)?;
         crate::client::steering::validate_text(&text)?;
+        if target.expects_reply {
+            super::history::validate_content(&source)?;
+        }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let now = Instant::now();
         state.expire(now);
@@ -586,7 +626,8 @@ impl Hub {
                     json!({"delivery_id":pending.id,"connection_id":pending.target.connection_id,
                         "cursor":pending.cursor,
                         "listener_id":pending.target.listener_id,"source":"client_user",
-                        "source_text":pending.source,"text":pending.text,"created_at_ms":pending.created_at_ms})
+                        "source_text":pending.source,"text":pending.text,"created_at_ms":pending.created_at_ms,
+                        "conversation_id":pending.target.conversation_id})
                 })
             };
             if let Some(delivery) = delivery {
@@ -770,6 +811,8 @@ enum Request {
         label: String,
         #[serde(default)]
         idempotency_key: Option<String>,
+        #[serde(default)]
+        enable_reply: bool,
     },
     Read {
         listener_id: String,
@@ -783,6 +826,13 @@ enum Request {
         delivery_id: String,
         status: AckStatus,
         reason: Option<String>,
+    },
+    Reply {
+        listener_id: String,
+        token: String,
+        delivery_id: String,
+        text: String,
+        execution_state: replies::ExecutionState,
     },
     Close {
         listener_id: String,
@@ -822,7 +872,11 @@ pub(crate) fn take_interrupted_sender_receipt() -> Option<Receipt> {
     global().take_interrupted_sender()
 }
 pub(crate) fn target(selected_thread: Option<&str>) -> Result<Target, String> {
-    global().target_for(selected_thread)
+    let mut target = global().target_for(selected_thread)?;
+    if target.expects_reply {
+        target.conversation_id = Some(super::history::ensure_current_id()?);
+    }
+    Ok(target)
 }
 pub(crate) fn submit(target: Target, source: String, text: String) -> Result<Ticket, String> {
     global().submit(target, source, text)
@@ -838,12 +892,19 @@ pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
 impl Hub {
     async fn call_for(self: &Arc<Self>, caller: Caller, arguments: Value) -> Result<Value, String> {
         let request: Request = serde_json::from_value(arguments)
-            .map_err(|_| "listener requires a valid open/read/ack/close/status request")?;
+            .map_err(|_| "listener requires a valid open/read/ack/reply/close/status request")?;
         match request {
             Request::Open {
                 label,
                 idempotency_key,
-            } => self.open_for(label, &caller, idempotency_key),
+                enable_reply,
+            } => {
+                if enable_reply {
+                    self.open_with_reply(label, &caller, idempotency_key, true)
+                } else {
+                    self.open_for(label, &caller, idempotency_key)
+                }
+            }
             Request::Read {
                 listener_id,
                 token,
@@ -862,6 +923,27 @@ impl Hub {
                 Ack { status, reason },
                 &caller,
             ),
+            Request::Reply {
+                listener_id,
+                token,
+                delivery_id,
+                text,
+                execution_state,
+            } => {
+                let hub = self.clone();
+                tokio::task::spawn_blocking(move || {
+                    hub.reply_for(
+                        &listener_id,
+                        &token,
+                        &delivery_id,
+                        &text,
+                        execution_state,
+                        &caller,
+                    )
+                })
+                .await
+                .map_err(|_| "listener reply worker stopped".to_owned())?
+            }
             Request::Close { listener_id, token } => self.close_for(&listener_id, &token, &caller),
             Request::Status {} => self.snapshot_for(Some(&caller)),
         }
@@ -897,11 +979,14 @@ impl Hub {
 
 pub(crate) fn tool() -> Value {
     json!({"name":"ssmcp.ui.listener",
-        "description":"Explicit single-program listener for forced user messages on this connection and authenticated thread. open acquires a 30-second exclusive lease for the actual controller account and bound participant (main when unbound). Optional idempotency_key is scoped to that caller; the last 128 keys are retained until disconnect. read renews the lease and returns the same delivery_id/cursor until ack. Only accepted ACK means the program received it, never that a model ran. Poll within 5 seconds and acknowledge within 5 seconds. status exposes a Linux private Unix endpoint using the same state; a same-UID local program needs the secret token to consume a remote lease. Expired/disconnected leases cannot be resumed, and unknown delivery is never automatically replayed. Ordinary code_mode requests do not register listeners or consume these messages.",
+        "description":"Explicit single-program listener for forced user messages on this connection and authenticated thread. open acquires a 30-second exclusive lease for the actual controller account and bound participant (main when unbound). Optional idempotency_key is scoped to that caller; the last 128 keys are retained until disconnect. read renews the lease and returns the same delivery_id/cursor until ack. Only accepted ACK means the program received it, never that a model ran. Poll within 5 seconds and acknowledge within 5 seconds. status exposes a Linux private Unix endpoint using the same state; a same-UID local program needs the secret token to consume a remote lease. Expired/disconnected leases cannot be resumed, and unknown delivery is never automatically replayed. Ordinary code_mode requests do not register listeners or consume these messages. A private Unix peer may explicitly open enable_reply=true and publish one bounded completed/failed execution result per accepted delivery to its original active conversation. This is not task completion approval; authenticated ui.message and request_finish rules are unchanged.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],
-            "properties":{"op":{"enum":["open","read","ack","close","status"]},
+            "properties":{"op":{"enum":["open","read","ack","reply","close","status"]},
                 "label":{"type":"string","minLength":1,"maxLength":96},
                  "idempotency_key":{"type":"string","minLength":1,"maxLength":128},
+                  "enable_reply":{"type":"boolean","default":false,"description":"Opt into scoped execution results; private Unix peers only."},
+                  "text":{"type":"string","minLength":1,"maxLength":replies::MAX_REPLY_BYTES},
+                  "execution_state":{"enum":["completed","failed"]},
                 "listener_id":{"type":"string","minLength":32,"maxLength":32},
                 "token":{"type":"string","minLength":64,"maxLength":64},
                 "delivery_id":{"type":"string","minLength":32,"maxLength":32},

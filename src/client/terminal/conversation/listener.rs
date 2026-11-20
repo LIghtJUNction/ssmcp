@@ -36,6 +36,7 @@ impl Task {
         // Check before file preparation, then recheck the same epoch/lease when
         // committing the delivery. A replacement listener cannot inherit it.
         let target = receiver::target(selected_thread)?;
+        let conversation_id = target.conversation_id.clone();
         let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
         let (sender, result) = oneshot::channel();
         let task_source = source.clone();
@@ -47,8 +48,17 @@ impl Task {
                 let receipt = ticket.wait().await?;
                 let history_error = if receipt.status == Status::Accepted {
                     let id = receipt.delivery_id.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        crate::client::interface::history::record_request(&id, &task_source)
+                    match tokio::task::spawn_blocking(move || match conversation_id {
+                        Some(conversation_id) => {
+                            crate::client::interface::history::record_request_in(
+                                &conversation_id,
+                                &id,
+                                &task_source,
+                            )
+                        }
+                        None => {
+                            crate::client::interface::history::record_request(&id, &task_source)
+                        }
                     })
                     .await
                     {
