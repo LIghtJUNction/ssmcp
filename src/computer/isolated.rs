@@ -3,6 +3,9 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "linux")]
+mod display;
+
 #[derive(Clone)]
 pub(super) struct Environment {
     pub display: String,
@@ -54,6 +57,10 @@ impl Drop for Directory {
 struct OwnedX11Files {
     #[cfg(target_os = "linux")]
     entries: Vec<OwnedX11File>,
+    // Startup cancellation retains the allocation lock until the child is
+    // reaped, even if it had not created its socket when cancellation arrived.
+    #[cfg(target_os = "linux")]
+    reservation: Option<display::Reservation>,
 }
 #[cfg(target_os = "linux")]
 struct OwnedX11File {
@@ -65,15 +72,7 @@ struct OwnedX11File {
     _pin: std::fs::File,
 }
 impl OwnedX11Files {
-    #[cfg(target_os = "linux")]
-    fn capture(display: u16) -> Self {
-        let mut owned = Self::default();
-        owned.remember(PathBuf::from(format!("/tmp/.X11-unix/X{display}")), true);
-        owned.remember(PathBuf::from(format!("/tmp/.X{display}-lock")), false);
-        owned
-    }
-
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", test))]
     fn remember(&mut self, path: PathBuf, socket: bool) {
         use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
         // O_PATH pins an unlinked inode without connecting to the socket or
@@ -381,6 +380,13 @@ impl Desktop {
         }
         let mut random = [0u8; 24];
         crate::platform::random_bytes(&mut random).map_err(|e| e.to_string())?;
+        let reservation = display::Reservation::acquire(u64::from_ne_bytes(
+            random[..8]
+                .try_into()
+                .expect("eight display selection bytes"),
+        ))
+        .await?;
+        let number = reservation.number();
         let suffix: String = random[..8]
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -399,13 +405,26 @@ impl Desktop {
             .mode(0o600)
             .open(&authority)
             .map_err(|e| e.to_string())?;
-        // The server loads the cookie independently of its display number. Update
-        // the client record after -displayfd atomically allocates an unused display.
-        auth.write_all(&authority_record("0", &random[8..]))
+        auth.write_all(&authority_record(&number.to_string(), &random[8..]))
             .map_err(|e| e.to_string())?;
         drop(auth);
+        let runtime = directory.0.join("runtime");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&runtime)
+            .map_err(|e| e.to_string())?;
+        let environment = Environment {
+            display: format!(":{number}"),
+            authority: authority.clone(),
+            runtime,
+        };
+        let mut child = Computer::new(root.to_owned())?;
+        child.session = Session::X11;
+        child.environment = Some(environment);
         let mut command = tokio::process::Command::new(crate::program::executable("Xvfb")?);
         command
+            // An explicit display prevents -displayfd from searching from :0.
+            .arg(format!(":{number}"))
             .args([
                 "-displayfd",
                 "1",
@@ -422,63 +441,9 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut process = Managed::spawn(&mut command).map_err(|e| format!("Xvfb: {e}"))?;
-        let stdout = process
-            .child
-            .stdout
-            .take()
-            .ok_or("Xvfb display pipe unavailable")?;
-        let mut output = String::new();
-        let announced = tokio::time::timeout(
-            Duration::from_secs(5),
-            BufReader::new(stdout.take(64)).read_line(&mut output),
-        )
-        .await;
-        match announced {
-            Ok(Ok(_)) => {}
-            _ => {
-                process.shutdown().await;
-                return Err("Xvfb did not announce an owned display within five seconds".into());
-            }
-        }
-        let number = match output.trim().parse::<u16>() {
-            Ok(number) => number,
-            Err(_) => {
-                process.shutdown().await;
-                return Err("Xvfb returned an invalid display number".into());
-            }
-        };
-        let x11_files = OwnedX11Files::capture(number);
-        let prepared = (|| -> Result<Computer, String> {
-            std::fs::write(
-                &authority,
-                authority_record(&number.to_string(), &random[8..]),
-            )
-            .map_err(|e| e.to_string())?;
-            let runtime = directory.0.join("runtime");
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&runtime)
-                .map_err(|e| e.to_string())?;
-            let environment = Environment {
-                display: format!(":{number}"),
-                authority,
-                runtime,
-            };
-            let mut child = Computer::new(root.to_owned())?;
-            child.session = Session::X11;
-            child.environment = Some(environment);
-            Ok(child)
-        })();
-        let child = match prepared {
-            Ok(child) => child,
-            Err(error) => {
-                // Keep both guards with the process even if this startup future
-                // is cancelled while cleanup waits for the guardian.
-                reap_desktop(process, Vec::new(), directory, x11_files);
-                return Err(error);
-            }
-        };
+        let process = Managed::spawn(&mut command).map_err(|e| format!("Xvfb: {e}"))?;
+        // Own startup from the first await: cancellation must retain the cookie
+        // and any verified socket inode until this process tree has been reaped.
         let mut desktop = Self {
             computer: Box::new(child),
             process: Some(process),
@@ -486,8 +451,45 @@ impl Desktop {
             width: options.width,
             height: options.height,
             directory,
-            x11_files,
+            x11_files: OwnedX11Files {
+                reservation: Some(reservation),
+                ..OwnedX11Files::default()
+            },
         };
+        let ready = async {
+            let process = desktop.process.as_mut().ok_or("Xvfb process unavailable")?;
+            let stdout = process
+                .child
+                .stdout
+                .take()
+                .ok_or("Xvfb display pipe unavailable")?;
+            let mut output = String::new();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                BufReader::new(stdout.take(64)).read_line(&mut output),
+            )
+            .await
+            .map_err(|_| "Xvfb did not announce its display within five seconds".to_owned())?
+            .map_err(|error| format!("could not read Xvfb display: {error}"))?;
+            if output != format!("{number}\n") {
+                return Err("Xvfb did not announce the requested private display".into());
+            }
+            let files = &mut desktop.x11_files;
+            files
+                .reservation
+                .as_ref()
+                .ok_or("private display reservation unavailable")?
+                .verify(process, &mut files.entries)
+        }
+        .await;
+        match ready {
+            Ok(()) => {}
+            Err(error) => {
+                desktop.shutdown().await;
+                return Err(error);
+            }
+        }
+        desktop.x11_files.reservation.take();
         if let Err(error) = desktop.computer.monitors().await {
             desktop.shutdown().await;
             return Err(format!("private display failed readiness check: {error}"));
