@@ -28,6 +28,26 @@ impl Draft {
         self.left();
         self.text.drain(self.cursor..end);
     }
+    /// A true result asks the caller to submit; editing itself never sends.
+    fn edit(&mut self, key: EditKey) -> bool {
+        match key {
+            EditKey::Left => self.left(),
+            EditKey::Right => self.right(),
+            EditKey::Home => self.cursor = 0,
+            EditKey::End => self.cursor = self.text.len(),
+            EditKey::Character('\r' | '\n') => return !self.text.trim().is_empty(),
+            EditKey::Character('\u{7f}' | '\u{8}') => self.backspace(),
+            EditKey::Character('\u{1}') => self.cursor = 0,
+            EditKey::Character('\u{5}') => self.cursor = self.text.len(),
+            EditKey::Character(c) if !c.is_control() || c == '\t' => {
+                if self.text.len() + c.len_utf8() <= 16 * 1024 {
+                    self.insert(&c.to_string());
+                }
+            }
+            EditKey::Character(_) => {}
+        }
+        false
+    }
     fn display(text: &str) -> String {
         text.chars()
             .map(|c| match c {
@@ -47,6 +67,106 @@ impl Draft {
         let _ = io::stderr().flush();
     }
 }
+
+#[derive(Debug, Eq, PartialEq)]
+enum EditKey {
+    Character(char),
+    Left,
+    Right,
+    Home,
+    End,
+}
+
+/// The outer attach decoder frames pastes and detach, not individual keys.
+/// Retain bounded CSI/SS3 prefixes across reads and keep neighboring UTF-8 text.
+#[derive(Default)]
+struct EditKeys {
+    escape: Vec<u8>,
+    discarded: bool,
+    utf8: input::Utf8Input,
+}
+
+impl EditKeys {
+    const MAX_ESCAPE: usize = 64;
+
+    fn text(&mut self, bytes: &mut Vec<u8>, keys: &mut Vec<EditKey>) {
+        keys.extend(self.utf8.push(bytes, false).chars().map(EditKey::Character));
+        bytes.clear();
+    }
+
+    fn navigation(&self, end: u8) -> Option<EditKey> {
+        if self.discarded {
+            return None;
+        }
+        let parameters = &self.escape[2..];
+        // One unmodified arrow; unknown function/modifier keys are consumed as
+        // one complete sequence, never inserted into the draft as "[..." text.
+        if parameters.is_empty() || parameters == b"1" {
+            match end {
+                b'D' => return Some(EditKey::Left),
+                b'C' => return Some(EditKey::Right),
+                b'H' => return Some(EditKey::Home),
+                b'F' => return Some(EditKey::End),
+                _ => {}
+            }
+        }
+        if self.escape[1] == b'[' && end == b'~' {
+            return match parameters {
+                b"1" | b"7" => Some(EditKey::Home),
+                b"4" | b"8" => Some(EditKey::End),
+                _ => None,
+            };
+        }
+        None
+    }
+
+    fn feed(&mut self, bytes: &[u8]) -> Vec<EditKey> {
+        let mut keys = Vec::new();
+        let mut text = Vec::new();
+        for &byte in bytes {
+            if byte == 0x1b {
+                self.text(&mut text, &mut keys);
+                self.escape.clear();
+                self.escape.push(byte);
+                self.discarded = false;
+                continue;
+            }
+            if self.escape.len() == 1 {
+                if matches!(byte, b'[' | b'O') {
+                    self.escape.push(byte);
+                    continue;
+                }
+                // A standalone Escape must not eat the next normal character.
+                self.escape.clear();
+            } else if self.escape.len() >= 2 {
+                if (0x40..=0x7e).contains(&byte) {
+                    if let Some(key) = self.navigation(byte) {
+                        keys.push(key);
+                    }
+                    self.escape.clear();
+                    self.discarded = false;
+                    continue;
+                }
+                if (0x20..=0x3f).contains(&byte) {
+                    if self.escape.len() < Self::MAX_ESCAPE {
+                        self.escape.push(byte);
+                    } else {
+                        self.discarded = true;
+                    }
+                    continue;
+                }
+                // Invalid control/UTF-8 bytes terminate a broken key prefix;
+                // preserve the user's following text and explicit Enter.
+                self.escape.clear();
+                self.discarded = false;
+            }
+            text.push(byte);
+        }
+        self.text(&mut text, &mut keys);
+        keys
+    }
+}
+
 fn clean(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
@@ -71,10 +191,10 @@ async fn observe(
     target: directory::Target,
     tx: tokio::sync::mpsc::Sender<Update>,
 ) {
-    let mut cursor = None;
-    let mut generation = None;
+    let mut cursor: Option<Value> = None;
+    let mut generation: Option<Value> = None;
     let mut output_cursor = 0u64;
-    let mut output_generation = None;
+    let mut output_generation: Option<Value> = None;
     loop {
         let result:Result<()>=async {
             let mut args=json!({"action":"thread","client_id":target.client_id,"limit":32});
@@ -133,6 +253,7 @@ pub(super) async fn run(
     let target = selection.entry.target.clone();
     let mut keyboard = input::Keyboard::open(read_only)?;
     let mut decoder = input::Utf8Input::default();
+    let mut keys = EditKeys::default();
     let mut draft = Draft::default();
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let _reader = Reader(tokio::spawn(observe(
@@ -176,19 +297,12 @@ pub(super) async fn run(
                 input::Event::Detach|input::Event::End|input::Event::Interrupt=>break,
                 input::Event::Resize(_,_)=>{if !read_only{draft.draw();}},
                 input::Event::InputProgress(_)=>{},
-                input::Event::PasteExpired=>{decoder=input::Utf8Input::default();},
+                input::Event::PasteExpired=>{decoder=input::Utf8Input::default();keys=EditKeys::default();},
                 input::Event::PasteBytes(bytes)=>{if !read_only{let text=decoder.push(&bytes,false);for c in text.chars().filter(|c|!c.is_control() || matches!(c,'\n'|'\t')){if draft.text.len()+c.len_utf8()<=16*1024{draft.insert(&c.to_string());}}draft.draw();}},
                 input::Event::Bytes(bytes)=>{
                     if read_only{continue;}
-                    if bytes==b"\x1b[D"{draft.left();draft.draw();continue;}
-                    if bytes==b"\x1b[C"{draft.right();draft.draw();continue;}
-                    if bytes==b"\x1b[H"{draft.cursor=0;draft.draw();continue;}
-                    if bytes==b"\x1b[F"{draft.cursor=draft.text.len();draft.draw();continue;}
-                    if bytes.first()==Some(&0x1b){continue;}
-                    let decoded=decoder.push(&bytes,false);
-                    for c in decoded.chars(){
-                        if matches!(c,'\r'|'\n') {
-                            if draft.text.trim().is_empty(){continue;}
+                    for key in keys.feed(&bytes){
+                        if draft.edit(key) {
                             let text=draft.text.clone();
                             let id=match &draft.attempt{Some((old,id)) if old==&text=>id.clone(),_=>send::request_id()?};
                             draft.attempt=Some((text.clone(),id.clone()));
@@ -197,10 +311,7 @@ pub(super) async fn run(
                                 Ok(_)=>{draft=Draft::default();output(&format!("You → {}\n{text}",target.id()),&draft,false);eprintln!("Queued {id}");},
                                 Err(error)=>{eprintln!("\r\x1b[2KInput retained ({id}): {error}");},
                             }
-                        } else if matches!(c,'\u{7f}'|'\u{8}'){draft.backspace();}
-                        else if c=='\u{1}'{draft.cursor=0;}
-                        else if c=='\u{5}'{draft.cursor=draft.text.len();}
-                        else if !c.is_control() || matches!(c,'\n'|'\t') {if draft.text.len()+c.len_utf8()<=16*1024{draft.insert(&c.to_string());}}
+                        }
                     }
                     draft.draw();
                 }
@@ -214,6 +325,69 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn submitted(chunks: &[&[u8]]) -> Vec<String> {
+        let mut outer = input::Decoder::default();
+        let mut keys = EditKeys::default();
+        let mut draft = Draft::default();
+        let mut sent = Vec::new();
+        for bytes in chunks {
+            for event in outer.feed_at(bytes, false, std::time::Instant::now()) {
+                if let input::Event::Bytes(bytes) = event {
+                    for key in keys.feed(&bytes) {
+                        if draft.edit(key) {
+                            sent.push(draft.text.clone());
+                            draft = Draft::default();
+                        }
+                    }
+                }
+            }
+            assert!(keys.escape.len() <= EditKeys::MAX_ESCAPE);
+        }
+        sent
+    }
+
+    #[test]
+    fn chat_editing_preserves_coalesced_keys_and_unicode_at_every_read_boundary() {
+        for (source, expected) in [
+            ("a界\u{1b}[D好\u{1b}[C!\r", "a好界!"),
+            ("ab\u{1b}[1D中\r", "a中b"),
+            ("bc\u{1b}OH界\u{1b}OF!\r", "界bc!"),
+            ("a\u{1b}[99u界\u{1b}OPb\r", "a界b"),
+        ] {
+            let bytes = source.as_bytes();
+            for size in 1..=bytes.len() {
+                assert_eq!(
+                    submitted(&bytes.chunks(size).collect::<Vec<_>>()),
+                    vec![expected],
+                    "source={source:?}, read_size={size}"
+                );
+            }
+            for split in 0..=bytes.len() {
+                assert_eq!(
+                    submitted(&[&bytes[..split], &bytes[split..]]),
+                    vec![expected],
+                    "source={source:?}, split={split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chat_escape_prefix_is_bounded_and_does_not_eat_following_text() {
+        let source = format!("ab\u{1b}[{}D界\r", "1".repeat(4096));
+        assert_eq!(
+            submitted(&source.as_bytes().chunks(17).collect::<Vec<_>>()),
+            vec!["ab界"]
+        );
+        assert_eq!(submitted(&[b"\x1b", "界\r".as_bytes()]), vec!["界"]);
+        let mut keys = EditKeys::default();
+        assert!(
+            keys.feed(b"\x1b[200~\x1b[201~").is_empty(),
+            "outer paste framing is not editor text or a submit action"
+        );
+    }
+
     #[test]
     fn chat_draft_keeps_unicode_cursor_and_pasted_newlines() {
         let mut draft = Draft::default();

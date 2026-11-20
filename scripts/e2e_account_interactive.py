@@ -229,6 +229,48 @@ def chat_checks(binary, environment, root, directory, cli, backend):
         captured.until("THREAD_B_HISTORY_ONLY")
         os.write(descriptor, "interactive 中文 request\n".encode())
         captured.until("IO_RESULT:" + THREAD_B + ":interactive 中文 request")
+
+        def edited_request(parts, expected):
+            with directory["io"].lock:
+                before_ids = set(directory["io"].requests)
+            for index, part in enumerate(parts):
+                assert os.write(descriptor, part) == len(part)
+                if index + 1 < len(parts):
+                    # Exceed the outer attach decoder's 35ms standalone-Escape
+                    # deadline, so partial CSI/SS3 prefixes reach the editor.
+                    time.sleep(0.08)
+            captured.until("IO_RESULT:" + THREAD_B + ":" + expected)
+            with directory["io"].lock:
+                received = [request for identifier, request in directory["io"].requests.items()
+                            if identifier not in before_ids]
+                assert len(received) == 1, received
+                request = received[0]
+                assert request["text"] == expected, request
+                assert request["targets"] == [dict(client_id=CLIENT_ID, thread_id=THREAD_B)]
+                assert any(item["kind"] == "result" and item["state"] == "done"
+                           and item["text"] == "IO_RESULT:" + THREAD_B + ":" + expected
+                           for item in request["outputs"]), request
+
+        edited_request(["COALESCED-a界\x1b[D好\x1b[C!\r".encode()], "COALESCED-a好界!")
+        edited_request([b"FRAGMENTED-ab\x1b[", b"1", "D中\r".encode()], "FRAGMENTED-a中b")
+        edited_request([b"SS3-bc\x1bO", "D好\x1bOC!\r".encode()], "SS3-b好c!")
+
+        with directory["io"].lock:
+            before_ids = set(directory["io"].requests)
+        pasted = "PASTED-第一行\nsecond line"
+        os.write(descriptor, b"\x1b[200~" + pasted.encode() + b"\x1b[201~")
+        time.sleep(0.1)
+        with directory["io"].lock:
+            assert set(directory["io"].requests) == before_ids, "paste submitted without Enter"
+        os.write(descriptor, b"\r")
+        captured.until("IO_RESULT:" + THREAD_B + ":PASTED-第一行")
+        with directory["io"].lock:
+            received = [request for identifier, request in directory["io"].requests.items()
+                        if identifier not in before_ids]
+            assert len(received) == 1 and received[0]["text"] == pasted, received
+            assert any(item["kind"] == "result" and item["state"] == "done"
+                       and item["text"] == "IO_RESULT:" + THREAD_B + ":" + pasted
+                       for item in received[0]["outputs"])
         os.write(descriptor, b"\x1d")
         child.wait(timeout=6)
         assert child.returncode == 0 and backend.child.poll() is None
@@ -242,7 +284,11 @@ def chat_checks(binary, environment, root, directory, cli, backend):
             "wait_timeout_does_not_cancel_pending_input", "wait_rejects_foreign_receipt_origin", "wait_rejects_foreign_account_before_poll",
             "wait_error_result_prints_actual_output_and_exits_nonzero", "send_wait_json_emits_actual_result_json",
             "readonly_thread_attach_filters_history_and_blocks_all_writes_and_resize",
-            "thread_chat_attach_stdin_and_correlated_stdout_keep_target_alive"]
+            "thread_chat_attach_stdin_and_correlated_stdout_keep_target_alive",
+            "thread_chat_coalesced_navigation_preserves_exact_unicode_input_and_reply",
+            "thread_chat_fragmented_csi_preserves_exact_input_and_reply",
+            "thread_chat_fragmented_ss3_preserves_exact_input_and_reply",
+            "thread_chat_multiline_paste_waits_for_enter_and_preserves_text"]
 
 
 def child_terminal():

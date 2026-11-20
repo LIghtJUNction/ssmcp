@@ -15,7 +15,7 @@ async fn account_chat_directory_send_and_poll_use_authenticated_exact_targets() 
         .await
         .unwrap();
     let thread = member["agent_id"].as_str().unwrap();
-    let http = reqwest::Client::new();
+    let http = crate::http_client::builder().no_proxy().build().unwrap();
     let directory: Value = http
         .get(format!("{}/api/client/sessions", fixture.base))
         .bearer_auth(&token)
@@ -216,7 +216,7 @@ async fn account_chat_old_native_catalog_cannot_enable_or_enqueue_by_display_nam
     let token = fixture.token("42").await;
     let (mut socket, session) = fixture.ready(Some(&token), Vec::new()).await;
     let request = json!({"action":"send","request_id":"io_old","text":"must remain unqueued","recipients":[{"client_id":session.client_id(),"thread_id":null}]});
-    let http = reqwest::Client::new();
+    let http = crate::http_client::builder().no_proxy().build().unwrap();
     let post = http
         .post(format!("{}/api/client/io", fixture.base))
         .bearer_auth(&token)
