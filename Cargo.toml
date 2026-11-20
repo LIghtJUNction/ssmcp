@@ -76,6 +76,8 @@ include = [
     "/docs/client-ui.md",
     "/docs/tool-group-summaries.md",
     "/scripts/e2e_tool_summaries.py",
+    "/scripts/e2e_readable_commands.py",
+    "/scripts/e2e_summary_commands.py",
     "/docs/terminal-images.md",
     "/docs/client-input.md",
     "/docs/conversation-history.md",

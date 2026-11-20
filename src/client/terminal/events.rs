@@ -92,6 +92,8 @@ struct CommandPanel {
     folded_scroll: Option<Option<usize>>,
     rows: usize,
     page: usize,
+    /// An explicit group fold must survive refreshes before its first paint.
+    user_folded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -100,6 +102,8 @@ struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
     group_expanded: bool,
+    #[serde(default)]
+    group_user_folded: bool,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -574,13 +578,19 @@ impl EventView {
                     .map(|saved| saved.display.clone());
             }
         }
-        // A single call keeps its existing card until it has a summary.
+        // Keep commands readable as standalone cards until the agent explicitly
+        // labels the complete group. Apply this to the whole canonical group so
+        // mixed reads/commands never expose duplicate IDs and partial counts.
         groups.retain(|group| {
-            group.members.len() > 1
-                || group
-                    .info
-                    .as_ref()
-                    .is_some_and(|info| info.summary.is_some())
+            let summarized = group
+                .info
+                .as_ref()
+                .is_some_and(|info| info.summary.is_some());
+            let has_command = group.members.iter().any(|index| {
+                let event = &self.events[*index];
+                event.meta.command && !event.meta.diff
+            });
+            summarized || (group.members.len() > 1 && !has_command)
         });
         groups
     }
@@ -628,13 +638,36 @@ impl EventView {
         ids
     }
 
+    fn reveal_summary_commands(&mut self) {
+        for group in self.tool_groups() {
+            if group
+                .info
+                .as_ref()
+                .is_some_and(|info| info.summary.is_some())
+                && group.members.iter().any(|index| {
+                    let event = &self.events[*index];
+                    event.meta.command && !event.meta.diff
+                })
+            {
+                let head = &mut self.events[group.start];
+                if !head.group_panel.user_folded {
+                    head.group_expanded = true;
+                }
+            }
+        }
+    }
+
     fn preserve_tool_selection(&mut self) {
+        self.reveal_summary_commands();
         let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) else {
             self.selected_group = None;
             return;
         };
         if !group.expanded {
-            if !self.follow && self.selected_group.is_none() {
+            if !self.follow
+                && self.selected_group.is_none()
+                && !self.events[group.start].group_panel.user_folded
+            {
                 // A new adjacent call must not swallow an item already being read.
                 self.events[group.start].group_expanded = true;
                 self.reveal = true;
@@ -646,12 +679,13 @@ impl EventView {
     }
 
     fn set_tool_expanded(&mut self, group: &tool_activity::Group, expanded: bool) -> bool {
+        let head = &mut self.events[group.start];
+        head.group_panel.user_folded = !expanded;
         if group.expanded == expanded {
             return false;
         }
-        let head = &mut self.events[group.start];
         head.group_expanded = expanded;
-        if expanded && head.group_panel.rows == 0 {
+        if expanded && head.group_panel.rows == 0 && head.group_panel.scroll.is_none() {
             head.group_panel.scroll = Some(0);
         }
         self.selected = Some(group.head);
@@ -901,6 +935,7 @@ impl EventView {
                             scroll: event.panel.scroll,
                             group_scroll: event.group_panel.scroll,
                             group_expanded: event.group_expanded,
+                            group_user_folded: event.group_panel.user_folded,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -932,6 +967,7 @@ impl EventView {
             event.panel.scroll = panel.scroll;
             event.group_panel.scroll = panel.group_scroll;
             event.group_expanded = panel.group_expanded;
+            event.group_panel.user_folded = panel.group_user_folded;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
