@@ -68,33 +68,33 @@ fn shortcuts(hint: Hint, width: u16, status: &str) -> String {
             "Loading… · Esc close",
         ],
         Hint::EmptyInput => [
-            "F7 copy · ↑ edit queued · Alt+↑/↓ input height · @ files · $ skills · / commands",
-            "F7 copy · ↑ edit queued · @ files · / commands",
-            "F7 copy · ↑ edit queued · F1 help",
+            "Alt+C select/copy · ↑ edit queued · Alt+↑/↓ input height · @ files · $ skills · / commands",
+            "Alt+C select/copy · ↑ edit queued · @ files · / commands",
+            "Alt+C select/copy · ↑ edit queued · F1 help",
         ],
         Hint::Draft => [
-            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy · Alt+↑/↓ input height",
-            "Enter send · Ctrl+J newline · Ctrl+C clear · F7 copy",
-            "Enter send · F7 copy · F1 help",
+            "Enter send · Ctrl+J newline · Ctrl+C clear · Alt+C select/copy · Alt+↑/↓ input height",
+            "Enter send · Ctrl+J newline · Ctrl+C clear · Alt+C select/copy",
+            "Enter send · Alt+C select/copy · F1 help",
         ],
         Hint::Conversation => [
-            "F7 copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "F7 copy · ↑↓ select · Enter expand · Tab input",
-            "F7 copy · Enter expand · Tab input",
+            "Alt+C select/copy · ↑↓ select · Enter expand · PgUp/PgDn scroll · ←/→ panels · Tab input",
+            "Alt+C select/copy · ↑↓ select · Enter expand · Tab input",
+            "Alt+C select/copy · Enter expand · Tab input",
         ],
         Hint::Audit => [
-            "F7 copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
-            "F7 copy · Enter details · PgUp/PgDn scroll · Tab input",
-            "F7 copy · Enter details · Tab input",
+            "Alt+C select/copy · ↑↓ browse · Enter details · PgUp/PgDn scroll · ←/→ panels · Tab input",
+            "Alt+C select/copy · Enter details · PgUp/PgDn scroll · Tab input",
+            "Alt+C select/copy · Enter details · Tab input",
         ],
         Hint::Queue => [
-            "F7 copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
-            "F7 copy · Enter edit · i inspect · Tab input",
-            "F7 copy · Enter edit · Tab input",
+            "Alt+C select/copy · ↑↓ select · Enter edit · i inspect · Delete cancel · Tab input",
+            "Alt+C select/copy · Enter edit · i inspect · Tab input",
+            "Alt+C select/copy · Enter edit · Tab input",
         ],
         Hint::QueueInspect => [
-            "F7 copy · ↑↓ select · Enter inspect · i inspect · Tab input",
-            "F7 copy · Enter inspect · Tab input",
+            "Alt+C select/copy · ↑↓ select · Enter inspect · i inspect · Tab input",
+            "Alt+C select/copy · Enter inspect · Tab input",
             "Enter inspect · Tab input",
         ],
     };
@@ -123,10 +123,10 @@ mod tests {
         assert!(!menu.contains("Enter send"));
         let draft = shortcuts(Hint::Draft, 100, "connected");
         assert!(draft.contains("Enter send") && draft.contains("Ctrl+J"));
-        assert!(draft.contains("Alt+↑/↓ input height") && draft.contains("F7 copy"));
+        assert!(draft.contains("Alt+↑/↓ input height") && draft.contains("Alt+C select/copy"));
         let empty = shortcuts(Hint::EmptyInput, 100, "connected");
         assert!(empty.contains("@ files") && empty.contains("$ skills"));
-        assert!(empty.contains("Alt+↑/↓ input height") && empty.contains("F7 copy"));
+        assert!(empty.contains("Alt+↑/↓ input height") && empty.contains("Alt+C select/copy"));
         let queue = shortcuts(Hint::Queue, 100, "connected");
         assert!(queue.contains("i inspect") && queue.contains("Delete cancel"));
         let delivered = shortcuts(Hint::QueueInspect, 100, "connected");

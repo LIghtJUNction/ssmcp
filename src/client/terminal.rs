@@ -41,7 +41,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
+const COPY_HINT: &str = "Select text · drag then terminal Copy · Alt+C/F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
@@ -935,6 +935,8 @@ const KEYS: &[(&[u8], Key)] = &[
     (b"\x1b[57351;3u", Key::CanvasRight),
     (b"\x1b[1;2A", Key::Questions),
     (b"\x1b[18~", Key::Select),
+    (b"\x1bc", Key::Select),
+    (b"\x1bC", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
     (b"\x1b[3~", Key::Delete),
     (b"\x1b[13;2u", Key::Newline),
@@ -2067,7 +2069,7 @@ impl State {
                 "F3         Show or hide the sidebar".into(),
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
-                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
+                "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
