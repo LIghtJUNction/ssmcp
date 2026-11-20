@@ -42,8 +42,12 @@ struct Manager {
     pending: BTreeMap<u64, Pending>,
     next_id: u64,
     next_poll: Option<Instant>,
+    revision: u64,
 }
 impl Manager {
+    fn changed(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
     fn available(&self) -> bool {
         self.connected && self.supported
     }
@@ -51,7 +55,7 @@ impl Manager {
         json!({
             "available":self.available(), "connected":self.connected,
             "recipients":self.recipients, "outgoing":self.outgoing,
-            "error":self.error, "pending":!self.pending.is_empty(),
+            "error":self.error, "pending":!self.pending.is_empty(), "revision":self.revision,
         })
     }
     fn connect(&mut self, supported: bool) -> mpsc::Receiver<Request> {
@@ -95,6 +99,7 @@ impl Manager {
                 deadline: Instant::now() + TIMEOUT,
             },
         );
+        self.changed();
         Ok(())
     }
     fn refresh(&mut self) -> Result<(), String> {
@@ -184,6 +189,7 @@ impl Manager {
         }
     }
     fn failure(&mut self, command: &Command, error: &str) {
+        self.changed();
         self.error = Some(error.into());
         if let Command::Send { request_id, .. } = command
             && let Some(message) = self
@@ -199,6 +205,7 @@ impl Manager {
         let Some(pending) = self.pending.remove(&id) else {
             return;
         };
+        self.changed();
         let result = result.and_then(|result| {
             result.validate()?;
             Ok(result)
@@ -259,6 +266,7 @@ impl Manager {
         }
     }
     fn disconnect(&mut self) {
+        self.changed();
         self.connected = false;
         self.supported = false;
         self.sender = None;
@@ -292,20 +300,35 @@ pub(crate) fn refresh() -> Result<(), String> {
 pub(crate) fn send(recipient_id: &str, text: &str, request_id: &str) -> Result<(), String> {
     state().send(recipient_id, text, request_id)
 }
+// Network/lifecycle entry points run outside the terminal state lock.
+// UI send/refresh deliberately leave invalidation to their current input event.
+fn update<T>(change: impl FnOnce(&mut Manager) -> T) -> T {
+    let (value, changed) = {
+        let mut manager = state();
+        let revision = manager.revision;
+        let value = change(&mut manager);
+        (value, revision != manager.revision)
+    };
+    if changed {
+        super::terminal::invalidate();
+    }
+    value
+}
 pub(super) fn connect(supported: bool) -> mpsc::Receiver<Request> {
-    state().connect(supported)
+    update(|manager| manager.connect(supported))
 }
 pub(super) fn pending(id: u64) -> bool {
-    let mut state = state();
-    state.poll();
-    state.pending.contains_key(&id)
+    update(|manager| {
+        manager.poll();
+        manager.pending.contains_key(&id)
+    })
 }
 pub(super) fn reply(id: u64, result: Result<Reply, String>) {
-    state().reply(id, result);
+    update(|manager| manager.reply(id, result));
 }
 pub(super) fn poll() {
-    state().poll();
+    update(Manager::poll);
 }
 pub(super) fn disconnect() {
-    state().disconnect();
+    update(Manager::disconnect);
 }
