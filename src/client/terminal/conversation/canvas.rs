@@ -1176,3 +1176,54 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod reload_history_tests {
+    use super::*;
+
+    fn summary(id: &str) -> crate::client::interface::history::SessionSummary {
+        crate::client::interface::history::SessionSummary {
+            id: id.into(),
+            workspace: "/fixture".into(),
+            title: id.into(),
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            message_count: 0,
+            truncated_messages: 0,
+            current: false,
+            archived: true,
+        }
+    }
+
+    #[test]
+    fn reload_restores_archive_mode_and_selects_history_by_id_after_reordering() {
+        let mut before = State::new(24, 80, &Ui::default());
+        before.preview = true;
+        before.canvas_focus(View::History);
+        before.conversation.history_archived = true;
+        before.conversation.sessions = vec![summary("first"), summary("selected")];
+        before.conversation.selected = 1;
+        let saved = before.canvas_reload_snapshot();
+        saved.validate().unwrap();
+        let saved: ReloadCanvas =
+            serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+
+        let mut after = State::new(24, 80, &Ui::default());
+        after.preview = true;
+        after.conversation.sessions = vec![summary("selected"), summary("first")];
+        after.canvas_restore_reload(saved);
+        assert_eq!(after.conversation.view, View::History);
+        assert!(after.conversation.history_archived);
+        assert_eq!(after.conversation.selected, 0);
+        assert_eq!(
+            after.conversation.sessions[after.conversation.selected].id,
+            "selected"
+        );
+
+        let saved = after.canvas_reload_snapshot();
+        after.conversation.sessions = vec![summary("first")];
+        after.canvas_restore_reload(saved);
+        assert_eq!(after.conversation.selected, 0);
+        assert!(after.conversation.history.is_none());
+    }
+}
