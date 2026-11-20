@@ -116,6 +116,15 @@ pub(super) struct Conversation {
     restored: bool,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
+    finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
+    finish_button_rows: Vec<(
+        u16,
+        String,
+        crate::client::interface::questions::FinishChoice,
+    )>,
+    drawn_questions: Vec<String>,
+    #[cfg(test)]
+    question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
@@ -2612,7 +2621,7 @@ impl State {
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
             prompt.lines[0] =
-                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
+                self.chat_input_line(&format!("❯ {}", self.question_input_hint()), g.left);
         }
         self.conversation.reference_stamp = Some(reference_stamp);
         self.conversation.reference_rows = std::mem::take(&mut prompt.references)
@@ -2678,11 +2687,7 @@ impl State {
                             else { "↑↓ select · Enter resume · Esc back".into() };
                     }
                     if self.conversation.view == View::Questions {
-                        return if self.conversation.detail {
-                            "Enter answer · Shift+↑ next · Esc list · Tab browse".into()
-                        } else {
-                            "↑↓ select · Enter answer · Delete skip · Esc back".into()
-                        };
+                        return self.question_navigation_hint().into();
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
