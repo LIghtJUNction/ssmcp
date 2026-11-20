@@ -296,6 +296,7 @@ struct Document {
     client: super::config::ClientSettings,
     browser: super::config::BrowserSettings,
     git: super::config::GitSettings,
+    contexts: super::connection_context::Store,
 }
 
 impl Ui {
@@ -306,6 +307,7 @@ impl Ui {
         doc.client.validate().map_err(|error| error.to_string())?;
         doc.browser.validate().map_err(|error| error.to_string())?;
         doc.git.validate().map_err(|error| error.to_string())?;
+        doc.contexts.validate().map_err(|error| error.to_string())?;
         doc.ui.validate()?;
         Ok(doc.ui)
     }
@@ -603,6 +605,34 @@ mod tests {
         let loaded = loaded.unwrap();
         assert_eq!(loaded.theme, Theme::Nord);
         assert!(!loaded.color);
+    }
+
+    #[test]
+    fn connection_contexts_keep_their_validation_in_ui_configuration() {
+        for current in ["here", "removed"] {
+            let text = format!(
+                "[ui]\ncolor = false\ntheme = 'nord'\n\
+                 [contexts]\ncurrent = '{current}'\n\
+                 [contexts.entries.here]\nendpoint = 'local'\n\
+                 [contexts.entries.work]\nendpoint = 'https://relay.example'\n"
+            );
+            let ui = Ui::parse(&text).unwrap();
+            assert_eq!(ui.theme, Theme::Nord);
+            assert!(!ui.color);
+        }
+        // A stale current selection can be overridden explicitly, but malformed
+        // entries and unknown fields must still fail before startup.
+        for text in [
+            "[contexts.entries.work]\nendpoint = 'ssh://secret-value'\n",
+            "[contexts.entries.work]\nendpoint = 'http://secret-value'\n",
+            "[contexts.entries.work]\nendpoint = 'local'\ntoken = 'secret-value'\n",
+            "[contexts]\ncurrent = 'secret-value with spaces'\n",
+            "[contexts]\nunknown = 'secret-value'\n",
+            "[contextz]\ncurrent = 'secret-value'\n",
+        ] {
+            let error = Ui::parse(text).unwrap_err();
+            assert!(!error.contains("secret-value"), "{error}");
+        }
     }
 
     #[test]
