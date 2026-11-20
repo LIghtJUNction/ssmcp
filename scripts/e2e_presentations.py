@@ -312,7 +312,7 @@ class Presentations(InputHistory):
         # Retained output reflects its publication width. Publish a fresh document
         # after the real resize instead of assuming historical output is reflowed.
         delivered_response, narrow_ack = self.present(narrow)
-        self.expect_delivery(delivered_response, queued)
+        self.expect_delivery(delivered_response, queued, agent_id=self.presenter["agent_id"])
         delivered = self.wait_queue_state(front, queued["id"], "delivered")
         self.check(delivered["revision"] == queued["revision"] + 1,
                    "a successful ui.present call claims the actual queued revision exactly once")

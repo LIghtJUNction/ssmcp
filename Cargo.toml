@@ -159,6 +159,7 @@ include = [
     "/docs/time-primitives.md",
     "/docs/local-mode.md",
     "/scripts/e2e_agent_entry.py",
+    "/scripts/e2e_local.py",
     "/scripts/e2e_local_socket.py",
     "/scripts/e2e_time_primitives.py",
     "/scripts/e2e_connection_context_reload.py",

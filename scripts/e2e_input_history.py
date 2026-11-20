@@ -136,11 +136,14 @@ class InputHistory(Composer):
             )
         return self.save_shot(name, front, cells=True)
 
-    def wait_state(self, front, predicate, description):
+    def wait_state(self, front, predicate, description, *, fields=None):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            state = self.ui("/display/conversation")
+            if fields is None:
+                state = self.ui("/display/conversation")
+            else:
+                state = {field: self.ui("/display/conversation/" + field) for field in fields}
             if predicate(state):
                 return state
             if front.process.poll() is not None:

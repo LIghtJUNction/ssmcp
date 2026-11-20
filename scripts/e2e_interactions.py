@@ -82,12 +82,12 @@ class Interactions(InputHistory):
 
     def conversation(self, front):
         for _ in range(4):
-            state = self.ui("/display/conversation")
-            if state["view"] == "activity":
+            view = self.ui("/display/conversation/view")
+            if view == "activity":
                 self.focus_input(front)
                 return self.wait_state(
                     front, lambda item: item["view"] == "activity" and item["focus"] == "input",
-                    "return to the retained conversation draft")
+                    "return to the retained conversation draft", fields=("view", "focus"))
             front.send(ESC)
             front.pump(0.12)
         raise AssertionError("Escape did not return the owned UI to its conversation")
@@ -96,18 +96,18 @@ class Interactions(InputHistory):
         if len(value.encode()) > 4096 or len(value.splitlines()) >= 8:
             raise AssertionError("the synthetic draft helper only accepts inline input")
         self.conversation(front)
-        before = self.ui("/display/conversation")["draft"]
+        before = self.ui("/display/conversation/draft")
         raw = before["text"].encode()
         prefix = raw[:before["cursor"]].decode()
         suffix = raw[before["cursor"]:].decode()
         self.send_stream(front, b"\x7f" * len(prefix) + DELETE * len(suffix))
         self.wait_state(front, lambda item: item["draft"]["text"] == "",
-                        "clear only the owned synthetic draft")
+                        "clear only the owned synthetic draft", fields=("draft",))
         if value:
             self.send_stream(front, PASTE_START + value.encode() + PASTE_END)
         return self.wait_state(
             front, lambda item: item["draft"]["text"] == value,
-            "replace the owned short draft without changing its route")
+            "replace the owned short draft without changing its route", fields=("draft",))
 
     def open_picker(self, front, query=""):
         self.replace_short(front, "/message" + (" " + query if query else ""))
@@ -586,14 +586,14 @@ class Interactions(InputHistory):
         boundary = "x" * 4093 + "中"
         self.replace_short(front, boundary)
         self.check(len(boundary.encode()) == 4096
-                   and self.ui("/display/conversation")["draft"]["text"] == boundary,
+                   and self.ui("/display/conversation/draft")["text"] == boundary,
                    "exactly 4 KiB remains inline without cutting a UTF-8 character")
         self.replace_short(front, "single-line byte limit")
         over = ("x" * 4094 + "中").encode()
         self.send_stream(front, PASTE_START + over + PASTE_END)
         stored = self.wait_state(
             front, lambda item: '@".ssmcp/inputs/' in item["draft"]["text"],
-            "a single UTF-8 line above 4 KiB becoming a private reference")
+            "a single UTF-8 line above 4 KiB becoming a private reference", fields=("draft",))
         byte_reference = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"',
                                    stored["draft"]["text"])
         self.check(len(over) == 4097 and byte_reference is not None
@@ -601,7 +601,7 @@ class Interactions(InputHistory):
                    "4 KiB plus one byte is stored whole even when it has only one logical line")
         seven = "\n".join("line " + str(index) for index in range(7))
         self.replace_short(front, seven)
-        self.check(self.ui("/display/conversation")["draft"]["text"] == seven,
+        self.check(self.ui("/display/conversation/draft")["text"] == seven,
                    "seven short logical lines remain inline with their newlines")
         self.replace_short(front, "paste prefix suffix")
         front.send(HOME + RIGHT * len("paste prefix"))
@@ -609,7 +609,8 @@ class Interactions(InputHistory):
         self.send_stream(front, PASTE_START + raw + PASTE_END)
         state = self.wait_state(
             front, lambda item: '@".ssmcp/inputs/' in item["draft"]["text"],
-            "eight or more logical lines becoming a private paste reference")
+            "eight or more logical lines becoming a private paste reference",
+            fields=("draft", "native_recipient"))
         match = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"', state["draft"]["text"])
         self.check(match is not None and state["draft"]["text"].startswith("paste prefix")
                    and state["draft"]["text"].endswith(" suffix")
@@ -621,7 +622,7 @@ class Interactions(InputHistory):
         self.capture_pair(front, "long-paste", ".ssmcp/inputs/")
 
         self.replace_short(front, "recoverable original draft")
-        before = self.ui("/display/conversation")
+        before = self.ui("/display/conversation/draft")
         inputs = self.workspace / ".ssmcp" / "inputs"
         held = self.workspace / ".ssmcp" / "inputs-owned-test-backup"
         self.check(inputs.is_dir() and not held.exists(),
@@ -634,8 +635,9 @@ class Interactions(InputHistory):
             self.send_stream(front, PASTE_START + original + PASTE_END)
             failed = self.wait_state(
                 front, lambda item: item["retained_paste_bytes"] == len(original),
-                "a failed private write retaining the original paste")
-            self.check(failed["draft"] == before["draft"]
+                "a failed private write retaining the original paste",
+                fields=("retained_paste_bytes", "draft", "native_recipient"))
+            self.check(failed["draft"] == before
                        and failed["native_recipient"] == recipient_id,
                        "a real storage error preserves the original draft, cursor and selected recipient")
             self.capture_pair(front, "paste-retained", "Original paste retained")
@@ -651,7 +653,8 @@ class Interactions(InputHistory):
         restored = self.wait_state(
             front, lambda item: item["retained_paste_bytes"] is None
             and '@".ssmcp/inputs/' in item["draft"]["text"],
-            "the explicit keyboard retry storing the original retained bytes")
+            "the explicit keyboard retry storing the original retained bytes",
+            fields=("retained_paste_bytes", "draft", "native_recipient"))
         reference = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"',
                               restored["draft"]["text"])
         self.check(reference is not None

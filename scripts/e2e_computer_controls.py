@@ -195,8 +195,10 @@ def quiet(sessions, seconds=0.4):
 
 
 def badge(session):
-    return {"on" if state == "开启" else "off"
-            for state in re.findall(r"电脑控制：(开启|关闭)", session.screen)}
+    # Read the current input divider, not a retained command receipt in the footer.
+    return {"on" if state in ("开启", "开") else "off"
+            for line in session.screen.splitlines() if "─" in line
+            for state in re.findall(r"(?:电脑控制：|键鼠：)(开启|关闭|开|关)", line)}
 
 
 def inside(args):

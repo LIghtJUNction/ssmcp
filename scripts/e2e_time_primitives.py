@@ -16,10 +16,11 @@ import sys
 import tempfile
 import termios
 import time
+import traceback
 import uuid
 
 import e2e_account_relay as relay
-from e2e_computer_controls import Session, quiet, save, until
+from e2e_computer_controls import Session, save, until
 from e2e_dashboard import sha256
 
 DRAFT = "TIME_FIXTURE_DRAFT_保持不变"
@@ -69,6 +70,18 @@ def clock_seconds(line, label):
     assert found, line
     parts = [int(part) for part in found[1].split(":")]
     return parts[-1] + 60 * parts[-2] + (3600 * parts[0] if len(parts) == 3 else 0)
+
+
+def until_clock(sessions, session, row, label, predicate, description, timeout):
+    # Rendering has a one-second cadence independent of the operation's start.
+    # Wait for the decoded numeric change, not a sleep aligned to the test.
+    def progressed():
+        line = divider(session, row)
+        if label + " " not in line:
+            return None
+        return line if predicate(clock_seconds(line, label)) else None
+
+    return until(sessions, progressed, description, timeout=timeout)
 
 
 def assert_draft(connection):
@@ -171,13 +184,14 @@ def inside(args):
 
                 # An owned sleep is the complete workload. No model executable
                 # exists on the child's private PATH, and no desktop API is used.
-                job = connection.call("ssmcp.exec.start", {"command": ["/bin/sh", "-c", "exec /bin/sleep 2.8"], "timeout_ms": 0})
+                job = connection.call("ssmcp.exec.start", {"command": ["/bin/sh", "-c", "exec /bin/sleep 4"], "timeout_ms": 0})
                 assert job["remaining_ms"] is None and job["timeout_ms"] == 0
                 until(sessions, lambda: "运行 00:" in divider(session, row), "running elapsed clock")
-                quiet(sessions, 1.1)
+                elapsed_frame = until_clock(sessions, session, row, "运行", lambda seconds: seconds >= 1,
+                                            "running elapsed clock reaches one second", timeout=2.5)
                 state = connection.call("ssmcp.exec.status", {"job_id": job["job_id"]})
-                assert state["running"] and state["duration_ms"] >= 1000 and state["remaining_ms"] is None
-                assert clock_seconds(divider(session, row), "运行") >= 1
+                assert state["running"] and state["duration_ms"] >= 1000 and state["remaining_ms"] is None, state
+                assert clock_seconds(elapsed_frame, "运行") >= 1, elapsed_frame
                 native_time = [entry for entry in display(connection)["timing"]["active"] if entry["kind"] == "task"]
                 assert native_time and native_time[0]["remaining_ms"] is None
                 assert abs(native_time[0]["elapsed_ms"] - state["duration_ms"]) < 1000
@@ -197,11 +211,15 @@ def inside(args):
                 timer_id = timer["timer_id"]
                 listed = connection.call("ssmcp.time.wait", {"op": "list"})
                 assert [entry["timer_id"] for entry in listed["active"]] == [timer_id]
-                until(sessions, lambda: "剩余 00:" in divider(session, row), "timer countdown")
+                # The completed job can leave its last countdown frame in the
+                # PTY until the next draw. Establish the timer's own first frame.
+                until(sessions, lambda: "计时 · 剩余 " in session.screen
+                      and "剩余 00:" in divider(session, row), "owned timer countdown frame")
                 first = divider(session, row)
                 capture(session, "timer-countdown")
-                quiet(sessions, 1.1)
-                later = divider(session, row)
+                first_seconds = clock_seconds(first, "剩余")
+                later = until_clock(sessions, session, row, "剩余", lambda seconds: seconds < first_seconds,
+                                    "timer countdown strictly decreases before expiry", timeout=2.2)
                 assert clock_seconds(first, "剩余") > clock_seconds(later, "剩余"), (first, later)
                 ended = until(sessions, lambda: (lambda value: value if value["status"] == "elapsed" else None)(connection.call("ssmcp.time.wait", {"op": "status", "timer_id": timer_id})), "timer expires")
                 assert ended["elapsed_ms"] == 2600 and ended["remaining_ms"] == 0
@@ -227,6 +245,7 @@ def inside(args):
         report["ok"] = True
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        report["traceback"] = traceback.format_exc()
         raise
     finally:
         for session in sessions:
