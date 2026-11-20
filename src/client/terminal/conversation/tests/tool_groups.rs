@@ -97,10 +97,20 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
             .lines()
             .position(|row| row.contains("Tools · 5 calls"))
             .unwrap() as u16;
-        let before = state.events.snapshot();
-        assert!(before["tool_groups"][0]["scroll"].as_u64().unwrap() > 0);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], false);
+        assert!(!screen.contains("call 0 result"), "{screen}");
         state.chat_key(Key::Mouse {
-            button: 64,
+            button: 0,
+            x: 8,
+            y: header_y,
+            release: false,
+        });
+        display(&mut state);
+        save_preview(&mut state, "group-expanded");
+        let before = state.events.snapshot();
+        assert_eq!(before["tool_groups"][0]["scroll"], 0);
+        state.chat_key(Key::Mouse {
+            button: 65,
             x: 8,
             y: header_y,
             release: false,
@@ -109,17 +119,17 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
         let scrolled = state.events.snapshot();
         assert!(
             scrolled["tool_groups"][0]["scroll"].as_u64().unwrap()
-                < before["tool_groups"][0]["scroll"].as_u64().unwrap()
+                > before["tool_groups"][0]["scroll"].as_u64().unwrap()
         );
         assert_eq!(scrolled["scroll"], before["scroll"]);
         assert_eq!(scrolled["events"][1]["panel"], before["events"][1]["panel"]);
         save_preview(&mut state, "group-scrolled");
-
-        state.conversation.content_focus = true;
         state.chat_key(Key::Home);
         display(&mut state);
         assert_eq!(state.events.snapshot()["tool_groups"][0]["scroll"], 0);
-        state.chat_key(Key::AuditUp);
+        for _ in 0..4 {
+            state.chat_key(Key::AuditDown);
+        }
         display(&mut state);
         let selected_previous = state.events.snapshot()["selected"].clone();
         state.chat_key(Key::AuditDown);
@@ -174,6 +184,23 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
         state.chat_key(Key::Home);
         let head_again = display(&mut state).screen().contents();
         assert!(head_again.contains("head-marker"), "{head_again}");
+        let header_y = head_again
+            .lines()
+            .position(|row| row.contains("Tools · 5 calls"))
+            .unwrap() as u16;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y: header_y,
+            release: false,
+        });
+        display(&mut state);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], false);
+        // Enter on the selected summary reopens only the display group.
+        input(&mut state, b"\r");
+        display(&mut state);
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], true);
+        assert_eq!(state.events.snapshot()["events"][5]["expanded"], true);
         assert_eq!(state.conversation.snapshot()["draft"], draft);
         assert_eq!(state.chat_data()["queue"], queue);
         assert!(state.actions.is_empty() && state.conversation.submitting.is_none());
@@ -182,4 +209,149 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
                 .all(|line| unicode_width::UnicodeWidthStr::width(line) <= usize::from(cols))
         );
     }
+}
+
+#[test]
+fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay() {
+    for cols in [120, 48] {
+        for expanded in [false, true] {
+            let mut before = fixture(cols);
+            let first = display(&mut before).screen().contents();
+            if !expanded {
+                let y = first
+                    .lines()
+                    .position(|row| row.contains("Tools · 5 calls"))
+                    .unwrap() as u16;
+                before.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y,
+                    release: false,
+                });
+                display(&mut before);
+                input(&mut before, b"\r");
+            }
+            if expanded {
+                let y = first
+                    .lines()
+                    .position(|row| row.contains("Tools · 5 calls"))
+                    .unwrap() as u16;
+                before.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y,
+                    release: false,
+                });
+                before.chat_key(Key::End);
+                display(&mut before);
+                for _ in 0..5 {
+                    before.chat_key(Key::AuditDown);
+                }
+                let screen = display(&mut before).screen().contents();
+                let y = screen
+                    .lines()
+                    .position(|row| row.contains("python3 -c"))
+                    .unwrap() as u16;
+                before.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y,
+                    release: false,
+                });
+                display(&mut before);
+                before.chat_key(Key::End);
+            }
+            let mode = if expanded { "expanded" } else { "folded" };
+            save_preview(&mut before, &format!("reload-before-{mode}"));
+            let events = before.events.snapshot();
+            let draft = before.chat_saved_draft();
+            let draft_display = before.conversation.snapshot()["draft"].clone();
+            let queue = before.chat_data()["queue"].clone();
+            let saved = before.chat_reload_snapshot();
+            let bytes = serde_json::to_vec(&saved).unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains("private-frame-secret"));
+            let saved = serde_json::from_slice(&bytes).unwrap();
+            let mut after = preview(32, cols);
+            after.chat_apply_reload_snapshot(saved, Vec::new());
+            after.chat_restore_draft(draft);
+            after.chat_restore_reload_input();
+            let screen = display(&mut after).screen().contents();
+            save_preview(&mut after, &format!("reload-after-{mode}"));
+            let restored = after.events.snapshot();
+            assert_eq!(restored["tool_groups"][0]["expanded"], expanded);
+            assert_eq!(
+                restored["tool_groups"][0]["scroll"],
+                events["tool_groups"][0]["scroll"]
+            );
+            assert_eq!(
+                restored["events"][5]["expanded"],
+                events["events"][5]["expanded"]
+            );
+            assert_eq!(
+                restored["events"][5]["panel"]["following"],
+                events["events"][5]["panel"]["following"]
+            );
+            if events["events"][5]["panel"]["following"] != true {
+                assert_eq!(
+                    restored["events"][5]["panel"]["scroll"],
+                    events["events"][5]["panel"]["scroll"]
+                );
+            }
+            assert_eq!(restored["tool_groups"][0]["stats"]["running"], 0);
+            assert_eq!(restored["tool_groups"][0]["stats"]["unknown"], 5);
+            assert!(
+                restored["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| event["command"] == true)
+                    .all(|event| event["historical"] == true && event["connection_ended"] == true)
+            );
+            assert_ne!(restored["events"][5]["id"], events["events"][5]["id"]);
+            if expanded {
+                assert!(screen.contains("tail-marker"), "{screen}");
+            } else {
+                assert!(
+                    !screen.contains("call 0 result") && screen.contains("Tools · 5 calls"),
+                    "{screen}"
+                );
+            }
+            assert!(!screen.contains("private-frame-secret"));
+            assert_eq!(after.conversation.snapshot()["draft"], draft_display);
+            assert_eq!(after.chat_data()["queue"], queue);
+            assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+        }
+    }
+}
+
+#[test]
+fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_readable() {
+    let mut before = fixture(120);
+    let draft = before.chat_saved_draft();
+    let mut value = serde_json::to_value(before.chat_reload_snapshot()).unwrap();
+    for bad in [
+        serde_json::Value::Null,
+        json!({"version":1,"entries":"bad","omitted":false}),
+    ] {
+        value["display"] = bad;
+        let saved = serde_json::from_value(value.clone()).unwrap();
+        let mut after = preview(32, 120);
+        after.chat_apply_reload_snapshot(saved, Vec::new());
+        after.chat_restore_draft(draft.clone());
+        assert_eq!(after.conversation.composer.text(), "Keep this draft");
+        assert!(
+            after
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("omitted"))
+        );
+        assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+    }
+    value.as_object_mut().unwrap().remove("display");
+    let saved = serde_json::from_value(value).unwrap();
+    let mut after = preview(32, 120);
+    after.chat_apply_reload_snapshot(saved, Vec::new());
+    after.chat_restore_draft(draft);
+    assert_eq!(after.conversation.composer.text(), "Keep this draft");
+    assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
 }

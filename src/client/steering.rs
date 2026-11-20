@@ -1650,12 +1650,20 @@ fn write_handoff(
     if let Some(session) = &session {
         session.validate()?;
     }
-    let bytes = serde_json::to_vec(&Handoff {
+    let mut payload = Handoff {
         created_at_ms: now_ms(),
         outbox,
         session,
-    })
-    .map_err(|_| "cannot serialize client outbox")?;
+    };
+    let mut bytes = serde_json::to_vec(&payload).map_err(|_| "cannot serialize client outbox")?;
+    if bytes.len() as u64 > MAX_HANDOFF_BYTES {
+        // Optional display previews must never crowd out the existing draft,
+        // delivery receipts or local conversation checkpoint.
+        if let Some(session) = &mut payload.session {
+            session.discard_display();
+        }
+        bytes = serde_json::to_vec(&payload).map_err(|_| "cannot serialize client outbox")?;
+    }
     if bytes.len() as u64 > MAX_HANDOFF_BYTES {
         return Err("client outbox exceeds reload handoff limit".into());
     }
@@ -3396,6 +3404,54 @@ mod tests {
             let error = context.validate().unwrap_err();
             assert!(!error.contains("private-fixture"));
         }
+    }
+
+    #[test]
+    fn reload_display_overflow_drops_only_optional_preview_before_private_handoff() {
+        let mut terminal =
+            serde_json::to_value(super::super::terminal::ReloadState::fixture_for_test()).unwrap();
+        let mut column = terminal["canvas"]["columns"][1].clone();
+        column["position"]["events"]["reading"] = json!({
+            "selected":0,"selected_group":0,"expanded":[],
+            "panels":(0..128).map(|index|json!([index,{
+                "scroll":1,"folded_scroll":2,"group_scroll":3,"group_expanded":true
+            }])).collect::<Vec<_>>()
+        });
+        terminal["canvas"]["columns"] = json!(
+            (1..=1024)
+                .map(|id| {
+                    let mut column = column.clone();
+                    column["id"] = json!(id);
+                    column
+                })
+                .collect::<Vec<_>>()
+        );
+        terminal["canvas"]["active"] = json!(0);
+        terminal["canvas"]["next_id"] = json!(1025);
+        terminal["canvas"]["logs_return"] = Value::Null;
+        let session: super::super::reload::SessionState = serde_json::from_value(json!({
+            "conversation_id":null,"terminal":terminal
+        }))
+        .unwrap();
+        session.validate().unwrap();
+        assert!(serde_json::to_vec(&session).unwrap().len() as u64 > MAX_HANDOFF_BYTES);
+        let mut outbox = Outbox::default();
+        outbox.draft.text = "keep draft and cursor".into();
+        outbox.draft.cursor = 5;
+        let expected = serde_json::to_value(&outbox).unwrap();
+        let ticket = write_handoff(outbox, Some(session), &std::env::temp_dir()).unwrap();
+        assert!(fs::metadata(&ticket.path).unwrap().len() <= MAX_HANDOFF_BYTES);
+        let restored = read_handoff(&ticket.path).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(restored.outbox).unwrap(), expected);
+        let session = serde_json::to_value(restored.session.unwrap()).unwrap();
+        assert_eq!(session["terminal"]["display"]["omitted"], true);
+        assert!(
+            session["terminal"]["canvas"]["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|column| column["position"]["events"]["reading"].is_null())
+        );
     }
 
     #[test]

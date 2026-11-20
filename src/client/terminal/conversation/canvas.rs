@@ -81,6 +81,14 @@ struct ReloadLogs {
 }
 
 impl ReloadCanvas {
+    pub(super) fn discard_display_positions(&mut self) {
+        for column in &mut self.columns {
+            if let Some(position) = &mut column.position {
+                position.events.discard_display();
+            }
+        }
+    }
+
     pub(super) fn validate(&self) -> Result<(), String> {
         let ids = self
             .columns
@@ -214,7 +222,7 @@ impl State {
                             .map(|history| history.metadata.id.clone()),
                         history_archived: position.history_archived,
                         selected_history: position.selected_history.clone(),
-                        events: position.events.for_reload(),
+                        events: position.events.for_reload(&self.events),
                         logs: position.logs.as_ref().map(|logs| ReloadLogs {
                             scrollback: logs.scrollback,
                             query: logs.query.clone(),
@@ -267,7 +275,7 @@ impl State {
                             history_archived: position.history_archived,
                             selected_history: position.selected_history,
                             audit: Default::default(),
-                            events: position.events.position(),
+                            events: position.events.position(&self.events),
                             logs: position.logs.map(|logs| LogPosition {
                                 scrollback: logs.scrollback,
                                 query: logs.query,

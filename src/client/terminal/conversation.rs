@@ -115,6 +115,7 @@ pub(super) struct Conversation {
     submitting: Option<(String, String)>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
+    force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
     wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     parked: Option<steering::SavedDraft>,
@@ -5433,6 +5434,41 @@ mod tests {
         }
     }
 
+    fn reveal_tool_group_text(state: &mut State, needle: &str) -> String {
+        state.chat_key(Key::HistoryStart);
+        let screen = display(state).screen().contents();
+        let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+            return screen;
+        };
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y: y as u16,
+            release: false,
+        });
+        for _ in 0..512 {
+            let screen = display(state).screen().contents();
+            if screen.contains(needle) {
+                return screen;
+            }
+            let before = state.events.snapshot()["tool_groups"].clone();
+            let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+                return screen;
+            };
+            state.chat_key(Key::Mouse {
+                button: 65,
+                x: 8,
+                y: y as u16,
+                release: false,
+            });
+            display(state);
+            if state.events.snapshot()["tool_groups"] == before {
+                return screen;
+            }
+        }
+        display(state).screen().contents()
+    }
+
     #[test]
     fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
         let mut state = super::super::preview_state(
@@ -5475,7 +5511,7 @@ mod tests {
         state.chat_key(Key::Escape);
         assert!(!state.conversation.logs_open);
         assert_eq!(state.conversation.view, View::Activity);
-        let screen = display(&mut state).screen().contents();
+        let screen = reveal_tool_group_text(&mut state, "cargo test --lib");
         assert!(screen.contains("Improve the client experience"));
         assert!(screen.contains("cargo test --lib"));
         assert!(!screen.contains("A quieter workspace"));
@@ -5798,7 +5834,7 @@ mod tests {
             );
             state.chat_key(Key::Escape);
             assert!(!state.conversation.logs_open);
-            let conversation = display(&mut state).screen().contents();
+            let conversation = reveal_tool_group_text(&mut state, "cargo test --lib");
             assert!(
                 conversation
                     .lines()
