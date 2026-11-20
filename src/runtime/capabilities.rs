@@ -218,7 +218,7 @@ fn native_limits() -> Value {
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
             "audit_source_max_bytes":65536,
-            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.answer","ssmcp.ui.finish","ssmcp.ui.question_ack","ssmcp.ui.question_delivery","ssmcp.ui.history","ssmcp.ui.history_archive","ssmcp.ui.history_update","ssmcp.ui.harness"],
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.answer","ssmcp.ui.finish","ssmcp.ui.question_ack","ssmcp.ui.question_delivery","ssmcp.ui.history","ssmcp.ui.history_archive","ssmcp.ui.history_update","ssmcp.ui.tool_summary","ssmcp.ui.harness"],
             "get_projection_max_bytes":8192,
             "queue_message_max_bytes":crate::wire::MAX_USER_MESSAGE_BYTES,
             "queue_pending_max":crate::wire::MAX_USER_MESSAGES,

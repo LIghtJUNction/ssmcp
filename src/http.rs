@@ -32,6 +32,7 @@ mod finish_request;
 mod question_delivery_tests;
 #[cfg(test)]
 mod relay_composer_fixture;
+mod tool_summaries;
 mod user_wait;
 
 pub fn router(broker: Arc<Broker>) -> Router {
@@ -1284,6 +1285,7 @@ fn delivery_budget_with_reserve(response: &Value, reserve: usize) -> usize {
         .saturating_sub(response.to_string().len())
         .saturating_sub(16 * 1024)
         .saturating_sub(code_mode::reminders::MAX_NOTICE_BYTES)
+        .saturating_sub(code_mode::tool_summaries::MAX_NOTICE_BYTES)
         .saturating_sub(reserve)
         / 2)
     .min(crate::steering::MAX_DELIVERY_BYTES)
@@ -1401,6 +1403,7 @@ async fn eligible_user_response(report: &CodeRunReport) -> Result<Vec<EligibleUs
 }
 
 async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value {
+    tool_summaries::collect(report).await;
     collect_question_answers(report).await;
     match eligible_user_response(report).await {
         Ok(eligible) => commit_user_response(report, response, eligible),
@@ -1525,6 +1528,7 @@ fn commit_user_response(
     let mut answers_deferred = Vec::new();
     let mut native_candidates = Vec::new();
     let mut notices = Vec::new();
+    let mut tool_summary_notices = Vec::new();
     let mut bytes = 0usize;
     let reserve = report.run.user_wait_reserve_bytes();
     let budget = if reserve == 0 {
@@ -1590,6 +1594,15 @@ fn commit_user_response(
             continue;
         }
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
+        // Legacy providers may emit this reserved field without host stripping.
+        // Only this live connection's actual native capability can promote it.
+        if session.tool_summary_advertised() {
+            tool_summary_notices.extend(
+                report
+                    .run
+                    .tool_summary_notices(session.client_id(), agent_id),
+            );
+        }
         native_candidates.push((session.clone(), owner.clone(), binding.clone()));
         if answers_deferred.len() < 8
             && binding.is_some()
@@ -1663,6 +1676,7 @@ fn commit_user_response(
         }
     }
     let response = append_conversation_reminders(append_user_messages(response, messages), notices);
+    let response = code_mode::tool_summaries::append(response, tool_summary_notices);
     let mut response = code_mode::question_answers::append(response, answers);
     if !answers_deferred.is_empty() {
         response["structuredContent"]["question_answers_deferred"] = json!(answers_deferred);
@@ -2191,7 +2205,7 @@ mod tests {
         use code_mode::reminders;
         let before = json!({
             "content":[{"type":"text","text":"native output"}],
-            "structuredContent":{"result":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)},
+            "structuredContent":{"result":"x".repeat(crate::wire::MAX_FRAME - 64 * 1024)},
             "isError":false,
         });
         let budget = delivery_budget(&before);
@@ -2312,7 +2326,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn conversation_reminders_finalize_real_deliveries_and_ignore_failed_authorization() {
+    async fn conversation_and_tool_summary_reminders_finalize_real_deliveries_and_ignore_failed_authorization()
+     {
         use crate::wire::{self, Frame, SteeringCommand, SteeringState};
         use tokio::{
             io::BufReader,
@@ -2402,6 +2417,142 @@ mod tests {
             "structuredContent":{"result":"kept"},
             "isError":false,
         });
+
+        // A legacy provider can forge the reserved field. Capture is not proof:
+        // only a real native catalog/summary receipt can authorize outer delivery.
+        let start_native = |run: code_mode::AuditRun, operation: Operation| {
+            let target = session.clone();
+            let authorization = authorization.clone();
+            tokio::spawn(code_mode::AUDIT_RUN.scope(run, async move {
+                target
+                    .call_with_authorization(operation, None, &authorization)
+                    .await
+            }))
+        };
+        let summary_run = code_mode::AuditRun::new("return null;", None).unwrap();
+        let native_notice = json!({"_meta":{"ssmcp.tool_summary":{
+            "schema_version":1,"group_id":"g","revision":0,"call_count":11,
+            "covered_call_count":0,"threshold":10,"tool":"ssmcp.ui.tool_summary"
+        }}});
+        let native = start_native(
+            summary_run.clone(),
+            Operation::CallTool {
+                name: "ssmcp.fs.stat".into(),
+                arguments: json!({"path":"fixture"}),
+            },
+        );
+        let Some(Frame::Call { id, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing real native stat call");
+        };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(native_notice.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        native.await.unwrap().unwrap();
+        assert_eq!(summary_run.tool_summary_notices(&client_id, None).len(), 1);
+        assert!(!session.tool_summary_advertised());
+        let mut summary_report = report(summary_run, &access_token);
+        assert_eq!(
+            finish_user_response(&summary_report, original.clone()).await,
+            original
+        );
+
+        // Capability is learned from the actual session's catalog, never JS JSON.
+        let catalog = start_native(
+            summary_report.run.clone(),
+            Operation::ListTools { cursor: None },
+        );
+        let Some(Frame::Call { id, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing real native catalog call");
+        };
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(json!({"tools":[
+                    {"name":"ssmcp.ui.tool_summary","inputSchema":{"type":"object"}}
+                ]})),
+            },
+        )
+        .await
+        .unwrap();
+        catalog.await.unwrap().unwrap();
+        assert!(session.tool_summary_advertised());
+        let eligibility = eligible_user_response(&summary_report).await.unwrap();
+        assert_eq!(eligibility.len(), 1);
+        // Re-check current authorization after the asynchronous eligibility snapshot.
+        summary_report.access_token = "invalid-token".into();
+        assert_eq!(
+            commit_user_response(&summary_report, original.clone(), eligibility),
+            original
+        );
+        summary_report.access_token = access_token.clone();
+
+        let validated = report(summary_report.run.clone(), &access_token);
+        let validated_original = original.clone();
+        let finalizing =
+            tokio::spawn(async move { finish_user_response(&validated, validated_original).await });
+        let Some(Frame::Call { id, operation, .. }) =
+            timeout(Duration::from_secs(2), wire::read_frame(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("missing final native summary validation");
+        };
+        assert!(matches!(operation,Operation::CallTool{name,arguments}
+            if name=="ssmcp.ui.tool_summary" && arguments==json!({"action":"list"})));
+        wire::write_frame(
+            &mut writer,
+            &Frame::Reply {
+                id,
+                result: Ok(json!({
+                    "structuredContent":{"schema_version":1,"threshold":10,"groups":[
+                        {"group_id":"g","revision":0,"call_count":11,"covered_call_count":0}
+                    ]}
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        let summarized = finalizing.await.unwrap();
+        assert_eq!(
+            summarized["structuredContent"]["tool_summary_reminders"][0]["group_id"],
+            "g"
+        );
+        assert_eq!(summarized["content"][0], original["content"][0]);
+
+        // A bound participant's capture cannot be delivered to an unbound caller.
+        let other_scope = run("ssmcp.fs.stat");
+        other_scope.record_connection(&session).unwrap();
+        other_scope.native_tool_summary_reply(
+            &client_id,
+            Some("another-agent"),
+            Some("ssmcp.fs.stat"),
+            &Ok(native_notice),
+        );
+        let other_response =
+            finish_user_response(&report(other_scope, &access_token), original.clone()).await;
+        assert!(
+            other_response["structuredContent"]
+                .get("tool_summary_reminders")
+                .is_none()
+        );
 
         publish("first");
         let unauthorized = report(run("ssmcp.exec.run"), "invalid-token");
