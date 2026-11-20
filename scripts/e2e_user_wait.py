@@ -184,7 +184,7 @@ class UserWait(InputHistory):
                     "mixed-episode finish intent remains visible in the footer")
         front.until(lambda shot: "Click or type to wake" in text(shot),
                     "the authenticated user wait dims the production terminal")
-        self.check(self.ui("/display")["sleeping"],
+        self.check(self.ui("/display/sleeping"),
                    "the real terminal exposes its active visual sleep state")
         self.save_shot("user-wait-active-120", front, cells=True)
         front.resize(24, 48)
@@ -204,7 +204,7 @@ class UserWait(InputHistory):
         front.send(b"M\x1b[<32;5;4M\x1b[<0;5;4m")
         front.until(lambda shot: "Click or type to wake" not in text(shot),
                     "the owned mouse gesture removes the visual sleep overlay")
-        self.check(not self.ui("/display")["sleeping"],
+        self.check(not self.ui("/display/sleeping"),
                    "mouse down and up leave the terminal visually awake")
         after_wake = self.ui("/display/conversation")
         self.check(all(after_wake[key] == before_wake[key]

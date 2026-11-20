@@ -769,9 +769,7 @@ fn execute(
         }
         "type" => {
             let value: TypeText = parse(args)?;
-            if value.text.len() > 16384 || value.text.contains('\0') {
-                return Err("invalid literal text".into());
-            }
+            validate_literal_text(backend, &value.text)?;
             let mut buffer = [0u8; 4];
             for character in value.text.chars() {
                 cancellation.check()?;
@@ -822,6 +820,25 @@ fn execute(
     Ok(json!({"result":result,"backend":backend}))
 }
 
+fn validate_literal_text(backend: &str, text: &str) -> Result<(), String> {
+    if text.len() > 16384 || text.contains('\0') {
+        return Err("invalid literal text".into());
+    }
+    if backend == "wayland" {
+        // zuse 0.2.0 validates the whole string before creating a virtual keyboard.
+        // Keep that guarantee when splitting native calls for cancellation.
+        for (offset, character) in text.char_indices() {
+            if character.is_control() && !matches!(character, '\t' | '\n' | '\r') {
+                return Err(format!(
+                    "unsupported control U+{:04X} at byte {offset}; text permits only Tab, LF and CR",
+                    character as u32
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool {
     // zuse 0.2.0 has String errors. These branches are verified against the
     // pinned library: they return before key injection or keyboard-map writes.
@@ -837,6 +854,28 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
                     error,
                     "invalid X11 keyboard-map range" | "could not read X11 keyboard mapping"
                 ));
+    }
+    if backend == "wayland" {
+        // In zuse 0.2.0 (557ea46), these exact state checks precede shortcut
+        // dispatch and virtual-keyboard creation. A generic prefix could also
+        // accept a new error or appended restoration failure, so keep it exact.
+        return matches!(
+            error,
+            "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
+                | "unsupported_state: a keyboard key is held; release it before input"
+                | "unsupported_state: compositor cannot report held keyboard keys"
+                | "unsupported_state: Wayland keys require Hyprland keyboard-state inspection"
+                | "unsupported_state: cannot parse compositor keyboard state"
+                | "unsupported_state: compositor keyboard state is unavailable"
+                | "unsupported_state: too many keyboards to inspect"
+                | "unsupported_state: Caps Lock is enabled; disable it before input"
+                | "unsupported_state: Num Lock is enabled; disable it before input"
+                | "unsupported_state: Caps Lock state is unavailable"
+                | "unsupported_state: Num Lock state is unavailable"
+                | "unsupported_state: keyboard layout group must be 0 before input"
+                | "unsupported_state: keyboard layout group is unavailable"
+                | "unsupported_state: a unique main keyboard is required"
+        );
     }
     if backend == "win32" && !typing {
         return error.starts_with("unknown key ") || error == "function key must be F1..F24";
@@ -1038,6 +1077,9 @@ fn encode_capture(
     }
     Err("screenshot exceeds 400 KiB after bounded downscaling; select a smaller region".into())
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod wayland_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,33 +1,35 @@
 # 客户端命令与独立任务
 
-## 连接、设备列表与临时控制
+## 连接、账号与设备列表
 
-在 A 的项目目录运行 `ssmcp username@server`；首次连接自动引导 GitHub 授权和用户名绑定，授权完成后继续连接。随后在另一个终端查看设备或邀请 B：
+控制者先在目标中继登录；被控设备明确指定允许的账号，设备本身可以不登录：
 
 ~~~sh
-ssmcp alice@ssmcp.example.com --name device-a
-# 无浏览器：ssmcp alice@ssmcp.example.com --no-browser
+# 控制者注册或复用该服务器的登录。
+ssmcp alice@relay.example
 
-# 在 A 的另一个终端：
-ssmcp list
-ssmcp -i
-ssmcp invite
+# 在被控设备的项目目录运行。
+ssmcp --server https://relay.example \
+  --allow alice@relay.example --name device-b
+
+# 控制者另开终端，查看并操作获准设备。
+ssmcp list --server https://relay.example
+ssmcp -i --server https://relay.example --client SESSION_ID
 ~~~
 
 | 命令 | 用途 |
 | --- | --- |
-| `ssmcp username@server` | 自动登录或注册并连接自己的设备 |
-| `ssmcp whoami` | 确认当前服务器上的登录身份 |
-| `ssmcp logout [--server URL] [--json]` | 清理所选服务器的本机凭据，并报告远端撤销结果；离线也能退出 |
-| `ssmcp list` / `ls` / `sessions list --remote` | 当前账号在所选服务器可控的在线会话 |
-| `ssmcp -i` / `list -i` | 选择会话并进入远端终端，Ctrl-] 离开 |
-| `ssmcp invite` | 生成 B 可直接执行的临时接入命令；默认验证并持久安装同源兼容客户端 |
-| `ssmcp invite --shell powershell` | 生成给 Windows PowerShell 的命令 |
-| `ssmcp sessions list` / `attach NAME` | 当前设备保存的本地后台会话 |
+| `ssmcp username@server` | 登录或注册账号，并连接自己的设备 |
+| `ssmcp --server URL --allow USER@SERVER` | 明确授权控制者并连接被控设备 |
+| `ssmcp whoami [--server URL]` | 确认所选服务器上的登录身份 |
+| `ssmcp logout [--server URL] [--json]` | 清理该服务器的本机凭据，并报告远端撤销结果；离线也能退出 |
+| `ssmcp list` / `ls` / `sessions list --remote` | 列出账号在所选服务器可控的在线设备 |
+| `ssmcp -i` / `list -i` | 选择设备并进入远端终端，Ctrl-] 离开 |
+| `ssmcp sessions list` / `attach NAME` | 管理当前设备保存的本机后台会话 |
 
-用户名不区分大小写，采用 3–32 个 ASCII 字母、数字、`_` 或 `-`，首字符为字母、末字符为字母或数字。凭据按服务器隔离，后续可直接运行 `ssmcp`；更换名字或服务器用完整目标。被占名字、账号已绑定其他名字会明确报错。[用户名与服务器管理](named-accounts.md)
+用户名采用 3–32 个 ASCII 字符，首字符为字母、末字符为字母或数字，中间还可使用 `_` 或 `-`。名单中的用户名须已在目标服务器注册，并与本次连接的服务器匹配。凭据按服务器隔离；已登录设备省略名单时只允许自己，显式名单只授权其中的账号。[用户名](named-accounts.md) · [完整账号与设备流程](client-accounts.md)
 
-邀请默认 10 分钟内兑换一次，B 会话默认可用 1 小时；`--ttl`、`--session-ttl` 可调整。已安装兼容客户端的 B 可用 `--no-bootstrap`。看门狗默认开启，`--no-watchdog` 可禁用，显式停止或临时授权到期后不会继续恢复。具名账号的前台连接会在凭据过期后请求新的 GitHub 授权；后台会话等待你在终端重新授权后手动重启。[完整账号流程与服务器配置](client-accounts.md)
+看门狗默认开启，`--no-watchdog` 可禁用；显式停止后不会继续恢复。CLI 的 `invite` / `join` 与 MCP 的 `invite` 已移除，设备授权使用 `--allow 用户名@服务器`；会话内 agent 登记继续使用 `collab.join`。[首次连接](onboarding.md)
 
 ## 更新客户端
 

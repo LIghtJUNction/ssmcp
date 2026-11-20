@@ -1,0 +1,26 @@
+{
+  "source": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+  "toolchain": "1.100.0",
+  "commands": [
+    {
+      "step": "core-format",
+      "exit_code": 0
+    },
+    {
+      "step": "core-contracts",
+      "exit_code": 0
+    },
+    {
+      "step": "core-clippy",
+      "exit_code": 0
+    },
+    {
+      "step": "core-package",
+      "exit_code": 0
+    }
+  ],
+  "crate_sha256": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca",
+  "published_checksum": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca",
+  "matches_published_crate": true,
+  "checkout_clean": true
+}
