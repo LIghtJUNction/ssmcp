@@ -1,0 +1,48 @@
+{
+  "schema": "ssmcp.paste-driver-r2-independent-review.v1",
+  "scope": "static narrow projection fix and strict pin successor; no product execution",
+  "original_driver_sha256": "07af1a3298ee75bbd5be31624a344aa265eb4a6ff73474020f8eff451cfe297e",
+  "new_driver": {
+    "bytes": 31746,
+    "sha256": "1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8",
+    "delta": "one added ui projection override; existing methods unchanged",
+    "page_limit_unicode_codepoints": 1024,
+    "full_draft_and_cursor_checks_preserved": true
+  },
+  "projection_patch": {
+    "bytes": 2307,
+    "sha256": "3679f2578f9c0aba9a674cb0e6934d2c8a1fc6a2472e34e0846140f44d3b960d"
+  },
+  "original_supplement_sha256": "434348a28727c717179ff6e49f322e8692a8e88a4107fcbcc12fc53cef298437",
+  "new_supplement": {
+    "bytes": 14624,
+    "sha256": "db2db3cfd14c1e6be0b36b4605a1c6f4790da4cab5a3515ad352739912ae238f",
+    "delta": "one FROZEN_SHA constant replacement only",
+    "old_diagnostic_wording_preserved": true
+  },
+  "pin_patch": {
+    "bytes": 333,
+    "sha256": "39bc18541aaa768941648d6f0916175b823c5cf4239e106aec9d9831d314afbb"
+  },
+  "guard_chain": {
+    "path": "scripts/e2e_composer.py",
+    "revisions": [
+      "c53c5ea681cb0840f1c41c9e8d31489abac4fd37",
+      "b0a07b047b1532688f06b9df8423e9bfc044c405"
+    ],
+    "blob": "020d371b92136b83b662f0c8ee1a7efdd3df86cf",
+    "root_read_from_github": true,
+    "chain": "observe -> response -> self.rpc -> PastePerformance.rpc timing guard"
+  },
+  "archive": {
+    "bytes": 34556,
+    "sha256": "d624a011202f488435de8fcfe68bffbb1aae651ad1985cb6bd619c7f32240d32",
+    "members": 10,
+    "drive_file_id": "1LeyqEdcbKnltPifWZWjfS2HhkBDdxASC",
+    "library_file_id": "libfile_fde3_f-a764410d05b48191963bcb6705a78b44_e58c93d727108191bbc40d6c0d09ec81",
+    "drive_raw_download_equal": true
+  },
+  "source_owner_accepted_for_future_pair": true,
+  "new_performance_run_executed": false,
+  "requires_fresh_source_lock_helpers_five_binaries_and_build_receipt": true
+}

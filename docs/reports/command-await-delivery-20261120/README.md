@@ -28,6 +28,14 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 
 这个约束作用于经过 SSMCP 的完成接口。宿主若完全停止调用 SSMCP，SSMCP 无法拦截宿主自己的外部 final。公共 `await` 和 `waitFor` 均需要更新后的 relay。公共 `await` 不占 JavaScript 执行槽，`code_mode` 内的 `waitFor` 仍占用所在执行槽；原生被动 finish 观察需要支持相应操作的客户端。
 
+## 命名的本地与远程连接目标
+
+[PR #153](https://github.com/LIghtJUNction/ssmcp/pull/153) 已把命名 context 合入固定主线提交 `b0a07b047b1532688f06b9df8423e9bfc044c405`。context 把连接目标保存成有名字的配置：建立新连接时先确定目标，再交给已有的本地或 HTTPS 传输。用户可以统一选择入口，凭据仍按服务器 origin 隔离，已保存会话仍保存具体目标。
+
+已有命令包括 `context create NAME --local`、`context create NAME --server URL`、`context list`、`context show`、`context inspect [NAME]`、`context use NAME`、`context use --default` 和 `context rm NAME`；list、show、inspect 支持 JSON 输出。本地连接仍限 Linux。新连接的 context 选择按 `--context`、`SSMCP_CONTEXT`、已保存选择、原服务器默认值的顺序解析。显式 `--server`、`local` 或目标地址可覆盖环境和保存的默认选择；与显式 `--context` 同时出现会报错。不存在的显式名称也会报错，不自动切换到其他目标。
+
+这些是[固定源码](https://github.com/LIghtJUNction/ssmcp/blob/b0a07b047b1532688f06b9df8423e9bfc044c405/src/client/connection_context.rs)与[连接入口](https://github.com/LIghtJUNction/ssmcp/blob/b0a07b047b1532688f06b9df8423e9bfc044c405/src/client.rs)的实现事实。合入本身不表示后续整合候选已通过验收；CLI、已保存会话、前台重载和账户命令的最终运行结果还需绑定共同候选。
+
 ## 依赖维护与迁移状态
 
 `zharness` 从 0.5.1 升到 0.6.0，固定源码 `db4206d3b74e37d57ff052948962f55514081d4b`，带入 `zcall 0.4.0` 和 `zguard 0.1.0`。PR #120 对实际使用的 12 个 Project Z 包按仓库身份完成核对，并在该次更新中同步精确版本、gitlink 和 Cargo.lock；核对结论以记录中的查询时间及受测提交为准。每轮迭代及发布前重新核对最新未撤回稳定版的规则已经写入[依赖维护文档](https://github.com/LIghtJUNction/ssmcp/blob/0128c356746b6a29b2cee811c3374c2f891c581f/docs/dependencies.md)。
@@ -48,7 +56,7 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 | --- | --- |
 | 产品代码与回归用例 | 静态审查无阻断；三个 Rust 文件的格式检查通过 |
 | Rust 回归 | 已编写 7 项，尚未在集成候选上执行 |
-| 真实终端性能脚本 | 首次基线运行未完成：负责人报告前四场景通过，第五场景受读取上限阻断；等待修正驱动后的完整比较 |
+| 真实终端性能脚本 | 首次基线未完成；分页修正与配套 Ctrl+V 后继脚本已冻结，新的完整比较待实际运行 |
 | 真实用户内容 | 未纳入公开补丁或性能样本；测试全部使用合成输入 |
 | 提升幅度 | 尚无可比较的实测结果，不报告加速比 |
 
@@ -76,6 +84,14 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 本检查点另已通过 GitHub 实读主线固定提交 `b0a07b047b1532688f06b9df8423e9bfc044c405`：[PR #153](https://github.com/LIghtJUNction/ssmcp/pull/153) 已合入命名的 local / HTTPS context；其父提交 `4237eea2cab8253b8dff84d81861ba1e1adf4246` 更新了 zuse 的固定源码及锁文件。旧 c53 / 6c76 锁文件身份因此不能代表这份新主线。后续比较仍由唯一构建负责人冻结共同基线，包含最终 context、依赖和必要修复；源码合入本身不表示最终运行验收通过。
 
 首次性能基线服务在 19:31:00–19:31:15 UTC 运行后退出 1。构建负责人报告，前四个场景通过，第五个 ordinary-16k 场景在读取完整草稿投影时触及 8 KiB 上限；报告还记录 57 项检查及输入未变。这里的场景统计来自负责人的转述：独立审查尚未取得其原始 16,024 字节报告（所报 SHA256 `76e4a54d52164c89a57be0a3eba10c11138e3c20d8f730113e4ec047d5476309`）。因此该次运行保留为未完成的基线，不给出加速比；修正分页读取后，基线与候选必须使用同一套实际驱动和辅助文件重新比较。
+
+### 分页驱动修正与 Ctrl+V 后继脚本
+
+针对首次运行遇到的读取上限，新驱动 SHA256 `1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8` 改为读取所需标量字段，并以每页 1,024 个 Unicode 字符重建完整草稿。页间总长度、实际字符数与连续 offset 都会检查；完整 UTF-8 正文及最终字节光标的原断言继续保留。独立 AST 对照确认，新驱动仅新增这个投影读取方法，原计时、样例和传输方法不变。c53 与 b0a07 的真实 helper 均经 `observe → response → self.rpc` 调用，仍进入计时期间禁止 RPC 的原保护。
+
+原 Ctrl+V 补充脚本 `434348…` 严格固定旧驱动 `07af…`，因此不能直接传入新驱动。后继脚本 SHA256 为 `db2db3cfd14c1e6be0b36b4605a1c6f4790da4cab5a3515ad352739912ae238f`，只替换一行严格驱动摘要；原启动、身份、文件系统、计时及正确性检查保持原样。旧版本原件已保留，历史拒绝提示仍含旧驱动简称，实际检查以新摘要为准。
+
+[完整交接包](https://drive.google.com/file/d/1LeyqEdcbKnltPifWZWjfS2HhkBDdxASC/view)包含新旧脚本、两份差异与清单，34,556 字节、10 个条目，SHA256 为 `d624a011202f488435de8fcfe68bffbb1aae651ad1985cb6bd619c7f32240d32`。实际下载云盘副本后确认字节完全相同。唯一构建负责人已接收这一组合；目前仍是准备完成，尚无新的实际性能比较。基线和候选须统一使用新驱动、后继 Ctrl+V 脚本与完整辅助文件集合，并重新绑定实际源码、锁文件和五个程序。[窄复核记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/paste-driver-r2-review-20261120.json)保留适用范围。
 
 ## 验证证据
 
@@ -143,7 +159,17 @@ HTTP 封装的独立审查也限定为静态结论：预配置 TLS 只替换 TLS
 
 旧版本兼容场景继续使用原来构建的 daemon；清理后的 Git tree/blob 只提供经过摘要核对的相同 runner 字节，没有把历史程序描述为重新构建的产物。现有 47 项离线合同测试的输入和日志已核对，但这些是验收工具测试，不能代替产品执行。
 
-[独立控制器审查](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/independent-review-final25-2e917-v1.json)明确保留剩余门禁：Gate10 adapter 尚未纳入冻结包，实际通过的 gate、外层 launcher 与最终源码/依赖/二进制身份仍需接通。当前控制器中的旧 r3 provenance 不能认证 Gate10。25 套产品验收、单独的 P1 集成与粘贴性能样本也尚不能写成已通过。
+[独立控制器审查](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/independent-review-final25-2e917-v1.json)明确保留剩余门禁：上述原冻结包未包含后续 Gate10 接线，旧 r3 provenance 也不能认证 Gate10。验收负责人随后已提供新的接线准备包；实际通过的 gate、外层 launcher 与最终源码/依赖/二进制身份仍需由真实执行接通。25 套产品验收、单独的 P1 集成与粘贴性能样本也尚不能写成已通过。
+
+### 恢复后的 Session service 实际失败
+
+[Session service 运行 44806975640](https://github.com/LIghtJUNction/ssmcp/actions/runs/44806975640) 绑定 `e0793d778ee1900c9087befeadb38a6a31f39386`，事件为 pull_request、attempt 1，于 2026-11-20 20:04 UTC 结束为失败。三个 job 的实际状态分别为：Linux 在 workspace 单元测试步骤失败，Windows 在协议测试步骤失败，macOS 的该工作流全部成功。Linux 与 Windows 的后续构建和 native lifecycle 步骤均跳过；不能把 macOS 单个 job 的成功写成整份候选通过。
+
+Windows 的完整原日志及同一固定提交中的源码已独立读取。此前 session 测试为 44 通过、0 失败；协议测试为 6 通过、4 失败，耗时 15.04 秒。三个失败取得的是 `SSH authentication timed out`，对应注册首帧等待超过测试中的 10 秒期限；另一个 panic 来自读取 fixture 尚未生成的 hellos.jsonl。该测试先读记录文件，再检查注册返回值，因此缺失文件遮蔽了注册本身的结果。预期的 GitHub 拒绝文案来自模拟对端，日志没有证明真实 GitHub 服务拒绝。
+
+四个失败在同批输出中出现，后续仍有模拟对端用例通过。这支持继续检查并行 fixture 的启动和首帧响应，但没有证明 Python 冷启动、防护扫描或 runner 负载中的某一个就是原因，也不足以只凭猜测放宽超时。[Windows job](https://github.com/LIghtJUNction/ssmcp/actions/runs/44806975640/job/136533435901) 的解码日志文本已原样保全，包括 UTF-8 BOM 与 CRLF：102,472 字节，SHA256 `ae93e5d1d00c3ba8b3d09f8cd4ba0a7756e75411c96e4ba7af0bc9f63d3986ff`。[云盘副本](https://drive.google.com/file/d/1stuctZu2CTVcK_x7FdI8QT5hg0oGvHtR/view)已实际下载核对。完整失败名称和源码关联见[独立失败记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/windows-e079-failure-review-20261120.json)。
+
+修复继续由唯一源码负责人收敛；本次日志审查没有启动新 CI、执行产品测试或修改生产程序。上述失败仍归属于 e079，不改标为包含后续 context、依赖与电脑控制修复的新候选结果。
 
 ## 历史清理与证据位置
 

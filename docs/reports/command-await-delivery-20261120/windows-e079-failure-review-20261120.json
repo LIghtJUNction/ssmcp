@@ -1,0 +1,79 @@
+{
+  "schema": "ssmcp.windows-e079-ci-failure-review.v1",
+  "source_sha": "e0793d778ee1900c9087befeadb38a6a31f39386",
+  "run_id": 44806975640,
+  "job_id": 136533435901,
+  "run_attempt": 1,
+  "event": "pull_request",
+  "workflow": "Session service",
+  "run_conclusion": "failure",
+  "job_conclusion": "failure",
+  "reviewer_full_original_log_read": true,
+  "root_log_identity_and_failure_excerpt_read": true,
+  "log": {
+    "bytes": 102472,
+    "unicode_characters": 102470,
+    "sha256": "ae93e5d1d00c3ba8b3d09f8cd4ba0a7756e75411c96e4ba7af0bc9f63d3986ff",
+    "utf8_bom_preserved": true,
+    "crlf_count": 1218,
+    "representation": "exact decoded log text returned by GitHub plugin, encoded UTF-8 without newline normalization",
+    "drive_file_id": "1stuctZu2CTVcK_x7FdI8QT5hg0oGvHtR",
+    "library_file_id": "libfile_fde3_f-ba2f0ca61c548191b01ab4a2cce00f63_e58c93d727108191bbc40d6c0d09ec81",
+    "drive_raw_download_equal": true
+  },
+  "command": "cargo test --locked --lib client::protocol_tests -- --test-threads=4",
+  "protocol_result": {
+    "passed": 6,
+    "failed": 4,
+    "ignored": 0,
+    "filtered": 1244,
+    "duration_seconds": 15.04
+  },
+  "prior_session_result": {
+    "passed": 44,
+    "failed": 0
+  },
+  "failures": [
+    {
+      "name": "authentication_errors_and_untyped_failures_never_retry_registration",
+      "panic_line": 354,
+      "actual": "SSH authentication timed out",
+      "expected": "GitHub access policy denied",
+      "scope": "expected text belongs to fake peer; not a live GitHub denial"
+    },
+    {
+      "name": "account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers",
+      "panic_line": 174,
+      "actual": "NotFound reading fixture hellos.jsonl",
+      "scope": "hellos() called before checking register result at line470; underlying result hidden by file-read panic"
+    },
+    {
+      "name": "current_protocol_negotiates_messaging_independently_of_access",
+      "panic_line": 282,
+      "actual": "TimedOut: SSH authentication timed out",
+      "scope": "fails before access and messaging assertions; iteration not identified by log"
+    },
+    {
+      "name": "current_protocol_preserves_allow_checks_and_login_requirements",
+      "panic_line": 383,
+      "actual": "policy-login: SSH authentication timed out",
+      "scope": "expected explicit account allow policy error not reached"
+    }
+  ],
+  "source_correlation": {
+    "fixture_file": "src/client/protocol_tests.rs",
+    "ready_limit_seconds": 10,
+    "registration_file": "src/client.rs",
+    "registration_error_path": "read_frame under timeout(deadline), lines1822-1825"
+  },
+  "later_build_and_lifecycle_steps": "skipped",
+  "unproven_causes": [
+    "Python cold start",
+    "Windows scanner delay",
+    "runner load",
+    "interpreter alias",
+    "process scheduling"
+  ],
+  "no_new_tests_ci_or_product_mutations": true,
+  "not_rebound_to_later_candidate": true
+}
