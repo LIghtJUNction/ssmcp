@@ -4,6 +4,8 @@ SYSCONFDIR ?= /etc
 SYSTEMD_DIR ?= /usr/lib/systemd/system
 CARGO ?= cargo
 CARGO_TARGET_DIR ?= target
+# Packaged-source callers can supply the immutable source SHA explicitly.
+SSMCP_SOURCE_REVISION ?= $(shell git rev-parse HEAD)
 
 .PHONY: all build check test test-code-mode install install-server
 all: build
@@ -63,6 +65,12 @@ test-client-ui-ready:
 	python3 scripts/e2e_context_memory.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/context-memory --report $(CARGO_TARGET_DIR)/acceptance/context-memory.json
 	python3 scripts/e2e_file_paste.py --bin-dir $(CARGO_TARGET_DIR)/debug --out $(CARGO_TARGET_DIR)/acceptance/file-paste --report $(CARGO_TARGET_DIR)/acceptance/file-paste.json
 	python3 scripts/e2e_relay_composer.py --bin-dir $(CARGO_TARGET_DIR)/debug --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" --report $(CARGO_TARGET_DIR)/acceptance/relay-composer.json
+	@set -eu; mkdir -p "$(CARGO_TARGET_DIR)/acceptance"; \
+	ssmcp_interactions_out="$$(mktemp -d "$(CARGO_TARGET_DIR)/acceptance/interactions-XXXXXX")"; \
+	python3 scripts/e2e_interactions.py --bin-dir "$(CARGO_TARGET_DIR)/debug" \
+	  --decoder "$(CARGO_TARGET_DIR)/debug/examples/vt_snapshot" \
+	  --fixture-binary "$$SSMCP_E2E_FIXTURE_BINARY" \
+	  --source-revision "$(SSMCP_SOURCE_REVISION)" --out "$$ssmcp_interactions_out"
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1 $(DESTDIR)$(PREFIX)/share/man/man8
