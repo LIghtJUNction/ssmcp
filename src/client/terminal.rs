@@ -22,6 +22,9 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
+pub(super) use conversation::reload_state::{
+    Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
+};
 mod events;
 mod footer;
 mod guide;
@@ -125,6 +128,7 @@ impl Session {
             state.account = AccountStatus::Loading;
         }
         state.graphics = images::Graphics::environment(&options);
+        state.chat_restore_reload_state();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -234,6 +238,11 @@ impl Drop for Session {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .chat_capture_reload_state();
         if let Some(global) = DISPLAY.get() {
             let mut global = global.lock().unwrap_or_else(|e| e.into_inner());
             if global

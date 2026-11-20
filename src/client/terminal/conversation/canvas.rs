@@ -37,6 +37,82 @@ struct Position {
     tasks: Option<tasks::TaskPosition>,
 }
 
+/// Only local view state crosses a reload. Native agents, questions, tasks and
+/// authorization handles are deliberately resolved again by the new connection.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReloadCanvas {
+    columns: Vec<ReloadColumn>,
+    active: usize,
+    next_id: u64,
+    logs_return: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReloadColumn {
+    id: u64,
+    view: View,
+    position: Option<ReloadPosition>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReloadPosition {
+    content_focus: bool,
+    detail: bool,
+    detail_scroll: usize,
+    history: Option<String>,
+    selected_history: Option<String>,
+    events: events::ReloadPosition,
+    logs: Option<ReloadLogs>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReloadLogs {
+    scrollback: usize,
+    query: String,
+    level: u8,
+    filter_offset: usize,
+}
+
+impl ReloadCanvas {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        let ids = self
+            .columns
+            .iter()
+            .map(|column| column.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if self.columns.is_empty()
+            || self.columns.len() > 1024
+            || self.active >= self.columns.len()
+            || ids.len() != self.columns.len()
+            || ids.contains(&0)
+            || ids.last().is_some_and(|id| *id >= self.next_id)
+            || self.next_id == u64::MAX
+            || self.logs_return.is_some_and(|id| !ids.contains(&id))
+            || self
+                .columns
+                .iter()
+                .filter_map(|column| column.position.as_ref())
+                .any(|position| {
+                    position
+                        .logs
+                        .as_ref()
+                        .is_some_and(|logs| logs.query.len() > 4096 || logs.level > 4)
+                        || [&position.history, &position.selected_history]
+                            .into_iter()
+                            .flatten()
+                            .any(|id| id.len() > 128 || id.chars().any(char::is_control))
+                })
+        {
+            return Err("invalid reload canvas".into());
+        }
+        Ok(())
+    }
+}
+
 impl Default for Canvas {
     fn default() -> Self {
         Self {
@@ -115,6 +191,103 @@ impl Canvas {
 }
 
 impl State {
+    pub(super) fn canvas_reload_snapshot(&mut self) -> ReloadCanvas {
+        self.canvas_save();
+        let canvas = &self.conversation.canvas;
+        ReloadCanvas {
+            columns: canvas
+                .columns
+                .iter()
+                .map(|column| ReloadColumn {
+                    id: column.id,
+                    view: column.view,
+                    position: column.position.as_ref().map(|position| ReloadPosition {
+                        content_focus: position.content_focus,
+                        detail: position.detail,
+                        detail_scroll: position.detail_scroll,
+                        history: position
+                            .history
+                            .as_ref()
+                            .map(|history| history.metadata.id.clone()),
+                        selected_history: (column.view == View::History)
+                            .then(|| {
+                                self.conversation
+                                    .sessions
+                                    .get(position.selected)
+                                    .map(|session| session.id.clone())
+                            })
+                            .flatten(),
+                        events: position.events.for_reload(),
+                        logs: position.logs.as_ref().map(|logs| ReloadLogs {
+                            scrollback: logs.scrollback,
+                            query: logs.query.clone(),
+                            level: logs.level,
+                            filter_offset: logs.filter_offset,
+                        }),
+                    }),
+                })
+                .collect(),
+            active: canvas.active,
+            next_id: canvas.next_id,
+            logs_return: canvas.logs_return,
+        }
+    }
+
+    pub(super) fn canvas_restore_reload(&mut self, saved: ReloadCanvas) {
+        let active = saved.active;
+        self.conversation.canvas = Canvas {
+            columns: saved
+                .columns
+                .into_iter()
+                .map(|column| Column {
+                    id: column.id,
+                    view: column.view,
+                    position: column.position.map(|position| {
+                        let history = position
+                            .history
+                            .as_deref()
+                            .and_then(|id| crate::client::interface::history::read(id).ok())
+                            .map(std::sync::Arc::new);
+                        Position {
+                            content_focus: position.content_focus,
+                            selected: position
+                                .selected_history
+                                .as_deref()
+                                .and_then(|id| {
+                                    self.conversation
+                                        .sessions
+                                        .iter()
+                                        .position(|session| session.id == id)
+                                })
+                                .unwrap_or_default(),
+                            selected_agent: None,
+                            detail: column.view == View::History
+                                && position.detail
+                                && history.is_some(),
+                            detail_scroll: position.detail_scroll,
+                            question_id: None,
+                            history,
+                            audit: Default::default(),
+                            events: position.events.position(),
+                            logs: position.logs.map(|logs| LogPosition {
+                                scrollback: logs.scrollback,
+                                query: logs.query,
+                                level: logs.level,
+                                filter_offset: logs.filter_offset,
+                            }),
+                            tasks: None,
+                        }
+                    }),
+                })
+                .collect(),
+            active,
+            next_id: saved.next_id,
+            logs_return: saved.logs_return,
+        };
+        self.canvas_restore(active);
+        self.canvas_sync_logs();
+    }
+
     pub(super) fn canvas_sync_logs(&mut self) {
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.raw_logs = self.conversation.logs_open;
