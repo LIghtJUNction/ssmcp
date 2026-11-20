@@ -11,3 +11,11 @@
 0.10.16 使用既有 release.py 完成应用版本和锁文件递增。Release 的 `deferred_versions` 同时保留 0.10.15 和 0.10.16；原 84 项发布政策测试继续执行，两个版本都覆盖 tag push 和各类 dispatch Boolean 输入，始终输出 `deploy_server=false`。只有独立确认不会中断现有连接后，才能安排服务器切换。
 
 [本地检查记录](local-validation.json)只记录实际执行结果；正式六平台结果、registry 发布和服务器部署必须分别核实。
+
+## 本地完整验证
+
+同一源码 `8a54a3f8500ce37724d6062bee7b4bc17f597d88` 的完整工作区串行测试退出码为 0；主库为 1,521 通过、0 失败、21 个原有忽略项，其余工作区测试和文档测试也完成。此前默认并行度运行出现 7 个超时或 PTY 启动失败，相关日志的哈希和失败名称已保留；没有改动测试断言、截止时间、权限或正式 CI 门禁。串行通过说明这个源码能够完成全部既有检查，但尚未单独隔离这 7 个失败的环境原因。
+
+Windows GNU 目标的 library、客户端和 release_client 测试均通过 `cargo clippy --target x86_64-pc-windows-gnu --locked --offline --lib --bin ssmcp --test release_client -- -D warnings`。这是交叉目标的严格编译检查，不代表已在 Windows 原生执行测试。macOS 和 Windows 原生执行仍需以新版本正式六平台流水线为准。
+
+四个声明的 workspace crate 版本均已从 registry 读取到可获取的非撤回版本及校验和，见本地检查记录。此检查点尚未建立 0.10.16 发布标签，也没有执行服务器部署。
