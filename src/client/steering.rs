@@ -467,6 +467,14 @@ impl Manager {
         })
     }
 
+    fn request_status(&self, id: &str) -> Option<&'static str> {
+        self.outbox
+            .records
+            .iter()
+            .find(|record| record.message.id == id)
+            .map(|record| record.status(self.connected))
+    }
+
     fn mutable(&self) -> Result<(), String> {
         if self.frozen {
             return Err("client reload is preparing; the draft is retained".into());
@@ -1501,6 +1509,10 @@ fn bounded_error(error: &str) -> String {
 pub(super) fn snapshot() -> Value {
     with(|manager| manager.snapshot())
 }
+/// Poll one editor receipt without serializing the entire outbox and drafts.
+pub(super) fn request_status(id: &str) -> Option<&'static str> {
+    with(|manager| manager.request_status(id))
+}
 pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String> {
     let id = with(|manager| manager.submit(text, target))?;
     super::interface::questions::user_input(target);
@@ -2456,6 +2468,10 @@ mod tests {
         assert_eq!(manager.snapshot()["queue"][0]["status"], "offline");
         assert_eq!(manager.snapshot()["queue"][1]["status"], "editing");
         assert_eq!(manager.snapshot()["queue"][2]["status"], "cancelled");
+        assert_eq!(manager.request_status(&first), Some("offline"));
+        assert_eq!(manager.request_status(&latest), Some("editing"));
+        assert_eq!(manager.request_status(&cancelled), Some("cancelled"));
+        assert_eq!(manager.request_status("missing_request"), None);
         assert!(manager.requests.is_empty());
     }
 
@@ -2831,6 +2847,8 @@ mod tests {
         ready(&mut manager, &mut receiver, "room_two");
         let retry_id = manager.retarget(&message.id, None).unwrap();
         assert_ne!(retry_id, message.id);
+        assert_eq!(manager.request_status(&message.id), Some("uncertain"));
+        assert_eq!(manager.request_status(&retry_id), Some("editing"));
         assert!(matches!(
             manager.events.pop_front(),
             Some(UiEvent::Editable {
@@ -2904,11 +2922,13 @@ mod tests {
             cursor: 16,
         };
         let mut message = publish(&mut manager, &mut receiver, "original request", None);
+        assert_eq!(manager.request_status(&message.id), Some("queued"));
         assert_eq!(
             manager.outbox.draft.text, "original request",
             "only the composer may clear its matching draft"
         );
         manager.take_back(&message.id).unwrap();
+        assert_eq!(manager.request_status(&message.id), Some("taking-back"));
         assert!(manager.events.is_empty());
         let (id, request) = command(&mut manager, &mut receiver);
         assert!(matches!(
@@ -2931,9 +2951,11 @@ mod tests {
                 recalled: true,
             })
         );
+        assert_eq!(manager.request_status(&message.id), Some("editing"));
         manager
             .publish_edit(&message.id, "改进后的 request", None)
             .unwrap();
+        assert_eq!(manager.request_status(&message.id), Some("sending"));
         let (id, request) = command(&mut manager, &mut receiver);
         assert!(
             matches!(request, SteeringCommand::Publish { message_id, expected_revision: 2, .. } if message_id == message.id)
@@ -2944,6 +2966,7 @@ mod tests {
         manager
             .reply(id, Ok(snapshot_for("room_one", 3, vec![message.clone()])))
             .unwrap();
+        assert_eq!(manager.request_status(&message.id), Some("queued"));
         assert_eq!(manager.outbox.records.len(), 1);
         assert_eq!(
             manager.events.pop_front(),
@@ -2989,6 +3012,7 @@ mod tests {
             manager.recalled_history.is_empty(),
             "delivery won; its history must remain"
         );
+        assert_eq!(manager.request_status(&message.id), Some("delivered"));
         assert!(manager.publish_edit(&message.id, "retry", None).is_err());
         assert!(manager.cancel(&message.id).is_err());
         assert!(manager.retarget(&message.id, None).is_err());
