@@ -1,0 +1,117 @@
+{
+  "schema": "ssmcp.portable-release-validation.v1",
+  "version": "0.10.16",
+  "base": "2f396f44483bd1ded2686e8ebc5a4858dfb646e8",
+  "checks": [
+    {
+      "check": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.094
+    },
+    {
+      "check": "test_release.py",
+      "command": [
+        "python3",
+        "-W",
+        "error",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "seconds": 4.938
+    },
+    {
+      "check": "test_server_deploy.py",
+      "command": [
+        "python3",
+        "-W",
+        "error",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_server_deploy.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "seconds": 0.186
+    },
+    {
+      "check": "test_server_upgrade_inspection.py",
+      "command": [
+        "python3",
+        "-W",
+        "error",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_server_upgrade_inspection.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "seconds": 0.125
+    },
+    {
+      "check": "metrics",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--lib",
+        "client::link_metrics::"
+      ],
+      "exit_code": 0,
+      "seconds": 200.575
+    },
+    {
+      "check": "resources",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--test",
+        "resources"
+      ],
+      "exit_code": 0,
+      "seconds": 256.108
+    },
+    {
+      "check": "public_catalog_native",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--test",
+        "two_tools",
+        "public_tools_cover_every_backend_with_native_discovery_and_javascript_dispatch",
+        "--",
+        "--include-ignored"
+      ],
+      "exit_code": 0,
+      "seconds": 8.769
+    }
+  ],
+  "full_workspace_and_windows_cross_clippy": "pending; separate receipts will record results",
+  "production_deployed": false
+}

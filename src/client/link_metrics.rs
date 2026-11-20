@@ -24,6 +24,8 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Status {
     Sampling,
+    // Only the Unix transport (and tests) currently produces rate samples.
+    #[cfg_attr(not(any(unix, test)), expect(dead_code))]
     Ready {
         uploaded: u64,
         downloaded: u64,
