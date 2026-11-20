@@ -1100,11 +1100,9 @@ impl EventView {
     }
 
     fn ingest_event_with_meta(&mut self, label: &str, event: &Value, bytes: &[u8], mut meta: Meta) {
-        // Observer failures stay in their native result and raw Logs. They must
-        // not create a conversation card or interrupt the work being summarized.
-        if self.summary_observer_event(&meta) {
-            return;
-        }
+        // Read runs retain their request barriers even when orchestration is
+        // transparent in the outer tool window.
+        let read_bookkeeping = meta.read_bookkeeping;
         // Code-mode audit records describe the envelope, not another native call.
         // Keep them in Logs without adding to or splitting the tool window.
         if matches!(
@@ -1139,8 +1137,11 @@ impl EventView {
         } else {
             meta.read.as_mut()
         };
-        self.read_boundary
-            .observe(event, read, meta.read_bookkeeping);
+        self.read_boundary.observe(event, read, read_bookkeeping);
+        // Balance controller boundaries before hiding observer diagnostics.
+        if self.summary_observer_event(&meta) {
+            return;
+        }
         if meta.kind == Kind::Conversation
             && event["presentation"].is_null()
             && let Some(text) = event["text"].as_str()

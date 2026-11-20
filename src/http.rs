@@ -2430,6 +2430,8 @@ mod tests {
             }))
         };
         let summary_run = code_mode::AuditRun::new("return null;", None).unwrap();
+        // This fixture calls Session directly; mirror code_host's frozen origin.
+        summary_run.record_connection(&session).unwrap();
         let native_notice = json!({"_meta":{"ssmcp.tool_summary":{
             "schema_version":1,"group_id":"g","revision":0,"call_count":11,
             "covered_call_count":0,"threshold":10,"tool":"ssmcp.ui.tool_summary"

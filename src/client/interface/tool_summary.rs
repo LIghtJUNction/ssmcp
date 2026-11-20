@@ -21,6 +21,19 @@ enum Request {
 }
 
 fn parse(arguments: Value) -> Result<Request, String> {
+    // Serde's internally tagged unit variant accepts extra List fields, so
+    // enforce each action's object shape before deserializing its values.
+    let object = arguments
+        .as_object()
+        .ok_or("invalid tool summary arguments")?;
+    let allowed: &[&str] = match object.get("action").and_then(Value::as_str) {
+        Some("list") => &["action"],
+        Some("set") => &["action", "group_id", "summary", "expected_revision"],
+        _ => return Err("invalid tool summary arguments".into()),
+    };
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err("invalid tool summary arguments".into());
+    }
     if arguments
         .get("expected_revision")
         .is_some_and(Value::is_null)
@@ -137,6 +150,9 @@ mod tests {
             json!({}),
             json!({"action":"clear"}),
             json!({"action":"list","summary":"private-fixture"}),
+            json!({"action":"list","group_id":"g"}),
+            json!({"action":"list","expected_revision":0}),
+            json!({"action":"list","caller":"private-fixture"}),
             json!({"action":"set","group_id":"g","summary":""}),
             json!({"action":"set","group_id":"g","summary":" \t "}),
             json!({"action":"set","group_id":"../g","summary":"ok"}),
