@@ -1,0 +1,152 @@
+{
+  "schema": "ssmcp.shared-cohort.publisher-handoff.v1",
+  "recorded_utc": "2026-11-20T04:26:22Z",
+  "status": "reviewable_delta_published; publisher_and_downstream_ack_pending",
+  "validated_functional_source": "785e6b00440b048d00d9da626a33defa99108afe",
+  "validation_receipt": {
+    "commit": "d82d93a49f3d5e02655c88a289555669f2ef1553",
+    "path": "docs/reports/shared-cohort-20261120/native-validation.json",
+    "sha256": "114c9170f8cd2eccbbfdfba6cdb96dec1d5536ba778f3255f722470653b9c749"
+  },
+  "existing_publisher_candidate": {
+    "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/109",
+    "branch": "integrate/v0.10.15-20261120",
+    "reviewed_head": "e30a14997d92adc5d19ec21de934dcc5a1eba562",
+    "development_version": "0.10.15"
+  },
+  "prepared_delta": {
+    "pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/110",
+    "draft": true,
+    "merged": false,
+    "branch": "coord/v0.10.15-private-environment-20261120",
+    "head": "bc0ef8e0b24f7e0e58271046743c89334041ec51",
+    "tree": "3bdd3755df35a1bf9f221e78cd87d2c9e1bfbd1a",
+    "review": {
+      "base": "e30a14997d92adc5d19ec21de934dcc5a1eba562",
+      "head": "bc0ef8e0b24f7e0e58271046743c89334041ec51",
+      "parents": [
+        "e30a14997d92adc5d19ec21de934dcc5a1eba562"
+      ],
+      "diff_check": "passed",
+      "changed_files": [
+        "Cargo.toml",
+        "scripts/e2e_private_desktop.py",
+        "scripts/e2e_x11_text.py",
+        "scripts/e2e_zuse_worker.py",
+        "src/computer/isolated.rs"
+      ],
+      "preserved_git_objects": {
+        "Cargo.lock": true,
+        "Makefile": true,
+        "src/computer/zuse_backend.rs": true,
+        "crates/zharness": true,
+        "crates/zplugin": true,
+        "crates/ztuio": true,
+        "crates/zuse": true
+      },
+      "runtime_validation_of_combination": "pending sole publisher"
+    },
+    "files": [
+      {
+        "path": "src/computer/isolated.rs",
+        "bytes": 44593,
+        "sha256": "76f2706c06121640b0c34717ae06c668af20597a3ae14e27edb2512ad532c8cb",
+        "tested_785_blob_exact": true
+      },
+      {
+        "path": "scripts/e2e_x11_text.py",
+        "bytes": 35493,
+        "sha256": "0408aa79331bccc611302b09840395eeedb0a03caa33fa9881c827585d6887fa",
+        "tested_785_blob_exact": true
+      },
+      {
+        "path": "scripts/e2e_zuse_worker.py",
+        "bytes": 12979,
+        "sha256": "903863628d79b7041352536608b8f37e9a9302f212aea48ddba99309283f52be",
+        "tested_785_blob_exact": true
+      },
+      {
+        "path": "scripts/e2e_private_desktop.py",
+        "bytes": 9891,
+        "sha256": "518f0910fe813bff0f77c041c69fada27bf2cb9dc69bdb965ccca8e4c33d0e56",
+        "tested_785_blob_exact": true
+      },
+      {
+        "path": "Cargo.toml",
+        "bytes": 8709,
+        "sha256": "6f3290f32a7e370e8619e37308b9d349326befa1005272696e66e0ffb246b610",
+        "tested_785_blob_exact": false
+      }
+    ],
+    "preparation_checks": [
+      "Python AST and compile() for three fixture scripts",
+      "TOML structural equality after removing the single added include",
+      "four files byte-identical to source-bound 785 acceptance"
+    ],
+    "rust_or_runtime_validation_of_combined_source": "not run; requires sole publisher actual source-bound acceptance"
+  },
+  "publication": {
+    "github_plugin_commit_and_branch": true,
+    "github_each_blob_readback": true,
+    "expected_changed_paths_only": true,
+    "owner_worktree_or_branch_modified": false,
+    "main_or_tag_modified": false,
+    "installed_runtime_modified": false,
+    "ordinary_ci_explicitly_dispatched_or_retried": false,
+    "commit_requests_ci_skip": true
+  },
+  "owner_receipts": {
+    "ssmcp_publisher": {
+      "queue_observed_utc": "2026-11-20T04:22:16Z",
+      "state": "queued",
+      "revision": 3,
+      "body_matches_pr110_handoff": true,
+      "delivery": null,
+      "owner_ack_observed": false,
+      "latest_assistant_history_search": {
+        "query": "PR110",
+        "matches": 0,
+        "scan_truncated": false,
+        "scanned_sessions": 9
+      }
+    },
+    "oh_my_ztty_and_zrc_propagation": {
+      "queue_observed_utc": "2026-11-20T04:24:40Z",
+      "state": "queued",
+      "revision": 1,
+      "delivery": null,
+      "owner_ack_observed": false,
+      "separate_zrc_owner_confirmed": false
+    }
+  },
+  "next_required_actions": [
+    {
+      "owner": "existing sole SSMCP publisher",
+      "action": "Review PR110 into the existing v0.10.15 candidate without overwriting existing publisher work; freeze the combined source and exact artifacts."
+    },
+    {
+      "owner": "existing sole SSMCP publisher",
+      "action": "Use its already planned workspace and interactions validation, plus the exact private Environment unit, client/daemon GTK worker, private-desktop MCP and account-relay cases on the newly built combined-source ELF. Do not label old 785 ELF evidence as a new candidate run."
+    },
+    {
+      "owner": "existing sole SSMCP publisher",
+      "action": "Publish through its existing formal release flow with immutable source/version/official artifact URLs and checksums; preserve the old release tag and active production jobs."
+    },
+    {
+      "owner": "existing oh-my-ztty suite owner; confirm zrc responsibility",
+      "action": "Consume the actual official publisher assets in runtime locks/package inputs, run installation/doctor/terminal/private-desktop acceptance, and return pushed source plus artifact and execution receipts."
+    }
+  ],
+  "owned_test_cleanup": {
+    "status": "one disconnected private GVfs FUSE mount and its obsolete test state removed after confirming ownership",
+    "normal_unmount_only": true,
+    "force_or_lazy_unmount": false,
+    "original_client_pid_absent": true,
+    "visible_process_references": 0,
+    "unreadable_proc_fd_tables_disclosed": true,
+    "ordinary_file_bytes_removed": 49,
+    "raw_receipt_sha256": "662bd57702544bd2f04fc79fdd58928f799be83ae3af746fcfdd829cba1164cf",
+    "source_logs_or_validation_evidence_removed": false
+  },
+  "boundary": "A queue acknowledgment is not an owner execution acknowledgment. An open PR and private development acceptance are not a formal release, package adoption or installed-runtime deployment."
+}
