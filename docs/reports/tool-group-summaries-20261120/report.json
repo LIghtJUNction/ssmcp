@@ -1310,5 +1310,11 @@
     }
   ],
   "scope": "Exact-source local integration acceptance; not production deployment or all-platform release certification.",
-  "recorded_at": "2026-11-20T23:24:12+08:00"
+  "recorded_at": "2026-11-20T23:24:12+08:00",
+  "post_integration": {
+    "status": "passed",
+    "source_revision": "4ca66fa12693b1b2db940da78b3c89cb2048425d",
+    "evidence": "post-integration.json",
+    "account_e2e_checks": 47
+  }
 }
