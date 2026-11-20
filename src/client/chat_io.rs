@@ -1,0 +1,290 @@
+//! Operator-selected chat ingress and dispatch for one live connection.
+mod options;
+mod process;
+mod transport;
+
+pub(crate) use options::{Agent, Flags, Input, Settings, takes_value};
+
+use super::{interface::questions, messaging, steering};
+use crate::runtime::Runtime;
+use serde::Serialize;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+};
+
+const ACK_LIMIT: Duration = Duration::from_secs(16);
+type Outcome = Result<Receipt, String>;
+pub(crate) type Ticket = oneshot::Receiver<Outcome>;
+
+#[derive(Debug, Serialize)]
+pub(crate) struct Receipt {
+    pub(crate) status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<String>,
+}
+
+impl Receipt {
+    fn new(status: &str, request_id: Option<String>) -> Self {
+        Self {
+            status: status.into(),
+            request_id,
+            output: None,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+struct Request {
+    text: String,
+    reply: oneshot::Sender<Outcome>,
+    authorization: Option<transport::Authorization>,
+}
+
+fn private_file(path: &Path) -> Result<Vec<u8>, String> {
+    if !std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return Err("chat input configuration requires a private regular file".into());
+    }
+    super::account::read_private(path)
+        .ok()
+        .flatten()
+        .ok_or_else(|| "could not read the private chat input configuration file".into())
+}
+
+#[derive(Clone)]
+struct Sender(mpsc::Sender<Request>);
+
+impl Sender {
+    fn start(
+        &self,
+        text: &str,
+        authorization: Option<transport::Authorization>,
+    ) -> Result<Ticket, String> {
+        steering::validate_text(text)?;
+        let (reply, ticket) = oneshot::channel();
+        self.0
+            .try_send(Request {
+                text: text.into(),
+                reply,
+                authorization,
+            })
+            .map_err(|_| "chat input is busy or disconnected; no request was admitted")?;
+        Ok(ticket)
+    }
+
+    async fn dispatch(
+        &self,
+        text: &str,
+        authorization: Option<transport::Authorization>,
+    ) -> Outcome {
+        tokio::time::timeout(Duration::from_secs(140), self.start(text, authorization)?)
+            .await.map_err(|_| "chat input confirmation timed out; check existing receipts before retrying")?
+            .map_err(|_| {
+            "chat input disconnected before confirmation; inspect existing receipts before retrying"
+        })?
+    }
+}
+
+static TERMINAL_ROUTE: Mutex<Option<Sender>> = Mutex::new(None);
+
+pub(crate) fn terminal_submit(text: &str) -> Result<Option<Ticket>, String> {
+    TERMINAL_ROUTE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map(|sender| sender.start(text, None))
+        .transpose()
+}
+
+pub(super) struct Session {
+    worker: JoinHandle<()>,
+    transport: Option<JoinHandle<Result<(), String>>>,
+    stop: watch::Sender<bool>,
+    owns_terminal: bool,
+    graceful: bool,
+}
+
+impl Session {
+    pub(super) async fn start(settings: &Settings, runtime: Arc<Runtime>) -> Result<Self, String> {
+        let agent = process::Target::resolve(&settings.agent)?;
+        let transport = transport::Endpoint::open(&settings.input).await?;
+        let graceful = matches!(settings.input, Input::Web(_) | Input::McpHttp(_));
+        let (tx, mut rx) = mpsc::channel::<Request>(4);
+        let sender = Sender(tx);
+        let (stop, mut cancelled) = watch::channel(false);
+        let worker = tokio::spawn(async move {
+            loop {
+                let Some(mut request) = (tokio::select! {
+                    biased;
+                    _ = cancelled.changed() => None,
+                    request = rx.recv() => request,
+                }) else {
+                    break;
+                };
+                if request.reply.is_closed() {
+                    continue;
+                }
+                let result = tokio::select! {
+                    biased;
+                    _ = cancelled.changed() => break,
+                    _ = request.reply.closed() => continue,
+                    _ = transport::revoked(request.authorization.as_ref()) => Err("chat input authorization was revoked; no automatic retry".into()),
+                    result = route(&agent, &runtime, &request.text) => result,
+                };
+                let _ = request.reply.send(result);
+                super::terminal::invalidate();
+            }
+        });
+        let owns_terminal =
+            settings.input == Input::Terminal && settings.agent != Agent::NextCaller;
+        if owns_terminal {
+            *TERMINAL_ROUTE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(sender.clone());
+        }
+        Ok(Self {
+            worker,
+            transport: transport
+                .map(|transport| tokio::spawn(transport.serve(sender, stop.subscribe()))),
+            stop,
+            owns_terminal,
+            graceful,
+        })
+    }
+
+    pub(super) async fn input_ended(&mut self) -> Result<(), String> {
+        let Some(task) = &mut self.transport else {
+            return std::future::pending().await;
+        };
+        let result = task.await;
+        self.transport = None;
+        result.map_err(|_| "chat input worker stopped")?
+    }
+
+    pub(super) async fn shutdown(mut self) {
+        self.stop();
+        let _ = (&mut self.worker).await;
+        if let Some(mut task) = self.transport.take()
+            && (!self.graceful
+                || tokio::time::timeout(Duration::from_secs(11), &mut task)
+                    .await
+                    .is_err())
+        {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
+    pub(super) fn stop(&self) {
+        let _ = self.stop.send(true);
+    }
+}
+
+pub(super) async fn input_ended(session: &mut Option<Session>) -> Result<(), String> {
+    match session {
+        Some(session) => session.input_ended().await,
+        None => std::future::pending().await,
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if self.owns_terminal {
+            *TERMINAL_ROUTE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
+        }
+        let _ = self.stop.send(true);
+        if let Some(task) = self.transport.take() {
+            task.abort();
+        }
+        self.worker.abort();
+    }
+}
+
+async fn route(agent: &process::Target, runtime: &Runtime, text: &str) -> Outcome {
+    steering::require_chat_connection()?;
+    let prepared = tokio::time::timeout(Duration::from_secs(5), runtime.prepare_references(text))
+        .await
+        .map_err(|_| "chat reference preparation timed out")??;
+    // A reload can start while workspace references are being read.
+    steering::require_chat_connection()?;
+    match agent {
+        process::Target::NextCaller => {
+            let warnings = prepared.warnings.clone();
+            let id = steering::submit_chat_prepared(prepared)?;
+            let deadline = tokio::time::Instant::now() + ACK_LIMIT;
+            loop {
+                let (state, error) = steering::chat_receipt(&id);
+                match state {
+                    Some(state @ ("queued" | "delivered")) => {
+                        let mut receipt = Receipt::new(state, Some(id));
+                        receipt.warnings = warnings;
+                        return Ok(receipt);
+                    }
+                    Some("editing" | "cancelled") => {
+                        return Err(error.unwrap_or_else(|| {
+                            "request was not published; review its queue entry".into()
+                        }));
+                    }
+                    Some("uncertain" | "offline" | "retarget-required") | None => break,
+                    _ if tokio::time::Instant::now() >= deadline => break,
+                    _ => tokio::time::sleep(Duration::from_millis(50)).await,
+                }
+            }
+            let mut receipt = Receipt::new("unconfirmed", Some(id));
+            receipt.warnings = warnings;
+            Ok(receipt)
+        }
+        process::Target::Ssmcp { id, account } => {
+            let mut bytes = [0; 16];
+            crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
+            let request_id = format!("chat-{}", crate::hex::encode(&bytes));
+            // Inboxes keep their existing literal body. No local file contents
+            // or skill declarations are sent as implicit attachments.
+            messaging::send(id, account, text, &request_id)?;
+            questions::user_input(None);
+            let deadline = tokio::time::Instant::now() + ACK_LIMIT;
+            loop {
+                match messaging::chat_receipt(&request_id) {
+                    Some((state, error)) => match state.as_str() {
+                        "queued" | "included" | "acknowledged" => {
+                            let mut receipt = Receipt::new(&state, Some(request_id));
+                            receipt.warnings = prepared.warnings;
+                            return Ok(receipt);
+                        }
+                        "failed" | "expired" => {
+                            return Err(error.unwrap_or_else(|| format!("native message {state}")));
+                        }
+                        _ => {}
+                    },
+                    None => break,
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            let mut receipt = Receipt::new("unconfirmed", Some(request_id));
+            receipt.warnings = prepared.warnings;
+            Ok(receipt)
+        }
+        process::Target::Program(command) => {
+            questions::user_input(None);
+            let output = command.run(&prepared.text).await?;
+            let mut receipt = Receipt::new("completed", None);
+            receipt.output = Some(output);
+            receipt.warnings = prepared.warnings;
+            Ok(receipt)
+        }
+    }
+}

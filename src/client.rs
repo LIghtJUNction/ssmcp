@@ -4,10 +4,11 @@ pub(crate) mod account;
 pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
+mod chat_io;
 mod clipboard;
 pub(crate) mod completion;
-mod computer_control;
 mod composer;
+mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
@@ -90,6 +91,8 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
+  --input MODE  Chat input (terminal by default)
+  --agent NAME  Chat recipient (next-caller by default)
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -123,6 +126,14 @@ Usage: ssmcp username@server [options]
 
   --server URL         Relay for this command; overrides config and last login
   --context NAME       Named local or HTTPS target; overrides SSMCP_CONTEXT and context use
+  --input MODE         terminal (default), pipe, web, mcp-stdio, mcp-http or sock
+  --input-host HOST    Loopback host for web or MCP HTTP (required)
+  --input-port PORT    Port for web or MCP HTTP (required)
+  --input-token-file PATH  Private bearer token file for web or MCP HTTP
+  --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
+  --agent RECIPIENT    next-caller (default), codex, claude, opencode, exec or ssmcp
+  --agent-exec PATH    Absolute executable for exec; optional --agent-argv-file PATH
+  --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
   --no-browser         Print the GitHub authorization link without opening it
   -i, --interactive    Select an authorized account session and open its terminal
@@ -387,6 +398,7 @@ struct Options {
     title: Option<String>,
     allow: Vec<String>,
     context_roots: Vec<PathBuf>,
+    chat: chat_io::Settings,
     list_tools: bool,
     daemon: bool,
     session_control: bool,
@@ -470,6 +482,7 @@ impl Options {
         let mut title = None;
         let mut allow = Vec::new();
         let mut context_roots = Vec::new();
+        let mut chat = chat_io::Flags::default();
         let mut list_tools = false;
         let mut daemon = false;
         let mut session_control = false;
@@ -687,6 +700,13 @@ impl Options {
                     crate::observer::validate_terminal(value)?;
                     tty = Some(value.into());
                 }
+                Some(flag) if chat_io::takes_value(flag) => {
+                    chat.set(
+                        flag,
+                        args.next()
+                            .ok_or_else(|| format!("{flag} requires a value"))?,
+                    )?;
+                }
                 Some("--shell") => {
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
                 }
@@ -695,6 +715,10 @@ impl Options {
                 }
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
+        }
+        let chat = chat.finish()?;
+        if list_tools && !chat.arguments().is_empty() {
+            return Err("--list-tools cannot configure chat input or an agent".into());
         }
         if context.is_some() && !new_connection {
             return Err("saved sessions must record a concrete server, not --context".into());
@@ -862,6 +886,7 @@ impl Options {
             title,
             allow,
             context_roots,
+            chat,
             list_tools,
             daemon,
             session_control,
@@ -953,6 +978,7 @@ impl Options {
         }
         let metadata = self.metadata()?;
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
+        args.extend_from_slice(self.chat.arguments());
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
             if let Some(value) = value {
                 args.extend([
@@ -1139,6 +1165,14 @@ pub(crate) fn child_session_spec(
 ) -> crate::Result<crate::session::SessionSpec> {
     let mut options =
         Options::parse_saved(template)?.ok_or("invalid management connection template")?;
+    if options.chat.input != chat_io::Input::Terminal
+        || options.chat.agent != chat_io::Agent::NextCaller
+    {
+        return Err(
+            "remote child sessions cannot inherit a privately authorized chat input or agent"
+                .into(),
+        );
+    }
     options.name = Some(name);
     options.title = title.or(options.title);
     options.daemon = false;
@@ -1218,6 +1252,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
+    options.chat.validate_saved_input()?;
     apply_account(&mut options, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
@@ -1237,30 +1272,31 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
 }
 
 fn connection_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "--name"
-            | "--server"
-            | "--context"
-            | "--username"
-            | "--identity"
-            | "--title"
-            | "--allow"
-            | "--context-root"
-            | "--listen"
-            | "--public-url"
-            | "--portal"
-            | "--reconnect-delay"
-            | "--log-format"
-            | "--ui-config"
-            | "--theme"
-            | "--max-inline-output"
-            | "-i"
-            | "-p"
-            | "-F"
-            | "--shell"
-            | "--tty"
-    )
+    chat_io::takes_value(option)
+        || matches!(
+            option,
+            "--name"
+                | "--server"
+                | "--context"
+                | "--username"
+                | "--identity"
+                | "--title"
+                | "--allow"
+                | "--context-root"
+                | "--listen"
+                | "--public-url"
+                | "--portal"
+                | "--reconnect-delay"
+                | "--log-format"
+                | "--ui-config"
+                | "--theme"
+                | "--max-inline-output"
+                | "-i"
+                | "-p"
+                | "-F"
+                | "--shell"
+                | "--tty"
+        )
 }
 
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
@@ -1508,6 +1544,9 @@ pub async fn run() -> crate::Result<()> {
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    if service.is_some() || options.daemon {
+        options.chat.validate_saved_input()?;
+    }
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
@@ -1516,7 +1555,8 @@ pub async fn run() -> crate::Result<()> {
             return Err("local mode requires a foreground session".into());
         }
     } else {
-        apply_account(&mut options, service.is_none()).await?;
+        let interactive_login = service.is_none() && !options.chat.input.uses_stdio();
+        apply_account(&mut options, interactive_login).await?;
     }
     if let Some(runner) = &service
         && (options.daemon
@@ -1658,6 +1698,7 @@ pub async fn run() -> crate::Result<()> {
             if service.is_none()
                 && !options.account_compat
                 && !options.temporary
+                && !options.chat.input.uses_stdio()
                 && options.username.is_some()
                 && !reauthenticated
             {
@@ -2307,7 +2348,7 @@ async fn connect_inner(
         transport.timing_support((time_observation_supported, wait_display_supported));
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
-    let display_session =
+    let display_session = if options.chat.input == chat_io::Input::Terminal {
         match transport.start_display(ui, &metadata.cwd, metadata.title.as_deref(), &url) {
             Ok(session) => session,
             Err(error) => {
@@ -2318,7 +2359,19 @@ async fn connect_inner(
                 );
                 None
             }
-        };
+        }
+    } else {
+        None
+    };
+    if options.chat.input == chat_io::Input::Terminal
+        && options.chat.agent != chat_io::Agent::NextCaller
+        && display_session.is_none()
+    {
+        let _ = ssh.kill().await;
+        return Err(Box::new(relay::PermanentFailure(
+            "terminal agent dispatch requires a live dashboard; select another --input mode for headless use".into(),
+        )));
+    }
     if let Some(notice) = version_notice {
         update::report_connection(notice, options.server.as_deref().unwrap_or(&url));
     }
@@ -2437,6 +2490,9 @@ async fn connect_inner(
     }
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
+    } else if options.chat.input != chat_io::Input::Terminal {
+        // External input owns its output protocol; do not emit account state.
+        Ok(())
     } else {
         render::connection(&output).map_err(Into::into)
     };
@@ -2446,6 +2502,10 @@ async fn connect_inner(
         incoming.stop().await;
         let _ = ssh.wait().await;
         return Err(error);
+    }
+    if options.is_local() && options.chat.input != chat_io::Input::Terminal {
+        // Local Ready URLs identify an MCP resource; login codes are separate.
+        render::status("shell", "Ready", &format!("Native MCP endpoint: {url}"));
     }
     render::status(
         "shell",
@@ -2458,13 +2518,19 @@ async fn connect_inner(
     render::status(
         "shell",
         "Result",
-        if github_auth {
+        if options.chat.input != chat_io::Input::Terminal {
+            "Chat input is enabled. Ctrl-C disconnects this client."
+        } else if github_auth {
             "Sign in with an allowed GitHub account. Ctrl-C disconnects this client."
         } else {
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
-    let local_input = match input::Input::attach(backend.terminals()) {
+    let local_input = match if options.chat.input == chat_io::Input::Terminal {
+        input::Input::attach(backend.terminals())
+    } else {
+        Ok(None)
+    } {
         Ok(input) => input,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -2484,6 +2550,28 @@ async fn connect_inner(
     let mut steering_commands = steering::connect(&client_id, VERSION);
     let mut access_commands = access::connect(access_supported);
     let mut message_commands = messaging::connect(messaging_supported);
+    let mut chat = if options.chat.input == chat_io::Input::Terminal
+        && options.chat.agent == chat_io::Agent::NextCaller
+    {
+        None
+    } else {
+        match chat_io::Session::start(&options.chat, backend.clone()).await {
+            Ok(session) => Some(session),
+            Err(error) => {
+                steering::disconnect();
+                access::disconnect();
+                messaging::disconnect();
+                if let Some(input) = local_input {
+                    input.shutdown().await;
+                }
+                let _ = ssh.start_kill();
+                backend.shutdown().await;
+                incoming.stop().await;
+                let _ = ssh.wait().await;
+                return Err(Box::new(relay::PermanentFailure(error)));
+            }
+        }
+    };
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -2493,6 +2581,13 @@ async fn connect_inner(
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            ended = chat_io::input_ended(&mut chat) => match ended {
+                Ok(()) if options.chat.input == chat_io::Input::Pipe => {
+                    render::status("chat input", "Ready", "Pipe reached EOF; the connected session stays available");
+                }
+                Ok(()) => { intentionally_stopped = true; break Ok(()); }
+                Err(error) => break Err(Box::new(relay::PermanentFailure(error)) as crate::Error),
+            },
             _ = steering_updates.tick() => {
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
@@ -2713,8 +2808,14 @@ async fn connect_inner(
             _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
+    if let Some(chat) = &chat {
+        chat.stop();
+    }
     if let Some(input) = local_input {
         input.shutdown().await;
+    }
+    if let Some(chat) = chat.take() {
+        chat.shutdown().await;
     }
     backend.disconnect_timing();
     steering::disconnect();

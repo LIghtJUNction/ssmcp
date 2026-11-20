@@ -126,6 +126,12 @@ pub(super) struct Conversation {
     native_connection: Option<crate::client::messaging::test_connection::Connection>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
+    agent_pending: Option<(
+        InputStamp,
+        Option<crate::client::interface::history::HistoryId>,
+        crate::client::chat_io::Ticket,
+    )>,
+    agent_unconfirmed: Option<InputStamp>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
     force_displayed: std::collections::VecDeque<(String, String)>,
@@ -476,6 +482,7 @@ impl State {
         self.chat_poll_logout();
         self.chat_poll_goal();
         self.chat_poll_force_send();
+        self.chat_poll_agent();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -1083,6 +1090,35 @@ impl State {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
             return;
         }
+        if self.conversation.editing.is_none() && self.conversation.target.is_none() {
+            if self.conversation.agent_pending.is_some() {
+                self.notice = Some(
+                    "Chat agent is still handling the previous message · draft retained".into(),
+                );
+                return;
+            }
+            let stamp = self.chat_composer_stamp();
+            if self.conversation.agent_unconfirmed.as_ref() == Some(&stamp) {
+                self.notice = Some("Previous delivery is unconfirmed · check its receipt before editing or sending again".into());
+                return;
+            }
+            match crate::client::chat_io::terminal_submit(&text) {
+                Ok(Some(ticket)) => {
+                    let history = crate::client::interface::history::current_owner()
+                        .map(|owner| owner.display_id());
+                    self.conversation.agent_pending = Some((stamp, history, ticket));
+                    self.notice =
+                        Some("Waiting for the configured chat agent · draft retained".into());
+                    self.dirty = true;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.notice = Some(error);
+                    return;
+                }
+            }
+        }
         // The native edit API treats omitted target as "keep the previous one".
         // The composer always shows a deliberate choice, including Next caller.
         let target = Some(self.conversation.target.as_deref().unwrap_or("next"));
@@ -1095,6 +1131,62 @@ impl State {
             Ok(id) => self.chat_enqueued(id, text),
             Err(error) => self.notice = Some(error),
         }
+    }
+
+    fn chat_poll_agent(&mut self) {
+        let Some((_, _, ticket)) = self.conversation.agent_pending.as_mut() else {
+            return;
+        };
+        let outcome = match ticket.try_recv() {
+            Ok(outcome) => outcome,
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                Err("chat agent disconnected before confirming the result".into())
+            }
+        };
+        let (stamp, history, _) = self.conversation.agent_pending.take().unwrap();
+        match outcome {
+            Ok(receipt) => {
+                if receipt.status == "unconfirmed" {
+                    self.conversation.agent_unconfirmed = Some(stamp);
+                } else {
+                    self.conversation.agent_unconfirmed = None;
+                    self.conversation.composer.remember(&stamp.text);
+                    if self.chat_composer_stamp() == stamp {
+                        self.conversation.composer.take_text();
+                    }
+                }
+                if let Some(answer) = receipt.output.filter(|answer| !answer.is_empty()) {
+                    let answer = panel::safe_text(&answer);
+                    let event = json!({"type":"ssmcp.message","author":"Chat agent","text":answer});
+                    let bytes = format!("\n[CHAT AGENT]\n{answer}\n");
+                    self.log_scoped_event(
+                        "chat agent",
+                        &event,
+                        bytes.as_bytes(),
+                        crate::runtime::call_scope::DisplaySource {
+                            history: history.map_or(
+                                crate::runtime::call_scope::DisplayHistory::Global,
+                                crate::runtime::call_scope::DisplayHistory::Local,
+                            ),
+                            call: None,
+                        },
+                    );
+                }
+                let mut notice = format!("Chat route: {}", receipt.status);
+                if let Some(id) = receipt.request_id {
+                    let _ = write!(notice, " · {id}");
+                }
+                if !receipt.warnings.is_empty() {
+                    let _ = write!(notice, " · {}", receipt.warnings.join("; "));
+                }
+                self.notice = Some(panel::safe_text(&notice));
+            }
+            Err(error) => {
+                self.notice = Some(panel::safe_text(&format!("{error} · draft retained")));
+            }
+        }
+        self.dirty = true;
     }
 
     fn chat_selected(&mut self) -> Option<Value> {

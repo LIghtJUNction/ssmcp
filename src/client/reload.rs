@@ -379,6 +379,7 @@ mod tests {
     #[test]
     fn foreground_reload_pins_the_resolved_server_and_preserves_literal_values() {
         let root = std::env::current_dir().unwrap();
+        let chat_token = root.join("test input token").into_os_string();
         let trailing = vec![
             OsString::from("--title"),
             OsString::from("--context"),
@@ -392,6 +393,16 @@ mod tests {
             OsString::from("nord"),
             OsString::from("--no-color"),
             OsString::from("--no-watchdog"),
+            OsString::from("--input"),
+            OsString::from("mcp-http"),
+            OsString::from("--input-host"),
+            OsString::from("localhost"),
+            OsString::from("--input-port"),
+            OsString::from("08181"),
+            OsString::from("--input-token-file"),
+            chat_token,
+            OsString::from("--agent"),
+            OsString::from("claude-code"),
         ];
         let mut initial = args(&["--server", "https://original.example"]);
         initial.extend(trailing.clone());
@@ -419,6 +430,7 @@ mod tests {
             assert_eq!(restored.theme, options.theme);
             assert_eq!(restored.no_color, options.no_color);
             assert_eq!(restored.watchdog, options.watchdog);
+            assert_eq!(restored.chat, options.chat);
         }
     }
 

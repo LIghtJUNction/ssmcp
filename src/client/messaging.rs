@@ -448,6 +448,14 @@ pub(crate) fn send(
     state().send_to_account(recipient_id, expected, text, request_id)
 }
 
+pub(super) fn chat_receipt(request_id: &str) -> Option<(String, Option<String>)> {
+    state()
+        .outgoing
+        .iter()
+        .find(|message| message.request_id == request_id)
+        .map(|message| (message.status.clone(), message.error.clone()))
+}
+
 pub(crate) const MAX_GROUP_RECIPIENTS: usize = groups::MAX_TARGETS;
 pub(crate) fn send_group(
     recipients: &[Recipient],

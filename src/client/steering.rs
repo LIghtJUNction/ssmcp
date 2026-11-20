@@ -593,8 +593,18 @@ impl Manager {
     }
 
     fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
+        self.submit_with_warnings(text, target, Vec::new())
+    }
+
+    fn submit_with_warnings(
+        &mut self,
+        text: &str,
+        target: Option<&str>,
+        reference_warnings: Vec<String>,
+    ) -> Result<String, String> {
         self.mutable()?;
         validate_text(text)?;
+        validate_reference_warnings(&reference_warnings)?;
         let target = self.target(target)?;
         self.reserve_record(text.len())?;
         let id = random_id()?;
@@ -617,7 +627,7 @@ impl Manager {
             resume_after_reload: false,
             pending: None,
             error: None,
-            reference_warnings: Vec::new(),
+            reference_warnings,
             retry_of: None,
         });
         let index = self.outbox.records.len() - 1;
@@ -1544,6 +1554,39 @@ pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String>
     super::interface::questions::user_input(target);
     Ok(id)
 }
+
+pub(super) fn require_chat_connection() -> Result<(), String> {
+    with(|manager| {
+        manager.mutable()?;
+        if !manager.connected || manager.reload_requested {
+            return Err("chat connection is closed or reloading".into());
+        }
+        Ok(())
+    })
+}
+
+pub(super) fn submit_chat_prepared(
+    prepared: super::references::PreparedReferences,
+) -> Result<String, String> {
+    let id = with(|manager| {
+        if !manager.connected || manager.reload_requested {
+            return Err("chat connection is closed or reloading".into());
+        }
+        manager.submit_with_warnings(&prepared.text, Some("next"), prepared.warnings)
+    })?;
+    super::interface::questions::user_input(Some("next"));
+    Ok(id)
+}
+
+pub(super) fn chat_receipt(id: &str) -> (Option<&'static str>, Option<String>) {
+    with(|manager| {
+        let Ok(index) = manager.index(id) else {
+            return (None, None);
+        };
+        let record = &manager.outbox.records[index];
+        (Some(record.status(manager.connected)), record.error.clone())
+    })
+}
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
     with(|manager| manager.publish_edit(id, text, target))?;
     // An omitted edit target preserves its stored recipient; conservatively
@@ -2281,6 +2324,28 @@ mod tests {
                 .claim("room_one", "second", None, 8, 64 * 1024)
                 .is_empty()
         );
+        std::fs::remove_file(root.join("missing.txt")).unwrap();
+        let prepared = super::super::references::prepare(&draft, &workspace, &context)
+            .await
+            .unwrap();
+        let notices = prepared.warnings.clone();
+        let mut ingress = Manager::default();
+        let mut wire = ingress.connect("room_two", crate::wire::VERSION);
+        ready(&mut ingress, &mut wire, "room_two");
+        let message = ingress
+            .submit_with_warnings(&prepared.text, Some("next"), prepared.warnings)
+            .unwrap();
+        let Transport::Wire { id } = wire.try_recv().unwrap() else {
+            panic!("prepared external input must publish");
+        };
+        assert!(!ingress.needs_preparation(id));
+        let command = ingress.pending_command(id).unwrap();
+        assert!(ingress.sent(id));
+        let accepted = server.command("room_two", vec![], command).unwrap();
+        assert_eq!(accepted.messages[0].text, draft);
+        ingress.reply(id, Ok(accepted)).unwrap();
+        assert_eq!(ingress.request_status(&message), Some("queued"));
+        assert_eq!(ingress.outbox.records[0].reference_warnings, notices);
         std::fs::remove_dir_all(root).unwrap();
     }
 
