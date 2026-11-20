@@ -2156,6 +2156,10 @@ if root.exists():
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
+        assert!(
+            events.iter().all(|args| args.as_slice() != ["unexpected"]),
+            "unexpected fake compositor command: {events:?}"
+        );
         assert_eq!(
             events.iter().filter(|args| args[0] == "eval").count(),
             0,
@@ -2200,45 +2204,55 @@ if root.exists():
         ));
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let python = crate::program::executable("python3").unwrap();
         let helper = bin.join("hyprctl");
         std::fs::write(
             &helper,
-            format!(
-                "#!{}\n{}",
-                python.display(),
-                r#"import json, os, pathlib, sys, time
-root = pathlib.Path(os.environ["SSMCP_COMPUTER_FOCUS_FIXTURE"])
-case = os.environ["SSMCP_COMPUTER_FOCUS_CASE"]
-args = sys.argv[1:]
-with (root / "events").open("a") as f:
-    f.write(json.dumps(args) + "\n")
-if args == ["-j", "clients"]:
-    print(json.dumps([{"address": "0x123", "mapped": True, "hidden": False}]))
-elif args == ["repl", "return type(hl.dsp.cursor.move)"]:
-    print("function")
-elif args == ["eval", 'hl.dispatch(hl.dsp.focus({window="address:0x123"}))']:
-    print("ok")
-elif args == ["-j", "activewindow"]:
-    counter = root / "reads"
-    reads = int(counter.read_text()) + 1 if counter.exists() else 1
-    counter.write_text(str(reads))
-    if case == "unresponsive":
-        time.sleep(10)
-    focused = case == "immediate" or (case == "delayed" and reads >= 3)
-    print(json.dumps({"address": "0x123" if focused else "0x999"}))
-else:
-    sys.exit("unexpected fake compositor command")
-"#
-            ),
+            r#"#!/bin/sh
+set -eu
+root=$SSMCP_COMPUTER_FOCUS_FIXTURE
+reject() {
+    printf '%s\n' '["unexpected"]' >> "$root/events"
+    printf 'unexpected fake compositor command (%s arguments)\n' "$#" >&2
+    for arg; do printf '  <%s>\n' "$arg" >&2; done
+    exit 1
+}
+[ "$#" -eq 2 ] || reject "$@"
+if [ "$1" = -j ] && [ "$2" = clients ]; then
+    printf '%s\n' '["-j","clients"]' >> "$root/events"
+    printf '%s\n' '[{"address":"0x123","mapped":true,"hidden":false}]'
+elif [ "$1" = repl ] && [ "$2" = 'return type(hl.dsp.cursor.move)' ]; then
+    printf '%s\n' '["repl","return type(hl.dsp.cursor.move)"]' >> "$root/events"
+    printf '%s\n' function
+elif [ "$1" = eval ] && [ "$2" = 'hl.dispatch(hl.dsp.focus({window="address:0x123"}))' ]; then
+    printf '%s\n' '["eval","hl.dispatch(hl.dsp.focus({window=\"address:0x123\"}))"]' >> "$root/events"
+    printf '%s\n' ok
+elif [ "$1" = -j ] && [ "$2" = activewindow ]; then
+    printf '%s\n' '["-j","activewindow"]' >> "$root/events"
+    reads=0
+    if [ -e "$root/reads" ]; then
+        IFS= read -r reads < "$root/reads"
+    fi
+    case "$reads" in
+        ''|*[!0-9]*) printf '%s\n' 'invalid fixture read counter' >&2; exit 1 ;;
+    esac
+    reads=$((reads + 1))
+    printf '%s\n' "$reads" > "$root/reads"
+    address=0x999
+    case "$SSMCP_COMPUTER_FOCUS_CASE" in
+        immediate) address=0x123 ;;
+        delayed) if [ "$reads" -ge 3 ]; then address=0x123; fi ;;
+        mismatch) ;;
+        unresponsive) exec /bin/sleep 10 ;;
+        *) printf '%s\n' 'unknown focus fixture case' >&2; exit 1 ;;
+    esac
+    printf '{"address":"%s"}\n' "$address"
+else
+    reject "$@"
+fi
+"#,
         )
         .unwrap();
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut paths = vec![bin];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        let path = std::env::join_paths(paths).unwrap();
         let mut failures = Vec::new();
         for case in ["immediate", "delayed", "mismatch", "unresponsive"] {
             let case_root = root.join(case);
@@ -2254,21 +2268,27 @@ else:
                     ])
                     .env("SSMCP_COMPUTER_FOCUS_FIXTURE", &case_root)
                     .env("SSMCP_COMPUTER_FOCUS_CASE", case)
-                    .env("PATH", &path)
+                    .env("PATH", &bin)
                     .stdin(Stdio::null())
                     .kill_on_drop(true)
                     .output(),
             )
             .await;
-            match output {
-                Ok(Ok(output)) if output.status.success() => {}
-                Ok(Ok(output)) => failures.push(format!(
-                    "{case}: {}\n{}",
+            let failure = match output {
+                Ok(Ok(output)) if output.status.success() => continue,
+                Ok(Ok(output)) => format!(
+                    "{}\n{}\n{}",
+                    output.status,
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
-                )),
-                other => failures.push(format!("{case}: {other:?}")),
-            }
+                ),
+                other => format!("{other:?}"),
+            };
+            let reads = std::fs::read_to_string(case_root.join("reads"));
+            let events = std::fs::read_to_string(case_root.join("events"));
+            failures.push(format!(
+                "{case}: {failure}\nreads={reads:?}\nevents={events:?}"
+            ));
         }
         let _ = std::fs::remove_dir_all(&root);
         assert!(failures.is_empty(), "{}", failures.join("\n"));
