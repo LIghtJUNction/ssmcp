@@ -4,6 +4,7 @@ use super::{
     Event, Ui, clip_plain, conversation_body, correlation::Kind, paint, semantic_text, styled_rows,
 };
 use std::collections::VecDeque;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug)]
 pub(super) struct Group {
@@ -12,6 +13,7 @@ pub(super) struct Group {
     pub(super) members: Vec<usize>,
     pub(super) head: u64,
     pub(super) expanded: bool,
+    pub(super) info: Option<super::tool_summaries::Display>,
 }
 
 impl Group {
@@ -62,7 +64,10 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         let mut members = vec![start];
         let mut end = start + 1;
         while end < events.len() {
-            if eligible(end) && events[end].historical == events[start].historical {
+            if eligible(end)
+                && events[end].historical == events[start].historical
+                && events[end].tool_group_id == events[start].tool_group_id
+            {
                 members.push(end);
             } else if !((owned(&events[end])
                 || events[end].meta.history == super::DisplayHistory::Global)
@@ -75,13 +80,14 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
             }
             end += 1;
         }
-        if members.len() > 1 {
+        if members.len() > 1 || events[start].tool_group_id.is_some() {
             result.push(Group {
                 start,
                 end,
                 members,
                 head: events[start].id,
                 expanded: events[start].group_expanded,
+                info: None,
             });
         }
         start = end;
@@ -126,11 +132,22 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
     } else {
         ""
     };
-    let title = format!(
-        "{} {marker} Tools · {} calls{history}",
-        if active && focused { "›" } else { " " },
-        group.members.len()
-    );
+    let count = group
+        .info
+        .as_ref()
+        .map_or(group.members.len() as u64, |info| info.call_count);
+    let summary = group.info.as_ref().and_then(|info| info.summary.as_deref());
+    let title = if let Some(summary) = summary {
+        format!(
+            "{} {marker} {summary}",
+            if active && focused { "›" } else { " " }
+        )
+    } else {
+        format!(
+            "{} {marker} Tools · {count} calls{history}",
+            if active && focused { "›" } else { " " }
+        )
+    };
     let status = [
         (stats.running, "run"),
         (stats.done, "done"),
@@ -142,6 +159,16 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
     .map(|(count, label)| format!("{label} {count}"))
     .collect::<Vec<_>>()
     .join(" · ");
+    let retained = if count > group.members.len() as u64 {
+        format!(" · retained {}", group.members.len())
+    } else {
+        String::new()
+    };
+    let status = if summary.is_some() {
+        format!("{count} calls{history}{retained} · {status}")
+    } else {
+        format!("{status}{retained}")
+    };
     let tone = if stats.failed > 0 {
         "warning"
     } else if active && focused {
@@ -149,7 +176,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
     } else {
         "muted"
     };
-    let mut header = if title.chars().count() + status.chars().count() + 3 <= width {
+    let mut header = if title.width() + status.width() + 3 <= width {
         vec![(
             group.head,
             paint(
