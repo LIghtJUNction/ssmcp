@@ -355,6 +355,10 @@ mod tests {
             crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
         );
         assert_eq!(access_capability_header(Some(&both)).unwrap(), both);
+        let all = format!("{both},{}", crate::wire::messages::CAPABILITY);
+        assert_eq!(access_capability_header(Some(&all)).unwrap(), all);
+        let duplicate_messages = format!("{all},{}", crate::wire::messages::CAPABILITY);
+        assert!(access_capability_header(Some(&duplicate_messages)).is_none());
         for invalid in [
             "control_attribution_v10",
             "control_attribution_v1,admin",
