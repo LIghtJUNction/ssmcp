@@ -747,24 +747,12 @@ pub(crate) fn skip(id: &str) -> Result<Question, String> {
     Ok(question)
 }
 
-pub(super) async fn finish_request(arguments: Value) -> Result<Value, String> {
-    workflow::finish(arguments).await
-}
-
-pub(super) fn agent_answer(arguments: Value) -> Result<Value, String> {
-    workflow::answer(arguments)
-}
-
 pub(super) fn acknowledge_answers(arguments: Value) -> Result<Value, String> {
     delivery::acknowledge(arguments)
 }
 
 pub(super) fn delivery_peek(arguments: Value) -> Result<Value, String> {
     delivery::peek(arguments)
-}
-
-pub(super) fn authorize_completion() -> Result<String, String> {
-    workflow::authorize_completion()
 }
 
 pub(super) fn message_scope() -> Option<String> {
@@ -1135,7 +1123,20 @@ mod tests {
     #[test]
     fn tools_do_not_offer_a_way_to_impersonate_the_users_answer() {
         let catalog = tools();
-        assert_eq!(catalog.len(), 7);
+        let names: Vec<_> = catalog
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "ssmcp.ui.ask",
+                "ssmcp.ui.questions",
+                "ssmcp.ui.message",
+                "ssmcp.ui.question_ack",
+                "ssmcp.ui.question_delivery",
+            ]
+        );
         for tool in &catalog {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false);

@@ -409,6 +409,9 @@ impl super::Queue {
         changed
     }
 
+    // Historical receipt tests exercise this invariant; production no longer
+    // consumes completion permission when publishing a final message.
+    #[cfg(test)]
     pub(super) fn consume_finish(&mut self, scope: &RequestScope) -> Result<String, String> {
         self.validate_scope(scope)?;
         let record = self.records.iter_mut().find(|record| {
