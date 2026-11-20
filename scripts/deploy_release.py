@@ -407,12 +407,15 @@ def restore_runtime(folder, before):
 def apply(path):
     r = json.loads(path.read_text())
     folder = path.parent
+    stage_only = r.get("stage_only", False)
+    require(type(stage_only) is bool, "invalid_stage_only_flag")
     receipt = {"schema": "ssmcp.release-deployment.v1", "status": "running", "commit": r["commit"],
                "target_sha256": r["daemon_sha256"], "expected_live_sha256": r["expected_live_sha256"],
                "assets": r["assets"], "runner_sha256": r["runner_sha256"], "version": r["version"],
                "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-               "private_backup_sha256": r["backup_sha256"], "rollback_checkpoint_verified": True,
                "release": r["release"]}
+    if not stage_only:
+        receipt.update(private_backup_sha256=r["backup_sha256"], rollback_checkpoint_verified=True)
     report = folder / "receipt.json"
     def checkpoint(step):
         receipt["step"] = step
@@ -423,6 +426,7 @@ def apply(path):
     runner = prefix / "libexec/ssmcp/code-mode.js"
     dropin = MANAGED_DROPIN
     switched, created = False, False
+    dropin_temporary = None
     try:
         checkpoint("verify_inputs_and_lease")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -430,7 +434,7 @@ def apply(path):
                 r["before"]["exe"] == r["expected_live_exe"] and
                 r["before"]["prestart_commands"] in [[], [r["before"]["exe"] + " check-runtime"]] and same_lease(r["before"], snapshot()), "production_lease")
         require(sha(folder / "candidate") == r["daemon_sha256"] and sha(folder / "runner.js") == r["runner_sha256"] and
-                sha(folder / "backup.tar") == r["backup_sha256"], "uploaded_digests")
+                (stage_only or sha(folder / "backup.tar") == r["backup_sha256"]), "uploaded_digests")
         require(sha(__file__) == r["helper_sha256"], "deployment_helper_changed")
         require(run([str(folder / "candidate"), "--version"]) == "ssmcpd " + r["version"], "candidate_version")
         receipt["free_bytes_before"] = shutil.disk_usage("/var/lib").free
@@ -459,12 +463,21 @@ def apply(path):
         receipt["stage_checks"] = stage(new, r)
         r["assets_frozen"] = True
         checkpoint("recheck_production_lease")
-        require(same_lease(r["before"], snapshot()), "production_changed_after_stage")
+        live = snapshot()
+        require(live["pid"] == r["before"]["pid"] and same_lease(r["before"], live),
+                "production_changed_after_stage")
+        if stage_only:
+            if created:
+                shutil.rmtree(prefix)
+            receipt.update(status="staged", running_sha256=live["live_sha256"],
+                           configuration_unchanged=True, original_units_preserved=True, proxy_unchanged=True)
+            return 0
         require(all(Path(p).name < dropin.name for p in r["before"]["units"]
                     if p.endswith(".conf") and p != str(dropin)), "dropin_precedence")
         dropin.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         text = "[Service]\nExecStart=\nExecStart=" + str(new) + " serve\nExecStartPre=\nExecStartPre=" + str(new) + " check-runtime\n"
         tmp = dropin.with_suffix(".tmp")
+        dropin_temporary = tmp
         tmp.write_text(text)
         tmp.chmod(0o644)
         switched = True
@@ -518,7 +531,8 @@ def apply(path):
             except Exception:
                 receipt.setdefault("cleanup_deferred", {})["candidate"] = True
     finally:
-        dropin.with_suffix(".tmp").unlink(missing_ok=True)
+        if dropin_temporary is not None:
+            dropin_temporary.unlink(missing_ok=True)
         receipt["finished_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         receipt["free_bytes_after"] = shutil.disk_usage("/var/lib").free
         save(report, receipt)
@@ -668,22 +682,25 @@ def prepare(intent, folder):
     match = re.fullmatch(r"ssmcpd ([0-9]+)\.([0-9]+)\.([0-9]+)", current_version)
     require(match is not None and tuple(map(int, version.split("."))) >= tuple(map(int, match.groups())), "automatic_downgrade_refused")
     require(before["prestart_commands"] in [[], [before["exe"] + " check-runtime"]], "unreviewed_prestart_command")
-    require(not MANAGED_DROPIN.is_symlink(), "managed_dropin_symlink")
-    saved = None
-    if MANAGED_DROPIN.exists():
-        saved = {"content": base64.b64encode(MANAGED_DROPIN.read_bytes()).decode(),
-                 "sha256": sha(MANAGED_DROPIN), "mode": MANAGED_DROPIN.stat().st_mode & 0o777}
-    with (folder / "backup.tar").open("xb") as stream:
-        backup(before["live_sha256"], stream)
-        stream.flush()
-        os.fsync(stream.fileno())
-    verify_checkpoint(folder / "backup.tar", before)
     request = {"run_id": intent["run_id"], "commit": commit, "version": version, "public_url": public_url,
                "before": before, "expected_live_sha256": before["live_sha256"], "expected_live_exe": before["exe"],
                "daemon_sha256": sha(folder / "candidate"), "runner_sha256": sha(folder / "runner.js"),
-               "backup_sha256": sha(folder / "backup.tar"), "helper_sha256": sha(__file__),
-               "assets": assets, "public_baseline": public_baseline(public_url),
-               "managed_dropin_before": saved, "release": record}
+               "helper_sha256": sha(__file__), "assets": assets, "release": record}
+    if intent.get("stage_only"):
+        request["stage_only"] = True
+    else:
+        require(not MANAGED_DROPIN.is_symlink(), "managed_dropin_symlink")
+        saved = None
+        if MANAGED_DROPIN.exists():
+            saved = {"content": base64.b64encode(MANAGED_DROPIN.read_bytes()).decode(),
+                     "sha256": sha(MANAGED_DROPIN), "mode": MANAGED_DROPIN.stat().st_mode & 0o777}
+        with (folder / "backup.tar").open("xb") as stream:
+            backup(before["live_sha256"], stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        verify_checkpoint(folder / "backup.tar", before)
+        request.update(backup_sha256=sha(folder / "backup.tar"),
+                       public_baseline=public_baseline(public_url), managed_dropin_before=saved)
     save(folder / "request.json", request)
     return request
 
@@ -748,7 +765,7 @@ def worker(intent, folder):
                  "commit": intent["commit"], "version": intent["tag"][1:],
                  "failure": {"type": type(error).__name__, "reason": str(error) if isinstance(error, RuntimeError) else "operation_failed"}})
     receipt = json.loads((folder / "receipt.json").read_text())
-    if receipt["status"] in ["deployed", "failed", "rolled_back"] and not receipt.get("cleanup_deferred"):
+    if receipt["status"] in ["staged", "deployed", "failed", "rolled_back"] and not receipt.get("cleanup_deferred"):
         removed = 0
         for name in ["candidate", "runner.js", "release.tar.gz", "backup.tar", "request.json"]:
             path = folder / name
@@ -766,7 +783,7 @@ def worker(intent, folder):
     receipt["finished_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     receipt["completed"] = True
     save(folder / "receipt.json", public_receipt(receipt))
-    return 0 if receipt["status"] == "deployed" else 1
+    return 0 if receipt["status"] in ["staged", "deployed"] else 1
 
 
 def main():
@@ -776,11 +793,12 @@ def main():
     parser.add_argument("--run-id")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--stage-only", action="store_true", help="validate the candidate in isolation without switching the live service")
     args = parser.parse_args()
     os.umask(0o077)
     require(os.geteuid() == 0, "root_required")
     if args.status:
-        require(not args.worker and not any([args.tag, args.commit, args.run_id]), "status_has_no_arguments")
+        require(not args.worker and not args.stage_only and not any([args.tag, args.commit, args.run_id]), "status_has_no_arguments")
         current = snapshot()
         print(json.dumps({"service_active": True, "version": run([current["exe"], "--version"]), "sha256": current["live_sha256"]}))
         return 0
@@ -789,6 +807,8 @@ def main():
     require(not BASE.is_symlink() and BASE.stat().st_uid == 0 and BASE.stat().st_mode & 0o777 == 0o700, "private_deployment_directory")
     folder = BASE / args.run_id
     intent = {"tag": args.tag, "commit": args.commit, "run_id": args.run_id}
+    if args.stage_only:
+        intent["stage_only"] = True
     if args.worker:
         require(folder.is_dir() and not folder.is_symlink() and folder.stat().st_uid == 0 and
                 json.loads((folder / "intent.json").read_text()) == intent, "owned_worker_request")
@@ -803,10 +823,13 @@ def main():
                 json.loads((folder / "intent.json").read_text()) == intent, "request_identity_conflict")
     if launch:
         unit = "ssmcp-deploy-" + args.run_id
-        run(["systemd-run", "--quiet", "--collect", "--unit=" + unit, "--property=Type=exec",
+        command = ["systemd-run", "--quiet", "--collect", "--unit=" + unit, "--property=Type=exec",
              "--property=UMask=0077", "--property=RuntimeMaxSec=900s", "--property=TimeoutStopSec=120s",
              "--property=StandardOutput=null", "--property=StandardError=journal", sys.executable, str(Path(__file__).resolve()),
-             "--worker", "--tag", args.tag, "--commit", args.commit, "--run-id", args.run_id])
+             "--worker", "--tag", args.tag, "--commit", args.commit, "--run-id", args.run_id]
+        if args.stage_only:
+            command.append("--stage-only")
+        run(command)
     deadline = time.monotonic() + 1020
     while time.monotonic() < deadline:
         report = folder / "receipt.json"
@@ -814,7 +837,7 @@ def main():
             result = json.loads(report.read_text())
             if result.get("completed") is True:
                 print(json.dumps(public_receipt(result), sort_keys=True))
-                return 0 if result["status"] == "deployed" else 1
+                return 0 if result["status"] == ("staged" if args.stage_only else "deployed") else 1
         time.sleep(1)
     raise RuntimeError("deployment_outcome_pending_reconnect_same_run_id")
 
