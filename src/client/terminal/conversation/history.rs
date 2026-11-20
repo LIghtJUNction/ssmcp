@@ -19,6 +19,7 @@ impl State {
         match history::archive::sessions(filter) {
             Ok(sessions) => {
                 self.chat_change_view(View::History);
+                self.conversation.content_focus = true;
                 self.conversation.sessions = sessions;
                 self.conversation.history_archived = archived;
                 self.conversation.selected = 0;
@@ -355,6 +356,47 @@ impl State {
 #[cfg(test)]
 mod archive_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn history_picker_commands_refocus_the_existing_column_after_submit() {
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let root = Scratch(
+            std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
+                .join(format!("ssmcp-history-picker-{}", std::process::id(),)),
+        );
+        std::fs::create_dir(&root.0).unwrap();
+        history::with_test_history(root.0.join("history"), async {
+            let mut state = State::new(24, 120, &Ui::default());
+            state.canvas_focus(View::History);
+            let column = state.conversation.canvas.active;
+            for (command, archived) in [("/resume", false), ("/archived", true), ("/resume", false)]
+            {
+                for character in command.chars() {
+                    state.chat_character(character);
+                }
+                assert!(!state.conversation.content_focus);
+                assert_eq!(state.conversation.composer.text(), command);
+
+                state.chat_character('\r');
+
+                assert_eq!(state.conversation.canvas.active, column);
+                assert_eq!(state.conversation.view, View::History);
+                assert!(state.conversation.content_focus, "{command}");
+                assert_eq!(state.conversation.history_archived, archived);
+                assert!(state.conversation.composer.is_empty());
+                assert!(state.actions.is_empty());
+            }
+        })
+        .await;
+    }
 
     #[test]
     fn history_archive_commands_do_not_mutate_or_send_from_preview() {
