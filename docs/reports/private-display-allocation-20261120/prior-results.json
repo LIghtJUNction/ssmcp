@@ -1,0 +1,379 @@
+{
+  "pre_allocator_library": {
+    "schema": "ssmcp.library-gate.v1",
+    "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+    "product_source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+    "version": "0.10.14",
+    "command": [
+      "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "--test-threads=2"
+    ],
+    "exit_code": 101,
+    "duration_seconds": 147.923,
+    "status": "failed",
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+      "bytes": 282671696
+    },
+    "log": {
+      "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/library-default-suite.log",
+      "sha256": "18f09c5604eb678d29e27f7ff7814ec2ffe3c4763d48982c0cf2f600d1379bcf"
+    },
+    "finished_at_utc": "2026-11-20T00:10:03.182413+00:00",
+    "results": {
+      "passed": 1501,
+      "failed": 1,
+      "ignored": 18,
+      "measured": 0,
+      "filtered_out": 0
+    },
+    "all_frozen_artifacts_unchanged": true,
+    "source_commit_unchanged": true
+  },
+  "pre_allocator_exact_replay": {
+    "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+    "command": [
+      "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "--exact",
+      "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 6.276,
+    "log": {
+      "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/opencode-exact-replay.log",
+      "sha256": "96c77ac896946346b1803ed013f9341cfb6f5bb66b7c796873247c99c721bc5c"
+    },
+    "libtest_sha256": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9"
+  },
+  "allocator_initial_build": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/796e7cefc4348fef09f0f1dbba094c75375e9298/fmt.log"
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 101,
+      "log": "$WORKTREE/target/zuse-validation/796e7cefc4348fef09f0f1dbba094c75375e9298/clippy.log"
+    }
+  ],
+  "allocator_initial_build_error": "E0509; struct update moved a Vec out of a type implementing Drop; fixed in f9dc07fd91a970e826da2b0961b91ca90d2c55f5.",
+  "desktop_initial_setup": {
+    "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "status": "failed",
+    "stages": [
+      {
+        "stage": "computer-unit",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "computer::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 4.726,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/computer-unit.log",
+        "log_sha256": "a3750c175ec6bd120968313f3500fe8b78b585d6960aeccb20eb7325270db7d9"
+      },
+      {
+        "stage": "isolated-native",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::tests::private_display_input_capture_and_cleanup",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.666,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/isolated-native.log",
+        "log_sha256": "07be5353842a0cfe29f54d17968ca590caa1e00b4042ae5f92fea04559fe3dfb"
+      },
+      {
+        "stage": "isolated-lifecycle",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::tests::app_launch_auto_starts_private_display_and_releases_owned_state",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.115,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/isolated-lifecycle.log",
+        "log_sha256": "d94e831788b6b69b1a1e62f4146b7007d28c8f156ce3049d7aa7a89d0d86ae17"
+      },
+      {
+        "stage": "display-concurrent",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::display::tests::real_private_displays_avoid_conflicts_concurrently_and_clean_up",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.164,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/display-concurrent.log",
+        "log_sha256": "649889469c73d0b389527f6d2ecdbfd72487895daa1b164bd601c85a05f31b04"
+      },
+      {
+        "stage": "display-reservations",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::display::tests::real_aliases_and_unrelated_endpoints_are_never_adopted",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.065,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/display-reservations.log",
+        "log_sha256": "f26326faec8a38d4fabc168e32002cb8e849654f0fcee92795668b956241adae"
+      },
+      {
+        "stage": "embedded-entry",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+          "--exact",
+          "missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.114,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/embedded-entry.log",
+        "log_sha256": "8741ef1e51077d8e1e9f25779919943e49862b63896d8e65a9f8942910644c58"
+      },
+      {
+        "stage": "private-desktop-mcp",
+        "command": [
+          "python3",
+          "scripts/e2e_private_desktop.py",
+          "--bin-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug",
+          "--evidence-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp",
+          "--report",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp.json"
+        ],
+        "exit_code": 1,
+        "timed_out": false,
+        "duration_seconds": 0.165,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp.log",
+        "log_sha256": "89791c4b2fa0aad210b6b9f5297225e106984d7adc8c39f6e32fd0c25fec66d3"
+      }
+    ]
+  },
+  "desktop_setup_correction": "The MCP runner lacked SSMCP_E2E_FIXTURE_BINARY. The remaining stages were resumed with that fixture path; source and frozen binaries stayed unchanged.",
+  "library_3298": {
+    "schema": "ssmcp.library-gate.v1",
+    "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "product_source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "version": "0.10.14",
+    "command": [
+      "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "--test-threads=2"
+    ],
+    "exit_code": 101,
+    "duration_seconds": 126.641,
+    "status": "failed",
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+      "bytes": 283204152
+    },
+    "log": {
+      "path": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/library-default-suite.log",
+      "sha256": "0e0f5323acfb5331c6354d11269131414a6aaf71fcba9ca0c028996e7726fc49"
+    },
+    "finished_at_utc": "2026-11-20T01:26:05.203533+00:00",
+    "results": {
+      "passed": 1506,
+      "failed": 1,
+      "ignored": 21,
+      "measured": 0,
+      "filtered_out": 0
+    },
+    "all_frozen_artifacts_unchanged": true,
+    "source_commit_unchanged": true
+  },
+  "diagnostic_trace": {
+    "source": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "test": "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+    "exit_code": -15,
+    "duration_seconds": 45.005,
+    "binary_sha256_before": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+    "binary_sha256_after": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+    "trace_filter": "connect,close,shutdown,epoll_ctl,flock,fcntl",
+    "finished_at": "2026-11-20T01:35:19.137770+00:00"
+  },
+  "diagnostic_trace_observation": {
+    "status": "diagnostic_interrupted",
+    "not_a_test_result": true,
+    "trace_overhead_affected_runtime": true,
+    "stage": "first shutdown, before second attach",
+    "fixture_http_connections": 10,
+    "short_request_shutdown_calls": 9,
+    "sse_transport_still_open": true,
+    "blocking_flock_seconds": 9.097509,
+    "payload_capture": false
+  },
+  "opencode_test_projection_assertion": {
+    "source_commit": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "binary_path": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "sha256_before": "76cc6e7638b9fb368850302ed343455deb0fa9fa8838ef6f8cc37fe53f147511",
+    "stages": [
+      {
+        "stage": "queued-runtime",
+        "test": "backend::opencode::cleanup::tests::queued_archive_survives_runtime_shutdown_exactly_once",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::cleanup::tests::queued_archive_survives_runtime_shutdown_exactly_once",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.008,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.00s",
+        "log_sha256": "b8769e6a1e3b0a1539204e01c279a63a71765226ae7a2d408f6fa333a0d6c437"
+      },
+      {
+        "stage": "shutdown-lock",
+        "test": "backend::opencode::tests::attached_shutdown_releases_transport_before_blocked_partial_archive",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::attached_shutdown_releases_transport_before_blocked_partial_archive",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 101,
+        "timed_out": false,
+        "duration_seconds": 0.114,
+        "summary": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.08s",
+        "log_sha256": "f9cd544362698d059dfa30e14124e926b08fc78f8af86dfdf1beaf12724d7f43"
+      }
+    ],
+    "status": "failed",
+    "sha256_after": "76cc6e7638b9fb368850302ed343455deb0fa9fa8838ef6f8cc37fe53f147511"
+  },
+  "opencode_same_binary_continuation": {
+    "source_commit": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "stages": [
+      {
+        "name": "attached_drop_releases_transport_before_blocked_partial_archive",
+        "exit_code": 101,
+        "duration_seconds": 0.114,
+        "summary": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.05s",
+        "log_sha256": "e8753ce4d882bc6e0f7bbf66331776adf7eb7aa7d91c1ab6b9d7e780167395b5",
+        "failure_excerpt": "\nrunning 1 test\ntest backend::opencode::tests::attached_drop_releases_transport_before_blocked_partial_archive ... [RES ] opencode\n  opencode.attach.echo\n[RES ] opencode\n  /api/echo\n[RES ] opencode\n  server.connected\n[RES ] opencode\n  status: 200\n\nthread 'backend::opencode::tests::attached_drop_releases_transport_before_blocked_partial_archive' (13768) panicked at src/backend/opencode.rs:3075:44:\ncalled `Option::unwrap()` on a `None` value\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    backend::opencode::tests::attached_drop_releases_transport_before_blocked_partial_archive\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.05s\n\n"
+      },
+      {
+        "name": "cancelled_shutdown_retains_partial_archive_and_event_close",
+        "exit_code": 101,
+        "duration_seconds": 0.065,
+        "summary": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s",
+        "log_sha256": "cbf193b674d83c9f5370e2c1459de5868730d1b8f6b856867d8e96a96c7e9241",
+        "failure_excerpt": "\nrunning 1 test\ntest backend::opencode::tests::cancelled_shutdown_retains_partial_archive_and_event_close ... [RES ] opencode\n  opencode.attach.echo\n[RES ] opencode\n  /api/echo\n[RES ] opencode\n  server.connected\n[RES ] opencode\n  status: 200\n\nthread 'backend::opencode::tests::cancelled_shutdown_retains_partial_archive_and_event_close' (13810) panicked at src/backend/opencode.rs:3075:44:\ncalled `Option::unwrap()` on a `None` value\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    backend::opencode::tests::cancelled_shutdown_retains_partial_archive_and_event_close\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s\n\n"
+      },
+      {
+        "name": "attached_drop_outside_runtime_retains_partial_archive_and_event_close",
+        "exit_code": 101,
+        "duration_seconds": 0.065,
+        "summary": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s",
+        "log_sha256": "facca2983a32ef471a51b6f048d10b97c50eea4a8632c49d4a8f6f3c80653860",
+        "failure_excerpt": "\nrunning 1 test\ntest backend::opencode::tests::attached_drop_outside_runtime_retains_partial_archive_and_event_close ... [RES ] opencode\n  opencode.attach.echo\n[RES ] opencode\n  /api/echo\n[RES ] opencode\n  server.connected\n[RES ] opencode\n  status: 200\n\nthread 'backend::opencode::tests::attached_drop_outside_runtime_retains_partial_archive_and_event_close' (13819) panicked at src/backend/opencode.rs:3075:44:\ncalled `Option::unwrap()` on a `None` value\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    backend::opencode::tests::attached_drop_outside_runtime_retains_partial_archive_and_event_close\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s\n\n"
+      },
+      {
+        "name": "attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+        "exit_code": 0,
+        "duration_seconds": 7.631,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 7.61s",
+        "log_sha256": "b5b4e037d926f6e65e039178e8059dce7079c0fcaa230fa9681e56e17e732733",
+        "failure_excerpt": null
+      }
+    ]
+  },
+  "test_projection_correction": "6f26b8e50197468d88da701e7b16c467dd23453e checks audit error omission and the owner-checked artifact stat, without changing product code.",
+  "library_6f26": {
+    "schema": "ssmcp.library-gate.v1",
+    "source_commit": "6f26b8e50197468d88da701e7b16c467dd23453e",
+    "product_source_commit": "6f26b8e50197468d88da701e7b16c467dd23453e",
+    "version": "0.10.14",
+    "command": [
+      "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "--test-threads=2"
+    ],
+    "exit_code": 101,
+    "duration_seconds": 134.023,
+    "status": "failed",
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "3d601b5f7e63909bbcd99930934368c658c2791d26e125c3a0be9f8b81661059",
+      "bytes": 284864800,
+      "built_from_commit": "6f26b8e50197468d88da701e7b16c467dd23453e"
+    },
+    "log": {
+      "path": "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/library-default-suite.log",
+      "sha256": "d0a94fb50140fb0e6e439891b9cefcdcb6e93421b8ee9773038b91b4fb3470ff"
+    },
+    "finished_at_utc": "2026-11-20T02:09:21.222611+00:00",
+    "results": {
+      "passed": 1511,
+      "failed": 1,
+      "ignored": 21,
+      "measured": 0,
+      "filtered_out": 0
+    },
+    "all_frozen_artifacts_unchanged": true,
+    "source_commit_unchanged": true
+  },
+  "library_6f26_product_provenance": {
+    "execution_source_commit": "6f26b8e50197468d88da701e7b16c467dd23453e",
+    "product_binaries_built_from": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "note": "The original gate wrapper recorded execution HEAD in product_source_commit. frozen.json and product-equivalence.json contain the correct product origin. The original failure receipt is preserved unchanged."
+  },
+  "task_panel_exact": {
+    "source_commit": "6f26b8e50197468d88da701e7b16c467dd23453e",
+    "exit_code": 0,
+    "duration_seconds": 0.016,
+    "summary": [
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.01s"
+    ],
+    "log_sha256": "4c38e80acb09adbf30b573fdda7b1336ff4dbfcbc3e8c2f0bdc63d0d0a866524"
+  },
+  "task_panel_fixture_correction": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7"
+}
