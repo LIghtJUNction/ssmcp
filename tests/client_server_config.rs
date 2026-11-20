@@ -38,6 +38,7 @@ impl Home {
             .args(args)
             .env("SSMCP_CLIENT_CONFIG", self.0.join("config.toml"))
             .env("SSMCP_AUTH_HOME", self.0.join("auth"))
+            .env_remove("SSMCP_CONTEXT")
             .env_remove("SSMCP_UI_CONFIG")
             .env_remove("SSMCP_RELAY_TOKEN")
             .env("NO_COLOR", "1")
