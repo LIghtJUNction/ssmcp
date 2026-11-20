@@ -309,9 +309,10 @@ mod tests {
         #[cfg(not(unix))]
         {
             // Private paste storage deliberately requires the Unix implementation.
-            let Err(error) = imported else {
-                panic!("private paste must report its platform limitation");
+            let Ok(attachments::Loaded::RetainedText { text, error }) = imported else {
+                panic!("unsupported private paste must retain the original text and warning");
             };
+            assert_eq!(text.as_bytes(), b"local attachment contents");
             assert_eq!(
                 error,
                 concat!(
@@ -319,6 +320,11 @@ mod tests {
                     "automatic private paste files are not supported on this platform yet; ",
                     "save the text inside the workspace and reference it with @path"
                 )
+            );
+            let storage = fixture.scratch.0.join("workspace/.ssmcp");
+            assert_eq!(
+                std::fs::symlink_metadata(storage).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
             );
         }
         fixture
