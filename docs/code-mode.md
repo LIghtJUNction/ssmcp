@@ -100,6 +100,17 @@ The stream summaries retain each returned byte cursor, page EOF and truncation f
 
 Keep discovery, command observation and any follow-up reads within the current call and time budgets. Raising every item's `max_bytes` can exceed the aggregate result budget; return compact fields and read only the extra output needed to decide the next step. If orchestration times out, inspect the existing jobs rather than submitting the batch again.
 
+#### Retry transient failures without duplicating work
+
+If an SSMCP request fails while a client may be reloading, make up to three further idempotent attempts after that initial transient failure before reporting the connection as unavailable. Keep a short bounded backoff between attempts, preserve each error, and keep the user informed. A retry is a recovery attempt, not permission to repeat an operation with unknown effects.
+
+- A read-only lookup or a request explicitly rejected before execution can be retried. For a stale client ID, refresh `list` and verify the same authorized task, workspace and host before selecting its replacement; a similar display name alone is insufficient.
+- A timeout after submission can leave native work running. Keep the returned job ID, stream cursors and artifact IDs. Inspect that original job or the operation's receipt before submitting another mutation. If the start reply was lost, use the existing job inventory to resolve its outcome.
+- Reuse the original idempotency key or request ID when that operation supports one. Resume a pending finish request with its original ID; neither timeout nor retry supplies user approval. Never generate a new identity merely to bypass a recorded decision.
+- When a write has neither a reusable idempotency identity nor a verifiable outcome, preserve its status as unknown and wait for inspection. Do not label an unobserved execution as failed or silently repeat it. Authorization and schema errors still require the correct authorized request; retrying does not override them.
+
+After three unsuccessful retries, continue useful independent work and report the unresolved connection or receipt accurately. Inspect the same pending operation when access returns. Do not restart another client's session or cancel its jobs to obtain a free execution slot.
+
 #### Name complex commands
 
 For complex inline scripts, provide an optional `title` describing the operation:
