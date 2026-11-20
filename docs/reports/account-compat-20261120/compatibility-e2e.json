@@ -1,0 +1,317 @@
+{
+  "schema": "ssmcp.account_compat.validation.v1",
+  "passed": true,
+  "production_state_used": false,
+  "production_connections_opened": false,
+  "global_configuration_modified": false,
+  "checks": [
+    {
+      "check": "old-0.10.13:real_daemon_verifies_synthetic_subject_and_handle",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:default_allow_does_not_silently_authenticate",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:default_allow_does_not_silently_authenticate_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:bare-default_keeps_saved_credential",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:zero_argument_default_uses_same_verified_account",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:zero_argument_default_retries_legacy_format_only_once",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:zero_argument_default_executes_real_native_tool",
+      "passed": true,
+      "status": 200
+    },
+    {
+      "check": "old-0.10.13:zero_argument_default_does_not_add_another_subject",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:missing_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:missing_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:expired_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:expired_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:wrong_cached_subject",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:wrong_cached_subject_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:wrong_cached_principal",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:wrong_cached_principal_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:different_allowed_account",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:different_allowed_account_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:multiple_accounts",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:multiple_accounts_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:cross_origin",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:cross_origin_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:missing_registered_handle",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:missing_registered_handle_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:compat-self_keeps_saved_credential",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:account_mode_is_explicit_in_connection_output",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:ownership_and_quota_notice_is_visible",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:owner_executes_real_native_tool",
+      "passed": true,
+      "status": 200,
+      "response": "{\"stdout\": \"compat-owner-ok\", \"snapshot\": {\"state\": \"completed\", \"running\": false, \"exit_code\": 0, \"timed_out\": false}}"
+    },
+    {
+      "check": "old-0.10.13:another_subject_cannot_list_connection",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:another_subject_cannot_call_known_client_id",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:synthetic_owner_revocation_accepted",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:revoked_compatibility_exits_without_reauthorization",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:revoked_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "old-0.10.13:revoked_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:compatibility_never_claims_or_changes_accounts",
+      "passed": true
+    },
+    {
+      "check": "old-0.10.13:unrelated_account_and_daemon_remain_available",
+      "passed": true
+    },
+    {
+      "check": "new-main:real_daemon_verifies_synthetic_subject_and_handle",
+      "passed": true
+    },
+    {
+      "check": "new-main:new_anonymous_multi_wire_policy_is_unchanged",
+      "passed": true
+    },
+    {
+      "check": "new-main:listed_subject_123_wire_call_is_delivered",
+      "passed": true
+    },
+    {
+      "check": "new-main:listed_subject_124_wire_call_is_delivered",
+      "passed": true
+    },
+    {
+      "check": "new-main:unlisted_subject_wire_call_is_denied",
+      "passed": true
+    },
+    {
+      "check": "new-main:missing_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:missing_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:expired_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:expired_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:wrong_cached_subject",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:wrong_cached_subject_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:wrong_cached_principal",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:wrong_cached_principal_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:different_allowed_account",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:different_allowed_account_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:multiple_accounts",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:multiple_accounts_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:cross_origin",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:cross_origin_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:missing_registered_handle",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:missing_registered_handle_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:compat-self_keeps_saved_credential",
+      "passed": true
+    },
+    {
+      "check": "new-main:account_mode_is_explicit_in_connection_output",
+      "passed": true
+    },
+    {
+      "check": "new-main:ownership_and_quota_notice_is_visible",
+      "passed": true
+    },
+    {
+      "check": "new-main:owner_executes_real_native_tool",
+      "passed": true,
+      "status": 200,
+      "response": "{\"stdout\": \"compat-owner-ok\", \"snapshot\": {\"state\": \"completed\", \"running\": false, \"exit_code\": 0, \"timed_out\": false}}"
+    },
+    {
+      "check": "new-main:another_subject_cannot_list_connection",
+      "passed": true
+    },
+    {
+      "check": "new-main:another_subject_cannot_call_known_client_id",
+      "passed": true
+    },
+    {
+      "check": "new-main:synthetic_owner_revocation_accepted",
+      "passed": true
+    },
+    {
+      "check": "new-main:revoked_controller_whoami_and_call_are_denied",
+      "passed": true,
+      "whoami_status": 401,
+      "call_status": 401,
+      "controlled_socket_still_running": true
+    },
+    {
+      "check": "new-main:revoked_saved_login",
+      "passed": true,
+      "exit_code": 1
+    },
+    {
+      "check": "new-main:revoked_saved_login_does_not_change_credentials",
+      "passed": true
+    },
+    {
+      "check": "new-main:compatibility_never_claims_or_changes_accounts",
+      "passed": true
+    },
+    {
+      "check": "new-main:unrelated_account_and_daemon_remain_available",
+      "passed": true
+    }
+  ],
+  "client_sha256": "96872b93bae63af30d4597ea705c4bb043c9a5fe50d0fa034ed7ca3b3a64cf23",
+  "old_server_sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+  "new_server_sha256": "8cd66937ca18cdd357dfab83d9bc59d10249e9732868fd039668d793421d6766",
+  "elapsed_seconds": 9.885
+}
