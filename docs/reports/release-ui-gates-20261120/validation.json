@@ -1,0 +1,243 @@
+{
+  "schema": "ssmcp.release-ui-gates.v1",
+  "source_base": "831e0969465929890ed130537223cedc18d6c80d",
+  "validation": "complete unchanged Makefile test-client-ui-ready target",
+  "exit_code": 0,
+  "seconds": 130.521,
+  "suites": [
+    {
+      "suite": "client-ui",
+      "checks": 56,
+      "status": "passed"
+    },
+    {
+      "suite": "canvas-logs",
+      "checks": 68,
+      "status": "passed"
+    },
+    {
+      "suite": "composer",
+      "checks": 87,
+      "status": "passed"
+    },
+    {
+      "suite": "questions",
+      "checks": 42,
+      "status": "passed"
+    },
+    {
+      "suite": "input-history",
+      "checks": 119,
+      "status": "passed"
+    },
+    {
+      "suite": "presentations",
+      "checks": 57,
+      "status": "passed"
+    },
+    {
+      "suite": "context-memory",
+      "checks": 71,
+      "status": "passed"
+    },
+    {
+      "suite": "file-paste",
+      "checks": 145,
+      "status": "passed"
+    },
+    {
+      "suite": "relay-composer",
+      "checks": 46,
+      "status": "passed"
+    }
+  ],
+  "total_checks": 691,
+  "command": [
+    "make",
+    "test-client-ui-ready",
+    "CARGO_TARGET_DIR=/var/tmp/ssmcp-release-0.10.16-20261120/ui-chain-target"
+  ],
+  "binary_provenance": {
+    "ssmcp": {
+      "source": "07928a32ae35795bc256d7ea1d873a55a7a40b22",
+      "path": "/var/tmp/ssmcp-release-0.10.16-20261120/ui-chain-target/debug/ssmcp",
+      "sha256": "44ea9fc0f58cce07bcba4f847e18219b0b7c8291589828126a1b2ed58e3bc295",
+      "bytes": 13432704
+    },
+    "ssmcp-test-fixture": {
+      "source": "8a54a3f8500ce37724d6062bee7b4bc17f597d88",
+      "path": "/var/tmp/ssmcp-release-0.10.16-20261120/ui-chain-target/debug/ssmcp-test-fixture",
+      "sha256": "14f7e33f217bcc7fbcdc00f6455ba31e40a4bf61e2a1f8a58e137b47df1900f5",
+      "bytes": 286625392
+    },
+    "examples/vt_snapshot": {
+      "source": "existing validated independent VT decoder",
+      "path": "/var/tmp/ssmcp-release-0.10.16-20261120/ui-chain-target/debug/examples/vt_snapshot",
+      "sha256": "fa982611dda8dfcbb3a79096fa5bb854a3cd1c9efdf49bcc90142b5bba27f3e4",
+      "bytes": 6472736
+    },
+    "ssmcpd": {
+      "source": "metadata only; real router uses frozen library fixture",
+      "path": "/var/tmp/ssmcp-release-0.10.16-20261120/ui-chain-target/debug/ssmcpd",
+      "sha256": "4f5e45883515134f1bb5ab54771d51a3ac63aaf84e5edea7089e1eda8bab71d4",
+      "bytes": 145409352
+    }
+  },
+  "scripts_sha256": {
+    "e2e_007.py": "c594be12442f6d65d2302aadeb7f47c2b211caf897c1af056dbc8aca5082a8fd",
+    "e2e_007_upgrade.py": "f2708a15015364b60d87623abda064ece47fb7419e26f2f73860b587ccf7f16a",
+    "e2e_account_compat.py": "f5630327c5a329212dff20bd1e7fe21eb3bdb0a90e017345a83bfd8e7ab3b3f9",
+    "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+    "e2e_account_interactive.py": "dd2d99166d8303043680593094dbb5ef42de946befc32bd08818b07f00b97a7b",
+    "e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+    "e2e_agent_panel.py": "789044a5a2f534edc8f2527d2661ae79d5af9c35d427b889a5ee5df13b4c509a",
+    "e2e_agents.py": "8714e17e0be4c9d3157869cb22bd1d4c08b88485bdf888f4ccc69a5f8d2bad04",
+    "e2e_at_completion.py": "3d83437fb9cb4f032092c5c7e58b696bf04d86d4d29f821242ca79a1b730aca7",
+    "e2e_attach_service.py": "b3577bce916079c4952dab247ba2fbb67a88e3c87cb297c1b184d7399215f432",
+    "e2e_browser_background.py": "30b306e15a06c21bade498a4ee3cea7f5f39dfb32ab2090ddbdcaaf5756163bf",
+    "e2e_browser_setup.py": "798b38c74ac2a476f114174db92019278c99d990a9df7250c7f599d952febc7b",
+    "e2e_canvas_logs.py": "8f0ca3a96e975f3a9eecd57cb723dc1c51a862331bb42a4c788ecd885337caf0",
+    "e2e_client_ui.py": "a6266e94f54465f4e4fb3ea12f9083f4eb654a757efe4175c7fad6036e9effcb",
+    "e2e_composer.py": "11d7282f5388f5baf9e5f1495aa33fccdd017e0e32a695d00da2addc23b6eb6d",
+    "e2e_computer_use.py": "9a0fb94c7ce50a7ca02cf2cbb64801bb552c7b71d3aeaf205e68b8ccd7659e13",
+    "e2e_context_memory.py": "354e1b5d90f4ee17436c091630af2a2e0a77bdcba3296919cedb556798e40e71",
+    "e2e_daemon.py": "318eb2146a4a0f1207b6a82d361f8ce8dac9075d9d6b0b537afe7493897f68a5",
+    "e2e_dashboard.py": "68489e9424b37213d43066b71e6a54246f0571087b871abb90937f78ec8af1bd",
+    "e2e_file_paste.py": "39b82b1e44a7f106d4ace2f493e6a300f28c38a74c04f3f2504d4a8e862bb434",
+    "e2e_force_send.py": "d4a0cde9828ad4b5eb0814394c998c5356bcd3de8f8a7df9a663c88967d16aff",
+    "e2e_guide.py": "369d1c0115b6e7d480326585f455580e9285c0795346ca20ef1bf39b76544542",
+    "e2e_image_fallback.py": "00771eacad555314911b95a81b04ed37f3d81c3775534b9167b71dcec3202af6",
+    "e2e_input_history.py": "2d99192cb6ffb14f101896a9f8aad5a605f8c08a7b5f6a7559719be5b475f3cc",
+    "e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+    "e2e_listener_transports.py": "0f389444c4058a634ff4cfd9bb55b7ec7144612b989266021c365c179a8b83c3",
+    "e2e_local.py": "8f69fb01f80182826e9b464cd03e46f1719e416a6528e666d5a22baf0d3dac66",
+    "e2e_native_images.py": "4ac307281dd1f682acd5810ef47a3eaf37f6930ae1e2a6c85b7c4e776ea0a67f",
+    "e2e_onboarding.py": "f056f49bc411684c9ba4d874839c1d7051a5c1cdac1c5bfd328c02f480d09d32",
+    "e2e_periodic_git_fetch.py": "e69d9c97daee26d5e55b3f5f6c73124644d2c38849ea893d889ff5cc09cd37e6",
+    "e2e_presentations.py": "94421dab092e40a7119a88f410272a8bbdc29ca5285715af5fe5e904c1b08536",
+    "e2e_private_desktop.py": "08a222edf3da18d6fd8d6d5e1d407ec57952e5b96460104ce511ba0d8bde2c03",
+    "e2e_questions.py": "230a73f27e54896eea28d7dbd6e6dd43c66e58ea404b8141ea2c32cfacfb3eac",
+    "e2e_relay_composer.py": "18eb0b1757401d6f032342daa072a0306b948560aa2c9bea30d2a39d7ef7b524",
+    "e2e_service_portable.py": "f17b49032ad2e3cfb0e57a8d550612812f232bcaa9a865e35cd381772080a1a8",
+    "e2e_session_features.py": "feae9a771598deaaf6c9a05e509561476e26a20fa261fb7d5e1281e99fa35bac",
+    "e2e_session_service.py": "bc9216fc28c0e56aab3e89e2539c334736218be9c4bdb5afd67a75fe965805f6",
+    "e2e_terminal_control.py": "7489418c28d0629764ebe97b680366c896cb3d403b3691d58d2ba06ea4bcb842",
+    "e2e_terminal_logout.py": "2c8887ed01521c1250e9eca7d1ccebfad4f2736e19b6eb325d08739bca98996c",
+    "e2e_tty_observer.py": "9fc9de47d7fa7e65a4e612b0c61f00c12b2befbbb2c1ab5790b9492b9796f274",
+    "e2e_unified.py": "f62542eeaab83ee00dc0c7ddbd89a80b806382d6b088cb1d716306aee7ef05f9",
+    "e2e_user_wait.py": "9b3b2ea817513863e20596c41ae1295c94a0f994ac9d6c8a4acacdcc3409edde",
+    "e2e_zuse_worker.py": "09e4f1845e7ede4f0bd3a22f5cc6237d5a75df1876bae82f68076d80a242a05e"
+  },
+  "full_log_sha256": "cfb447f35a5e34b9acc91d5742d8fcd9544186e5d05fe3661431371ce9391cfe",
+  "server_deployment_policy": {
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_release.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "seconds": 6.197,
+    "forced_deferred_versions": [
+      "0.10.15",
+      "0.10.16",
+      "0.10.17",
+      "0.10.18"
+    ],
+    "tested_events": [
+      "push",
+      "workflow_dispatch"
+    ],
+    "tested_dispatch_requests": [
+      "absent",
+      true,
+      "true",
+      false,
+      "false"
+    ],
+    "future_selection_examples": [
+      "0.10.19",
+      "0.10.19-rc.1"
+    ],
+    "tail": [
+      "test_zuse_alias_requires_initialized_source_and_exact_registry_package (test_release.ReleaseTests.test_zuse_alias_requires_initialized_source_and_exact_registry_package) ... ok",
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 84 tests in 5.927s",
+      "",
+      "OK"
+    ]
+  },
+  "native_image_crop": {
+    "source": [
+      512,
+      127
+    ],
+    "cell": [
+      10,
+      20
+    ],
+    "full": {
+      "i": 1397948417,
+      "p": 1,
+      "x": 0,
+      "y": 0,
+      "w": 512,
+      "h": 127,
+      "row": 6,
+      "col": 7,
+      "axes": {
+        "c": 32
+      },
+      "pixel_width": 320.0,
+      "pixel_height": 79.375,
+      "columns": 32,
+      "rows": 4
+    },
+    "cropped": {
+      "i": 1397948417,
+      "p": 1,
+      "x": 0,
+      "y": 64,
+      "w": 512,
+      "h": 63,
+      "row": 2,
+      "col": 7,
+      "axes": {
+        "c": 32
+      },
+      "pixel_width": 320.0,
+      "pixel_height": 39.375,
+      "columns": 32,
+      "rows": 2
+    },
+    "last_source_row": 96
+  },
+  "additional_at_completion": "passed",
+  "additional_agent_panel": {
+    "status": "failed",
+    "release_gate_member": false,
+    "error": "keyboard navigation did not reach ChatGPT",
+    "scope": "pre-existing caller grouping stage; before the recipient literal assertion",
+    "coordinator_notified": true
+  },
+  "scope": {
+    "live_server_changed": false,
+    "global_client_replaced": false,
+    "existing_sessions_restarted": false,
+    "new_model_started": false
+  },
+  "prior_full_preflight": {
+    "run_id": 44703969970,
+    "commit": "0d3c4dc723ca7d554bcbe6dbd41e8b7b6a9b15ff",
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44703969970",
+    "status": "failed",
+    "remaining_step_after_ui": "real user systemd daemon and watchdog acceptance"
+  },
+  "next_step": "one no-tag full-platform release preflight from the merged candidate; no production deployment"
+}

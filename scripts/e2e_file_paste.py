@@ -516,7 +516,8 @@ class FilePaste(InputHistory):
                    "native graphics starts only after the real PTY capability and cell-size queries")
         self.clear_draft(front)
 
-        width, height = 512, 128
+        # Keep a partial final cell row after the thumbnail's width scaling.
+        width, height = 512, 127
         rgb = bytes(channel for y in range(height) for x in range(width)
                     for channel in ((x * 17 + y) % 256, (y * 31 + x // 2) % 256, (x ^ y) % 256))
         rgba = b"".join(rgb[i:i + 3] + b"\xff" for i in range(0, len(rgb), 3))
