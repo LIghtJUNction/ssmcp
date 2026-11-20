@@ -17,6 +17,7 @@ pub(super) fn body(text: &str) -> Option<&str> {
 struct Completed {
     receipt: Receipt,
     history_error: Option<String>,
+    reference_warnings: Vec<String>,
 }
 
 pub(super) struct Task {
@@ -41,6 +42,7 @@ impl Task {
         let task = handle.spawn(async move {
             let outcome = async {
                 let text = runtime.expand_references(&task_source).await?;
+                let reference_warnings = references::warnings(&text);
                 let ticket = receiver::submit(target, task_source.clone(), text)?;
                 let receipt = ticket.wait().await?;
                 let history_error = if receipt.status == Status::Accepted {
@@ -60,6 +62,7 @@ impl Task {
                 Ok(Completed {
                     receipt,
                     history_error,
+                    reference_warnings,
                 })
             }
             .await;
@@ -163,11 +166,17 @@ impl State {
                     record.push_str("  监听程序已接收\n\n");
                     self.log_message("user", source, record.as_bytes());
                 }
-                if let Some(error) = completed.history_error {
-                    format!("{}；历史记录未保存：{error}", completed.receipt.detail)
-                } else {
-                    completed.receipt.detail
+                let mut detail = completed.receipt.detail;
+                if completed.receipt.status == Status::Accepted
+                    && !completed.reference_warnings.is_empty()
+                {
+                    detail.push_str("；引用提示：");
+                    detail.push_str(&completed.reference_warnings.join("；"));
                 }
+                if let Some(error) = completed.history_error {
+                    let _ = write!(detail, "；历史记录未保存：{error}");
+                }
+                detail
             }
             Err(error) if error.starts_with("发送") => error,
             Err(error) => format!("发送失败：{error}；草稿已保留"),
@@ -212,6 +221,7 @@ mod tests {
                 .into(),
             },
             history_error: None,
+            reference_warnings: Vec::new(),
         })
     }
 
@@ -296,6 +306,33 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
+        }
+    }
+
+    #[test]
+    fn force_listener_reference_notices_follow_only_an_accepted_receipt() {
+        for status in [
+            Status::Accepted,
+            Status::Rejected,
+            Status::Failed,
+            Status::Unknown,
+        ] {
+            let original = "/send 请创建 @missing.txt";
+            let mut state = preview(original);
+            let stamp = state.chat_input_stamp().unwrap();
+            let mut result = completed(status).unwrap();
+            result.reference_warnings = vec!["@missing.txt: file unavailable".into()];
+            state.chat_finish_force_send(&stamp, body(original).unwrap(), Ok(result));
+            let notice = state.notice.as_deref().unwrap();
+            if status == Status::Accepted {
+                assert!(notice.starts_with("监听程序已接收；引用提示："));
+                assert!(notice.contains("@missing.txt: file unavailable"));
+                assert!(state.conversation.composer.is_empty());
+            } else {
+                assert!(notice.starts_with("发送"));
+                assert!(!notice.contains("引用提示"));
+                assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            }
         }
     }
 

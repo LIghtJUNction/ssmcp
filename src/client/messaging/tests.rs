@@ -238,3 +238,255 @@ fn idle_picker_refreshes_only_while_visible_and_unchanged_reply_does_not_redraw(
     manager.poll();
     assert!(receiver.try_recv().is_err());
 }
+
+#[test]
+fn overlapping_poll_and_send_replies_cannot_regress_delivery_progress() {
+    for final_status in [Status::Included, Status::Acknowledged, Status::Expired] {
+        let (mut manager, mut receiver, one, _) = ready();
+        manager.send(&one.id, "deliver once", "overlap").unwrap();
+        let send = receiver.try_recv().unwrap();
+        manager.refresh().unwrap();
+        let poll = receiver.try_recv().unwrap();
+        let mut confirmed = receipt(&one, "overlap", final_status);
+        confirmed.updated_at_ms = 20;
+        manager.reply(
+            poll.id,
+            Ok(Reply {
+                recipients: vec![one.clone()],
+                receipts: vec![confirmed],
+                ..Default::default()
+            }),
+        );
+        let expected = manager.outgoing[0].status.clone();
+        let mut delayed = receipt(&one, "overlap", Status::Queued);
+        delayed.updated_at_ms = 10;
+        manager.reply(
+            send.id,
+            Ok(Reply {
+                receipts: vec![delayed],
+                ..Default::default()
+            }),
+        );
+        assert_eq!(manager.outgoing[0].status, expected);
+        assert_eq!(manager.outgoing[0].confirmed_status, Some(final_status));
+        assert_eq!(manager.outgoing[0].text, "deliver once");
+        assert!(manager.pending.is_empty());
+        assert!(
+            receiver.try_recv().is_err(),
+            "old replies never replay a send"
+        );
+    }
+}
+
+#[test]
+fn confirmed_identity_and_terminal_receipts_survive_stale_or_conflicting_updates() {
+    let (mut manager, mut receiver, one, _) = ready();
+    manager
+        .send(&one.id, "stable identity", "identity")
+        .unwrap();
+    let sent = receiver.try_recv().unwrap();
+    let mut confirmed = receipt(&one, "identity", Status::Included);
+    confirmed.updated_at_ms = 20;
+    manager.reply(
+        sent.id,
+        Ok(Reply {
+            receipts: vec![confirmed.clone()],
+            ..Default::default()
+        }),
+    );
+    let mut replacement = confirmed.clone();
+    replacement.message_id = format!("native_{}", "b".repeat(32));
+    replacement.status = Status::Acknowledged;
+    replacement.updated_at_ms = 30;
+    assert!(!manager.update_receipt(replacement));
+    assert_eq!(
+        manager.outgoing[0].message_id.as_deref(),
+        Some(confirmed.message_id.as_str())
+    );
+    assert_eq!(manager.outgoing[0].status, "included");
+
+    // Even a newer timestamp cannot retract a delivered milestone.
+    let mut queued = receipt(&one, "identity", Status::Queued);
+    queued.updated_at_ms = 30;
+    assert!(!manager.update_receipt(queued));
+    assert_eq!(manager.outgoing[0].status, "included");
+
+    let mut acknowledged = confirmed.clone();
+    acknowledged.status = Status::Acknowledged;
+    acknowledged.updated_at_ms = 30;
+    assert!(manager.update_receipt(acknowledged));
+    let mut expired = confirmed;
+    expired.status = Status::Expired;
+    expired.updated_at_ms = 40;
+    assert!(!manager.update_receipt(expired));
+    assert_eq!(manager.outgoing[0].status, "acknowledged");
+    assert!(manager.outgoing[0].error.is_none());
+}
+
+#[test]
+fn late_send_error_does_not_retract_a_confirmed_receipt() {
+    for status in [Status::Queued, Status::Included, Status::Acknowledged] {
+        let (mut manager, mut receiver, one, _) = ready();
+        manager
+            .send(&one.id, "already received", "late-error")
+            .unwrap();
+        let send = receiver.try_recv().unwrap();
+        manager.refresh().unwrap();
+        let poll = receiver.try_recv().unwrap();
+        manager.reply(
+            poll.id,
+            Ok(Reply {
+                recipients: vec![one.clone()],
+                receipts: vec![receipt(&one, "late-error", status)],
+                ..Default::default()
+            }),
+        );
+        let before = manager.outgoing[0].status.clone();
+        manager.reply(send.id, Err("response lost after dispatch".into()));
+        assert_eq!(manager.outgoing[0].status, before);
+        assert_eq!(manager.outgoing[0].confirmed_status, Some(status));
+        assert!(manager.pending.is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
+fn disconnect_keeps_included_evidence_without_polling_a_closed_connection_forever() {
+    let (mut manager, mut receiver, one, _) = ready();
+    manager
+        .send(&one.id, "included before disconnect", "closed")
+        .unwrap();
+    let send = receiver.try_recv().unwrap();
+    manager.reply(
+        send.id,
+        Ok(Reply {
+            receipts: vec![receipt(&one, "closed", Status::Included)],
+            ..Default::default()
+        }),
+    );
+    let mut next = manager.connect(true);
+    assert_eq!(manager.outgoing[0].status, "included");
+    assert!(manager.outgoing[0].connection_closed);
+    assert!(
+        manager.outgoing[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("已包含")
+    );
+    assert_eq!(manager.outgoing[0].text, "included before disconnect");
+    let refresh = next.try_recv().unwrap();
+    assert!(matches!(refresh.command, Command::List {}));
+    manager.reply(
+        refresh.id,
+        Ok(Reply {
+            recipients: vec![one.clone()],
+            ..Default::default()
+        }),
+    );
+    manager.next_poll = Some(Instant::now());
+    manager.poll();
+    assert!(
+        next.try_recv().is_err(),
+        "closed included messages do not poll forever"
+    );
+
+    // Retained evidence must not permanently exhaust the bounded outbox.
+    let old = manager.outgoing[0].clone();
+    manager.outgoing = (0..128)
+        .map(|index| Outgoing {
+            request_id: format!("closed-{index}"),
+            ..old.clone()
+        })
+        .collect();
+    manager.send(&one.id, "new request", "fresh").unwrap();
+    assert_eq!(manager.outgoing.len(), 128);
+    assert_eq!(manager.outgoing.last().unwrap().request_id, "fresh");
+    let fresh = next.try_recv().unwrap();
+    assert!(matches!(fresh.command, Command::Send { .. }));
+    assert!(
+        next.try_recv().is_err(),
+        "only the explicitly requested new send is dispatched"
+    );
+}
+
+#[test]
+fn expired_receipts_are_terminal_and_do_not_retry_the_completed_request() {
+    let (mut manager, mut receiver, one, _) = ready();
+    manager
+        .send(&one.id, "expired body", "expired-request")
+        .unwrap();
+    let send = receiver.try_recv().unwrap();
+    manager.reply(
+        send.id,
+        Ok(Reply {
+            receipts: vec![receipt(&one, "expired-request", Status::Expired)],
+            ..Default::default()
+        }),
+    );
+    assert_eq!(manager.outgoing[0].status, "expired");
+    manager
+        .send(&one.id, "expired body", "expired-request")
+        .unwrap();
+    assert!(matches!(
+        receiver.try_recv().unwrap().command,
+        Command::List {}
+    ));
+    assert!(receiver.try_recv().is_err());
+    assert!(!manager.update_receipt(receipt(&one, "expired-request", Status::Queued)));
+    assert_eq!(manager.outgoing[0].status, "expired");
+}
+
+#[test]
+fn conflicting_message_identity_ends_an_explicit_retry_without_claiming_delivery() {
+    let (mut manager, mut receiver, one, _) = ready();
+    manager
+        .send(&one.id, "original body", "same-request")
+        .unwrap();
+    let send = receiver.try_recv().unwrap();
+    let original = receipt(&one, "same-request", Status::Queued);
+    manager.reply(
+        send.id,
+        Ok(Reply {
+            receipts: vec![original.clone()],
+            ..Default::default()
+        }),
+    );
+    let mut next = manager.connect(true);
+    let refresh = next.try_recv().unwrap();
+    manager.reply(
+        refresh.id,
+        Ok(Reply {
+            recipients: vec![one.clone()],
+            ..Default::default()
+        }),
+    );
+    manager
+        .send(&one.id, "original body", "same-request")
+        .unwrap();
+    let retry = next.try_recv().unwrap();
+    let mut conflict = original.clone();
+    conflict.message_id = format!("native_{}", "b".repeat(32));
+    manager.reply(
+        retry.id,
+        Ok(Reply {
+            receipts: vec![conflict],
+            ..Default::default()
+        }),
+    );
+    assert!(manager.pending.is_empty());
+    assert_eq!(manager.outgoing[0].status, "failed");
+    assert_eq!(
+        manager.outgoing[0].message_id.as_deref(),
+        Some(original.message_id.as_str())
+    );
+    assert!(
+        manager.outgoing[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("不同消息")
+    );
+    assert_eq!(manager.outgoing[0].text, "original body");
+    assert!(next.try_recv().is_err());
+}
