@@ -233,6 +233,11 @@ fn connection_arguments(
     }
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
+            Some("--") => {
+                pinned.push(argument);
+                pinned.extend(arguments);
+                break;
+            }
             Some("--context" | "--server") => {
                 arguments
                     .next()
@@ -420,6 +425,31 @@ mod tests {
             assert_eq!(restored.no_color, options.no_color);
             assert_eq!(restored.watchdog, options.watchdog);
         }
+    }
+
+    #[test]
+    fn foreground_reload_preserves_native_arguments_after_separator() {
+        let options = super::super::Options::parse(args(&["--server", "https://original.example"]))
+            .unwrap()
+            .unwrap();
+        let native = args(&[
+            "--agent",
+            "codex",
+            "--",
+            "--server",
+            "native-server",
+            "--context",
+            "native-context",
+            "--title",
+            "--context=literal",
+            "中文参数",
+        ]);
+        let mut original = args(&["--context", "old-connection"]);
+        original.extend(native.clone());
+        let pinned = connection_arguments(original, &options, false).unwrap();
+        let mut expected = args(&["--server", "https://original.example"]);
+        expected.extend(native);
+        assert_eq!(pinned, expected);
     }
 
     #[cfg(target_os = "linux")]
