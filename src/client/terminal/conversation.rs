@@ -1528,8 +1528,7 @@ impl State {
             && button & 3 == 2
             && button & (32 | 64) == 0
         {
-            if self.conversation.view == View::Agents {
-                self.chat_thread_history_mouse(x, y);
+            if self.conversation.view == View::Agents && self.chat_thread_history_mouse(x, y) {
                 return;
             }
             if self.conversation.view == View::History && self.conversation.scoped_history.is_some()

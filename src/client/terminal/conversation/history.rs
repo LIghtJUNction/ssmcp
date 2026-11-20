@@ -138,19 +138,19 @@ fn history_entry_height(session: &history::SessionSummary) -> usize {
 }
 
 impl State {
-    pub(super) fn chat_thread_history_mouse(&mut self, x: u16, y: u16) {
+    pub(super) fn chat_thread_history_mouse(&mut self, x: u16, y: u16) -> bool {
         if x >= self.geometry.left
             || y < body_top(self.geometry.rows)
             || y >= prompt_top(self.geometry)
         {
-            return;
+            return false;
         }
         if !self.conversation.detail && x < self.chat_agent_list_width() {
             let Some(index) = self.chat_list_hit(y) else {
-                return;
+                return false;
             };
             let Some(key) = self.conversation.drawn_agents.get(index).cloned() else {
-                return;
+                return false;
             };
             // Use the row the user actually clicked, even without a prior left-click.
             // chat_selected resolves this stable key and never falls back to a new occupant.
@@ -158,6 +158,7 @@ impl State {
             self.conversation.selected_agent = Some(key);
         }
         self.chat_thread_history_selected();
+        true
     }
 
     pub(super) fn chat_thread_history_selected(&mut self) {
@@ -723,6 +724,9 @@ mod archive_tests {
             y: first_row + 8,
             release: false,
         });
+        assert_eq!(state.conversation.view, View::Logs);
+        state.chat_key(Key::Escape);
+        assert_eq!(state.conversation.view, View::Agents);
         assert_eq!(state.conversation.selected_agent, selected);
         assert!(state.conversation.scoped_history.is_none());
     }

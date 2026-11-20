@@ -4431,7 +4431,10 @@ mod tests {
             let bottom = frame.rows.last().unwrap();
             assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
             assert!(
-                bottom.contains("https://ssmcp.lmm.best"),
+                matches!(
+                    bottom.split_whitespace().last(),
+                    Some("https://ssmcp.lmm.best" | "ssmcp.lmm.best")
+                ),
                 "{layout:?}: {bottom}"
             );
             assert!(bottom.contains("preview"), "{layout:?}: {bottom}");

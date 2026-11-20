@@ -444,7 +444,7 @@ class Portable:
         expected = {"portable-closed", "portable-restored"}
         self.check(all({entry["name"] for entry in entries} == expected for entries in listings),
                    "session list and both attach listing forms show the same identities")
-        self.cli(["attach", "absent-fixture", "--read-only"], expected="failure")
+        self.cli(["attach", "--local", "absent-fixture", "--read-only"], expected="failure")
         self.check({entry["name"] for entry in json.loads(
             self.cli(["sessions", "list", "--json"]).stdout)} == expected,
             "attaching an absent name does not create it")
