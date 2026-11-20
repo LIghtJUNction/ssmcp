@@ -122,6 +122,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Import clipboard text, image or desktop file selection",
     },
     SlashCommand {
+        name: "/paste-retry",
+        description: "Retry the retained paste; /paste-retry discard explicitly clears it",
+    },
+    SlashCommand {
         name: "/attach",
         description: "Reference a workspace file or import selected local files",
     },

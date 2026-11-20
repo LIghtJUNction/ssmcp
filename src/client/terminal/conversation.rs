@@ -10,6 +10,7 @@ mod history;
 mod listener;
 mod login;
 pub(super) mod logout;
+mod paste;
 mod questions;
 mod queue;
 mod receipts;
@@ -104,6 +105,8 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
+    paste_recovery: Option<String>,
+    retrying_paste: bool,
     login_task: Option<crate::client::account::login::Task>,
     access_request: Option<u64>,
     pub(super) logout_task: Option<logout::Task>,
@@ -127,6 +130,7 @@ impl Conversation {
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
             "force_pending":self.force_task.is_some(),
+            "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
@@ -494,6 +498,7 @@ impl State {
                 }
                 self.chat_start_input(attachments::Source::Clipboard, true)?;
             }
+            "/paste-retry" => self.chat_retry_paste(rest)?,
             "/attach" => {
                 self.chat_start_input(attachments::source_argument(rest)?, true)?;
             }
@@ -1802,6 +1807,12 @@ impl State {
         let copying = matches!(&source, attachments::Source::Copy(_));
         let context = matches!(&source, attachments::Source::Context { .. });
         let inserts = !copying && !context;
+        if inserts
+            && self.conversation.paste_recovery.is_some()
+            && !self.conversation.retrying_paste
+        {
+            return Err("A previous paste is retained · use /paste-retry, or /paste-retry discard before importing more input".into());
+        }
         if self.conversation.view == View::Questions && inserts {
             self.question_paste_len()?;
         }
@@ -1863,7 +1874,21 @@ impl State {
         result: Result<attachments::Loaded, String>,
     ) {
         let unchanged = expected.is_some() && self.chat_input_stamp().as_ref() == expected;
+        let retrying = std::mem::take(&mut self.conversation.retrying_paste);
+        if retrying && matches!(&result, Ok(attachments::Loaded::Reference { .. })) {
+            self.conversation.paste_recovery = None;
+        }
         match result {
+            Ok(attachments::Loaded::RetainedText { text, error }) => {
+                if unchanged && let Some(command) = original_command {
+                    self.conversation.composer.set_text(command);
+                }
+                self.conversation.paste_recovery = Some(text);
+                self.notice = Some(format!(
+                    "{error} · {}",
+                    self.chat_paste_recovery_hint().unwrap()
+                ));
+            }
             Ok(attachments::Loaded::Copied) => {
                 self.notice = Some("Latest agent message copied to the system clipboard".into());
             }
@@ -1930,14 +1955,18 @@ impl State {
                 if unchanged && let Some(command) = original_command {
                     self.conversation.composer.set_text(command);
                 }
-                self.notice = Some(format!("Local input failed: {error}"));
+                let recovery = self
+                    .chat_paste_recovery_hint()
+                    .map(|hint| format!(" · {hint}"))
+                    .unwrap_or_default();
+                self.notice = Some(format!("Local input failed: {error}{recovery}"));
             }
         }
         self.dirty = true;
     }
 
     fn chat_paste_text(&mut self, text: &str) -> Result<(), String> {
-        let large = text.len() > 8 * 1024;
+        let large = references::paste::should_store(text);
         let question = self.conversation.view == View::Questions;
         let used = if question {
             self.question_paste_len()?
@@ -1958,7 +1987,20 @@ impl State {
             }
             // File creation/fsync happens on the shared async input job. The
             // completion stamp protects edits, answers and recipient changes.
-            return self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            let result = self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            if let Err(error) = result {
+                if self.conversation.input_task.is_none()
+                    && self.conversation.paste_recovery.is_none()
+                {
+                    self.conversation.paste_recovery = Some(text.to_owned());
+                    return Err(format!(
+                        "{error} · {}",
+                        self.chat_paste_recovery_hint().unwrap()
+                    ));
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         let accepted = if question {
             self.question_paste(text)
@@ -2608,8 +2650,11 @@ impl State {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
-                let priority_hint =
-                    self.notice.is_some() || scroll_hint.is_some() || wait_hint.is_some();
+                let paste_hint = self.chat_paste_recovery_hint();
+                let priority_hint = self.notice.is_some()
+                    || scroll_hint.is_some()
+                    || wait_hint.is_some()
+                    || paste_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2617,6 +2662,7 @@ impl State {
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = wait_hint { return hint; }
+                    if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
