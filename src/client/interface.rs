@@ -18,6 +18,7 @@ pub(crate) mod history;
 pub(crate) mod listener;
 pub(crate) mod messages;
 pub(crate) mod questions;
+pub(crate) mod tool_summary;
 pub(crate) mod user_wait;
 
 static CONFIG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -497,6 +498,9 @@ pub(crate) async fn call(
     arguments: Value,
     terminals: &crate::terminals::Terminals,
 ) -> Result<Value, String> {
+    if name == tool_summary::TOOL {
+        return tool_summary::call(arguments);
+    }
     // Bounded waits must not hold the UI configuration lock.
     if name == "ssmcp.ui.wait" {
         return user_wait::call(arguments).await;
@@ -631,6 +635,7 @@ pub(crate) fn tools() -> Vec<Value> {
     vec![
         queue_tool(),
         listener::tool(),
+        tool_summary::tool(),
         user_wait::tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),
@@ -1143,6 +1148,7 @@ mod tests {
             "ssmcp.ui.questions",
             "ssmcp.ui.queue",
             "ssmcp.ui.set",
+            "ssmcp.ui.tool_summary",
             "ssmcp.ui.wait",
         ]);
         assert_eq!(names, expected);
