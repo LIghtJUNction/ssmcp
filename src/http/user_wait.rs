@@ -4,7 +4,7 @@ use super::*;
 use crate::code_mode::user_wait::{Arguments, Outcome, Recipient};
 use tokio::time::{Instant, MissedTickBehavior};
 
-async fn authorized(
+pub(super) async fn authorized(
     broker: &Broker,
     user: &str,
     token: &str,

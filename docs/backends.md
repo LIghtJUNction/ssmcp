@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-ssmcp 对外提供 `list`、`code_mode` 和 `collab` 三个 MCP 工具。`list` 找到当前授权可访问的在线客户端并读取能力目录；`code_mode` 执行 JavaScript，通过客户端连接编排原生工具；`collab` 在服务端处理同一会话的 agent 成员与消息。每条新连接始终显示为 `shell`，同时提供交互式终端和独立命令任务，并可注册多个已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+本开发分支对外提供 `list`、`code_mode`、`collab`、`request_finish` 和 `messages` 五个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`request_finish` 在 Rust 中等待有理由的结束决定；`messages` 按明确收件人处理原生消息。新增交互接口属于下一轮源码检查点，验证状态见[结束申请与问题](finish-and-questions.md)。每条新连接显示为 `shell`，提供交互式终端、独立命令任务和已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 
@@ -85,7 +85,7 @@ Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already
 {"name":"list","arguments":{"client_id":"CLIENT_ID_FROM_LIST","cursor":"NEXT_CURSOR_FROM_RESULT"}}
 ```
 
-MCP 协议本身的 `tools/list` 返回 `list`、`code_mode`、`collab`，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、接收或确认等会话内 agent 操作；它不代替控制端登录。`terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
+MCP 协议本身的 `tools/list` 返回上述五个工具，没有后续页。`collab` 的 `action` 选择加入、成员发现、发送、接收或确认等会话内 agent 操作；它不代替控制端登录。`terminal.write`、`claude.Read` 等原生名称供代码模式内部调用，完整参数以当前原生目录为准。
 
 ## 3. 用 code_mode 编排调用
 
