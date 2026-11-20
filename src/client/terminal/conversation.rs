@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use steering::receipt::Receipt;
 mod access;
 mod canvas;
+mod groups;
 mod hints;
 mod history;
 mod listener;
@@ -15,6 +16,7 @@ mod paste;
 mod questions;
 mod queue;
 mod receipts;
+mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
 mod tasks;
@@ -40,7 +42,7 @@ impl View {
         match self {
             Self::Activity => "conversation",
             Self::Audit => "code audit",
-            Self::Agents => "agents",
+            Self::Agents => "sessions",
             Self::Queue => "queue",
             Self::Questions => "questions",
             Self::History => "history",
@@ -80,6 +82,9 @@ pub(super) struct Conversation {
     pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
+    pub(super) process_id: String,
+    pub(super) process_generation: u64,
+    groups: groups::Selection,
     canvas: canvas::Canvas,
     pub(super) logs_open: bool,
     pub(super) exit_requested: bool,
@@ -102,6 +107,7 @@ pub(super) struct Conversation {
     native_retry: Option<messaging::Pending>,
     native_last: Option<Value>,
     native_refreshed: bool,
+    native_picker: bool,
     #[cfg(test)]
     native_fixture: Option<Value>,
     editing: Option<String>,
@@ -150,6 +156,7 @@ impl Conversation {
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
@@ -218,6 +225,7 @@ fn agent_key(value: &Value) -> String {
     match field(value, "kind") {
         "observed" => format!("caller:{}", field(value, "key")),
         "native" => format!("native:{}", field(value, "id")),
+        "process" => format!("process:{}", field(value, "client_id")),
         _ => format!("member:{}", field(value, "agent_id")),
     }
 }
@@ -225,9 +233,12 @@ fn agent_key(value: &Value) -> String {
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
-        entries.extend(self.chat_native_entries());
-        entries
+        let entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        sessions::arrange(
+            entries,
+            self.chat_native_entries(),
+            &self.conversation.process_id,
+        )
     }
 
     fn chat_saved_draft(&self) -> steering::SavedDraft {
@@ -497,13 +508,18 @@ impl State {
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
         if let Some(id) = &self.conversation.native_recipient {
-            let key = format!("native:{id}");
-            self.conversation.selected = entries
+            let index = entries
                 .iter()
-                .position(|entry| agent_key(entry) == key)
-                .unwrap_or(0);
-            self.conversation.selected_agent = Some(key);
+                .position(|entry| sessions::group_id(entry) == Some(id.as_str()));
+            self.conversation.selected = index.unwrap_or(0);
+            self.conversation.selected_agent = Some(
+                index
+                    .map(|index| agent_key(&entries[index]))
+                    .unwrap_or_else(|| format!("native:{id}")),
+            );
+            self.conversation.native_picker = true;
         } else {
+            self.conversation.native_picker = false;
             let target = self.conversation.target.as_deref().unwrap_or("next");
             self.conversation.selected = entries
                 .iter()
@@ -515,6 +531,10 @@ impl State {
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
+        if let Some(arguments) = groups::arguments(text) {
+            self.chat_group_command(arguments)?;
+            return Ok(true);
+        }
         if let Some(arguments) = user_wait::arguments(text) {
             self.chat_user_wait(arguments)?;
             return Ok(true);
@@ -550,6 +570,12 @@ impl State {
                 self.conversation.content_focus = true;
             }
             "/message" | "/recipients" => self.chat_native_picker(rest)?,
+            "/sessions" => {
+                if !rest.is_empty() {
+                    return Err("Use /sessions without arguments; i shows the selected IDs".into());
+                }
+                self.chat_group_command("")?;
+            }
             "/paste" => {
                 if !rest.is_empty() {
                     return Err("Use /paste without arguments to read your local clipboard".into());
@@ -923,7 +949,9 @@ impl State {
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
+                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart"))
+                        && !groups::retains_draft(&text)
+                    {
                         self.conversation.composer.take_text();
                     }
                     return;
@@ -991,6 +1019,10 @@ impl State {
             View::Audit => self.audit.open(),
             View::Agents => {
                 if let Some(agent) = self.chat_selected() {
+                    if field(&agent, "kind") == "process" {
+                        self.notice = Some("This process exposes threads but no verified inbox; select an exact thread".into());
+                        return;
+                    }
                     if field(&agent, "kind") == "observed" {
                         if self.audit.open_run(field(&agent, "run_id")) {
                             self.conversation.detail = true;
@@ -1005,6 +1037,12 @@ impl State {
                     }
                     if field(&agent, "kind") == "native" {
                         self.chat_native_select(&agent);
+                        return;
+                    }
+                    if self.conversation.native_picker
+                        && let Some(id) = sessions::group_id(&agent)
+                    {
+                        self.chat_native_select(&json!({"id":id}));
                         return;
                     }
                     self.conversation.native_recipient = None;
@@ -1718,6 +1756,30 @@ impl State {
         }
         if self.conversation.view == View::Agents
             && self.conversation.content_focus
+            && !self.conversation.detail
+        {
+            let handled = match character {
+                ' ' => {
+                    self.chat_group_toggle();
+                    true
+                }
+                'g' | 'G' => {
+                    self.chat_group_compose();
+                    true
+                }
+                'i' | 'I' => {
+                    self.chat_session_info();
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                self.dirty = true;
+                return;
+            }
+        }
+        if self.conversation.view == View::Agents
+            && self.conversation.content_focus
             && matches!(
                 character,
                 '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
@@ -2306,6 +2368,9 @@ impl State {
                 ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
             ];
         };
+        if matches!(field(selected, "session_role"), "process" | "thread") {
+            return self.session_details(selected, data);
+        }
         if field(selected, "kind") == "native" {
             return self.chat_native_details(selected);
         }
@@ -2429,155 +2494,7 @@ impl State {
     }
 
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        let entries = self.chat_recipients(data);
-        if let Some(selected) = &self.conversation.selected_agent {
-            if let Some(index) = entries
-                .iter()
-                .position(|entry| agent_key(entry) == *selected)
-            {
-                self.conversation.selected = index;
-            } else {
-                self.conversation.selected = 0;
-                self.notice = Some("Selected member or caller left · choose a recipient".into());
-            }
-        }
-        let missing = self
-            .conversation
-            .selected_agent
-            .as_ref()
-            .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
-        let window = self.chat_list_window(entries.len(), height);
-        self.conversation.drawn_agents = entries.iter().map(agent_key).collect();
-        let selected = &entries[self.conversation.selected];
-        if !missing {
-            self.conversation.selected_agent = Some(agent_key(selected));
-        }
-        let width = self.geometry.left;
-        let list_width = self.chat_agent_list_width();
-        let target = self.conversation.target.as_deref().unwrap_or("next");
-        let callers = entries
-            .iter()
-            .filter(|entry| field(entry, "kind") == "observed")
-            .count();
-        let mut rows = vec![self.chat_line(
-            &if entries.iter().any(|entry| field(entry, "kind") == "native") {
-                format!(
-                    "  Recipients · {} native inboxes / agents",
-                    entries
-                        .iter()
-                        .filter(|entry| field(entry, "kind") == "native")
-                        .count()
-                )
-            } else {
-                format!(
-                    "  Agents · {} members · {callers} callers",
-                    items(data, "agents").len()
-                )
-            },
-            PanelTone::Heading,
-            list_width,
-        )];
-        for index in window {
-            let entry = &entries[index];
-            let observed = field(entry, "kind") == "observed";
-            let marker = if !missing && index == self.conversation.selected {
-                "›"
-            } else {
-                " "
-            };
-            let native = field(entry, "kind") == "native";
-            let current = if native {
-                self.conversation.native_recipient.as_deref() == Some(field(entry, "id"))
-            } else {
-                !observed
-                    && self.conversation.native_recipient.is_none()
-                    && field(entry, "agent_id") == target
-            };
-            let symbol = if current {
-                "● "
-            } else if observed {
-                "↳ "
-            } else {
-                ""
-            };
-            let title = if observed && !field(entry, "model").is_empty() {
-                format!(
-                    " {marker} {symbol}{} · {}",
-                    field(entry, "name"),
-                    field(entry, "model")
-                )
-            } else {
-                format!(" {marker} {symbol}{}", field(entry, "name"))
-            };
-            let subtitle = if native {
-                format!(
-                    "     {} · {}",
-                    if field(entry, "native_kind") == "account_inbox" {
-                        "Inbox"
-                    } else {
-                        "Verified agent"
-                    },
-                    panel::safe_text(field(&entry["account"], "login"))
-                )
-            } else if observed {
-                format!("     {} calls · {}", entry["calls"], field(entry, "status"))
-            } else if field(entry, "agent_id") == "next" {
-                "     Next eligible response".into()
-            } else {
-                let duplicate = entries
-                    .iter()
-                    .filter(|other| {
-                        field(other, "kind") != "observed"
-                            && field(other, "name") == field(entry, "name")
-                    })
-                    .count()
-                    > 1;
-                let id = field(entry, "agent_id");
-                let suffix: String = id
-                    .chars()
-                    .rev()
-                    .take(8)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect();
-                let status = field(entry, "status");
-                format!(
-                    "     {}{}",
-                    if status.is_empty() { "Member" } else { status },
-                    if duplicate {
-                        format!(" · …{suffix}")
-                    } else {
-                        String::new()
-                    }
-                )
-            };
-            rows.push(self.chat_line(
-                &title,
-                if !missing && index == self.conversation.selected {
-                    PanelTone::Accent
-                } else {
-                    PanelTone::Normal
-                },
-                list_width,
-            ));
-            rows.push(self.chat_line(&subtitle, PanelTone::Muted, list_width));
-        }
-        if list_width < width {
-            let details = self.chat_agent_details((!missing).then_some(selected), data);
-            rows.resize_with(usize::from(height), || {
-                self.chat_line("", PanelTone::Normal, list_width)
-            });
-            for (index, row) in rows.iter_mut().enumerate() {
-                let (detail, tone) = details
-                    .get(index)
-                    .map(|(text, tone)| (text.as_str(), *tone))
-                    .unwrap_or(("", PanelTone::Normal));
-                row.push_str(&self.tone(PanelTone::Muted, " │ "));
-                row.push_str(&self.chat_line(detail, tone, width - list_width - 3));
-            }
-        }
-        rows
+        self.chat_session_rows(data, height)
     }
 
     fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
@@ -2818,7 +2735,8 @@ impl State {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
                                 "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
                             } else {
-                                "Esc back · ↑↓ select · Enter message · ←/→ panels".into()
+                                format!("{} selected · Esc back · Space select · g group · i IDs · Enter message",
+                                    self.conversation.groups.selected.len())
                             }
                         };
                     }
@@ -4029,7 +3947,7 @@ mod tests {
                 assert_eq!(shot.screen().size(), (nonzero(rows), nonzero(cols)));
                 if rows >= 10 && cols >= 80 {
                     let visible = shot.screen().contents();
-                    assert!(visible.contains("Agents"));
+                    assert!(visible.contains("Sessions"));
                     assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }

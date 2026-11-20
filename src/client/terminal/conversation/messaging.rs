@@ -65,6 +65,8 @@ fn local_command(text: &str) -> bool {
                 | "/questions"
                 | "/paste"
                 | "/paste-retry"
+                | "/group"
+                | "/sessions"
                 | "/attach"
                 | "/select"
                 | "/copy"
@@ -105,7 +107,7 @@ fn receipt_hint(receipt: &Value) -> String {
 }
 
 impl State {
-    fn native_snapshot(&self) -> Value {
+    pub(super) fn native_snapshot(&self) -> Value {
         #[cfg(test)]
         if let Some(snapshot) = &self.conversation.native_fixture {
             return snapshot.clone();
@@ -206,7 +208,15 @@ impl State {
             } else {
                 "No verified native recipient matches this name · draft retained"
             })?;
-        let selected = format!("native:{}", field(selected, "id"));
+        let id = field(selected, "id").to_owned();
+        let data = self.chat_data();
+        let selected = self
+            .chat_recipients(&data)
+            .iter()
+            .find(|entry| sessions::group_id(entry) == Some(id.as_str()))
+            .map(agent_key)
+            .unwrap_or_else(|| format!("native:{id}"));
+        self.conversation.native_picker = true;
         self.chat_change_view(View::Agents);
         self.conversation.content_focus = true;
         self.conversation.detail = false;
@@ -435,6 +445,7 @@ impl State {
 
     pub(super) fn chat_poll_native(&mut self) {
         let snapshot = self.native_snapshot();
+        self.chat_poll_groups(&snapshot);
         if snapshot["connected"] != true {
             self.conversation.native_refreshed = false;
         } else if !self.preview && !self.conversation.native_refreshed {
@@ -771,7 +782,7 @@ mod tests {
             parser.process(&bytes);
             let contents = parser.screen().contents();
             assert!(contents.contains("project-z"));
-            assert!(contents.contains("Inbox"));
+            assert!(contents.contains("process"));
             if let Some(directory) = std::env::var_os("SSMCP_INTERACTION_PREVIEW_DIR") {
                 let directory = std::path::PathBuf::from(directory);
                 std::fs::create_dir_all(&directory).unwrap();

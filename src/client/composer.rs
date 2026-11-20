@@ -122,6 +122,14 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Clear visible logs",
     },
     SlashCommand {
+        name: "/sessions",
+        description: "Browse session processes and threads, full IDs and group selection",
+    },
+    SlashCommand {
+        name: "/group",
+        description: "Select any exact recipients; send, save, inspect or retry a group",
+    },
+    SlashCommand {
         name: "/message",
         description: "Choose a verified agent or account inbox for a native text message",
     },
