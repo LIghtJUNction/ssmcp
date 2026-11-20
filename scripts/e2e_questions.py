@@ -144,8 +144,10 @@ class Questions(Composer):
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8)
-                    and "To · Question fixture agent" in text(shot),
+                    and "To Question fixture agent" in text(shot),
                     "Enter selecting an exact member recipient")
+        self.check(self.ui("/display/conversation")["target"] == member["agent_id"],
+                   "the question draft targets the exact registered member identity")
         ordinary = "QUESTIONS_ORDINARY_DRAFT 保留文字界"
         front.send(ordinary.encode("utf-8") + LEFT)
         original = self.wait_conversation(
