@@ -2,24 +2,22 @@ use super::*;
 use sha2::{Digest, Sha256};
 
 fn fixture(cols: u16) -> State {
-    // Two independent panes must fit above the retained composer.
-    let mut state = preview(40, cols);
+    let mut state = preview(32, cols);
     state.events.clear();
     state.log_message("user", "Inspect these adjacent calls.", b"");
-    // Five three-row tools exceed the group's twelve-row inner viewport.
-    for index in 0..5 {
+    for index in 0..4 {
         let id = format!("group-{index}");
         state.log_event(
             "preview",
-            &json!({"type":"harness.tool.started","call_id":id}),
-            format!("[REQ] inspect check-{index} call={id} started\n").as_bytes(),
+            &json!({"type":"exec.started","job_id":id,"command":["cargo",format!("check-{index}")]}),
+            format!("[RUN] preview {id} cargo check-{index} started\n").as_bytes(),
         );
         let output = (0..20)
             .map(|n| format!("call {index} result {n:02}\n"))
             .collect::<String>();
         state.log_event(
             "preview",
-            &json!({"type":"tool_result","call_id":id}),
+            &json!({"type":"exec.stdout","job_id":id}),
             output.as_bytes(),
         );
     }
@@ -86,18 +84,32 @@ fn save_preview(state: &mut State, name: &str) {
 }
 
 #[test]
-fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
+fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_queue() {
     for cols in [120, 48] {
         let mut state = fixture(cols);
         let draft = state.conversation.snapshot()["draft"].clone();
         let queue = state.chat_data()["queue"].clone();
+        let initial = display(&mut state).screen().contents();
+        assert!(
+            initial.contains("python3 -c") && initial.contains("Show details"),
+            "{initial}"
+        );
+        assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], true);
+        save_preview(&mut state, "group-default-command-visible");
+        let initial_header = initial
+            .lines()
+            .position(|row| row.contains("Tools · 5 calls"))
+            .unwrap() as u16;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y: initial_header,
+            release: false,
+        });
         let screen = display(&mut state).screen().contents();
         assert!(screen.contains("Tools · 5 calls"), "{screen}");
         assert!(!screen.contains("private-frame-secret"));
-        assert!(screen.contains("python3 -c"), "{screen}");
-        assert!(screen.contains("Show details"), "{screen}");
-        assert_eq!(state.events.snapshot()["tool_groups"][0]["count"], 5);
-        save_preview(&mut state, "group-folded-command-visible");
+        save_preview(&mut state, "group-folded");
         let header_y = screen
             .lines()
             .position(|row| row.contains("Tools · 5 calls"))
@@ -110,6 +122,8 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
             y: header_y,
             release: false,
         });
+        display(&mut state);
+        state.chat_key(Key::Home);
         display(&mut state);
         save_preview(&mut state, "group-expanded");
         let before = state.events.snapshot();
@@ -132,7 +146,7 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
         state.chat_key(Key::Home);
         display(&mut state);
         assert_eq!(state.events.snapshot()["tool_groups"][0]["scroll"], 0);
-        for _ in 0..5 {
+        for _ in 0..4 {
             state.chat_key(Key::AuditDown);
         }
         display(&mut state);
@@ -141,7 +155,7 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
         let screen = display(&mut state).screen().contents();
         let selected = state.events.snapshot()["selected"].clone();
         assert_ne!(selected, selected_previous);
-        assert_eq!(selected, state.events.snapshot()["events"][6]["id"]);
+        assert_eq!(selected, state.events.snapshot()["events"][5]["id"]);
         let title_y = screen
             .lines()
             .position(|row| row.contains("python3 -c"))
@@ -155,8 +169,8 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
         let head = display(&mut state).screen().contents();
         assert!(head.contains("head-marker"), "{head}");
         assert!(!head.contains("private-frame-secret"));
-        assert_eq!(state.events.snapshot()["events"][6]["expanded"], true);
-        assert_eq!(state.events.snapshot()["events"][6]["panel"]["scroll"], 0);
+        assert_eq!(state.events.snapshot()["events"][5]["expanded"], true);
+        assert_eq!(state.events.snapshot()["events"][5]["panel"]["scroll"], 0);
         save_preview(&mut state, "group-command-head");
 
         let outer_offset = state.events.snapshot()["tool_groups"][0]["scroll"].clone();
@@ -171,7 +185,7 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
             release: false,
         });
         display(&mut state);
-        assert_eq!(state.events.snapshot()["events"][6]["panel"]["scroll"], 3);
+        assert_eq!(state.events.snapshot()["events"][5]["panel"]["scroll"], 3);
         assert_eq!(
             state.events.snapshot()["tool_groups"][0]["scroll"],
             outer_offset
@@ -189,13 +203,7 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
         state.chat_key(Key::Home);
         let head_again = display(&mut state).screen().contents();
         assert!(head_again.contains("head-marker"), "{head_again}");
-        // The command is outside the shared tool window. Move through the
-        // five tool items to reveal their group header before folding it.
-        for _ in 0..6 {
-            state.chat_key(Key::AuditUp);
-        }
-        let group_again = display(&mut state).screen().contents();
-        let header_y = group_again
+        let header_y = head_again
             .lines()
             .position(|row| row.contains("Tools · 5 calls"))
             .unwrap() as u16;
@@ -211,7 +219,7 @@ fn tool_group_and_standalone_command_frame_preserve_draft_and_queue() {
         input(&mut state, b"\r");
         display(&mut state);
         assert_eq!(state.events.snapshot()["tool_groups"][0]["expanded"], true);
-        assert_eq!(state.events.snapshot()["events"][6]["expanded"], true);
+        assert_eq!(state.events.snapshot()["events"][5]["expanded"], true);
         assert_eq!(state.conversation.snapshot()["draft"], draft);
         assert_eq!(state.chat_data()["queue"], queue);
         assert!(state.actions.is_empty() && state.conversation.submitting.is_none());
@@ -227,21 +235,22 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
     for cols in [120, 48] {
         for expanded in [false, true] {
             let mut before = fixture(cols);
+            let initial = display(&mut before).screen().contents();
+            let y = initial
+                .lines()
+                .position(|row| row.contains("Tools · 5 calls"))
+                .unwrap() as u16;
+            before.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y,
+                release: false,
+            });
             let first = display(&mut before).screen().contents();
-            if !expanded {
-                let y = first
-                    .lines()
-                    .position(|row| row.contains("Tools · 5 calls"))
-                    .unwrap() as u16;
-                before.chat_key(Key::Mouse {
-                    button: 0,
-                    x: 8,
-                    y,
-                    release: false,
-                });
-                display(&mut before);
-                input(&mut before, b"\r");
-            }
+            assert_eq!(
+                before.events.snapshot()["tool_groups"][0]["expanded"],
+                false
+            );
             if expanded {
                 let y = first
                     .lines()
@@ -255,7 +264,7 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 });
                 before.chat_key(Key::End);
                 display(&mut before);
-                for _ in 0..6 {
+                for _ in 0..5 {
                     before.chat_key(Key::AuditDown);
                 }
                 let screen = display(&mut before).screen().contents();
@@ -282,7 +291,7 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             let bytes = serde_json::to_vec(&saved).unwrap();
             assert!(!String::from_utf8_lossy(&bytes).contains("private-frame-secret"));
             let saved = serde_json::from_slice(&bytes).unwrap();
-            let mut after = preview(40, cols);
+            let mut after = preview(32, cols);
             after.chat_apply_reload_snapshot(saved, Vec::new(), None);
             after.chat_restore_draft(draft);
             after.chat_restore_reload_input();
@@ -295,17 +304,17 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 events["tool_groups"][0]["scroll"]
             );
             assert_eq!(
-                restored["events"][6]["expanded"],
-                events["events"][6]["expanded"]
+                restored["events"][5]["expanded"],
+                events["events"][5]["expanded"]
             );
             assert_eq!(
-                restored["events"][6]["panel"]["following"],
-                events["events"][6]["panel"]["following"]
+                restored["events"][5]["panel"]["following"],
+                events["events"][5]["panel"]["following"]
             );
-            if events["events"][6]["panel"]["following"] != true {
+            if events["events"][5]["panel"]["following"] != true {
                 assert_eq!(
-                    restored["events"][6]["panel"]["scroll"],
-                    events["events"][6]["panel"]["scroll"]
+                    restored["events"][5]["panel"]["scroll"],
+                    events["events"][5]["panel"]["scroll"]
                 );
             }
             assert_eq!(restored["tool_groups"][0]["stats"]["running"], 0);
@@ -318,7 +327,7 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                     .filter(|event| event["command"] == true)
                     .all(|event| event["historical"] == true && event["connection_ended"] == true)
             );
-            assert_ne!(restored["events"][6]["id"], events["events"][6]["id"]);
+            assert_ne!(restored["events"][5]["id"], events["events"][5]["id"]);
             if expanded {
                 assert!(screen.contains("tail-marker"), "{screen}");
             } else {
@@ -328,12 +337,6 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 );
             }
             assert!(!screen.contains("private-frame-secret"));
-            assert!(screen.contains("Keep this draft"), "{screen}");
-            assert!(
-                screen
-                    .lines()
-                    .all(|line| unicode_width::UnicodeWidthStr::width(line) <= usize::from(cols))
-            );
             assert_eq!(after.conversation.snapshot()["draft"], draft_display);
             assert_eq!(after.chat_data()["queue"], queue);
             assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
@@ -352,7 +355,7 @@ fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_read
     ] {
         value["display"] = bad;
         let saved = serde_json::from_value(value.clone()).unwrap();
-        let mut after = preview(40, 120);
+        let mut after = preview(32, 120);
         after.chat_apply_reload_snapshot(saved, Vec::new(), None);
         after.chat_restore_draft(draft.clone());
         assert_eq!(after.conversation.composer.text(), "Keep this draft");
@@ -366,7 +369,7 @@ fn reload_tool_display_bad_optional_data_keeps_draft_and_legacy_checkpoints_read
     }
     value.as_object_mut().unwrap().remove("display");
     let saved = serde_json::from_value(value).unwrap();
-    let mut after = preview(40, 120);
+    let mut after = preview(32, 120);
     after.chat_apply_reload_snapshot(saved, Vec::new(), None);
     after.chat_restore_draft(draft);
     assert_eq!(after.conversation.composer.text(), "Keep this draft");

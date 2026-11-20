@@ -45,7 +45,11 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
             .iter()
             .any(|key| key.contains("old-job-a"))
     );
-    before.selected = Some(before.events[2].id);
+    before.select(isize::MIN);
+    before.select(1);
+    assert!(before.back());
+    assert!(before.open());
+    before.select(2);
     assert!(before.open());
     before.render(48, 24, &ui(), true);
     assert!(before.scroll_selected_panel(6));
@@ -80,15 +84,10 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
     assert!(after.events[1].historical && after.events[1].interrupted);
     assert_eq!(after.events[2].meta.status, Some(Status::Exit(0)));
     assert_eq!(after.events[2].panel.offset(), 6);
-    assert!(after.events[2].chat_expanded);
-    assert!(after.tool_groups().is_empty());
+    assert!(after.events[2].chat_expanded && after.tool_groups()[0].expanded);
     assert_eq!(after.selected, Some(after.events[2].id));
-    assert!(
-        after
-            .events
-            .iter()
-            .all(|event| event.meta.status != Some(Status::Running))
-    );
+    assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["running"], 0);
+    assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["unknown"], 1);
     let old_text = after.events[1].text.clone();
     after.ingest_event(
         "shell",
@@ -106,15 +105,10 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
 #[test]
 fn reload_display_keeps_both_outer_fold_states_and_separates_new_live_calls() {
     for expanded in [false, true] {
-        let mut before = EventView::new();
-        before.set_scope(EventScope::Conversation);
-        for id in ["old-tool-a", "old-tool-b"] {
-            before.ingest_event(
-                "native",
-                &json!({"type":"harness.tool.started","call_id":id}),
-                format!("[REQ] inspect call={id} started\n").as_bytes(),
-            );
-        }
+        let mut before = fixture();
+        before.select(isize::MIN);
+        before.select(1);
+        assert!(before.back());
         if expanded {
             assert!(before.open());
         }
@@ -130,14 +124,68 @@ fn reload_display_keeps_both_outer_fold_states_and_separates_new_live_calls() {
         assert_eq!(after.selected_group, Some(after.tool_groups()[0].head));
         for id in ["new-a", "new-b"] {
             after.ingest_event(
-                "native",
-                &json!({"type":"harness.tool.started","call_id":id}),
-                b"[REQ] next inspection\n",
+                "shell",
+                &json!({"type":"exec.started","job_id":id}),
+                b"[RUN] next command\n",
             );
         }
         assert_eq!(after.tool_groups().len(), 2);
         assert_eq!(after.tool_groups()[0].members.len(), 2);
         assert_eq!(after.tool_groups()[1].members.len(), 2);
+    }
+}
+
+#[test]
+fn command_group_reload_keeps_automatic_and_explicit_choices_and_legacy_bools() {
+    for (choice, legacy) in [
+        (None, false),
+        (Some(false), false),
+        (Some(true), false),
+        (Some(false), true),
+        (Some(true), true),
+    ] {
+        let mut before = fixture();
+        if let Some(expanded) = choice {
+            let group = before.tool_groups()[0].clone();
+            assert!(before.set_tool_expanded(&group, expanded));
+        }
+        let display = serde_json::to_value(before.reload_display()).unwrap();
+        let mut reading = serde_json::to_value(before.position().for_reload(&before)).unwrap();
+        if legacy {
+            for panel in reading["reading"]["panels"].as_array_mut().unwrap() {
+                assert!(
+                    panel[1]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("group_automatic")
+                        .is_some()
+                );
+            }
+        }
+        let reading: ReloadPosition = serde_json::from_value(reading).unwrap();
+        let mut after = EventView::new();
+        after.set_scope(EventScope::Conversation);
+        after.restore_reload_display(serde_json::from_value(display).unwrap());
+        after.restore_position(&reading.position(&after));
+        let group = after.tool_groups()[0].clone();
+        assert_eq!(group.expanded, choice.unwrap_or(true));
+        assert_eq!(after.events[group.start].group_automatic, choice.is_none());
+        for width in [120, 48] {
+            let rows = after.render(width, 24, &ui(), false);
+            let text = rows.join("\n");
+            assert_eq!(
+                text.contains("python3 -c"),
+                choice.unwrap_or(true),
+                "{text}"
+            );
+            assert!(!text.contains("private-reload-source"), "{text}");
+        }
+        assert!(
+            after
+                .events
+                .iter()
+                .all(|event| event.meta.scope.is_none() && event.meta.keys.is_empty())
+        );
     }
 }
 

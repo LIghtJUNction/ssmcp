@@ -55,6 +55,7 @@ struct Event {
     panel: CommandPanel,
     group_panel: CommandPanel,
     group_expanded: bool,
+    group_automatic: bool,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
@@ -100,6 +101,9 @@ struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
     group_expanded: bool,
+    // Missing in older checkpoints: their saved bool is an explicit choice.
+    #[serde(default)]
+    group_automatic: bool,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -637,6 +641,7 @@ impl EventView {
             if !self.follow && self.selected_group.is_none() {
                 // A new adjacent call must not swallow an item already being read.
                 self.events[group.start].group_expanded = true;
+                self.events[group.start].group_automatic = false;
                 self.reveal = true;
             } else {
                 self.selected = Some(group.head);
@@ -646,11 +651,12 @@ impl EventView {
     }
 
     fn set_tool_expanded(&mut self, group: &tool_activity::Group, expanded: bool) -> bool {
-        if group.expanded == expanded {
+        if group.expanded == expanded && !self.events[group.start].group_automatic {
             return false;
         }
         let head = &mut self.events[group.start];
         head.group_expanded = expanded;
+        head.group_automatic = false;
         if expanded && head.group_panel.rows == 0 {
             head.group_panel.scroll = Some(0);
         }
@@ -883,6 +889,9 @@ impl EventView {
     }
 
     pub(super) fn position(&self) -> EventPosition {
+        let groups = tool_activity::groups(&self.events, |event| {
+            event.owned_by(&self.history_selection)
+        });
         EventPosition {
             selected: self.selected,
             selected_group: self.selected_group,
@@ -894,13 +903,21 @@ impl EventView {
             panel_scroll: self
                 .events
                 .iter()
-                .map(|event| {
+                .enumerate()
+                .map(|(index, event)| {
+                    // Any retained member can become the head after pruning.
+                    // A saved canvas must carry the group's choice with it.
+                    let head = groups
+                        .iter()
+                        .find(|group| group.contains(index))
+                        .map_or(event, |group| &self.events[group.start]);
                     (
                         event.id,
                         CommandPosition {
                             scroll: event.panel.scroll,
-                            group_scroll: event.group_panel.scroll,
-                            group_expanded: event.group_expanded,
+                            group_scroll: head.group_panel.scroll,
+                            group_expanded: head.group_expanded,
+                            group_automatic: head.group_automatic,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -928,10 +945,16 @@ impl EventView {
                 .iter()
                 .find(|(id, _)| *id == event.id)
                 .map(|(_, panel)| *panel)
-                .unwrap_or_default();
+                .unwrap_or(CommandPosition {
+                    // New live rows use the default for this canvas. Restored
+                    // rows without reading data keep the legacy folded state.
+                    group_automatic: !event.historical,
+                    ..CommandPosition::default()
+                });
             event.panel.scroll = panel.scroll;
             event.group_panel.scroll = panel.group_scroll;
             event.group_expanded = panel.group_expanded;
+            event.group_automatic = panel.group_automatic;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
@@ -964,14 +987,19 @@ impl EventView {
         self.group_header_hit_rows.clear();
         self.placements.clear();
         self.preserve_read_selection();
-        let visible = self.visible_ids();
-        if !self.selected.is_some_and(|id| visible.contains(&id)) {
-            self.selected = if self.follow {
+        let visible = self.selection_targets();
+        if !self
+            .selected
+            .is_some_and(|id| visible.iter().any(|(target, _)| *target == id))
+        {
+            let target = if self.follow {
                 visible.last()
             } else {
                 visible.first()
             }
             .copied();
+            self.selected = target.map(|(id, _)| id);
+            self.selected_group = target.and_then(|(id, group)| group.then_some(id));
             self.reveal = !self.follow;
         }
     }
@@ -1341,6 +1369,7 @@ impl EventView {
                 panel: CommandPanel::default(),
                 group_panel: CommandPanel::default(),
                 group_expanded: false,
+                group_automatic: true,
                 truncated,
                 tone,
                 meta,
@@ -1387,6 +1416,7 @@ impl EventView {
                     .find(|next| next.tool_group_id.as_ref() == Some(group_id))
             {
                 next.group_expanded = event.group_expanded;
+                next.group_automatic = event.group_automatic;
                 next.group_panel = event.group_panel;
                 if self.selected_group == Some(event.id) {
                     self.selected_group = Some(next.id);
