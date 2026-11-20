@@ -1,0 +1,31 @@
+{
+  "status": "controller_contracts_passed_awaiting_product_gates",
+  "product_acceptance_started": false,
+  "cargo_started": false,
+  "controller": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/run_bound_v3.py",
+    "sha256": "3bbe4a7e74ff9bf7305cbf4aedb49ae19a28a4bcfeed49958e9c5a1d15ffb94b"
+  },
+  "tests": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/test_run_bound_v3_r2.py",
+    "sha256": "67467048112e5344a49fedcd544f096c8d4deaefb86dcc17fdd90caf84b59570",
+    "passed": 19,
+    "total": 19
+  },
+  "contracts_receipt": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/contracts-3bbe4a7e74ff-r2.json",
+  "review_sha256": "333753d39016041ce3f67d630523dc1e016123cafa0a668d989d9b7e1e1fee14",
+  "resolved_findings": [
+    "gate_source_manifest",
+    "repository_relative_source_keys",
+    "router_test_fixture_alias",
+    "prebaseline_gated_hash_recheck"
+  ],
+  "ast": "passed",
+  "diff_whitespace": "passed",
+  "help_exit_code": 0,
+  "real_manifest_probe": {
+    "path": "/var/tmp/ssmcp-iteration-converge-20261120/final21-acceptance-controller/source-binding-contract-7e284e76bbbf.json",
+    "helpers_unchanged": true,
+    "scope": "Historical failed e25 binding helper only, not product acceptance"
+  }
+}
