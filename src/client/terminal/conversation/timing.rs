@@ -27,35 +27,32 @@ fn counter(entry: &Entry) -> String {
     )
 }
 
+fn label(entry: &Entry) -> String {
+    let value = counter(entry);
+    match (entry.kind, entry.remaining_ms) {
+        ("timer", Some(_)) => format!("Countdown {value} left"),
+        ("timer", None) => format!("Elapsed {value}"),
+        (_, Some(_)) => format!("Observation {value} left"),
+        _ => format!("Observation elapsed {value}"),
+    }
+}
+
 fn hint(snapshot: &Snapshot) -> Option<String> {
     let entry = snapshot.active.first()?;
-    let mode = if entry.remaining_ms.is_some() {
-        "left"
-    } else {
-        "elapsed"
-    };
     let others = snapshot.active.len().saturating_sub(1);
-    Some(format!(
-        "{} {} {mode}{} · /wait",
-        if entry.kind == "timer" {
-            "Timer"
-        } else {
-            "Wait"
-        },
-        counter(entry),
-        if others == 0 {
-            String::new()
-        } else {
-            format!(" · +{others}")
-        }
-    ))
+    let more = if others == 0 {
+        String::new()
+    } else {
+        format!(" · +{others}")
+    };
+    Some(format!("{}{more} · /wait", label(entry)))
 }
 
 fn detail(snapshot: &Snapshot) -> Option<String> {
     if snapshot.active.is_empty() && snapshot.recent.is_empty() {
         return None;
     }
-    let mut lines = vec!["Timers and passive waits (monotonic)".into()];
+    let mut lines = vec!["Timing snapshot · monotonic clocks".into()];
     for entry in &snapshot.active {
         lines.push(format!(
             "#{} · {}",
@@ -63,13 +60,8 @@ fn detail(snapshot: &Snapshot) -> Option<String> {
             panel::safe_text(&entry.label)
         ));
         lines.push(format!(
-            "{} {}{}",
-            counter(entry),
-            if entry.remaining_ms.is_some() {
-                "remaining"
-            } else {
-                "elapsed"
-            },
+            "{}{}",
+            label(entry),
             if entry.cancellable {
                 " · /wait cancel <exact ID>"
             } else {
@@ -91,6 +83,7 @@ fn detail(snapshot: &Snapshot) -> Option<String> {
             duration(entry.elapsed_ms, false)
         ));
     }
+    lines.push("Observation time left is the current wait budget; jobs can keep running.".into());
     lines.push(
         "Cancelling a wait never cancels its job, consumes input or approves task completion."
             .into(),
@@ -121,20 +114,9 @@ impl State {
     pub(super) fn chat_clock_label(&self) -> Option<String> {
         let user = self.chat_user_wait_snapshot();
         if let Some(remaining) = user.active.iter().map(|entry| entry.remaining_ms).min() {
-            return Some(format!("Wait {}", duration(remaining, true)));
+            return Some(format!("User wait {} left", duration(remaining, true)));
         }
-        let timing = self.chat_timing_snapshot();
-        timing.active.first().map(|entry| {
-            format!(
-                "{} {}",
-                if entry.kind == "timer" {
-                    "Timer"
-                } else {
-                    "Wait"
-                },
-                counter(entry)
-            )
-        })
+        self.chat_timing_snapshot().active.first().map(label)
     }
 }
 

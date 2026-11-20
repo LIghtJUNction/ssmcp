@@ -469,7 +469,22 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                 .await
                 .unwrap();
             assert_eq!(now["structuredContent"]["deadline_clock"], "monotonic");
+            let capabilities = || crate::wire::Operation::CallTool {
+                name: "ssmcp.client.capabilities".into(),
+                arguments: json!({}),
+            };
+            let enabled = runtime.perform(capabilities()).await.unwrap();
+            assert_eq!(enabled["structuredContent"]["chat_enabled"], false);
+            assert_eq!(
+                enabled["structuredContent"]["timing"]["primitives_available"],
+                true
+            );
             runtime.configure_timing(false, false).unwrap();
+            let disabled = runtime.perform(capabilities()).await.unwrap();
+            assert_eq!(
+                disabled["structuredContent"]["timing"]["primitives_available"],
+                false
+            );
             assert!(
                 runtime
                     .perform(operation())

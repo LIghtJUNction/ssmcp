@@ -58,16 +58,27 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
             recent: vec![],
         });
         let first = screen(&mut state);
-        assert!(first.contains("Timer 00:13"), "{cols}: {first}");
+        assert!(first.contains("Countdown 00:13 left"), "{cols}: {first}");
         assert!(first.contains("Specific local notice"), "{cols}: {first}");
         state.conversation.timing_fixture.as_mut().unwrap().active[0].remaining_ms = Some(10_999);
         let later = screen(&mut state);
-        assert!(later.contains("Timer 00:11"), "{cols}: {later}");
+        assert!(later.contains("Countdown 00:11 left"), "{cols}: {later}");
         state.conversation.timing_fixture.as_mut().unwrap().active[0] = entry(None, 65_999);
         let elapsed = screen(&mut state);
-        assert!(elapsed.contains("Timer +01:05"), "{cols}: {elapsed}");
-        for frame in [&first, &later, &elapsed] {
-            let divider = frame.lines().find(|row| row.contains("Timer ")).unwrap();
+        assert!(elapsed.contains("Elapsed +01:05"), "{cols}: {elapsed}");
+        let mut observation = entry(Some(5_001), 20_000);
+        observation.kind = "observation";
+        observation.cancellable = false;
+        state.conversation.timing_fixture.as_mut().unwrap().active[0] = observation;
+        let wait = screen(&mut state);
+        assert!(wait.contains("Observation 00:06 left"), "{cols}: {wait}");
+        for (frame, label) in [
+            (&first, "Countdown"),
+            (&later, "Countdown"),
+            (&elapsed, "Elapsed"),
+            (&wait, "Observation"),
+        ] {
+            let divider = frame.lines().find(|row| row.contains(label)).unwrap();
             assert!(
                 divider.contains("电脑控制：未确认")
                     || divider.contains("FG ? · BG on")

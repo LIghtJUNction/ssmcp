@@ -325,6 +325,7 @@ impl Runtime {
         manifest["wire_version"] = json!(crate::wire::VERSION);
         manifest["thread_scope"] = json!(1);
         manifest["chat_enabled"] = json!(self.chat_enabled());
+        manifest["timing"] = json!({"primitives_available":self.time.time_tools_enabled()});
         if self.chat_enabled() {
             manifest["listener"] = json!({
                 "tool":"ssmcp.ui.listener", "scope":"authenticated account and bound thread",
