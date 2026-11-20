@@ -72,14 +72,15 @@ class DeploymentPolicyTests(unittest.TestCase):
             raise AssertionError("the workflow must contain one executable deployment policy")
         cls.policy = textwrap.dedent("".join(lines[starts[0] + 1:ends[0]]))
 
-    def run_policy(self, event, *, name="workflow_dispatch", publish="true", existing=""):
+    def run_policy(self, event, *, name="workflow_dispatch", publish="true", existing="", version="0.10.13"):
         with tempfile.TemporaryDirectory(prefix="ssmcp-deployment-policy-") as temporary:
             root = Path(temporary)
             event_path, output = root / "event.json", root / "output"
             event_path.write_text(json.dumps(event), encoding="utf-8")
             output.write_text(existing, encoding="utf-8")
             environment = {"GITHUB_EVENT_NAME": name, "GITHUB_EVENT_PATH": str(event_path),
-                           "GITHUB_OUTPUT": str(output), "RELEASE_PUBLISH": publish}
+                           "GITHUB_OUTPUT": str(output), "RELEASE_PUBLISH": publish,
+                           "RELEASE_VERSION": version}
             result = subprocess.run([sys.executable, "-I", "-c", self.policy],
                                     env=environment, capture_output=True, text=True, timeout=10)
             return result, output.read_text(encoding="utf-8")
@@ -106,6 +107,36 @@ class DeploymentPolicyTests(unittest.TestCase):
     def test_tag_push_preserves_automatic_deployment(self):
         self.assert_policy({}, "true", name="push")
         self.assert_policy({"inputs": {"deploy_server": False}}, "true", name="push")
+
+    def test_deferred_version_cannot_be_deployed_by_tag_or_dispatch(self):
+        events = [("push", {})]
+        events.extend(("workflow_dispatch", {"inputs": inputs}) for inputs in (
+            {}, {"deploy_server": True}, {"deploy_server": "true"},
+            {"deploy_server": False}, {"deploy_server": "false"}))
+        for name, event in events:
+            with self.subTest(name=name, event=event):
+                result, output = self.run_policy(event, name=name, version="0.10.15")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, "deploy_server=false\n")
+                report = json.loads(result.stdout)
+                self.assertEqual(report["publish"], "true")
+                self.assertEqual(report["version"], "0.10.15")
+                self.assertIn("active relay sessions", report["deployment_deferred"])
+
+    def test_other_versions_keep_existing_deployment_selection(self):
+        for version in ("0.10.16", "0.10.16-rc.1"):
+            with self.subTest(version=version):
+                self.assert_policy({}, "true", name="push", version=version)
+                self.assert_policy({"inputs": {"deploy_server": False}}, "false", version=version)
+
+    def test_missing_or_malformed_version_cannot_bypass_deferral(self):
+        for version in ("", "v0.10.15", "0.10", "0.10.15\n", "00.10.15",
+                        "0.10.15+build", "0.10.15-rc.01", "0.10.15-rc..1"):
+            with self.subTest(version=version):
+                result, output = self.run_policy({}, version=version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("validated version output", result.stderr)
+                self.assertEqual(output, "")
 
     def test_build_only_never_deploys_even_when_requested(self):
         for name, event in (("workflow_dispatch", {}),
