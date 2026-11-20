@@ -2948,15 +2948,18 @@ mod tests {
     fn conversation_command_updates_preserve_command_source_and_output() {
         let mut view = EventView::new();
         let job = "1234567890abcdef1234567890abcdef-1a";
-        let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n       cwd /example\n";
-        let output = b"[STDOUT] shell #1a\nfirst-result\nsecond-result\nthird-result\n";
-        let finished =
-            b"[OK ] shell #1a completed exit=0 0.04s \xc2\xb7 bash -lc \xc2\xb7 2 lines\n";
+        let invocation = "bash -lc 'printf first'";
+        let start_header = "[RUN ] shell #1a bash -lc · 2 lines started";
+        let cwd = "       cwd /example\n";
+        let started = format!("{start_header}\n{cwd}");
+        let output = "[STDOUT] shell #1a\nfirst-result\nsecond-result\nthird-result\n";
+        let finished = "[OK ] shell #1a completed exit=0 0.04s · bash -lc · 2 lines\n";
         view.ingest_event(
             "shell",
             &json!({"type":"exec.started","job_id":job,"command":["bash","-lc","printf first"]}),
-            started,
+            started.as_bytes(),
         );
+        assert_eq!(view.events[0].text, started);
         view.set_scope(EventScope::Conversation);
         let running = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(
@@ -2964,11 +2967,17 @@ mod tests {
             "{running}"
         );
         assert!(!running.contains("shell #1a") && !running.contains("started"));
-        view.ingest_event("shell", &json!({"type":"exec.stdout","job_id":job}), output);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.stdout","job_id":job}),
+            output.as_bytes(),
+        );
+        let streamed = format!("{started}{output}");
+        assert_eq!(view.events[0].text, streamed);
         view.ingest_event(
             "shell",
             &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
-            finished,
+            finished.as_bytes(),
         );
         let done = view.render(100, 12, &plain_ui(), false).join("\n");
         assert!(done.contains("bash -lc · 2 lines · done"), "{done}");
@@ -2977,27 +2986,32 @@ mod tests {
         for hidden in ["exit=0", "cwd /example", "[RUN", "[STDOUT", "[OK"] {
             assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
         }
-        // The retained view adds the complete audited invocation to the
-        // concise start event; lifecycle updates must preserve that source
-        // and the original output/footer bytes without duplication.
-        let retained_started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\ncmd=bash -lc 'printf first'\n       cwd /example\n";
-        let retained = [
-            retained_started.as_slice(),
-            output.as_slice(),
-            finished.as_slice(),
-        ]
-        .concat();
+        let retained = format!("{streamed}{finished}");
         assert_eq!(view.events.len(), 1);
-        assert_eq!(
-            view.events[0]
-                .text
-                .matches("cmd=bash -lc 'printf first'\n")
-                .count(),
-            1
-        );
-        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
-        assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
+        let event = &view.events[0];
+        assert_eq!(event.text, retained);
+        assert!(!event.text.contains(invocation), "{}", event.text);
+        assert_eq!(event.meta.status, Some(Status::Exit(0)));
+        let source = event
+            .command_source
+            .as_ref()
+            .expect("lifecycle updates preserve the audited invocation");
+        assert_eq!(source.text, format!("cmd={invocation}\n"));
+        assert!(!source.truncated, "the fixture invocation fits in full");
+
+        let expected_detail = format!("{start_header}\ncmd={invocation}\n{cwd}{output}{finished}");
+        let detail = event.command_detail_text();
+        assert_eq!(detail, expected_detail);
+        assert_eq!(detail.matches(invocation).count(), 1, "{detail}");
+
         let bytes = view.bytes;
+        assert!(view.open(), "the selected command expands in conversation");
+        let expanded = view.render(100, 20, &plain_ui(), false).join("\n");
+        assert_eq!(expanded.matches(invocation).count(), 1, "{expanded}");
+        assert_eq!(
+            view.render(100, 20, &plain_ui(), false).join("\n"),
+            expanded
+        );
         view.set_scope(EventScope::All);
         view.open();
         let logs = view.render(100, 20, &plain_ui(), false).join("\n");
@@ -3012,8 +3026,10 @@ mod tests {
         ] {
             assert!(logs.contains(detail), "missing {detail}: {logs}");
         }
-        assert_eq!(view.bytes, bytes);
-        assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
+        assert!(!logs.contains(invocation), "{logs}");
+        assert_eq!((view.events.len(), view.bytes), (1, bytes));
+        assert_eq!(view.events[0].text, retained);
+        assert_eq!(view.events[0].command_detail_text(), expected_detail);
 
         for (job, summary, expected) in [
             (
