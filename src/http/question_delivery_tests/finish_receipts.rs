@@ -5,9 +5,9 @@ use super::*;
 const REASON: &str = "The requested work and its acceptance checks are complete.";
 
 fn set_finish(fixture: &Fixture, actor: Option<Value>, status: &str, approved: bool) {
-    let decision = actor.as_ref().map(|actor| {
-        json!({"choice":"yes","comment":null,"actor":actor,"revision":1,"decided_at_ms":2})
-    });
+    let decision = actor.as_ref().map(
+        |actor| json!({"choice":"yes","comment":null,"actor":actor,"revision":1,"decided_at_ms":2}),
+    );
     let mut state = fixture.native.lock().unwrap();
     state.view = json!({
         "id":"retained_question","title":"Request to finish","question":REASON,
@@ -59,7 +59,10 @@ fn assert_requests(fixture: &Fixture, count: usize) {
         assert_eq!(operation["request_id"], "retained_question");
         assert_eq!(operation["reason"], REASON);
     }
-    assert!(!fixture.peer.is_finished(), "authenticated peer must remain healthy");
+    assert!(
+        !fixture.peer.is_finished(),
+        "authenticated peer must remain healthy"
+    );
 }
 
 #[tokio::test]
@@ -68,11 +71,7 @@ async fn request_finish_rejects_legacy_agent_approval_from_authenticated_native_
     let peer = fixture
         .session
         .collaboration
-        .dispatch(
-            &fixture.owner,
-            "join",
-            json!({"name":"legacy approver"}),
-        )
+        .dispatch(&fixture.owner, "join", json!({"name":"legacy approver"}))
         .await
         .unwrap();
     assert_ne!(peer["agent_id"], fixture.agent_id);
