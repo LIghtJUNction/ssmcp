@@ -212,6 +212,7 @@ Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`�
 | --- | --- |
 | zplugin-macros → zplugin → zharness | 独立仓库发布；SSMCP 的发布预检要求使用的 zplugin、zharness 精确版本已存在且未撤回 |
 | ztuio → ssmcp | ztuio 由独立仓库发布；应用预检要求精确版本存在且未撤回，应用工作流只上传 ssmcp |
+| zuse-computer → ssmcp | 桌面引擎由独立仓库发布；当前精确依赖为 0.2.2，应用预检同样要求版本存在且未撤回，并核对固定子模块与锁文件；SSMCP 工作流不重新发布该依赖 |
 
 独立库的 registry 版本应对应其仓库的固定源码，SSMCP 不从消费方仓库重新发布依赖。应用源码包通过实际 registry 依赖打包验证；已发布应用的摘要必须与验证包一致，冲突时停止。
 
