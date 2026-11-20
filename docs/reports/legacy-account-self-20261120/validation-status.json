@@ -1,0 +1,29 @@
+{
+  "schema": "ssmcp.legacy-account-validation.v1",
+  "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "build_and_strict_clippy": "passed",
+  "broker": {
+    "passed": 57,
+    "failed": 0,
+    "new_legacy_ws_cases": 4
+  },
+  "complete_default_library_attempt": {
+    "passed": 1501,
+    "failed": 1,
+    "ignored": 18,
+    "exit_code": 101,
+    "failed_test": "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+    "failure": "The fixture's five-second wait for attached subscriptions to close elapsed."
+  },
+  "single_failure_exact_replay": {
+    "passed": 1,
+    "failed": 0,
+    "exit_code": 0,
+    "source_and_binary_unchanged": true,
+    "assertions_or_timeouts_modified": false
+  },
+  "complete_default_library_gate_passed": false,
+  "account_evidence_commit": "d84ca240bc01d9c36683c5175c88bb200059aec4",
+  "account_evidence_directory": "../legacy-client-compat-20261120",
+  "next_gate": "Run the complete default collection on the next combined private-display-fix candidate; do not relabel this initial attempt as a pass."
+}
