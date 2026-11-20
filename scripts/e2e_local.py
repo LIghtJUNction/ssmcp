@@ -550,7 +550,7 @@ class Local(Harness):
         receipt, = structured["user_wait"]
         messages = structured["user_messages"]
         self.check(receipt["client_id"] == self.client_id and receipt["wait_id"] == active["wait_id"]
-                   and receipt["status"] == "received" and receipt["user_consent_to_end"] is None,
+                   and receipt["status"] == "received" and "user_consent_to_end" not in receipt,
                    "the final local wait receipt matches its server-owned wait without inferring consent to end")
         self.check(len(messages) == 1 and messages[0]["text"] == message
                    and receipt["messages"] == [{"message_id": item["message_id"], "revision": item["revision"]} for item in messages],

@@ -78,13 +78,19 @@ fn arguments_accept_typed_targets_and_apply_bounded_defaults() {
             notify: true
         }]
     );
-    assert_eq!(
-        create(json!([{"type":"finish", "request_id":"question_1"}]))
-            .targets
-            .unwrap(),
-        vec![Target::Finish {
-            request_id: "question_1".into()
-        }]
+    let retired = Arguments::parse(json!({
+        "client_id":"fixture_client",
+        "targets":[{"type":"finish","request_id":"question_1"}]
+    }))
+    .err()
+    .expect("finish target is retired");
+    assert!(retired.starts_with("tool_retired:"));
+    assert!(
+        !tool()["inputSchema"]["properties"]["targets"]["items"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["properties"]["type"]["const"] == "finish")
     );
     for timeout in [1_000, 25_000] {
         let args = Arguments::parse(json!({

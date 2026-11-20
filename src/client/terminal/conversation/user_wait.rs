@@ -26,8 +26,7 @@ fn groups(snapshot: &Snapshot) -> BTreeMap<&str, Vec<&Entry>> {
 
 fn intent_text(intent: Intent) -> &'static str {
     match intent {
-        Intent::NeedUser => "等待你的输入",
-        Intent::Finish => "等待你确认是否结束",
+        Intent::NeedUser | Intent::Finish => "等待你的输入",
     }
 }
 
@@ -134,23 +133,10 @@ fn hint(snapshot: &Snapshot) -> Option<String> {
         .map(|entry| entry.remaining_ms)
         .min()?
         .div_ceil(1000);
-    let finish = snapshot
-        .active
-        .iter()
-        .any(|entry| entry.intent == Intent::Finish);
     if episodes.len() > 1 {
-        Some(if finish {
-            format!(
-                "{} 项等待 · 含结束确认 · {remaining}s · /wait",
-                episodes.len()
-            )
-        } else {
-            format!("{} 项等待你的回应 · {remaining}s · /wait", episodes.len())
-        })
-    } else if finish {
         Some(format!(
-            "{} · {remaining}s · /wait",
-            intent_text(Intent::Finish)
+            "{} 项等待你的回应 · {remaining}s · /wait",
+            episodes.len()
         ))
     } else {
         snapshot
@@ -308,7 +294,7 @@ mod tests {
         };
         assert_eq!(
             hint(&snapshot).as_deref(),
-            Some("2 项等待 · 含结束确认 · 13s · /wait")
+            Some("2 项等待你的回应 · 13s · /wait")
         );
         let text = detail(&snapshot);
         assert_eq!(text.matches("Synthetic wait reason").count(), 2);
@@ -316,7 +302,7 @@ mod tests {
             assert!(text.contains(id));
         }
         assert!(text.contains("完整编号或唯一前缀"));
-        assert!(text.contains("等待你确认是否结束"));
+        assert!(text.contains("等待你的输入"));
         let mixed = Snapshot {
             active: vec![
                 entry("first-input", "same-episode", Intent::NeedUser),
@@ -324,13 +310,10 @@ mod tests {
             ],
             ..Snapshot::default()
         };
-        assert_eq!(
-            hint(&mixed).as_deref(),
-            Some("等待你确认是否结束 · 13s · /wait")
-        );
+        assert_eq!(hint(&mixed).as_deref(), Some("等待你的输入 · 13s · /wait"));
         let text = detail(&mixed);
         assert!(text.contains("#first-input · 等待你的输入"));
-        assert!(text.contains("#second-finish · 等待你确认是否结束"));
+        assert!(text.contains("#second-finish · 等待你的输入"));
         assert!(!text.contains("user_wait.received"));
     }
 
@@ -380,7 +363,7 @@ mod tests {
             let rendered = screen(&mut state);
             let footer = rendered.lines().last().unwrap();
             assert!(
-                footer.contains("等待你确认是否结束") && footer.contains("/wait"),
+                footer.contains("等待你的输入") && footer.contains("/wait"),
                 "{rendered}"
             );
             assert_eq!(state.conversation.composer.text(), original);
@@ -417,13 +400,7 @@ mod tests {
                     "{rendered}"
                 );
             }
-            assert!(
-                !rendered
-                    .lines()
-                    .last()
-                    .unwrap()
-                    .contains("等待你确认是否结束")
-            );
+            assert!(!rendered.lines().last().unwrap().contains("等待你的输入"));
             state.conversation.composer.set_text(&original);
             state.conversation.content_focus = true;
             let rendered = screen(&mut state);
@@ -440,7 +417,7 @@ mod tests {
                     "{rendered}"
                 );
             }
-            assert!(!rendered.contains("等待你确认是否结束"));
+            assert!(!rendered.contains("等待你的输入"));
             assert_eq!(state.conversation.composer.text(), original);
         }
     }

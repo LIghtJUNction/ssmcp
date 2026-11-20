@@ -667,8 +667,9 @@ mod tests {
                     true
                 );
                 assert!(
-                    response["structuredContent"]["continuation_reminder"]["instruction"]
-                        .is_string()
+                    response["structuredContent"]
+                        .get("continuation_reminder")
+                        .is_none()
                 );
             }
             assert_eq!(

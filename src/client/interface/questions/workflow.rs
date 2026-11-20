@@ -372,36 +372,6 @@ pub(super) fn message_scope() -> Option<String> {
     })
 }
 
-pub(super) fn tools() -> Vec<Value> {
-    let id = json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
-    vec![
-        json!({
-            "name":"ssmcp.ui.answer",
-            "description":"Answer a retained question as the currently verified bound agent in the same client and account. Ordinary answers retain their agent origin. Agents may decline a finish request with decision no, but only the local user may approve completion; decision yes from any agent is rejected. Text yes is ordinary text and never approval. Reads do not consume answers.",
-            "inputSchema":{"type":"object","additionalProperties":false,"required":["id"],"properties":{
-                "id":id,"answer":{"type":"string","minLength":1,"maxLength":MAX_ANSWER_BYTES},
-                "decision":{"enum":["yes","no"]},"comment":{"type":"string","minLength":1,"maxLength":MAX_ANSWER_BYTES}},
-                "oneOf":[{"required":["answer"],"not":{"anyOf":[{"required":["decision"]},{"required":["comment"]}]}},
-                    {"required":["decision"],"not":{"required":["answer"]}}]},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false}
-        }),
-        json!({
-            "name":"ssmcp.ui.finish",
-            "description":"Request/resume the local user's reasoned finish decision using the current verified thread. This native entry also works when public request_finish is not exposed. collab.join registers the current participant without starting a model; bind its returned agent_id/token first. Request creates or resumes a reasoned request; wait only observes an existing request_id and its cancellation never invalidates that request. Bounded waits of 1..25000ms leave pending unchanged on timeout: resume the same ID. Only an explicit local human Yes permits completion; agent approval and timeout never do. Default No does not invent a human decision. Prefer public request_finish when exposed to avoid occupying a JavaScript worker. Cancel explicitly invalidates only this thread's exact request.",
-            "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
-                "op":{"enum":["request","wait","cancel"]},"reason":{"type":"string","minLength":1,"maxLength":MAX_QUESTION_BYTES},
-                "request_id":id,"idempotency_key":id,"timeout_ms":{"type":"integer","minimum":1,"maximum":25000,"default":20000}},
-                "oneOf":[{"properties":{"op":{"const":"request"}},"required":["reason"],"not":{"required":["request_id","idempotency_key"]}},
-                    {"properties":{"op":{"const":"wait"}},"required":["request_id"],"not":{"anyOf":[{"required":["reason"]},{"required":["idempotency_key"]}]}},
-                    {"properties":{"op":{"const":"cancel"}},
-                        "oneOf":[{"required":["request_id"],"not":{"required":["idempotency_key"]}},
-                            {"required":["idempotency_key"],"not":{"required":["request_id"]}}],
-                        "not":{"anyOf":[{"required":["reason"]},{"required":["timeout_ms"]}]}}]},
-            "annotations":{"readOnlyHint":false,"destructiveHint":false}
-        }),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

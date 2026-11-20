@@ -522,7 +522,6 @@ impl Session {
         } else {
             result
         };
-        let received_at = std::time::Instant::now();
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()
@@ -611,15 +610,6 @@ impl Session {
                 reply_agent.as_deref(),
                 audit_tool.as_deref(),
                 &result,
-            );
-        }
-        if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
-            run.native_reply(
-                self.client_id(),
-                reply_agent.as_deref(),
-                audit_tool.as_deref(),
-                value,
-                received_at,
             );
         }
         let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
@@ -1943,7 +1933,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dialogue_receipts_use_native_ack_and_binding_at_dispatch() {
+    async fn native_messages_preserve_dispatch_without_completion_hooks() {
         for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
             for bind_after_dispatch in [false, true] {
                 let (sender, mut receiver) = mpsc::channel(1);
@@ -1993,19 +1983,14 @@ mod tests {
                     "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
                 }))).unwrap();
                 request.await.unwrap().unwrap();
-                let replies = run.accepted_replies("dialogue");
-                assert_eq!(replies.len(), 1, "{tool}");
-                assert_eq!(
-                    replies[0].agent_id.as_deref(),
-                    (!bind_after_dispatch).then_some(agent_id),
-                );
-                assert!(run.accepted_replies("other").is_empty());
+                assert_eq!(run.user_wait_addition()["content"], serde_json::json!([]));
+                assert_eq!(run.user_wait_reserve_bytes(), 0);
             }
         }
     }
 
     #[tokio::test]
-    async fn failed_duplicate_or_other_native_tools_cannot_acknowledge_dialogue() {
+    async fn native_errors_and_duplicate_receipts_never_create_completion_hooks() {
         for (tool, result) in [
             (
                 "ssmcp.ui.message",
@@ -2052,7 +2037,11 @@ mod tests {
             let expected = result.clone();
             call.reply.send(result).unwrap();
             assert_eq!(request.await.unwrap(), expected);
-            assert!(run.accepted_replies("dialogue").is_empty(), "{tool}");
+            assert_eq!(
+                run.user_wait_addition()["content"],
+                serde_json::json!([]),
+                "{tool}"
+            );
         }
     }
 

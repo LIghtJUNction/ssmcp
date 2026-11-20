@@ -444,105 +444,30 @@ class Interactions(InputHistory):
         self.conversation(front)
         return draft
 
-    def create_finish(self, requester, suffix):
-        result = self.public_call("request_finish", {
-            "client_id": self.client_id, "reason": "PTY finish review " + suffix,
-            "timeout_ms": 1000, "idempotency_key": "pty-finish-" + suffix,
-            "agent": {"id": requester["agent_id"], "token": requester["token"]}})
-        self.check(result["timed_out"] is True and result["decision"] is None
-                   and result["approved"] is False and result["default_decision"] == "no",
-                   suffix + ": bounded waiting leaves an undecided request with default No")
-        return result
-
-    def finish_decision(self, front, requester, choice, comment, draft):
-        initial = self.create_finish(requester, choice)
-        request_id = initial["request_id"]
-        arguments = {
-            "client_id": self.client_id, "reason": "PTY finish review " + choice,
-            "timeout_ms": 15000, "request_id": request_id,
-            "agent": {"id": requester["agent_id"], "token": requester["token"]}}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            waiting = executor.submit(self.public_call, "request_finish", arguments)
-            front.until(lambda shot: "Click or type to wake" in text(shot),
-                        "a real native finish waiter sleeping the actual terminal")
-            if choice == "no":
-                self.capture_pair(front, "finish-sleep", "Click or type to wake")
-            # The complete real SGR gesture only dismisses sleep. It cannot choose
-            # a decision, edit a draft, or synthesize a human answer.
-            front.send(b"\x1b[<0;4;8M\x1b[<0;4;8m")
-            front.until(lambda shot: "Click or type to wake" not in text(shot),
-                        "the finish sleep overlay dismissed by one complete click")
-            self.check(not waiting.done()
-                       and self.question(requester, request_id)["finish"]["decision"] is None
-                       and self.ui("/display/conversation")["draft"]["text"] == draft,
-                       choice + ": sleep dismissal preserves the pending request and original draft")
-            self.open_question(front, request_id)
-            front.until(lambda shot: "● No" in text(shot), "the explicit default No choice")
-            if choice == "yes":
-                shot = front.snapshot()
-                row, line = next((index, line) for index, line in enumerate(shot["rows"])
-                                 if "○ Yes" in line)
-                column = line.index("Yes") + 1
-                front.send(("\x1b[<0;%d;%dM\x1b[<0;%d;%dm" %
-                            (column, row + 1, column, row + 1)).encode())
-                front.until(lambda shot: "● Yes" in text(shot),
-                            "a real mouse gesture explicitly selecting Yes")
-            front.send(b"\t")
-            self.send_stream(front, PASTE_START + comment.encode() + PASTE_END)
-            self.capture_pair(front, "finish-selected-" + choice,
-                              "● " + choice.capitalize())
-            front.send(ENTER)
-            result = waiting.result(timeout=8)
-        decision = result["decision"]
-        self.check(result["timed_out"] is False and result["approved"] is (choice == "yes")
-                   and decision["choice"] == choice and decision["comment"] == comment
-                   and decision["actor"]["origin"] == "human",
-                   choice + ": Enter records only the explicitly selected decision and separate comment")
+    def retired_hooks(self, front, requester, draft):
+        before = self.scoped_native(requester, "ssmcp.ui.questions", {})
+        for name in ("ssmcp.ui.finish", "ssmcp.ui.answer"):
+            code = "try { await call(%s,%s,{}); return {accepted:true}; } catch (error) { return {error:String(error)}; }" % (
+                json.dumps(self.client_id), json.dumps(name))
+            outer = self.response(code, agent=self.binding(requester))
+            result = outer["structuredContent"]["result"]
+            self.check("tool_retired:" in result.get("error", ""),
+                       name + " fails before dispatch with an explicit retirement result")
+            self.check("continuation_reminder" not in outer["structuredContent"]
+                       and "conversation_reminders" not in outer["structuredContent"],
+                       "a retired call does not inject continuation or conversation hooks")
+        after = self.scoped_native(requester, "ssmcp.ui.questions", {})
+        self.check(after == before, "retired tools create no approval cards or proxy answers")
+        receipt = self.scoped_native(requester, "ssmcp.ui.message", {
+            "text": "Final result without completion approval",
+            "kind": "answer", "idempotency_key": "retired-hooks-final",
+        })
+        self.check(receipt["accepted"] is True and receipt["history_saved"] is True
+                   and receipt.get("finish_request_id") is None,
+                   "a real final message commits without completion approval")
         self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
-                   choice + ": the real approval handler completes without losing the main draft")
-        if choice == "no":
-            self.check(comment == "yes" and result["approved"] is False,
-                       "ordinary comment text yes never changes default No into approval")
-        self.capture_pair(front, "finish-recorded-" + choice,
-                          "No · keep working" if choice == "no" else "Approved")
-        if choice == "yes":
-            final = {"kind": "answer", "text": "PTY approved completion receipt",
-                     "idempotency_key": "pty-approved-final"}
-            receipt = self.scoped_native(requester, "ssmcp.ui.message", final)
-            duplicate = self.scoped_native(requester, "ssmcp.ui.message", final)
-            self.check(receipt["accepted"] is True and receipt["duplicate"] is False
-                       and receipt["finish_request_id"] == request_id
-                       and duplicate["duplicate"] is True
-                       and duplicate["message_id"] == receipt["message_id"],
-                       "the approved real final answer consumes one grant and matching retries reuse its receipt")
-            self.check(self.question(requester, request_id)["finish"]["status"] == "completed",
-                       "the final receipt closes this finish request before another is created")
-            self.capture_pair(front, "finish-completed", "Finish receipt committed")
-        self.conversation(front)
-
-    def external_finish_decision(self, front, requester, reviewer, draft):
-        initial = self.create_finish(requester, "external")
-        request_id = initial["request_id"]
-        self.open_question(front, request_id)
-        front.send(b"\t")
-        self.send_stream(front, PASTE_START + "human note not sent".encode() + PASTE_END)
-        response = self.scoped_native(reviewer, "ssmcp.ui.answer", {
-            "id": request_id, "decision": "no", "comment": "reviewer asks for one more check"})
-        self.check(isinstance(response, dict), "a second verified agent returns a typed finish receipt")
-        self.quiet_until(
-            front, lambda shot: "Agent PTY reviewer" in text(shot)
-            and "Your unsent draft" in text(shot) and "human note not sent" in text(shot),
-            "another verified agent's decision appears while retaining the unsent local comment")
-        view = self.question(requester, request_id)
-        actor = view["finish"]["decision"]["actor"]
-        self.check(actor["origin"] == "agent"
-                   and actor["agent"]["thread_id"] == reviewer["agent_id"]
-                   and view["finish"]["decision"]["choice"] == "no",
-                   "the displayed external decision is bound to the real other agent identity")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
-                   "an external decision never replaces the main draft")
-        self.capture_pair(front, "finish-external", "Your unsent draft")
-        self.conversation(front)
+                   "retirement and final display preserve the user's unsent draft")
+        self.capture_pair(front, "final-without-approval", "Final result without completion approval")
 
     def native_message(self, front):
         self.replace_short(front, "")
@@ -750,14 +675,10 @@ class Interactions(InputHistory):
         recalled = self.pending_recall(front)
         requester = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY requester", "role": "requester"})
-        reviewer = self.public_call("collab", {
-            "action": "join", "client_id": self.client_id, "name": "PTY reviewer", "role": "reviewer"})
-        self.sensitive.extend([requester["token"], reviewer["token"]])
+        self.sensitive.append(requester["token"])
         self.command_details(front)
         draft = self.ordinary_question(front, requester)
-        self.finish_decision(front, requester, "no", "yes", draft)
-        self.finish_decision(front, requester, "yes", "ready after explicit review", draft)
-        self.external_finish_decision(front, requester, reviewer, draft)
+        self.retired_hooks(front, requester, draft)
         recipient_id = self.native_message(front)
         self.private_pastes(front, recipient_id)
         return {

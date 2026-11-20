@@ -81,7 +81,6 @@ class Presentations(InputHistory):
         self.copied = self.directory / "copied.txt"
         self.snapshots = []
         self.presenter = None
-        self.completion_requests = {}
 
     def client_environment(self, label, **options):
         environment = super().client_environment(label, **options)
@@ -115,44 +114,6 @@ class Presentations(InputHistory):
         return {"client_id": self.client_id, "id": self.presenter["agent_id"],
                 "token": self.presenter["token"]}
 
-    def approve_completion(self, key):
-        """Use the owned physical UI for Yes; do not consume queued work in a helper call."""
-        if key in self.completion_requests:
-            return self.completion_requests[key]
-        if not isinstance(key, str):
-            raise AssertionError("every final presentation fixture needs a stable retry key")
-        queue_before = [(row["id"], row["revision"], row["status"]) for row in self.queue()["queue"]]
-        binding = self.presenter_binding()
-        request = self.public_call("request_finish", {
-            "client_id": self.client_id, "reason": "Review presentation fixture " + key,
-            "timeout_ms": 1000, "idempotency_key": "finish_" + key,
-            "agent": {"id": binding["id"], "token": binding["token"]},
-        })
-        self.check(request["timed_out"] is True and request["approved"] is False
-                   and request["decision"] is None,
-                   "a new final presentation has no approval until the owned UI decides")
-        request_id = request["request_id"]
-        front = self.last_frontend
-        front.send(b"\x1b[1;2A")
-        self.wait_state(front, lambda state: state["view"] == "questions"
-                        and state["answering"] == request_id,
-                        "Shift+Up did not open this presentation's real finish request")
-        front.until(lambda shot: "● No" in text(shot),
-                    "the presentation finish request's explicit default No")
-        front.send(b"\x1b[C\r")
-        front.until(lambda shot: "Approved" in text(shot),
-                    "the owned UI explicitly choosing Yes and confirming it")
-        for _ in range(2):
-            front.send(b"\x1b")
-            front.pump(0.12)
-        self.wait_state(front, lambda state: state["view"] == "activity",
-                        "the presentation review did not return to the retained conversation")
-        queue_after = [(row["id"], row["revision"], row["status"]) for row in self.queue()["queue"]]
-        self.check(queue_after == queue_before,
-                   "finish approval leaves queued requirements for the actual final presentation call")
-        self.completion_requests[key] = request_id
-        return request_id
-
     def native(self, name, arguments):
         result = self.response("return await call(%s, %s, %s);" % (
             json.dumps(self.client_id), json.dumps(name), json.dumps(arguments),
@@ -161,7 +122,6 @@ class Presentations(InputHistory):
         return result, native
 
     def present(self, payload):
-        request_id = self.approve_completion(payload.get("idempotency_key"))
         result, native = self.native("ssmcp.ui.present", payload)
         if native.get("isError"):
             raise AssertionError(f"ui.present failed: {native}")
@@ -169,11 +129,11 @@ class Presentations(InputHistory):
         self.check(acknowledgement.get("accepted") is True
                    and isinstance(acknowledgement.get("message_id"), str)
                    and acknowledgement.get("kind") == "answer"
-                   and acknowledgement.get("finish_request_id") == request_id
+                   and acknowledgement.get("finish_request_id") is None
                    and acknowledgement.get("history_saved") is True
                    and acknowledgement.get("format") == "intelligence_ui.v1"
                    and acknowledgement.get("block_count") == len(payload["blocks"]),
-                   "a real presentation retains the message ACK and structured format metadata")
+                   "a real final presentation requires no approval and retains its message ACK and structured metadata")
         self.check("user_messages" not in acknowledgement,
                    "queued requirements do not overwrite the original native acknowledgement")
         return result, acknowledgement

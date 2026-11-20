@@ -169,7 +169,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
 });
 ```
 
-`kind` 可选，接受 `progress`（默认）或 `answer`。`progress` 可以直接报告进展；明确的最终 `answer` 必须先由同一已验证线程取得 `request_finish` 的 Yes 决定，再消费一次完成许可。成功回执的 `finish_request_id` 指向该申请，相同幂等请求重试不再消耗第二次许可。具体申请、线程绑定与取消参数见[结束申请协议](finish-and-questions.md#申请结束)。
+`kind` 接受 `progress`（默认）或 `answer`，两者都按真实会话归属提交，最终回复不再需要结束审批。原有幂等键仍会复用相同内容的回执，并拒绝同一键的不同内容；旧 `finish_request_id` 字段保留为 `null`。[消息提交](../src/client/interface/messages.rs) · [入口退役说明](finish-and-questions.md#已退役的入口)
 
 两种消息都使用固定 `[AGENT]` 标签和客户端的 Markdown 排版，写入其归属会话的 JSONL，记录使用 `role: "assistant"`、`kind: "agent_message"`。已验证线程的回复沿用它首次发起原生调用时绑定的本地会话。切换到其他历史后，回复仍可保存到原会话。[本地消息的会话归属](client-ui.md#本地消息与回答问题)
 
