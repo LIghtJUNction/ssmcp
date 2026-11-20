@@ -1,13 +1,14 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod access;
 pub(crate) mod account;
+pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
 mod clipboard;
 pub(crate) mod completion;
-mod computer_control;
 mod composer;
+mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
@@ -90,6 +91,7 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
+  --agent NAME           Load one explicit agent protocol; --agent list shows providers
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -151,10 +153,15 @@ Usage: ssmcp username@server [options]
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
   --list-tools         List native and workspace tools as JSON, then exit
+  --agent NAME         Load one explicit protocol at startup; --agent list shows providers
+  -- ARGS              Native Codex/Claude protocol arguments; never parsed as ssmcp flags
 
 The client provides native tools without another harness. Optional Codex, Claude
 Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
 Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
+--agent codex|claude-code selects that same explicit startup load, not a model turn.
+--agent ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
+The peer URL identifies an authenticated MCP gateway, not a device/session.
 Tools keep their native schemas and permission/approval behavior.
 
 Examples:
@@ -403,6 +410,7 @@ struct Options {
     config: Option<OsString>,
     shell: PathBuf,
     tty: Option<String>,
+    agent: Option<agent::Selection>,
 }
 
 impl Options {
@@ -485,8 +493,36 @@ impl Options {
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
         let mut tty = None;
+        let mut agent_name = None;
+        let mut agent_arguments = Vec::new();
         while let Some(arg) = args.next() {
             match arg.to_str() {
+                Some("--agent") => {
+                    if agent_name.is_some() {
+                        return Err("--agent may be supplied only once".into());
+                    }
+                    agent_name = Some(
+                        args.next()
+                            .ok_or("--agent requires a provider; use ssmcp --agent list")?
+                            .into_string()
+                            .map_err(|_| "--agent must be UTF-8")?,
+                    );
+                }
+                Some(value) if value.starts_with("--agent=") => {
+                    if agent_name
+                        .replace(value["--agent=".len()..].to_owned())
+                        .is_some()
+                    {
+                        return Err("--agent may be supplied only once".into());
+                    }
+                }
+                Some("--") => {
+                    if agent_name.is_none() {
+                        return Err("arguments after -- require an explicit --agent".into());
+                    }
+                    agent_arguments.extend(args.by_ref());
+                    break;
+                }
                 Some("-h" | "--help") => {
                     #[cfg(target_os = "linux")]
                     if local_mode {
@@ -696,6 +732,10 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
+        let agent = agent_name
+            .as_deref()
+            .map(|name| agent::Selection::new(name, agent_arguments))
+            .transpose()?;
         if context.is_some() && !new_connection {
             return Err("saved sessions must record a concrete server, not --context".into());
         }
@@ -878,6 +918,7 @@ impl Options {
             config,
             shell,
             tty,
+            agent,
         }))
     }
 
@@ -1015,6 +1056,9 @@ impl Options {
                     .ok_or("missing connection destination")?,
             ));
         }
+        if let Some(agent) = &self.agent {
+            agent.append_saved(&mut args);
+        }
         let args = args
             .into_iter()
             .map(|arg| {
@@ -1082,6 +1126,9 @@ impl Options {
 pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
     let mut args = spec.args.iter();
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
         if matches!(
             arg.as_str(),
             "--help" | "--help-full" | "-h" | "--version" | "-V"
@@ -1116,6 +1163,9 @@ pub(crate) fn session_title(spec: &crate::session::SessionSpec) -> crate::Result
     let mut args = spec.args.iter();
     let mut title = None;
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
         if arg == "--title" {
             title = Some(args.next().ok_or("saved session title is missing")?.clone());
         } else if let Some(value) = arg.strip_prefix("--title=") {
@@ -1202,6 +1252,11 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let mut connection = vec![OsString::from("--name"), OsString::from(&name)];
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--") => {
+                connection.push(arg);
+                connection.extend(args);
+                break;
+            }
             Some("--cwd") => cwd = PathBuf::from(args.next().ok_or("--cwd requires a directory")?).canonicalize()?,
             Some("--json") => json_output = true,
             Some("--name" | "--daemon" | "--list-tools") => return Err("sessions create takes its name before the connection options and starts a managed background session".into()),
@@ -1240,6 +1295,7 @@ fn connection_option_takes_value(option: &str) -> bool {
     matches!(
         option,
         "--name"
+            | "--agent"
             | "--server"
             | "--context"
             | "--username"
@@ -1432,6 +1488,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if agent::dispatch(&args)? {
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
     }
@@ -1584,7 +1643,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_agent(&options.shell, options.tty.as_deref(), options.agent.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -1608,7 +1667,11 @@ pub async fn run() -> crate::Result<()> {
             }
         };
         let tools = tokio::select! {
-            result = timeout(Duration::from_secs(120),async { backend.wait_discovery().await; backend.tools().await }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+            result = timeout(Duration::from_secs(180),async {
+                if let Some(agent) = &options.agent { agent.activate(&backend).await?; }
+                backend.wait_discovery().await;
+                backend.tools().await
+            }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
             _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
         };
@@ -2334,10 +2397,21 @@ async fn connect_inner(
     let _link_metrics = display_session
         .as_ref()
         .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
+    if let Some(agent) = &options.agent {
+        if let Err(error) = agent.check_target(Some(&url)) {
+            let _ = ssh.kill().await;
+            incoming.stop().await;
+            return Err(error.into());
+        }
+    }
     render::status(
         "shell",
         "Progress",
-        "Starting native tools; optional harnesses stay unloaded",
+        if options.agent.is_some() {
+            "Starting native tools and the explicitly selected agent protocol"
+        } else {
+            "Starting native tools; optional harnesses stay unloaded"
+        },
     );
     let backend = tokio::select! {
         biased;
@@ -2349,7 +2423,7 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_agent(&options.shell, options.tty.as_deref(), options.agent.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),
@@ -2384,7 +2458,7 @@ async fn connect_inner(
             return Err(error);
         }
     };
-    // Native tools are ready immediately; optional providers stay unloaded until requested.
+    // Only an explicit --agent performs a startup load; other providers stay unloaded.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -2394,7 +2468,10 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+        result = timeout(Duration::from_secs(180), async {
+            if let Some(agent) = &options.agent { agent.activate(&backend).await?; }
+            backend.tools().await
+        }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
     let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
     if let Err(mut error) = readiness {
@@ -2409,6 +2486,10 @@ async fn connect_inner(
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
+    if let Some(agent) = &options.agent {
+        output["agent"] = json!(agent.provider.label());
+        output["agent_scope"] = json!("protocol_catalog");
+    }
     if options.is_local() {
         output["transport"] = json!("local");
         output["auth"] = json!("local_user");
