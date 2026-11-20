@@ -147,3 +147,40 @@ fn account_compat_relay_omits_delegation_and_keeps_credentials_out_of_arguments(
             .any(|arg| arg.to_string_lossy().contains(&credential.token))
     );
 }
+
+#[tokio::test]
+async fn legacy_account_retry_never_borrows_credentials_for_explicit_allow() {
+    let mut anonymous = options(&[
+        "--server",
+        "https://relay.example",
+        "--allow",
+        "alice@relay.example",
+    ]);
+    // Even a caller-supplied username alongside explicit allow does not make
+    // this an authenticated account connection.
+    anonymous.username = Some("alice".into());
+    assert!(
+        !retry_legacy_self_account(&mut anonymous, relay::LEGACY_ACCOUNT_ALLOW, false,)
+            .await
+            .unwrap()
+    );
+    assert!(!anonymous.account_compat);
+    assert!(anonymous.relay.is_none());
+    let mut explicit = options(&[
+        "--server",
+        "https://relay.example",
+        "--account-compat",
+        "--allow",
+        "alice@relay.example",
+    ]);
+    assert!(
+        !retry_legacy_self_account(&mut explicit, relay::LEGACY_ACCOUNT_ALLOW, false,)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !retry_legacy_self_account(&mut anonymous, "other registration failure", false,)
+            .await
+            .unwrap()
+    );
+}
