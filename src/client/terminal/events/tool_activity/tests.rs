@@ -87,6 +87,7 @@ fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
             json!({"running":1,"done":1,"failed":1,"unknown":1})
         );
         assert_eq!(snapshot["tool_groups"][0]["expanded"], false);
+        assert_eq!(snapshot["visible_cards"], 1);
         assert!(
             text.contains("Tools · 4 calls") && text.contains("unknown 1"),
             "{text}"
@@ -97,6 +98,7 @@ fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
         assert!(view.open());
         view.render(width, 24, &ui(), true);
         assert!(view.total_rows > 2);
+        assert_eq!(view.snapshot()["visible_cards"], 4);
         assert!(view.mouse_select(0));
         assert!(view.toggle());
         view.render(width, 24, &ui(), true);
