@@ -29,7 +29,7 @@ zcalld listen \
 /send 请解释这段代码为什么会返回空值
 ~~~
 
-然后按 Enter。普通文本的 Enter 仍进入原有 Requests 队列；选中了原生收件箱或不匹配的线程时，`/send` 会拒绝并保留草稿。这个入口不会把已有目标静默改成 zcalld。
+然后按 Enter。普通文本的 Enter 仍进入原有 Requests 队列。要把显式输入交给 zcalld，先确认当前目标是 **Next caller**；其他目标遵守当前所选收件人的投递规则，不会静默改投 zcalld。监听器拒收时会保留草稿。
 
 实际命令参数与本地传输说明见 [zcalld 原生监听指南](https://github.com/LIghtJUNction/zcalld/blob/feat/ssmcp-listener-p1-20261120/docs/ssmcp-listener.md) 和 [SSMCP 程序监听器](thread-listeners.md)。
 
