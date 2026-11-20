@@ -104,6 +104,8 @@ struct Entry {
     /// Exact JSONL identity for display reconciliation and confirmed recall.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_group_id: Option<String>,
     text: String,
     summary: String,
     source: Option<Source>,
@@ -129,6 +131,8 @@ pub(crate) struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     selected_history_id: Option<String>,
     entries: Vec<Entry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    summaries: Vec<tool_summaries::Display>,
     omitted: bool,
 }
 impl Default for Snapshot {
@@ -137,6 +141,7 @@ impl Default for Snapshot {
             version: 1,
             selected_history_id: None,
             entries: Vec::new(),
+            summaries: Vec::new(),
             omitted: false,
         }
     }
@@ -149,6 +154,8 @@ struct WireSnapshot {
     #[serde(default)]
     selected_history_id: Option<String>,
     entries: Vec<Entry>,
+    #[serde(default)]
+    summaries: Vec<tool_summaries::Display>,
     omitted: bool,
 }
 
@@ -166,6 +173,7 @@ impl<'de> Deserialize<'de> for Snapshot {
             version: 1,
             selected_history_id: raw.selected_history_id,
             entries: raw.entries,
+            summaries: raw.summaries,
             omitted: raw.omitted,
         };
         snapshot.bound();
@@ -218,7 +226,25 @@ impl Snapshot {
             self.omitted |= !valid;
             valid
         });
+        if self.summaries.len() > MAX_EVENTS {
+            self.summaries.truncate(MAX_EVENTS);
+            self.omitted = true;
+        }
+        let mut group_ids = HashSet::new();
+        self.summaries.retain_mut(|summary| {
+            let valid = summary.valid() && group_ids.insert(summary.group_id.clone());
+            self.omitted |= !valid;
+            valid
+        });
         for entry in &mut self.entries {
+            if !matches!(entry.kind, DisplayKind::Tool)
+                || !entry
+                    .tool_group_id
+                    .as_ref()
+                    .is_some_and(|id| group_ids.contains(id))
+            {
+                entry.tool_group_id = None;
+            }
             let history = entry.history.restore();
             entry.history = History::capture(&history);
             if history.local_id().is_none()
@@ -245,13 +271,22 @@ impl Snapshot {
                 self.omitted |= shortened;
             }
         }
+        self.retain_summaries();
         // Use serialized size: quotes and newlines also consume handoff bytes.
         let mut bytes = serde_json::to_vec(self).map_or(usize::MAX, |bytes| bytes.len());
         while bytes > MAX_BYTES && !self.entries.is_empty() {
             self.entries.remove(0);
+            self.retain_summaries();
             self.omitted = true;
             bytes = serde_json::to_vec(self).map_or(usize::MAX, |bytes| bytes.len());
         }
+    }
+    fn retain_summaries(&mut self) {
+        self.summaries.retain(|summary| {
+            self.entries
+                .iter()
+                .any(|entry| entry.tool_group_id.as_ref() == Some(&summary.group_id))
+        });
     }
 }
 
@@ -329,6 +364,7 @@ impl EventView {
                         .clone()
                         .or_else(|| event.meta.message_id.clone()),
                     text,
+                    tool_group_id: event.tool_group_id.clone(),
                     summary: event.chat_heading(),
                     source: event.command_source.as_ref().map(|source| Source {
                         text: source.text.clone(),
@@ -355,6 +391,11 @@ impl EventView {
                 .local_id()
                 .map(|id| id.as_str().to_owned()),
             entries,
+            summaries: self
+                .summary_groups
+                .iter()
+                .map(|group| group.display.clone())
+                .collect(),
             ..Snapshot::default()
         };
         snapshot.bound();
@@ -428,8 +469,14 @@ impl EventView {
                 interrupted: entry.interrupted,
                 reload_index: Some(entry.index),
                 reload_boundary: entry.boundary,
+                tool_group_id: entry.tool_group_id,
             });
         }
+        self.summary_groups = saved
+            .summaries
+            .into_iter()
+            .map(tool_summaries::Group::restored)
+            .collect();
         self.prune();
         self.selected = self.visible_ids().last().copied();
         (saved.omitted || self.dropped > 0).then(|| "Some tool display history was shortened during reload; your draft and conversation are preserved.".into())

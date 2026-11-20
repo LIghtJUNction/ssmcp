@@ -1,6 +1,7 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
 pub(crate) mod question_answers;
 pub(crate) mod reminders;
+pub(crate) mod tool_summaries;
 pub(crate) mod user_wait;
 use crate::backend::process::Managed;
 use serde::Deserialize;
@@ -58,6 +59,7 @@ pub(crate) struct AuditRun {
     memories: Arc<Mutex<ContextMemories>>,
     question_answers: Arc<Mutex<question_answers::Capture>>,
     accepted_replies: Arc<Mutex<reminders::Receipts>>,
+    tool_summaries: Arc<Mutex<tool_summaries::Capture>>,
     waits: Arc<Mutex<user_wait::State>>,
     started: Instant,
 }
@@ -122,6 +124,7 @@ impl AuditRun {
             memories: Arc::new(Mutex::new(ContextMemories::default())),
             question_answers: Arc::new(Mutex::new(question_answers::Capture::default())),
             accepted_replies: Arc::new(Mutex::new(reminders::Receipts::default())),
+            tool_summaries: Arc::new(Mutex::new(tool_summaries::Capture::default())),
             waits: Arc::new(Mutex::new(user_wait::State::default())),
             started: Instant::now(),
         })
@@ -164,6 +167,7 @@ impl AuditRun {
                         | "ssmcp.ui.get"
                         | "ssmcp.ui.question_ack"
                         | "ssmcp.ui.question_delivery"
+                        | "ssmcp.ui.tool_summary"
                 )
             }) {
                 activity.entry(client_id.into()).or_insert(false);
@@ -230,6 +234,49 @@ impl AuditRun {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .for_client(client_id)
+    }
+
+    /// Observe only the broker's actual native reply under its frozen binding.
+    pub(crate) fn native_tool_summary_reply(
+        &self,
+        client_id: &str,
+        agent_id: Option<&str>,
+        tool: Option<&str>,
+        result: &Result<Value, String>,
+    ) {
+        let mut summaries = self
+            .tool_summaries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Ok(value) = result {
+            if tool == Some(tool_summaries::TOOL) {
+                summaries.reconcile(client_id, agent_id, value);
+            }
+            summaries.observe(client_id, agent_id, value);
+        }
+        if tool.is_some_and(|name| name != tool_summaries::TOOL)
+            && !result.as_ref().is_ok_and(|value| value["isError"] != true)
+        {
+            summaries.failed(client_id, agent_id);
+        }
+    }
+
+    pub(crate) fn claim_tool_summary_probe(&self, client_id: &str, agent_id: Option<&str>) -> bool {
+        self.tool_summaries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .claim_probe(client_id, agent_id)
+    }
+
+    pub(crate) fn tool_summary_notices(
+        &self,
+        client_id: &str,
+        agent_id: Option<&str>,
+    ) -> Vec<Value> {
+        self.tool_summaries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .for_scope(client_id, agent_id)
     }
 
     /// Only the HTTP native-call path invokes this, after the real reply and

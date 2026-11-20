@@ -1,0 +1,1320 @@
+{
+  "schema_version": 2,
+  "status": "passed",
+  "source_revision": "8725b7b4606e8eb75c3d366c380f991842e0219a",
+  "validation_attempt": "attempt-09",
+  "package_version": "0.10.21",
+  "source_clean_before_and_after": true,
+  "rust_toolchain": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "build_policy": {
+    "locked": true,
+    "offline": true,
+    "jobs": 1,
+    "incremental": false,
+    "debug_info": 0,
+    "ordinary_ci_dispatched": false
+  },
+  "submodule_commits": {
+    "crates/zharness": "db4206d3b74e37d57ff052948962f55514081d4b",
+    "crates/zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "crates/zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "stages": [
+    {
+      "name": "01-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.536,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "02-libtest-build",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--no-run",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 214.857,
+      "stdout_sha256": "5ac852870c64d375ca2eebee82521e18f0a3f6aedca5a6ec804cc2c09679cf98",
+      "stderr_sha256": "fb2de88af32f80d912949e6f6a0e39d3f586428ca550ee2a420d8e44636685b2"
+    },
+    {
+      "name": "03-summary-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "tool_summar",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.287,
+      "stdout_sha256": "a3fd391387cf62374f672d34d9f033e00d8ca8f3eef87d13e48d07c3f12b997f",
+      "stderr_sha256": "61d903fd2a38418d8946b711e40c26160a6130041709d3adb1b622abc7b9909a"
+    },
+    {
+      "name": "04-events-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::terminal::events::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 9.288,
+      "stdout_sha256": "56a3a442b72e8f82709aedf05acd08cafa53c8bdd7a7d9f07183182d4a45fd27",
+      "stderr_sha256": "b738b22e216aa114e23be626842a3e8250410dcecdf8d86ead7ff55ec29ed215"
+    },
+    {
+      "name": "05-broker-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "broker::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.045,
+      "stdout_sha256": "56d0e434d09fcff30ae387e793503ae6383c8bdd456c943a7f72a6c2cf32f2aa",
+      "stderr_sha256": "9fad97468de3d005dfa5bd40123c70cf4e1965e21415c834301b8340c5f35489"
+    },
+    {
+      "name": "06-runtime-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "runtime::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 3.496,
+      "stdout_sha256": "7c2fee8c83cd22b49af92c6ea9b9c3a14b480eab299611c9fc2f88648c80fa00",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06b-ui-inventory",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::tests::action_decoder_validates_the_catalog_without_executing_actions",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.007,
+      "stdout_sha256": "35750772f05b94299e5bb551234600db5b2cb2f79b0a9e273d9487031b07ebc7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06c-history-owner",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::history::ownership::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.05,
+      "stdout_sha256": "3ce9fac8f3e309144234c97180d42e4d3c705a0fd3199c6d44b9b5232c2c2640",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06d-queue-recall",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::latest_takeback_reclaims_only_the_latest_unsent_request",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.005,
+      "stdout_sha256": "48ecbee2d55a655aa2b770ab40c60a29d74dc0e2de8c5a7fd94dca41bda65f18",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06e-queue-retry",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::uncertain_retarget_and_local_edit_never_retract_previous_history",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.004,
+      "stdout_sha256": "b7d8a06beedc9217ce51a427d53da81880a9e9fb94a5b6fc177298e25c50eeab",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06f-queue-ack",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.005,
+      "stdout_sha256": "c55ace51e1fd588955c66fa012960bfa24cbc60b230da776bb295f3fc5d9aa0b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06g-queue-delivery",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "stdout_sha256": "a1f8c4482b363d596f8c3381e7a8a10ba1c59c78622a0c100fba6d388f7cc21f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06h-history-archive",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::history::archive::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.78,
+      "stdout_sha256": "1339484319c1979a223eecb9a251a2996b8e3eb5afa0319174ec0d1207d0f91e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06i-conversation-reload",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::terminal::conversation::reload_state::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.049,
+      "stdout_sha256": "8756ca884d1da819162379444e63dbc0afbbc317c09a41304075673b233da6d4",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06j-late-session-frames",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "session::attach::tests::modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "stdout_sha256": "1749788fb1a04ac41f76705647e77afe9277931505ac36fcf1f047fa6be98e16",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06k-human-finish",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::questions::human_finish_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.011,
+      "stdout_sha256": "69b91efb190acb02d34cd167d235e4d85391c5e258d4830c588f88cb7075d10a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06l-public-finish",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "http::finish_request::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.007,
+      "stdout_sha256": "db63e891e31dab3a20989846f03776f0bf93d2d3a93c425d22591ea4b24454eb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06m-typed-await",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "http::await_tool::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.049,
+      "stdout_sha256": "3322ce1e4e2917d9cadf0d66a62f556f9c16b45db78b743d704f60d047a4da1e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06n-await-collab",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "collab::await_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.025,
+      "stdout_sha256": "c6018a76e88a122a390c20f518e387581bee5bb69f82bf156af0e7dc38aeb78a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06o-command-cards",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::terminal::conversation::tests::tool_groups::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.173,
+      "stdout_sha256": "a79ebe0f5bd6d408f1ce9950fbc123f63418d7fecea87768a6de76d7b5442f10",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06p-code-mode-await",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "code_mode::tests::typed_wait_helper_preserves_targets_and_uses_server_wait_identifiers",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.098,
+      "stdout_sha256": "49b1f361e2be7407d07409ddb747eef3ef151177bac5b2fb0b0fbf5b9eac66ba",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06q-question-delivery",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "http::question_delivery_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 1.966,
+      "stdout_sha256": "d77e60b00fdc11bcc88800816ccf27fdd4b0e0e64707f09e3a72b61bb542dbf8",
+      "stderr_sha256": "c9db07a071cb4ee046d94bd77a8ba0443c6c78b57cf17e1497b5fcd056c85638"
+    },
+    {
+      "name": "07-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--offline",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 98.751,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e96404490f6e497433a97b7c2e8f707a41d695f62f1d04b9b747ff0149a5a746"
+    },
+    {
+      "name": "08-binaries",
+      "command": [
+        "cargo",
+        "build",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 80.898,
+      "stdout_sha256": "2801a305087bf533bd0ff0bb63d91ac72c6cc8312e88895587435aea1caa1b6d",
+      "stderr_sha256": "e750aa4e82c8c342061070e81223a7642e6d1a7f069a86c81d209e0edc08e131"
+    },
+    {
+      "name": "09-pty",
+      "command": [
+        "python3",
+        "-B",
+        "-u",
+        "scripts/e2e_tool_summaries.py",
+        "--bin-dir",
+        "<validation-root>/attempt-09/bin",
+        "--decoder",
+        "<validation-root>/attempt-09/bin/vt_snapshot",
+        "--fixture-binary",
+        "<validation-root>/attempt-09/bin/libtest",
+        "--source-revision",
+        "8725b7b4606e8eb75c3d366c380f991842e0219a",
+        "--font",
+        "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+        "--out",
+        "<validation-root>/attempt-09/pty"
+      ],
+      "exit_code": 0,
+      "seconds": 16.735,
+      "stdout_sha256": "f6242d35d163c34c2af4fe5dabfadccdd00404acd14a3556decd369b12411b93",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "10-readable-commands",
+      "command": [
+        "python3",
+        "-B",
+        "-u",
+        "scripts/e2e_readable_commands.py",
+        "--bin-dir",
+        "<validation-root>/attempt-09/bin",
+        "--decoder",
+        "<validation-root>/attempt-09/bin/vt_snapshot",
+        "--fixture-binary",
+        "<validation-root>/attempt-09/bin/libtest",
+        "--source-revision",
+        "8725b7b4606e8eb75c3d366c380f991842e0219a",
+        "--font",
+        "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+        "--out",
+        "<validation-root>/attempt-09/pty-readable-commands"
+      ],
+      "exit_code": 0,
+      "seconds": 15.426,
+      "stdout_sha256": "975a66695194f998bcc2827a9b31c2cf321e88c76ed60db9e9148b5f8f7103ec",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "11-summary-commands",
+      "command": [
+        "python3",
+        "-B",
+        "-u",
+        "scripts/e2e_summary_commands.py",
+        "--bin-dir",
+        "<validation-root>/attempt-09/bin",
+        "--decoder",
+        "<validation-root>/attempt-09/bin/vt_snapshot",
+        "--fixture-binary",
+        "<validation-root>/attempt-09/bin/libtest",
+        "--source-revision",
+        "8725b7b4606e8eb75c3d366c380f991842e0219a",
+        "--font",
+        "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+        "--out",
+        "<validation-root>/attempt-09/pty-summary-commands"
+      ],
+      "exit_code": 0,
+      "seconds": 16.179,
+      "stdout_sha256": "def65b20a8ade8cfa23f3d8e4d34947344020c4bb802e696ffb723818bc2b0ad",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "rust_tests": [
+    {
+      "stage": "03-summary-tests",
+      "label": "工具组摘要、计数、授权与提醒",
+      "filter": "tool_summar",
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "04-events-tests",
+      "label": "终端事件、分组与显示归属",
+      "filter": "client::terminal::events::",
+      "passed": 102,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "05-broker-tests",
+      "label": "Broker 原生交付",
+      "filter": "broker::tests::",
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06-runtime-tests",
+      "label": "Runtime 执行",
+      "filter": "runtime::tests::",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06b-ui-inventory",
+      "label": "原生 UI 工具目录",
+      "filter": "client::interface::tests::action_decoder_validates_the_catalog_without_executing_actions",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06c-history-owner",
+      "label": "历史所有权",
+      "filter": "client::interface::history::ownership::tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06d-queue-recall",
+      "label": "待发送撤回",
+      "filter": "client::steering::tests::latest_takeback_reclaims_only_the_latest_unsent_request",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06e-queue-retry",
+      "label": "跨会话重试与编辑",
+      "filter": "client::steering::tests::uncertain_retarget_and_local_edit_never_retract_previous_history",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06f-queue-ack",
+      "label": "消息确认与修订号",
+      "filter": "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06g-queue-delivery",
+      "label": "投递与撤回竞争",
+      "filter": "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06h-history-archive",
+      "label": "历史归档",
+      "filter": "client::interface::history::archive::tests::",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06i-conversation-reload",
+      "label": "会话重载",
+      "filter": "client::terminal::conversation::reload_state::tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06j-late-session-frames",
+      "label": "会话切换后的晚到帧",
+      "filter": "session::attach::tests::modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06k-human-finish",
+      "label": "仅真人批准完成",
+      "filter": "client::interface::questions::human_finish_tests::",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06l-public-finish",
+      "label": "公共完成请求",
+      "filter": "http::finish_request::tests::",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06m-typed-await",
+      "label": "公共类型化等待",
+      "filter": "http::await_tool::",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06n-await-collab",
+      "label": "协作等待",
+      "filter": "collab::await_tests::",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06o-command-cards",
+      "label": "独立命令卡片",
+      "filter": "client::terminal::conversation::tests::tool_groups::",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06p-code-mode-await",
+      "label": "code_mode waitFor 路由",
+      "filter": "code_mode::tests::typed_wait_helper_preserves_targets_and_uses_server_wait_identifiers",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06q-question-delivery",
+      "label": "问题交付与被动观察隔离",
+      "filter": "http::question_delivery_tests::",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "unique_rust_test_total_claimed": false,
+  "binaries_sha256": {
+    "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+    "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+    "vt_snapshot": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+    "libtest": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+  },
+  "font": {
+    "path": "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+    "sha256": "09c42e7acca82bfb6cc602624d40f80a3f29557e0d8e4b93d6612a8af03af7f2"
+  },
+  "suites": {
+    "core": {
+      "status": "passed",
+      "checks": 68,
+      "passed_checks": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "the live client advertises the summary tool before metadata is trusted",
+        "10 real native file-stat calls completed successfully",
+        "ten logical calls do not inject a summary reminder",
+        "ten adjacent native calls produce one stable group",
+        "repeated list operations preserve group identity, count, and revision",
+        "1 real native file-stat calls completed successfully",
+        "the outer code_mode response identifies the exact overdue group after eleven new calls",
+        "the model-facing response also contains the explicit summary reminder text block",
+        "listing does not count as work or repeat an already delivered reminder",
+        "the summary tool returns an accepted update",
+        "updating the same group advances only its summary revision and coverage",
+        "summary updates do not issue tool-count reminders",
+        "first-folded: the exact text and UTF-8 cursor survive 120-column rendering",
+        "first-folded: the exact text and UTF-8 cursor survive 48-column rendering",
+        "2 real native file-stat calls completed successfully",
+        "two calls after the first summary remain below the next reminder threshold",
+        "additional native calls overflow the twelve-row tool viewport",
+        "expansion and internal scrolling retain the unsent draft and its cursor",
+        "the summary tool returns an accepted update",
+        "updating the same group advances only its summary revision and coverage",
+        "summary updates do not issue tool-count reminders",
+        "summary replacement preserves group expansion, inner scroll, and outer scroll",
+        "two summary updates replace metadata without appending chat messages or tool records",
+        "updated-expanded: the exact text and UTF-8 cursor survive 120-column rendering",
+        "updated-expanded: the exact text and UTF-8 cursor survive 48-column rendering",
+        "the native summary update rejects with tool_summary_revision_conflict",
+        "the native summary update rejects with tool_summary_not_found",
+        "stale revisions and a different authenticated agent cannot alter the owner group",
+        "10 real native file-stat calls completed successfully",
+        "ten calls after an update remain below the next reminder threshold",
+        "1 real native file-stat calls completed successfully",
+        "the outer code_mode response identifies the exact overdue group after eleven new calls",
+        "the model-facing response also contains the explicit summary reminder text block",
+        "only real work advances the group count across both reminder periods",
+        "the summary tool returns an accepted update",
+        "updating the same group advances only its summary revision and coverage",
+        "summary updates do not issue tool-count reminders",
+        "one real code_mode run completes eleven calls and proactively updates that group",
+        "a successful same-run update removes the older pending summary reminder",
+        "the proactive update covers all calls at the new revision",
+        "JavaScript return data cannot manufacture a host summary reminder",
+        "eleven actual missing-file calls fail without a mutation retry",
+        "the outer code_mode response identifies the exact overdue group after eleven new calls",
+        "the model-facing response also contains the explicit summary reminder text block",
+        "native errors remain in the same logical group instead of being reset by diagnostics",
+        "the summary tool returns an accepted update",
+        "updating the same group advances only its summary revision and coverage",
+        "summary updates do not issue tool-count reminders",
+        "final-folded: the exact text and UTF-8 cursor survive 120-column rendering",
+        "final-folded: the exact text and UTF-8 cursor survive 48-column rendering",
+        "the summary lifecycle adds no user or assistant chat body"
+      ],
+      "frames": [
+        "tool-summary-first-folded-120.png",
+        "tool-summary-first-folded-48.png",
+        "tool-summary-updated-expanded-120.png",
+        "tool-summary-updated-expanded-48.png",
+        "tool-summary-final-folded-120.png",
+        "tool-summary-final-folded-48.png"
+      ],
+      "summary_receipts": [
+        {
+          "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+          "revision": 1,
+          "summary": "Inspecting workspace files",
+          "call_count": 11,
+          "covered_call_count": 11
+        },
+        {
+          "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+          "revision": 2,
+          "summary": "Verified workspace files",
+          "call_count": 13,
+          "covered_call_count": 13
+        },
+        {
+          "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+          "revision": 3,
+          "summary": "Verified workspace files",
+          "call_count": 24,
+          "covered_call_count": 24
+        },
+        {
+          "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+          "revision": 4,
+          "summary": "Tracking validation progress",
+          "call_count": 35,
+          "covered_call_count": 35
+        },
+        {
+          "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+          "revision": 5,
+          "summary": "Checked file lookup results",
+          "call_count": 46,
+          "covered_call_count": 46
+        }
+      ],
+      "metrics": {
+        "failed_call_batch_seconds": 0.227
+      },
+      "final_group": {
+        "group_id": "tool_group_f899e80d607173897fee9b7ffbf7defe",
+        "revision": 5,
+        "summary": "Checked file lookup results",
+        "call_count": 46,
+        "covered_call_count": 46
+      },
+      "transport": "production account router, native tools, code_mode, WebSocket, and owned PTY",
+      "upstream_provider": "synthetic GitHub fixture",
+      "models_started": false,
+      "existing_clients_reloaded": false,
+      "existing_services_touched": false,
+      "real_user_credentials_used": false,
+      "source_of_images": "actual owned PTY cells decoded by the independent VT fixture",
+      "source_revision": "8725b7b4606e8eb75c3d366c380f991842e0219a",
+      "elapsed_seconds": 15.934,
+      "binaries_sha256_before": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "binaries_sha256_after": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "source_sha256": {
+        "e2e_tool_summaries.py": "3daa4079e1e1998f22c406e90ecde7cbe935bb4d1e02a3807fae58feecef8c83",
+        "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+        "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+        "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+        "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+        "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "e2e.py": "b7b04769aad311e05faa408888bcb1f872094dd8fdc100e2ee954dd47200e677",
+        "render_ui_snapshot.py": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8"
+      },
+      "font_sha256": "09c42e7acca82bfb6cc602624d40f80a3f29557e0d8e4b93d6612a8af03af7f2",
+      "inputs_unchanged": true
+    },
+    "readable": {
+      "status": "passed",
+      "checks": 71,
+      "passed_checks": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "owned fixture command has its real zero exit code",
+        "Inspect repository state: the real native command completed",
+        "owned fixture command has its real zero exit code",
+        "Inspect eight output lines: the real native command completed",
+        "owned fixture command has its real zero exit code",
+        "Inspect empty output: the real native command completed",
+        "the Python command executed exactly once",
+        "all completed command argv arrive in the real conversation: no keyboard input was sent during the observation",
+        "folded-120: the PTY frame contains no private credential or fixture token",
+        "120 columns: the inline script has one readable command header",
+        "120 columns: folded command details hide the inline source body",
+        "120 columns: commands are not members of a Tools group",
+        "120 columns: adjacent commands remain individually visible",
+        "120 columns: the real git status output is visible",
+        "120 columns: the long command previews exactly three output rows",
+        "120 columns: long, short and empty commands expose details",
+        "120 columns: Inspect repository state keeps its native status and preview bound",
+        "120 columns: Inspect eight output lines keeps its native status and preview bound",
+        "120 columns: Inspect empty output keeps its native status and preview bound",
+        "120 columns: click or selected Enter expands the exact command",
+        "expanded-head-120: the PTY frame contains no private credential or fixture token",
+        "120 columns: Home exposes the inline source and descriptive title",
+        "expanded-output-120: the PTY frame contains no private credential or fixture token",
+        "120 columns: End exposes every real output line",
+        "expanded-source-tail-120: the PTY frame contains no private credential or fixture token",
+        "120 columns: bounded panel scrolling reveals the redacted source tail",
+        "120 columns: expanding increases the command's own viewport",
+        "120 columns: Enter folds the same command again",
+        "folded-48: the PTY frame contains no private credential or fixture token",
+        "48 columns: the inline script has one readable command header",
+        "48 columns: folded command details hide the inline source body",
+        "48 columns: commands are not members of a Tools group",
+        "48 columns: adjacent commands remain individually visible",
+        "48 columns: the real git status output is visible",
+        "48 columns: the long command previews exactly three output rows",
+        "48 columns: long, short and empty commands expose details",
+        "48 columns: Inspect repository state keeps its native status and preview bound",
+        "48 columns: Inspect eight output lines keeps its native status and preview bound",
+        "48 columns: Inspect empty output keeps its native status and preview bound",
+        "48 columns: click or selected Enter expands the exact command",
+        "expanded-head-48: the PTY frame contains no private credential or fixture token",
+        "48 columns: Home exposes the inline source and descriptive title",
+        "expanded-output-48: the PTY frame contains no private credential or fixture token",
+        "48 columns: End exposes every real output line",
+        "expanded-source-tail-48: the PTY frame contains no private credential or fixture token",
+        "48 columns: bounded panel scrolling reveals the redacted source tail",
+        "48 columns: expanding increases the command's own viewport",
+        "48 columns: Enter folds the same command again",
+        "viewing, clicking, resizing and scrolling create no extra native jobs",
+        "command inspection preserves the exact completed native job",
+        "command inspection preserves the exact completed native job",
+        "command inspection preserves the exact completed native job",
+        "expanding or scrolling never re-executes the Python side effect",
+        "command inspection leaves the composer and outgoing queue empty"
+      ],
+      "frames": [
+        "readable-commands-folded-120.json",
+        "readable-commands-expanded-head-120.json",
+        "readable-commands-expanded-output-120.json",
+        "readable-commands-expanded-source-tail-120.json",
+        "readable-commands-folded-48.json",
+        "readable-commands-expanded-head-48.json",
+        "readable-commands-expanded-output-48.json",
+        "readable-commands-expanded-source-tail-48.json"
+      ],
+      "pngs": [
+        "readable-commands-folded-120.png",
+        "readable-commands-expanded-head-120.png",
+        "readable-commands-expanded-output-120.png",
+        "readable-commands-expanded-source-tail-120.png",
+        "readable-commands-folded-48.png",
+        "readable-commands-expanded-head-48.png",
+        "readable-commands-expanded-output-48.png",
+        "readable-commands-expanded-source-tail-48.png"
+      ],
+      "quiet_checks": [
+        "all completed command argv arrive in the real conversation"
+      ],
+      "widths": [
+        120,
+        48
+      ],
+      "native_commands": 3,
+      "transport": "production account router, native exec, owned PTY, independent VT",
+      "models_started": false,
+      "real_user_credentials_used": false,
+      "existing_clients_reloaded": false,
+      "existing_services_touched": false,
+      "source_revision": "8725b7b4606e8eb75c3d366c380f991842e0219a",
+      "elapsed_seconds": 14.726,
+      "binaries_sha256_before": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "binaries_sha256_after": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "source_sha256": {
+        "e2e_readable_commands.py": "5a71ba09b2c4fcf7e4c25216140b510f9722c990945d1717f02b72580ff89885",
+        "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+        "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+        "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+        "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+        "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "e2e.py": "b7b04769aad311e05faa408888bcb1f872094dd8fdc100e2ee954dd47200e677",
+        "render_ui_snapshot.py": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8"
+      },
+      "inputs_unchanged": true
+    },
+    "commands": {
+      "status": "passed",
+      "source_revision": "8725b7b4606e8eb75c3d366c380f991842e0219a",
+      "elapsed_seconds": 15.668,
+      "checks": 90,
+      "scenarios": [
+        {
+          "status": "passed",
+          "scenario": "exec-only",
+          "checks": 43,
+          "passed_checks": [
+            "the owned account router keeps its credentials in a private ready record",
+            "the isolated account has the expected stable provider identity and handle",
+            "the real production account router is healthy",
+            "the account connection advertises its exact identity-scoped MCP resource",
+            "MCP 401 advertises protected-resource metadata",
+            "resource metadata binds the exact account endpoint and OAuth issuer",
+            "OAuth discovery advertises authorization-code PKCE S256",
+            "public MCP client registers through OAuth DCR",
+            "the account OAuth endpoint requires provider consent instead of a connection login code",
+            "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+            "OAuth pages cannot be cached and bind same-origin form submission",
+            "real identity exchange validates provider PKCE and requires explicit consent",
+            "OAuth consent preserves the registered callback, state and issuer",
+            "the real OAuth endpoint issues an identity-scoped MCP access token",
+            "OAuth access expires in eight hours and supplies a refresh token",
+            "OAuth token responses cannot be cached",
+            "the account relay credential cannot authenticate as an MCP access token",
+            "the live client advertises the exact native summary primitive",
+            "first: the real native command completes successfully",
+            "one stable canonical group counts every real stat/start/wait request",
+            "the summary tool returns an accepted update",
+            "updating the same group advances only its summary revision and coverage",
+            "summary updates do not issue tool-count reminders",
+            "the single visible summary window owns every logical row exactly once",
+            "the real PTY shows one summary title and the original command argv",
+            "the single visible summary window owns every logical row exactly once",
+            "second: the real native command completes successfully",
+            "one stable canonical group counts every real stat/start/wait request",
+            "new native events keep the same summary revision and prior coverage",
+            "the single visible summary window owns every logical row exactly once",
+            "the single visible summary window owns every logical row exactly once",
+            "new calls and repeated native refresh preserve the user's draft and cursor",
+            "the summary tool returns an accepted update",
+            "updating the same group advances only its summary revision and coverage",
+            "summary updates do not issue tool-count reminders",
+            "the single visible summary window owns every logical row exactly once",
+            "the single visible summary window owns every logical row exactly once",
+            "120 columns: the physical summary header remains folded",
+            "120 columns: the unsent draft and interior cursor are unchanged",
+            "the single visible summary window owns every logical row exactly once",
+            "48 columns: the physical summary header remains folded",
+            "48 columns: the unsent draft and interior cursor are unchanged",
+            "summary updates, folding and inspection never re-execute either command"
+          ],
+          "frames": [
+            "summary-commands-exec-only-folded-120.png",
+            "summary-commands-exec-only-folded-48.png"
+          ],
+          "summary_receipts": [
+            {
+              "group_id": "tool_group_2b353dd0a374882737830af0362a82a1",
+              "revision": 1,
+              "summary": "Local command checks",
+              "call_count": 2,
+              "covered_call_count": 2
+            },
+            {
+              "group_id": "tool_group_2b353dd0a374882737830af0362a82a1",
+              "revision": 2,
+              "summary": "Local commands complete",
+              "call_count": 4,
+              "covered_call_count": 4
+            }
+          ],
+          "native_requests": {
+            "ssmcp.exec.start": 2,
+            "ssmcp.exec.wait": 2
+          },
+          "native_jobs": [
+            {
+              "job_id": "bc7960f8a3b3451d57d457eb2033ca90-1",
+              "exit_code": 0
+            },
+            {
+              "job_id": "bc7960f8a3b3451d57d457eb2033ca90-2",
+              "exit_code": 0
+            }
+          ],
+          "logical_call_count": 4,
+          "final_group": {
+            "group_id": "tool_group_2b353dd0a374882737830af0362a82a1",
+            "revision": 2,
+            "summary": "Local commands complete",
+            "call_count": 4,
+            "covered_call_count": 4
+          },
+          "elapsed_seconds": 7.704
+        },
+        {
+          "status": "passed",
+          "scenario": "mixed",
+          "checks": 47,
+          "passed_checks": [
+            "the owned account router keeps its credentials in a private ready record",
+            "the isolated account has the expected stable provider identity and handle",
+            "the real production account router is healthy",
+            "the account connection advertises its exact identity-scoped MCP resource",
+            "MCP 401 advertises protected-resource metadata",
+            "resource metadata binds the exact account endpoint and OAuth issuer",
+            "OAuth discovery advertises authorization-code PKCE S256",
+            "public MCP client registers through OAuth DCR",
+            "the account OAuth endpoint requires provider consent instead of a connection login code",
+            "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+            "OAuth pages cannot be cached and bind same-origin form submission",
+            "real identity exchange validates provider PKCE and requires explicit consent",
+            "OAuth consent preserves the registered callback, state and issuer",
+            "the real OAuth endpoint issues an identity-scoped MCP access token",
+            "OAuth access expires in eight hours and supplies a refresh token",
+            "OAuth token responses cannot be cached",
+            "the account relay credential cannot authenticate as an MCP access token",
+            "the live client advertises the exact native summary primitive",
+            "first before command: the native file lookup succeeds",
+            "first: the real native command completes successfully",
+            "first after command: the native file lookup succeeds",
+            "one stable canonical group counts every real stat/start/wait request",
+            "the summary tool returns an accepted update",
+            "updating the same group advances only its summary revision and coverage",
+            "summary updates do not issue tool-count reminders",
+            "the single visible summary window owns every logical row exactly once",
+            "the real PTY shows one summary title and the original command argv",
+            "the single visible summary window owns every logical row exactly once",
+            "second before command: the native file lookup succeeds",
+            "second: the real native command completes successfully",
+            "second after command: the native file lookup succeeds",
+            "one stable canonical group counts every real stat/start/wait request",
+            "new native events keep the same summary revision and prior coverage",
+            "the single visible summary window owns every logical row exactly once",
+            "the single visible summary window owns every logical row exactly once",
+            "new calls and repeated native refresh preserve the user's draft and cursor",
+            "the summary tool returns an accepted update",
+            "updating the same group advances only its summary revision and coverage",
+            "summary updates do not issue tool-count reminders",
+            "the single visible summary window owns every logical row exactly once",
+            "the single visible summary window owns every logical row exactly once",
+            "120 columns: the physical summary header remains folded",
+            "120 columns: the unsent draft and interior cursor are unchanged",
+            "the single visible summary window owns every logical row exactly once",
+            "48 columns: the physical summary header remains folded",
+            "48 columns: the unsent draft and interior cursor are unchanged",
+            "summary updates, folding and inspection never re-execute either command"
+          ],
+          "frames": [
+            "summary-commands-mixed-folded-120.png",
+            "summary-commands-mixed-folded-48.png"
+          ],
+          "summary_receipts": [
+            {
+              "group_id": "tool_group_673911d24cb5fd7ee1a8d1a3d4894e10",
+              "revision": 1,
+              "summary": "Mixed file and command checks",
+              "call_count": 4,
+              "covered_call_count": 4
+            },
+            {
+              "group_id": "tool_group_673911d24cb5fd7ee1a8d1a3d4894e10",
+              "revision": 2,
+              "summary": "Mixed checks complete",
+              "call_count": 8,
+              "covered_call_count": 8
+            }
+          ],
+          "native_requests": {
+            "ssmcp.fs.stat": 4,
+            "ssmcp.exec.start": 2,
+            "ssmcp.exec.wait": 2
+          },
+          "native_jobs": [
+            {
+              "job_id": "100a03fc78edc6157b83f7a36a0933b1-1",
+              "exit_code": 0
+            },
+            {
+              "job_id": "100a03fc78edc6157b83f7a36a0933b1-2",
+              "exit_code": 0
+            }
+          ],
+          "logical_call_count": 8,
+          "final_group": {
+            "group_id": "tool_group_673911d24cb5fd7ee1a8d1a3d4894e10",
+            "revision": 2,
+            "summary": "Mixed checks complete",
+            "call_count": 8,
+            "covered_call_count": 8
+          },
+          "elapsed_seconds": 7.603
+        }
+      ],
+      "frames": [
+        "exec-only/summary-commands-exec-only-folded-120.png",
+        "exec-only/summary-commands-exec-only-folded-48.png",
+        "mixed/summary-commands-mixed-folded-120.png",
+        "mixed/summary-commands-mixed-folded-48.png"
+      ],
+      "binaries_sha256_before": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "binaries_sha256_after": {
+        "ssmcp": "18d7e753e009585e7830f38af84afa6feb59d46bcb15f4048c819b1f0630c698",
+        "ssmcpd": "4c374d57f43d08e2201b44ef0b222492f58705d220b14d0ee86c076755029f3e",
+        "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+        "fixture": "b82835ea374e39102841e066a5e192d92bd4efd8fba3dd35643cccb06c5cdddd"
+      },
+      "source_sha256_before": {
+        "e2e_summary_commands.py": "095ef1fc4dab648038e79d849965e3ecebed53efe347526f881e93237040dd94",
+        "e2e_tool_summaries.py": "3daa4079e1e1998f22c406e90ecde7cbe935bb4d1e02a3807fae58feecef8c83",
+        "e2e_readable_commands.py": "5a71ba09b2c4fcf7e4c25216140b510f9722c990945d1717f02b72580ff89885",
+        "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+        "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+        "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+        "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+        "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "e2e.py": "b7b04769aad311e05faa408888bcb1f872094dd8fdc100e2ee954dd47200e677",
+        "render_ui_snapshot.py": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8"
+      },
+      "source_sha256": {
+        "e2e_summary_commands.py": "095ef1fc4dab648038e79d849965e3ecebed53efe347526f881e93237040dd94",
+        "e2e_tool_summaries.py": "3daa4079e1e1998f22c406e90ecde7cbe935bb4d1e02a3807fae58feecef8c83",
+        "e2e_readable_commands.py": "5a71ba09b2c4fcf7e4c25216140b510f9722c990945d1717f02b72580ff89885",
+        "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+        "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+        "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+        "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+        "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+        "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "e2e.py": "b7b04769aad311e05faa408888bcb1f872094dd8fdc100e2ee954dd47200e677",
+        "render_ui_snapshot.py": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8"
+      },
+      "font_path": "/home/lightjunction/.local/share/fonts/obel-mono/ObelMono[wght].ttf",
+      "font_sha256_before": "09c42e7acca82bfb6cc602624d40f80a3f29557e0d8e4b93d6612a8af03af7f2",
+      "font_sha256": "09c42e7acca82bfb6cc602624d40f80a3f29557e0d8e4b93d6612a8af03af7f2",
+      "inputs_unchanged": true,
+      "transport": "two independent private account relays, real native exec and owned PTYs",
+      "models_started": false,
+      "real_user_credentials_used": false,
+      "existing_clients_reloaded": false,
+      "existing_services_touched": false
+    }
+  },
+  "images": [
+    {
+      "suite": "core",
+      "file": "tool-summary-first-folded-120.png",
+      "bytes": 26813,
+      "sha256": "55b9638d81d37e21783a6a5cb9f7e94ad4dc72894b6b29d491ff6f051570c429"
+    },
+    {
+      "suite": "core",
+      "file": "tool-summary-first-folded-48.png",
+      "bytes": 21133,
+      "sha256": "504bfb9af07b0eaeb91ac7790a49aa85a177cb928bbf8f08a35893dc6f677ed3"
+    },
+    {
+      "suite": "core",
+      "file": "tool-summary-updated-expanded-120.png",
+      "bytes": 56971,
+      "sha256": "25c8189a7db155b5287ebd61fd8dd26558a1c10e97500c7723ce6d50f6185c02"
+    },
+    {
+      "suite": "core",
+      "file": "tool-summary-updated-expanded-48.png",
+      "bytes": 48673,
+      "sha256": "74aba020be91a6889d4aec0d4bd252f4bffe767e5adf961334c0b6e59acc5156"
+    },
+    {
+      "suite": "core",
+      "file": "tool-summary-final-folded-120.png",
+      "bytes": 27742,
+      "sha256": "de0b70c9efa8d52e8c317d3e1cab16be9080f9186c01035a5a7650752f4b6c43"
+    },
+    {
+      "suite": "core",
+      "file": "tool-summary-final-folded-48.png",
+      "bytes": 22106,
+      "sha256": "2453dc309cde43eede0ed418d9159fbfba4bd7b66604ac3c5d0436092d9588cc"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-folded-120.png",
+      "bytes": 57898,
+      "sha256": "528aaa8e542c39e96ddb69b6ef3e75beeba252294452aef93106cf57a62636d7"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-head-120.png",
+      "bytes": 92090,
+      "sha256": "0e8e0a86def77ccfc244e4457735aaae8d16103f4b40485ddbd5ed34b0327cc8"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-output-120.png",
+      "bytes": 77183,
+      "sha256": "5ab99f824a02673c67846b0737744fe5fc2bf7a59a7b4618884bc141f891f90a"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-source-tail-120.png",
+      "bytes": 78149,
+      "sha256": "fbc4cf3ede4009dcf4c4c789b63f1141a606c2494804fc8f4554585e4f5522b1"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-folded-48.png",
+      "bytes": 48750,
+      "sha256": "6a9b5a904e25784836881a5bce11cf28f5e11fe4f1ead68b0b76306a25bebae0"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-head-48.png",
+      "bytes": 75117,
+      "sha256": "aab83d56eceadac3bf55e9519302b3f3e4bb6b8ce74f07afbd0ce50003f201b8"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-output-48.png",
+      "bytes": 66613,
+      "sha256": "833540f50024ec4ad0773931464f53bd3f26177259acc15ce3b8bf240411e8aa"
+    },
+    {
+      "suite": "readable",
+      "file": "readable/readable-commands-expanded-source-tail-48.png",
+      "bytes": 65471,
+      "sha256": "818abf3d3f507d3fc9bdf4df0dfc90c24f1ca839bb50e511009c0dd929313acf"
+    },
+    {
+      "suite": "commands",
+      "file": "commands/exec-only/summary-commands-exec-only-folded-120.png",
+      "bytes": 26448,
+      "sha256": "306e6b3d01760758a7df7afbbeae6280a4b322f3fde0048157de8dab9ccf612f"
+    },
+    {
+      "suite": "commands",
+      "file": "commands/exec-only/summary-commands-exec-only-folded-48.png",
+      "bytes": 18945,
+      "sha256": "cc24e3d05eb1a92a80672d80de699e6b5ab5894196a6855c0118861cd4c03ab5"
+    },
+    {
+      "suite": "commands",
+      "file": "commands/mixed/summary-commands-mixed-folded-120.png",
+      "bytes": 27462,
+      "sha256": "c509b581c2b448855db5d3b6ed54a3761d06953fb92c02bad142db7c16563e60"
+    },
+    {
+      "suite": "commands",
+      "file": "commands/mixed/summary-commands-mixed-folded-48.png",
+      "bytes": 19737,
+      "sha256": "a6ffa11a35d4c8426890e93aafaa8f1612aa4bd990d6a24bd911022a95866d58"
+    }
+  ],
+  "repository_cleanup": {
+    "remote_deleted": 23,
+    "local_deleted": 21,
+    "readback_verified": true,
+    "receipt": "branch-cleanup.json"
+  },
+  "previous_attempts": [
+    {
+      "attempt": "02",
+      "source_revision": "a00e1b1333315090db89e6dfb9c6dd8716af0ffc",
+      "status": "failed",
+      "reason": "Strict list input, exact test identity and read-group boundary defects were corrected."
+    },
+    {
+      "attempt": "03",
+      "source_revision": "5998949d0fd6103bf72794c2293ebe8e42eebab9",
+      "status": "failed",
+      "reason": "PTY fixture needed more than twelve actual rows before testing internal scroll."
+    },
+    {
+      "attempt": "04",
+      "source_revision": "2a40d08adbcf0ca1458e99f89c40bb3ef5adcbac",
+      "status": "failed",
+      "reason": "Unscoped native error diagnostics split the active summary group."
+    },
+    {
+      "attempt": "05",
+      "source_revision": "c265794e2a1df5c27fcb448452a82e0143dbc497",
+      "status": "failed",
+      "reason": "65 real PTY assertions passed before the full events projection exceeded the unchanged 8 KiB limit."
+    },
+    {
+      "attempt": "06",
+      "source_revision": "46cef6e5bcded40ee4a3181b828d7758c758654d",
+      "status": "passed",
+      "reason": "Full gate and 68 PTY checks passed; later input-performance integration required a separate candidate."
+    },
+    {
+      "attempt": "07",
+      "source_revision": "8729bf8e26b8e91d34a676af2e67d8ef37fe9b13",
+      "status": "failed",
+      "reason": "Targeted tests passed; strict non-test Clippy found the test-only HistoryStore import."
+    },
+    {
+      "attempt": "08",
+      "source_revision": "911bfe905e6df1b54bcc46be2f88c87813cb031c",
+      "status": "passed",
+      "reason": "Exact-source checkpoint passed; subsequent readable-command and typed-await integration received a separate gate.",
+      "evidence_commit": "894f28c02253bb492944847d2cbbe81f9ccf7070"
+    }
+  ],
+  "scope": "Exact-source local integration acceptance; not production deployment or all-platform release certification.",
+  "recorded_at": "2026-11-20T23:24:12+08:00",
+  "post_integration": {
+    "status": "passed",
+    "source_revision": "4ca66fa12693b1b2db940da78b3c89cb2048425d",
+    "evidence": "post-integration.json",
+    "account_e2e_checks": 47
+  }
+}

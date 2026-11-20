@@ -1,9 +1,11 @@
 //! Process-local capabilities for writing to an explicitly captured history.
+#[cfg(test)]
+use super::HistoryStore;
 use super::{Committed, HISTORY, History, random_id, with};
 use crate::runtime::call_scope::CallScope;
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, Weak},
 };
 
 const MAX_BINDINGS: usize = 1024;
@@ -28,7 +30,7 @@ impl HistoryId {
 pub(crate) struct HistoryOwner {
     id: Arc<str>,
     #[cfg(test)]
-    fixture: Option<Weak<std::sync::Mutex<Option<History>>>>,
+    fixture: Option<Weak<HistoryStore>>,
 }
 
 impl HistoryOwner {
@@ -48,6 +50,25 @@ impl PartialEq for HistoryOwner {
 }
 
 impl Eq for HistoryOwner {}
+
+/// Share the selected identity without sharing the history storage lock.
+/// Writers hold the history transaction lock; this short lock never covers
+/// disk I/O or calls back into history storage or the terminal.
+#[derive(Clone, Default)]
+pub(super) struct CurrentOwner(Arc<Mutex<Option<HistoryOwner>>>);
+
+impl CurrentOwner {
+    pub(super) fn get(&self) -> Option<HistoryOwner> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    fn replace(&self, owner: Option<HistoryOwner>) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = owner;
+    }
+}
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct VerifiedThread {
@@ -77,7 +98,7 @@ struct IssuedOwner {
 
 #[derive(Default)]
 pub(super) struct Ownership {
-    pub(super) current: Option<HistoryOwner>,
+    pub(super) current: CurrentOwner,
     issued: HashMap<String, IssuedOwner>,
     threads: HashMap<VerifiedThread, HistoryOwner>,
 }
@@ -107,7 +128,7 @@ impl Ownership {
             #[cfg(test)]
             fixture: TEST_HISTORY.try_with(Arc::downgrade).ok(),
         };
-        self.current = Some(owner.clone());
+        self.current.replace(Some(owner.clone()));
         owner
     }
 
@@ -127,14 +148,19 @@ impl Ownership {
 
     pub(super) fn revoke(&mut self, id: &str) {
         self.issued.remove(id);
-        if self.current.as_ref().is_some_and(|owner| owner.id() == id) {
-            self.current = None;
+        if self
+            .current
+            .get()
+            .as_ref()
+            .is_some_and(|owner| owner.id() == id)
+        {
+            self.current.replace(None);
         }
     }
 
     pub(super) fn release(&mut self) {
         self.issued.clear();
-        self.current = None;
+        self.current.replace(None);
         // Keep the bound identities as tombstones. A retry must never bind to a
         // later conversation, even after release or when the table is full.
     }
@@ -142,8 +168,8 @@ impl Ownership {
 
 impl History {
     pub(super) fn capture_owner(&mut self) -> Result<HistoryOwner, String> {
-        if let Some(owner) = &self.ownership.current {
-            return Ok(owner.clone());
+        if let Some(owner) = self.ownership.current.get() {
+            return Ok(owner);
         }
         if let Some(active) = &self.active {
             return Ok(self.ownership.select(&active.metadata.id, false));
@@ -176,25 +202,13 @@ pub(crate) fn capture(call: Option<&CallScope>) -> Result<HistoryOwner, String> 
     })
 }
 
-/// Observe the selected owner without reserving a new conversation.
+/// Observe the selected owner without reserving a conversation or waiting for disk I/O.
 pub(crate) fn current_owner() -> Option<HistoryOwner> {
     #[cfg(test)]
-    if let Ok(owner) = TEST_HISTORY.try_with(|store| {
-        store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .and_then(|history| history.ownership.current.clone())
-    }) {
+    if let Ok(owner) = TEST_HISTORY.try_with(|store| store.current.get()) {
         return owner;
     }
-    HISTORY.get().and_then(|state| {
-        state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .and_then(|history| history.ownership.current.clone())
-    })
+    HISTORY.get().and_then(|store| store.current.get())
 }
 
 fn with_owner<T>(
@@ -204,7 +218,10 @@ fn with_owner<T>(
     #[cfg(test)]
     if let Some(fixture) = &owner.fixture {
         let store = fixture.upgrade().ok_or(RELEASED)?;
-        let mut state = store.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         return operation(state.as_mut().ok_or(RELEASED)?, owner);
     }
     with(|history| operation(history, owner))
@@ -254,7 +271,7 @@ pub(crate) fn record_owned_request(
 /// Check and update the leaf copy cache while selection remains stable.
 pub(crate) fn remember_visible_reply(owner: &HistoryOwner, text: &str) -> bool {
     with_owner(owner, |history, owner| {
-        let current = history.ownership.current.as_ref() == Some(owner);
+        let current = history.ownership.current.get().as_ref() == Some(owner);
         if current {
             super::super::messages::remember_last(text);
         }
@@ -265,7 +282,7 @@ pub(crate) fn remember_visible_reply(owner: &HistoryOwner, text: &str) -> bool {
 
 #[cfg(test)]
 tokio::task_local! {
-    pub(super) static TEST_HISTORY: Arc<std::sync::Mutex<Option<History>>>;
+    pub(super) static TEST_HISTORY: Arc<HistoryStore>;
 }
 
 #[cfg(test)]
@@ -274,14 +291,74 @@ pub(crate) async fn with_test_history<F: std::future::Future>(
     future: F,
 ) -> F::Output {
     let history = History::with_workspace(path, "/owner-fixture".into()).unwrap();
-    TEST_HISTORY
-        .scope(Arc::new(std::sync::Mutex::new(Some(history))), future)
-        .await
+    let store = HistoryStore {
+        current: history.ownership.current.clone(),
+        state: Mutex::new(Some(history)),
+    };
+    TEST_HISTORY.scope(Arc::new(store), future).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_owner_is_available_while_history_storage_is_locked() {
+        use std::{sync::mpsc, time::Duration};
+
+        let temp = super::super::tests::Temporary::new();
+        let history = temp.history();
+        let store = Arc::new(HistoryStore {
+            current: history.ownership.current.clone(),
+            state: Mutex::new(Some(history)),
+        });
+        TEST_HISTORY.sync_scope(store.clone(), || {
+            let expected = capture(None).unwrap();
+            let locked = store.state.lock().unwrap();
+            let reader_store = store.clone();
+            let (sent, received) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                TEST_HISTORY.sync_scope(reader_store, || {
+                    sent.send(current_owner()).unwrap();
+                });
+            });
+
+            // The reader must finish while storage is still locked. The timeout
+            // is only a deadlock watchdog; no sleep or storage speed is assumed.
+            let observed = received.recv_timeout(Duration::from_secs(1));
+            drop(locked);
+            reader.join().unwrap();
+            assert_eq!(
+                observed.expect("display ownership must not wait for history storage"),
+                Some(expected)
+            );
+        });
+    }
+
+    #[test]
+    fn shared_current_owner_tracks_switch_revocation_and_release() {
+        let mut ownership = Ownership::default();
+        let display = ownership.current.clone();
+        let a = "conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        assert!(display.get().is_none());
+
+        let first = ownership.select(a, true);
+        assert_eq!(display.get(), Some(first.clone()));
+        assert_eq!(ownership.select(a, false), first);
+        let second = ownership.select(b, false);
+        assert_eq!(display.get(), Some(second.clone()));
+        ownership.revoke(a);
+        assert_eq!(display.get(), Some(second));
+        ownership.revoke(b);
+        assert!(display.get().is_none());
+
+        let restored = ownership.select(a, false);
+        assert_ne!(restored, first);
+        assert_eq!(display.get(), Some(restored));
+        ownership.release();
+        assert!(display.get().is_none());
+    }
 
     #[test]
     fn a_reserved_inactive_owner_can_materialize_only_its_own_file() {

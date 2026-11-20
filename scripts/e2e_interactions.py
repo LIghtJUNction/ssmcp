@@ -196,9 +196,19 @@ class Interactions(InputHistory):
             and markers[1] not in body_text(shot) and body_text(shot).count(markers[0]) == 1,
             "server-confirmed Up recall removes only the old pending bubble without another key")
         recalled = self.ui("/display/conversation")
-        self.check(recalled["editing"] == pending["id"] and recalled["target"] == pending["target"]
-                   and recalled["draft"] == {"text": original, "cursor": len(original.encode())},
-                   "Up restores the exact request identity, source and UTF-8 end cursor")
+        expected_recall = (
+            pending["id"],
+            None if pending["target"] == "next" else pending["target"],
+            {"text": original, "cursor": len(original.encode())},
+        )
+        observed_recall = (recalled["editing"], recalled["target"], recalled["draft"])
+        recall_matches = observed_recall == expected_recall
+        self.check(
+            recall_matches,
+            "Up restores the exact request identity, source and UTF-8 end cursor"
+            + ("" if recall_matches else
+               f"; observed={observed_recall!r}; expected={expected_recall!r}"),
+        )
         queue_state(pending, "editing", original)
         frames("recalled", (1, 0, 0), markers[1])
 
