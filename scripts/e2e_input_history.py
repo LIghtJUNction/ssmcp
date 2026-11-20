@@ -114,6 +114,27 @@ class InputHistory(Composer):
         )
         return snapshot
 
+    def save_resized_shots(self, name, front, marker):
+        """Capture the same live view at two widths, then restore its terminal."""
+        rows, original_columns = front.snapshot()["size"]
+        try:
+            for columns in (120, 48):
+                front.resize(rows, columns)
+                front.pump(0.15)
+                front.until(
+                    lambda shot: shot["size"] == [rows, columns] and marker in text(shot),
+                    f"{name} redraw at {columns} columns", cells=True,
+                )
+                self.save_shot(f"{name}-{columns}", front, cells=True)
+        finally:
+            front.resize(rows, original_columns)
+            front.pump(0.15)
+            front.until(
+                lambda shot: shot["size"] == [rows, original_columns] and marker in text(shot),
+                f"{name} restoring the original terminal size",
+            )
+        return self.save_shot(name, front, cells=True)
+
     def wait_state(self, front, predicate, description):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -616,7 +637,7 @@ class InputHistory(Composer):
         self.check(len(found["matches"]) == 1
                    and found["matches"][0]["conversation_id"] == session_id,
                    "archived content remains explicitly searchable through the read-only history tool")
-        self.save_shot("archived", front)
+        self.save_resized_shots("archived", front, "Archived conversations")
         front.send(b"\x01\x0b")
         self.wait_state(front, lambda state: not state["draft"]["text"],
                         "the archive preservation draft did not clear")
@@ -653,7 +674,7 @@ class InputHistory(Composer):
             {key: value for key, value in item.items() if key != "type"} for item in previous
         ] and history["messages"][-1]["content"] == continuation,
                    "an explicit new requirement appends once to the restored original messages")
-        self.save_shot("archive-restored", restored_front)
+        self.save_resized_shots("archive-restored", restored_front, "ARCHIVE_RESTORED_CONTINUATION")
         self.metrics["archive_pty"] = {
             "bytes": len(restored_front.transcript),
             "sha256": hashlib.sha256(restored_front.transcript).hexdigest(),

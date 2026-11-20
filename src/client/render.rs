@@ -2607,12 +2607,15 @@ fn command_label(command: &Value) -> String {
 /// Native argv is never modified or executed by this presentation helper.
 pub(crate) fn interactive_command_source(event: &Value) -> Option<String> {
     let rpc = event.get("request").unwrap_or(event);
-    let value = if event["type"] == "exec.started" {
+    let value = if matches!(
+        event["type"].as_str(),
+        Some("exec.started" | "ssmcp.exec.started")
+    ) {
         event.get("command")?
     } else if rpc["method"] == "command/exec" {
-        rpc["params"]
-            .get("command")
-            .or_else(|| rpc["params"].get("cmd"))?
+        let params = &rpc["params"];
+        let params = params.get("arguments").unwrap_or(params);
+        params.get("command").or_else(|| params.get("cmd"))?
     } else {
         return None;
     };
@@ -2621,15 +2624,33 @@ pub(crate) fn interactive_command_source(event: &Value) -> Option<String> {
     }
     let redacted = crate::audit::event(serde_json::json!({"command":value}));
     let command = command::Command::new(&redacted["command"]);
-    let mut source = format!("cmd={}\n", command.invocation.replace('\n', "\\n"));
+    let mut source = format!("cmd={}\n", command_source_literal(&command.invocation));
     if let Some(script) = command.script {
         let lines = script.split('\n').collect::<Vec<_>>();
         source.push_str(&format!("script · {} lines\n", lines.len()));
         for (index, line) in lines.iter().enumerate() {
-            source.push_str(&format!("{} │ {line}\n", index + 1));
+            source.push_str(&format!(
+                "{} │ {}\n",
+                index + 1,
+                command_source_literal(line)
+            ));
         }
     }
     Some(source)
+}
+
+/// Commands may contain terminal controls as literal argv bytes. Show those
+/// controls visibly; never let them change a source line, color or output tag.
+fn command_source_literal(text: &str) -> String {
+    let mut literal = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_control() {
+            literal.extend(ch.escape_default());
+        } else {
+            literal.push(ch);
+        }
+    }
+    literal
 }
 
 fn json_record(text: &str) -> bool {

@@ -85,8 +85,14 @@ fn short_id(value: &str) -> String {
         return "ID unavailable".into();
     }
     let value = value.strip_prefix("agent_").unwrap_or(value);
-    let short: String = value.chars().take(10).collect();
-    format!("#{short}")
+    let safe = panel::safe_text(value);
+    let characters: Vec<_> = safe.chars().collect();
+    let head: String = characters.iter().take(10).collect();
+    if characters.len() <= 10 {
+        return format!("#{head}");
+    }
+    let tail: String = characters[characters.len() - 8..].iter().collect();
+    format!("#{head}…{tail}")
 }
 
 fn identity_rows(rows: &mut Vec<(String, PanelTone)>, label: &str, id: &str, width: usize) {
@@ -266,11 +272,12 @@ impl State {
             let indent = if process { "" } else { "  " };
             let name = panel::safe_text(field(entry, "name"));
             let model = panel::safe_text(field(entry, "model"));
-            let title = if observed && !model.is_empty() {
-                format!(" {marker} {indent}{check} {name} · {model}")
+            let label = if observed && !model.is_empty() {
+                format!("{name} · {model}")
             } else {
-                format!(" {marker} {indent}{check} {name}")
+                name
             };
+            let title = format!(" {marker} {indent}{check} {label}");
             let id = if process {
                 field(entry, "client_id")
             } else if observed {

@@ -36,6 +36,7 @@ impl Task {
         // Check before file preparation, then recheck the same epoch/lease when
         // committing the delivery. A replacement listener cannot inherit it.
         let target = receiver::target(selected_thread)?;
+        let conversation_id = target.conversation_id.clone();
         let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
         let (sender, result) = oneshot::channel();
         let task_source = source.clone();
@@ -47,8 +48,17 @@ impl Task {
                 let receipt = ticket.wait().await?;
                 let history_error = if receipt.status == Status::Accepted {
                     let id = receipt.delivery_id.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        crate::client::interface::history::record_request(&id, &task_source)
+                    match tokio::task::spawn_blocking(move || match conversation_id {
+                        Some(conversation_id) => {
+                            crate::client::interface::history::record_request_in(
+                                &conversation_id,
+                                &id,
+                                &task_source,
+                            )
+                        }
+                        None => {
+                            crate::client::interface::history::record_request(&id, &task_source)
+                        }
                     })
                     .await
                     {
@@ -449,11 +459,37 @@ mod tests {
                     .as_deref()
                     .is_some_and(|detail| detail.starts_with("上次连接：发送"))
             );
-            let events = state.events.snapshot();
-            assert_eq!(events["retained_events"], 1);
-            // The snapshot contains event metadata, not message bodies. The
-            // retained transcript must still explain the interrupted send.
-            assert!(state.logs.screen().contents().contains("上次连接"));
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            // Ordinary conversation snapshots expose a generic summary, not
+            // their body. Clear the transient notice and verify the retained
+            // result through the same Frame/VT path used by the terminal.
+            state.ui.layout = Layout::Chat;
+            state.ui.sidebar = false;
+            state.resize(24, 120);
+            state.chat_change_view(View::Activity);
+            assert!(state.notice.is_none());
+            let frame = state.frame(Instant::now());
+            let mut screen = vt100::Parser::new(
+                std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
+                std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
+                0,
+            );
+            screen.process(&frame.diff(None));
+            let visible = screen.screen().contents();
+            assert_eq!(visible.matches("上次连接").count(), 1, "{visible}");
+            assert!(visible.contains("上次连接：发送"), "{visible}");
+            match status {
+                Status::Failed => {
+                    assert!(visible.contains("连接已结束，消息未投递"), "{visible}");
+                }
+                Status::Unknown => {
+                    assert!(visible.contains("发送结果未确认"), "{visible}");
+                    assert!(visible.contains("不会自动重发"), "{visible}");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+            assert!(state.actions.is_empty());
         }
     }
 }

@@ -22,6 +22,9 @@ use std::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod conversation;
+pub(super) use conversation::reload_state::{
+    Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
+};
 mod events;
 mod footer;
 mod guide;
@@ -38,7 +41,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
 const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
-const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
+const COPY_HINT: &str = "Copy mode · drag then terminal Copy · Alt+C/F7/Esc back";
 const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
@@ -125,6 +128,7 @@ impl Session {
             state.account = AccountStatus::Loading;
         }
         state.graphics = images::Graphics::environment(&options);
+        state.chat_restore_reload_state();
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -234,6 +238,11 @@ impl Drop for Session {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .chat_capture_reload_state();
         if let Some(global) = DISPLAY.get() {
             let mut global = global.lock().unwrap_or_else(|e| e.into_inner());
             if global
@@ -296,6 +305,22 @@ pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::
             .unwrap_or_else(|error| error.into_inner());
         let changed = state.link_metrics.update(generation, status);
         state.dirty |= changed;
+    }
+}
+
+pub(super) fn set_connection_versions(versions: super::update::ConnectionVersions) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let notice = versions
+            .update_message()
+            .unwrap_or_else(|| versions.summary());
+        // Preserve a more urgent local recovery or authentication notice.
+        state.notice.get_or_insert(notice);
+        state.connection_versions = Some(versions);
+        state.dirty = true;
     }
 }
 
@@ -400,6 +425,57 @@ pub(super) fn log_event(
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     state.log_scoped_event(label, value, bytes, scope);
     true
+}
+
+/// A listener result is scoped output, not an agent finish decision or user input.
+/// Lock order is Terminal -> Hub -> History; publication cannot move to a new view.
+pub(crate) fn listener_result(
+    receipt: &super::interface::listener::ReplyReceipt,
+    label: &str,
+    text: &str,
+) -> bool {
+    let event = serde_json::json!({
+        "type":"ssmcp.message","role":"assistant","kind":"execution_result",
+        "author":label,"text":text,"source":"local_listener",
+        "message_id":receipt.message_id,"delivery_id":receipt.delivery_id,
+        "connection_id":receipt.connection_id,"conversation_id":receipt.conversation_id,
+        "execution_state":receipt.execution_state,"task_completion_approved":false,
+    });
+    let header = format!(
+        "\n[LISTENER] {label} · {}\n",
+        receipt.execution_state.as_str()
+    );
+    let shown = if let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire))
+    {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bytes = header.into_bytes();
+        for row in markdown::rows(text, state.geometry.left.max(1), &state.ui) {
+            bytes.extend_from_slice(row.as_bytes());
+            bytes.push(b'\n');
+        }
+        bytes.push(b'\n');
+        super::interface::listener::with_current_reply(receipt, || {
+            if !shared.alive.load(Ordering::Acquire) {
+                return false;
+            }
+            state.log_event("listener", &event, &bytes);
+            crate::session::attach::record_event("listener", &event);
+            true
+        })
+        .unwrap_or(false)
+    } else {
+        super::interface::listener::with_current_reply(receipt, || {
+            let mut output = io::stderr().lock();
+            write!(output, "{header}{text}\n\n")
+                .and_then(|()| output.flush())
+                .is_ok()
+        })
+        .unwrap_or(false)
+    };
+    if shown {
+        super::interface::messages::remember_last(text);
+    }
+    shown
 }
 
 /// The renderer releases its lock before publishing these display-only updates.
@@ -653,6 +729,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
+        "versions":state.connection_versions,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
@@ -926,6 +1003,16 @@ const KEYS: &[(&[u8], Key)] = &[
     (b"\x1b[57351;3u", Key::CanvasRight),
     (b"\x1b[1;2A", Key::Questions),
     (b"\x1b[18~", Key::Select),
+    (b"\x1bc", Key::Select),
+    (b"\x1bC", Key::Select),
+    (b"\x1b[99;3u", Key::Select),
+    (b"\x1b[67;3u", Key::Select),
+    (b"\x1b[99;4u", Key::Select),
+    (b"\x1b[67;4u", Key::Select),
+    (b"\x1b[27;3;99~", Key::Select),
+    (b"\x1b[27;3;67~", Key::Select),
+    (b"\x1b[27;4;99~", Key::Select),
+    (b"\x1b[27;4;67~", Key::Select),
     (b"\x1b[Z", Key::FocusBack),
     (b"\x1b[3~", Key::Delete),
     (b"\x1b[13;2u", Key::Newline),
@@ -1246,6 +1333,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     server_origin: Option<footer::Origin>,
+    connection_versions: Option<super::update::ConnectionVersions>,
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
@@ -1290,6 +1378,7 @@ impl State {
             events: events::EventView::new(),
             context_label: String::new(),
             server_origin: None,
+            connection_versions: None,
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
@@ -2058,7 +2147,7 @@ impl State {
                 "F3         Show or hide the sidebar".into(),
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
-                "F7         Freeze display for terminal mouse selection; F7/Esc returns".into(),
+                "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),

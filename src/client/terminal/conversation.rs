@@ -16,6 +16,7 @@ mod paste;
 mod questions;
 mod queue;
 mod receipts;
+pub(super) mod reload_state;
 mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
@@ -25,7 +26,7 @@ mod user_wait;
 const EXIT_CONFIRMATION: &str =
     "Press Ctrl+C again to exit · any other key keeps this session open";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(super) enum View {
     #[default]
     Activity,
@@ -130,6 +131,7 @@ pub(super) struct Conversation {
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
+    reload_input_history: Option<crate::client::composer::InputHistory>,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
     finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
@@ -383,6 +385,7 @@ impl State {
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
+            self.chat_restore_reload_input();
             self.conversation.restored = true;
             self.chat_restore_interrupted_force_send();
         }
@@ -589,7 +592,8 @@ impl State {
             "/select" => {
                 if !rest.is_empty() {
                     return Err(
-                        "Use /select without arguments; F7 or Esc returns to the interface".into(),
+                        "Use /select without arguments; Alt+C, F7 or Esc returns to the interface"
+                            .into(),
                     );
                 }
                 self.set_selection_mode(true);
@@ -2548,7 +2552,7 @@ impl State {
     /// It is not a separate mode that can drift away from the active editor.
     fn chat_mode_label(&self, width: u16) -> &'static str {
         let (full, compact) = if self.selection {
-            ("Select · F7/Esc back", "Select")
+            ("Select · Alt+C/F7/Esc back", "Select")
         } else if self.help
             || self.conversation.content_focus
             || (self.conversation.view == View::Questions && !self.conversation.detail)
@@ -2967,6 +2971,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    mod tool_groups;
     use super::*;
 
     fn preview(rows: u16, cols: u16) -> State {
@@ -3159,6 +3164,14 @@ mod tests {
                 &json!({"type":"exec.stdout","job_id":id}),
                 format!("[STDOUT] preview {id}\n{output}").as_bytes(),
             );
+            if id == "build" {
+                // A retained diagnostic splits adjacency even while hidden in Chat.
+                state.log_event(
+                    "preview",
+                    &json!({"type":"ssmcp.status"}),
+                    b"separating diagnostic\n",
+                );
+            }
         }
         state.log_event(
             "preview",
@@ -3211,7 +3224,7 @@ mod tests {
             let first = state.events.snapshot();
             assert_eq!(first["scroll"], before["scroll"]);
             assert_eq!(first["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(first["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(first["events"][3]["panel"]["scroll"], 37);
             state.chat_key(Key::Mouse {
                 button: 64,
                 x: 8,
@@ -3221,7 +3234,7 @@ mod tests {
             display(&mut state);
             let both = state.events.snapshot();
             assert_eq!(both["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(both["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(both["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "independent-scroll");
             state.chat_key(Key::Mouse {
                 button: 64,
@@ -3252,7 +3265,7 @@ mod tests {
                 "{expanded}"
             );
             assert_eq!(state.events.snapshot()["events"][1]["panel"]["scroll"], 0);
-            assert_eq!(state.events.snapshot()["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(state.events.snapshot()["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "expanded");
             state.chat_key(Key::Down);
             display(&mut state);
@@ -3317,7 +3330,7 @@ mod tests {
             let left = state.events.snapshot();
             assert_eq!(left["scroll"], before["scroll"]);
             assert_eq!(left["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(left["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(left["events"][3]["panel"]["scroll"], 37);
             save_command_panel_preview(&mut state, "scroll-zones-left");
 
             state.chat_key(Key::Mouse {
@@ -3337,8 +3350,8 @@ mod tests {
                 left["events"][1]["panel"]["scroll"]
             );
             assert_eq!(
-                right["events"][2]["panel"]["scroll"],
-                left["events"][2]["panel"]["scroll"]
+                right["events"][3]["panel"]["scroll"],
+                left["events"][3]["panel"]["scroll"]
             );
             assert_eq!(state.conversation.snapshot()["draft"], draft);
             save_command_panel_preview(&mut state, "scroll-zones-page");
@@ -3856,18 +3869,26 @@ mod tests {
 
     #[test]
     fn narrow_agent_list_keeps_different_models_visible() {
-        let mut state = preview(24, 70);
-        state.audit = Default::default();
-        for model in ["Model A", "Model B"] {
-            state.audit.ingest(&json!({
-                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
-                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
-            }));
+        for columns in [48, 70] {
+            let mut state = preview(24, columns);
+            state.audit = Default::default();
+            for model in ["Model A", "Model B"] {
+                state.audit.ingest(&json!({
+                    "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                    "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+                }));
+            }
+            state.chat_agents();
+            let screen = display(&mut state).screen().contents();
+            assert!(
+                screen.contains("ChatGPT · Model A"),
+                "{columns} columns:\n{screen}"
+            );
+            assert!(
+                screen.contains("ChatGPT · Model B"),
+                "{columns} columns:\n{screen}"
+            );
         }
-        state.chat_agents();
-        let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("ChatGPT · Model A"));
-        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]
@@ -4866,6 +4887,82 @@ mod tests {
                 vt100::Color::Rgb(0, 0, 255)
             );
             assert_eq!(screen.cell(top + 3, 4).unwrap().bgcolor(), background);
+        }
+    }
+
+    #[test]
+    fn alt_c_selects_text_without_changing_draft_or_queue() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("draft remains 界");
+        let before = state.conversation.snapshot()["draft"].clone();
+        let queue = state.chat_data()["queue"].clone();
+        input(&mut state, b"\x1bc");
+        assert!(state.selection);
+        assert!(!state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.notice.as_deref(), Some(COPY_HINT));
+        input(&mut state, b"\x1bc");
+        assert!(!state.selection);
+        assert!(state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.conversation.snapshot()["draft"], before);
+        assert_eq!(state.chat_data()["queue"], queue);
+        assert!(state.conversation.input_task.is_none());
+    }
+
+    #[test]
+    fn alt_c_protocol_variants_survive_split_input_and_preserve_both_focus_modes() {
+        let sequences: &[&[u8]] = &[
+            b"\x1bc",
+            b"\x1bC",
+            b"\x1b[99;3u",
+            b"\x1b[67;3u",
+            b"\x1b[99;4u",
+            b"\x1b[67;4u",
+            b"\x1b[27;3;99~",
+            b"\x1b[27;3;67~",
+            b"\x1b[27;4;99~",
+            b"\x1b[27;4;67~",
+        ];
+        for sequence in sequences {
+            for split in 1..sequence.len() {
+                for content in [false, true] {
+                    let mut state = preview(24, 100);
+                    state.conversation.content_focus = content;
+                    state.conversation.composer.set_text("retained 界");
+                    state.conversation.composer.left();
+                    let draft = state.conversation.snapshot()["draft"].clone();
+                    let queue = state.chat_data()["queue"].clone();
+                    input(&mut state, &sequence[..split]);
+                    assert!(
+                        !state.selection,
+                        "partial key must wait: {sequence:?}/{split}"
+                    );
+                    input(&mut state, &sequence[split..]);
+                    assert!(state.selection, "{sequence:?}/{split}");
+                    assert!(!state.frame(Instant::now()).mouse_capture);
+                    input(&mut state, sequence);
+                    assert!(!state.selection);
+                    assert_eq!(state.conversation.content_focus, content);
+                    assert_eq!(state.conversation.snapshot()["draft"], draft);
+                    assert_eq!(state.chat_data()["queue"], queue);
+                    assert!(state.conversation.input_task.is_none());
+                    assert!(state.actions.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alt_c_bytes_inside_bracketed_paste_do_not_toggle_text_selection() {
+        for sequence in [b"\x1bc".as_slice(), b"\x1b[99;3u", b"\x1b[27;3;99~"] {
+            let mut state = preview(24, 100);
+            let queue = state.chat_data()["queue"].clone();
+            input(&mut state, b"\x1b[200~paste-marker ");
+            input(&mut state, sequence);
+            input(&mut state, b"\x1b[201~");
+            assert!(!state.selection);
+            assert!(state.conversation.composer.text().contains("paste-marker"));
+            assert_eq!(state.chat_data()["queue"], queue);
+            assert!(state.conversation.input_task.is_none());
         }
     }
 

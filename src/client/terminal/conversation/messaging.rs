@@ -217,7 +217,8 @@ impl State {
             .map(agent_key)
             .unwrap_or_else(|| format!("native:{id}"));
         self.chat_change_view(View::Agents);
-        // A new session column initializes its local target while being opened.
+        // Restoring the Agents column also restores its local queue selection.
+        // Apply the explicit native-picker intent after that view transition.
         self.conversation.native_picker = true;
         self.conversation.content_focus = true;
         self.conversation.detail = false;

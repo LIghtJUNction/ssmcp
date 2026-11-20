@@ -1509,6 +1509,8 @@ pub(super) fn request_reload() -> Result<(), String> {
 struct Handoff {
     created_at_ms: u64,
     outbox: Outbox,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session: Option<super::reload::SessionState>,
 }
 
 pub(super) struct ReloadHandoff {
@@ -1523,11 +1525,19 @@ impl Drop for ReloadHandoff {
     }
 }
 
-fn write_handoff(outbox: Outbox, directory: &Path) -> Result<ReloadHandoff, String> {
+fn write_handoff(
+    outbox: Outbox,
+    session: Option<super::reload::SessionState>,
+    directory: &Path,
+) -> Result<ReloadHandoff, String> {
     outbox.validate()?;
+    if let Some(session) = &session {
+        session.validate()?;
+    }
     let bytes = serde_json::to_vec(&Handoff {
         created_at_ms: now_ms(),
         outbox,
+        session,
     })
     .map_err(|_| "cannot serialize client outbox")?;
     if bytes.len() as u64 > MAX_HANDOFF_BYTES {
@@ -1562,7 +1572,7 @@ fn write_handoff(outbox: Outbox, directory: &Path) -> Result<ReloadHandoff, Stri
     Ok(handoff)
 }
 
-fn read_handoff(path: &Path) -> Result<Option<Outbox>, String> {
+fn read_handoff(path: &Path) -> Result<Option<Handoff>, String> {
     let folder = path.parent().ok_or("invalid client outbox handoff path")?;
     let name = folder
         .file_name()
@@ -1622,29 +1632,42 @@ fn read_handoff(path: &Path) -> Result<Option<Outbox>, String> {
         return Err("client outbox handoff expired".into());
     }
     handoff.outbox.validate()?;
+    if let Some(session) = &handoff.session {
+        session.validate()?;
+    }
     fs::remove_file(path).map_err(|_| "cannot consume client outbox handoff")?;
     let _ = fs::remove_dir(folder);
-    Ok(Some(handoff.outbox))
+    Ok(Some(handoff))
 }
 
 pub(super) fn restore_handoff() -> Result<(), String> {
-    with(|manager| {
-        if manager.restored {
-            return Ok(());
-        }
-        manager.restored = true;
-        if let Some(path) = std::env::var_os(HANDOFF_ENV)
-            && let Some(outbox) = read_handoff(Path::new(&path))?
-        {
-            manager.outbox = outbox;
-        }
-        Ok(())
-    })
+    let session = with(
+        |manager| -> Result<Option<super::reload::SessionState>, String> {
+            if manager.restored {
+                return Ok(None);
+            }
+            manager.restored = true;
+            if let Some(path) = std::env::var_os(HANDOFF_ENV)
+                && let Some(handoff) = read_handoff(Path::new(&path))?
+            {
+                manager.outbox = handoff.outbox;
+                return Ok(handoff.session);
+            }
+            Ok(None)
+        },
+    )?;
+    // History and rendering have their own locks; never call them while holding
+    // the outbox manager lock. Failed history recovery must keep the draft.
+    if let Some(session) = session {
+        session.restore();
+    }
+    Ok(())
 }
 
 pub(super) fn prepare_reload(command: &mut std::process::Command) -> Result<ReloadHandoff, String> {
     let outbox = with(|manager| manager.outbox.clone());
-    let handoff = write_handoff(outbox, &std::env::temp_dir())?;
+    let session = super::reload::SessionState::capture()?;
+    let handoff = write_handoff(outbox, Some(session), &std::env::temp_dir())?;
     command.env(HANDOFF_ENV, &handoff.path);
     Ok(handoff)
 }
@@ -2532,7 +2555,13 @@ mod tests {
             manager.events.is_empty(),
             "reload reclamation must not overwrite the active draft"
         );
-        let ticket = write_handoff(manager.outbox.clone(), &std::env::temp_dir()).unwrap();
+        let session: super::super::reload::SessionState = serde_json::from_value(json!({
+            "conversation_id": format!("conversation_{}", "a".repeat(32)),
+            "terminal": null,
+        }))
+        .unwrap();
+        let ticket =
+            write_handoff(manager.outbox.clone(), Some(session), &std::env::temp_dir()).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2549,7 +2578,13 @@ mod tests {
                 0o700
             );
         }
-        let outbox = read_handoff(&ticket.path).unwrap().unwrap();
+        let handoff = read_handoff(&ticket.path).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(handoff.session.unwrap()).unwrap()["conversation_id"],
+            format!("conversation_{}", "a".repeat(32)),
+            "the active history identity travels with the exact draft and outbox"
+        );
+        let outbox = handoff.outbox;
         assert!(!ticket.path.exists());
         assert!(
             read_handoff(&ticket.path).unwrap().is_none(),
@@ -2912,11 +2947,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn legacy_reload_handoff_remains_readable_without_a_session_checkpoint() {
+        let handoff: Handoff = serde_json::from_value(json!({
+            "created_at_ms": now_ms(),
+            "outbox": Outbox::default(),
+        }))
+        .unwrap();
+        handoff.outbox.validate().unwrap();
+        assert!(handoff.session.is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn handoff_rejects_shared_permissions_without_consuming_private_data() {
         use std::os::unix::fs::PermissionsExt;
-        let ticket = write_handoff(Outbox::default(), &std::env::temp_dir()).unwrap();
+        let ticket = write_handoff(Outbox::default(), None, &std::env::temp_dir()).unwrap();
         fs::set_permissions(&ticket.path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_handoff(&ticket.path).is_err());
         assert!(ticket.path.exists());
