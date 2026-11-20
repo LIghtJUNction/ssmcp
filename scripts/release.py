@@ -498,6 +498,32 @@ def find_release(repository, tag, root=None):
     return matches[0] if matches else None
 
 
+def should_mark_latest(repository, release_version, root=None):
+    """Only a stable version newer than every published stable release is Latest."""
+    candidate = version_key(release_version)
+    if "-" in release_version:
+        return False
+    # The Latest pointer can already refer to an older release. Compare all
+    # published stable versions, and fail closed if their metadata is unreadable.
+    pages = json.loads(command("gh", "api", "--paginate", "--slurp",
+                               f"repos/{repository}/releases?per_page=100", cwd=root or ROOT))
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError("invalid releases listing; draft retained without choosing Latest")
+    published = []
+    for page in pages:
+        for item in page:
+            if not isinstance(item, dict) or any(type(item.get(flag)) is not bool
+                                                  for flag in ("draft", "prerelease")):
+                raise ValueError("invalid release metadata; draft retained without choosing Latest")
+            if item["draft"] or item["prerelease"]:
+                continue
+            tag = item.get("tag_name")
+            if not isinstance(tag, str) or not tag.startswith("v") or "-" in tag:
+                raise ValueError("invalid stable release tag; draft retained without choosing Latest")
+            published.append(version_key(tag[1:]))
+    return all(candidate > existing for existing in published)
+
+
 def release(tag, root=None):
     root = root or ROOT
     validate_tag(tag, root)
@@ -552,10 +578,12 @@ def release(tag, root=None):
         if asset.get("digest") and asset["digest"] != "sha256:" + digest(path):
             raise ValueError(f"release upload checksum mismatch: {path.name}")
     if metadata["draft"]:
-        prerelease = "-" in version(root)
+        release_version = version(root)
+        prerelease = "-" in release_version
+        latest = should_mark_latest(repository, release_version, root)
         subprocess.run(["gh", "release", "edit", tag, "--repo", repository, "--draft=false",
                         f"--prerelease={str(prerelease).lower()}",
-                        f"--latest={str(not prerelease).lower()}"], cwd=root, check=True)
+                        f"--latest={str(latest).lower()}"], cwd=root, check=True)
     print(command("gh", "release", "view", tag, "--repo", repository, "--json", "url", "--jq", ".url", cwd=root))
 
 

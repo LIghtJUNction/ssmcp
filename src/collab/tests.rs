@@ -62,6 +62,123 @@ fn spawn_receive(hub: &Arc<Hub>, agent: &Value) -> tokio::task::JoinHandle<Resul
 }
 
 #[tokio::test]
+async fn online_summary_alias_uses_registered_identity_and_authenticated_updates() {
+    let client_id = "c".repeat(64);
+    let hub = Hub::for_session(&client_id);
+    let summary = format!("{}ab", "界".repeat(42));
+    let joined = hub
+        .dispatch(
+            "owner",
+            "join",
+            json!({"name":"Researcher","summary":summary}),
+        )
+        .await
+        .unwrap();
+    let id = joined["agent_id"].as_str().unwrap();
+    assert_eq!(joined["thread_id"], id);
+    assert_eq!(joined["client_id"], client_id);
+    assert_eq!(joined["session_id"], client_id);
+    assert_eq!(joined["agents"][0]["summary"], summary);
+    assert_eq!(joined["agents"][0]["role"], summary);
+
+    let mut forged = joined.clone();
+    forged["token"] = json!("0".repeat(64));
+    for (owner, agent) in [("owner", &forged), ("different-owner", &joined)] {
+        assert!(
+            action(&hub, owner, "update", agent, json!({"summary":"Forbidden"}))
+                .await
+                .is_err()
+        );
+    }
+    let list = hub.dispatch("observer", "list", json!({})).await.unwrap();
+    assert_eq!(list["client_id"], client_id);
+    let agent = &list["agents"][0];
+    assert_eq!(agent["client_id"], client_id);
+    assert_eq!(agent["thread_id"], id);
+    assert_eq!(agent["summary"], summary);
+    assert!(agent.get("token").is_none());
+
+    for field in [
+        json!({"role":"legacy","summary":"alias"}),
+        json!({"role":null,"summary":"alias"}),
+        json!({"summary":"界".repeat(43)}),
+        json!({"summary":"bad\u{001b}[2J"}),
+    ] {
+        let mut join = field.clone();
+        join["name"] = json!("Rejected");
+        assert!(hub.dispatch("owner", "join", join).await.is_err());
+        assert!(
+            action(&hub, "owner", "update", &joined, field)
+                .await
+                .is_err()
+        );
+    }
+
+    let updated = action(
+        &hub,
+        "owner",
+        "update",
+        &joined,
+        json!({"summary":"Preparing a review"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated["agent"]["role"], "Preparing a review");
+    assert_eq!(updated["agent"]["summary"], "Preparing a review");
+    let public_wire = serde_json::to_value(&hub.presence().unwrap()[0]).unwrap();
+    assert_eq!(
+        public_wire,
+        json!({"agent_id":id,"name":"Researcher",
+        "role":"Preparing a review","status":"available"})
+    );
+    let mut unsupported = public_wire.clone();
+    unsupported["summary"] = public_wire["role"].clone();
+    assert!(serde_json::from_value::<crate::wire::SteeringAgent>(unsupported).is_err());
+    assert_eq!(
+        serde_json::from_value::<crate::wire::SteeringAgent>(public_wire)
+            .unwrap()
+            .agent_id,
+        id
+    );
+
+    let legacy = action(
+        &hub,
+        "owner",
+        "update",
+        &joined,
+        json!({"role":"Legacy editor"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(legacy["agent"]["summary"], "Legacy editor");
+    let updated = action(&hub, "owner", "update", &joined, json!({"summary":""}))
+        .await
+        .unwrap();
+    assert!(updated["agent"]["summary"].is_null());
+    assert!(updated["agent"]["role"].is_null());
+    assert!(hub.presence().unwrap()[0].role.is_none());
+}
+
+#[test]
+fn native_recipient_keeps_the_strict_v7_fields() {
+    use crate::wire::messages::Recipient;
+
+    let client_id = "c".repeat(64);
+    let agent_id = format!("agent_{}", "b".repeat(32));
+    let legacy = json!({"id":format!("agent:{client_id}:{agent_id}"),
+        "client_id":client_id,"agent_id":agent_id,"kind":"agent","display_name":"Reviewer",
+        "account":{"provider":"github","subject":"42","login":"owner"},
+        "online":true,"sendable":true});
+    let recipient: Recipient = serde_json::from_value(legacy.clone()).unwrap();
+    recipient.validate().unwrap();
+    assert_eq!(serde_json::to_value(recipient).unwrap(), legacy);
+    let mut with_summary = legacy;
+    with_summary["summary"] = json!("Reviewing changes");
+    assert!(serde_json::from_value::<Recipient>(with_summary).is_err());
+    assert_eq!(crate::wire::VERSION, 7);
+}
+
+#[tokio::test]
 async fn discovery_is_public_but_mailbox_credentials_bind_owner_and_agent() {
     let hub = Hub::default();
     let a = join(&hub, "owner", "same name").await;

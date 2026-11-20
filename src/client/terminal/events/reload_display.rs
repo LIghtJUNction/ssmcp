@@ -348,6 +348,7 @@ impl EventView {
                 meta,
                 image: None,
                 diagnostic: None,
+                history_id: None,
                 historical: kind == Kind::Tool,
                 interrupted: entry.interrupted,
                 reload_index: Some(entry.index),

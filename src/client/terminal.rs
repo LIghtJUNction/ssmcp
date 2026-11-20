@@ -383,6 +383,17 @@ pub(super) fn invalidate() {
     }
 }
 
+pub(super) fn history_description_changed() {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.conversation.history_list_stale = true;
+        state.dirty = true;
+    }
+}
+
 pub(super) fn log_width() -> Option<usize> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
@@ -1545,6 +1556,10 @@ impl State {
             &serde_json::json!({"type":"ssmcp.message", "role":role, "text":text}),
             bytes,
         );
+    }
+    fn log_identified_message(&mut self, id: &str, role: &str, text: &str, bytes: &[u8]) {
+        self.events.ingest_identified_message(id, role, text, bytes);
+        self.log_raw(bytes);
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
         self.events.ingest_event(label, value, bytes);

@@ -146,6 +146,7 @@ pub(super) struct Conversation {
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
+    pub(super) history_list_stale: bool,
     history_archived: bool,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
@@ -322,7 +323,11 @@ impl State {
             let _ = writeln!(record, "  Reference notice: {}", panel::safe_text(warning));
         }
         record.push('\n');
-        self.log_message("user", &text, record.as_bytes());
+        if let Ok(identity) = crate::client::interface::history::request_identity(&id, &text) {
+            self.log_identified_message(&identity, "user", &text, record.as_bytes());
+        } else {
+            self.log_message("user", &text, record.as_bytes());
+        }
         if self
             .conversation
             .submitting
@@ -341,6 +346,36 @@ impl State {
             )
         });
         self.dirty = true;
+    }
+
+    fn chat_recalled(&mut self, id: &str, text: &str) {
+        let Ok(identity) = crate::client::interface::history::request_identity(id, text) else {
+            return;
+        };
+        self.events.recall_message(&identity);
+        if let Some(history) = self.conversation.history.as_mut() {
+            std::sync::Arc::make_mut(history)
+                .messages
+                .retain(|message| message.id != identity);
+            self.conversation.history_width = 0;
+            self.conversation.history_rows.clear();
+        }
+        // The audit transcript keeps the actual queue acceptance and its later
+        // confirmed recall; only the current conversation presentation retracts it.
+        self.log_raw(
+            format!("\n[RECALLED] #{id} · queued request returned to editing\n").as_bytes(),
+        );
+        self.dirty = true;
+    }
+
+    fn chat_retargeted(&mut self, id: &str, source: Option<&str>) {
+        if source.is_some_and(|source| {
+            source != id && self.conversation.editing.as_deref() == Some(source)
+        }) {
+            // Only the exact predecessor may transfer its editing association.
+            // Text, recipient selection, cursor and parked draft remain intact.
+            self.conversation.editing = Some(id.to_owned());
+        }
     }
 
     fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
@@ -409,14 +444,24 @@ impl State {
                 } => {
                     self.chat_accepted(id, text, reference_warnings);
                 }
-                steering::UiEvent::Editable { id, text } => {
+                steering::UiEvent::Editable { id, text, recalled } => {
+                    if recalled {
+                        self.chat_recalled(&id, &text);
+                    }
                     let data = steering::snapshot();
-                    let target = items(&data, "queue")
-                        .iter()
-                        .find(|item| message_id(item) == id)
+                    let entries = items(&data, "queue");
+                    let record = entries.iter().find(|item| message_id(item) == id);
+                    let target = record
                         .and_then(|record| record.get("target").and_then(Value::as_str))
                         .filter(|target| *target != "next")
                         .map(str::to_owned);
+                    if !recalled {
+                        self.chat_retargeted(
+                            &id,
+                            record
+                                .and_then(|record| record.get("retry_of").and_then(Value::as_str)),
+                        );
+                    }
                     self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
@@ -1422,12 +1467,15 @@ impl State {
                 self.filter_offset = 0;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
-            Key::Up => self.chat_page(
-                -(isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
-            Key::Down => self.chat_page(
-                (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
+            Key::Up | Key::Down => {
+                let page = if self.conversation.view == View::History && !self.conversation.detail {
+                    self.conversation.list_count
+                } else {
+                    usize::from(self.geometry.log_rows.saturating_sub(1))
+                };
+                let step = isize::try_from(page.max(1)).unwrap_or(isize::MAX);
+                self.chat_page(if matches!(key, Key::Up) { -step } else { step });
+            }
             Key::HistoryStart if self.conversation.view == View::Tasks => {
                 self.conversation
                     .tasks
@@ -2520,6 +2568,9 @@ impl State {
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
         }
+        if self.conversation.view == View::History {
+            return self.chat_history_list_hit(usize::from(relative));
+        }
         let index = usize::from(relative / 2);
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
     }
@@ -3462,12 +3513,14 @@ mod tests {
         state.chat_character('\r');
         assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
         let screen = display(&mut state).screen().contents();
-        for argument in [
+        for expected in [
+            "Job: preview-task-test",
+            "Command · complete argv · read only",
             "argv[0]: \"cargo\"",
             "argv[1]: \"test\"",
             "argv[2]: \"--lib\"",
         ] {
-            assert!(screen.contains(argument), "{screen}");
+            assert!(screen.contains(expected), "{screen}");
         }
         assert_eq!(
             state.conversation.tasks.snapshot()["selected_job"]["command"],
@@ -5072,6 +5125,119 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with("Answer cleared")
+        );
+    }
+
+    #[test]
+    fn confirmed_recall_retracts_only_its_card_and_edited_resubmission_is_single() {
+        for columns in [48, 120] {
+            let mut state = preview(32, columns);
+            state.events.clear();
+            state.chat_accepted("delivered_request".into(), "SAME_BODY".into(), Vec::new());
+            state.chat_accepted("pending_request".into(), "SAME_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            state.chat_recall_started("pending_request".into());
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                2,
+                "an unconfirmed takeback must keep its queued card"
+            );
+            state.chat_recalled("pending_request", "SAME_BODY");
+            state.chat_editable("pending_request".into(), "SAME_BODY".into(), None);
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.conversation.composer.text(), "SAME_BODY");
+            assert_eq!(state.conversation.composer.cursor(), "SAME_BODY".len());
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(
+                screen.matches("SAME_BODY").count(),
+                2,
+                "only the other message and the editable draft remain: {screen}"
+            );
+            input(&mut state, b"\x03");
+            state.chat_escape();
+            assert!(state.conversation.composer.is_empty());
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("pending_request")
+            );
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                1,
+                "clearing or leaving the editor cannot restore the withdrawn card"
+            );
+            state.conversation.composer.set_text("EDITED_BODY");
+            state.chat_enqueued("pending_request".into(), "EDITED_BODY".into());
+            state.chat_accepted("pending_request".into(), "EDITED_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(screen.matches("SAME_BODY").count(), 1, "{screen}");
+            assert_eq!(screen.matches("EDITED_BODY").count(), 1, "{screen}");
+            assert!(
+                state.logs.screen().contents().contains("[RECALLED]"),
+                "the original audit transcript records the later recall"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_room_retarget_transfers_only_its_source_edit_and_keeps_unknown_history() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted("original_unknown".into(), "SHARED_BODY".into(), Vec::new());
+        state.conversation.editing = Some("original_unknown".into());
+        state.conversation.composer.set_text("AMENDED_DRAFT 界");
+        input(&mut state, b"\x1b[D");
+        let text = state.conversation.composer.text().to_owned();
+        let cursor = state.conversation.composer.cursor();
+        state.conversation.parked = Some(steering::SavedDraft {
+            text: "PARKED_DRAFT".into(),
+            cursor: 3,
+            target: Some("example-reviewer".into()),
+            native_recipient: None,
+        });
+        let parked = state.conversation.parked.clone();
+        state.chat_retargeted("wrong_retry", Some("unrelated_source"));
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("original_unknown")
+        );
+        state.chat_retargeted("new_attempt", Some("original_unknown"));
+        state.chat_editable("new_attempt".into(), "SHARED_BODY".into(), None);
+        assert_eq!(state.conversation.editing.as_deref(), Some("new_attempt"));
+        assert_eq!(state.conversation.composer.text(), text);
+        assert_eq!(state.conversation.composer.cursor(), cursor);
+        assert_eq!(state.conversation.parked, parked);
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        state.chat_enqueued("new_attempt".into(), "SHARED_BODY".into());
+        state.chat_accepted("new_attempt".into(), "SHARED_BODY".into(), Vec::new());
+        assert_eq!(state.events.snapshot()["retained_events"], 2);
+        state.chat_recalled("new_attempt", "SHARED_BODY");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen.contains("SHARED_BODY"),
+            "the original unknown attempt remains: {screen}"
+        );
+    }
+
+    #[test]
+    fn editable_without_confirmed_recall_keeps_existing_conversation() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            Vec::new(),
+        );
+        state.chat_editable(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            None,
+        );
+        assert_eq!(
+            state.events.snapshot()["retained_events"],
+            1,
+            "retarget or preparation recovery is not a confirmed recall"
         );
     }
 

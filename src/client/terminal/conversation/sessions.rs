@@ -97,15 +97,20 @@ fn short_id(value: &str) -> String {
 
 fn identity_rows(rows: &mut Vec<(String, PanelTone)>, label: &str, id: &str, width: usize) {
     rows.push((label.into(), PanelTone::Muted));
-    if id.is_empty() {
-        rows.push(("Not connected".into(), PanelTone::Normal));
+    let value = if id.is_empty() {
+        "Not connected".into()
     } else {
-        let safe = panel::safe_text(id);
-        let chars: Vec<_> = safe.chars().collect();
-        for chunk in chars.chunks(width.max(8)) {
-            rows.push((chunk.iter().collect(), PanelTone::Normal));
-        }
+        panel::safe_text(id)
+    };
+    for line in events::styled_rows(&value, width.max(1), false) {
+        rows.push((line, PanelTone::Normal));
     }
+}
+
+fn session_summary(entry: &Value) -> Option<&str> {
+    [field(entry, "summary"), field(entry, "role")]
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
 }
 
 impl State {
@@ -132,7 +137,7 @@ impl State {
         ];
         identity_rows(
             &mut rows,
-            "Process ID",
+            "Client ID",
             field(entry, "client_id"),
             usize::from(width),
         );
@@ -143,6 +148,9 @@ impl State {
                 field(entry, "agent_id"),
                 usize::from(width),
             );
+            if let Some(summary) = session_summary(entry) {
+                identity_rows(&mut rows, "Summary", summary, usize::from(width));
+            }
         }
         rows.push(("".into(), PanelTone::Normal));
         if !process && field(entry, "kind") != "native" {
@@ -198,22 +206,32 @@ impl State {
         let Some(entry) = self.chat_selected() else {
             return;
         };
-        let mut text = format!(
-            "Session: {}\nProcess ID: {}",
-            panel::safe_text(field(&entry, "name")),
-            if field(&entry, "client_id").is_empty() {
-                "unavailable"
-            } else {
-                field(&entry, "client_id")
-            }
-        );
+        let client_id = field(&entry, "client_id");
+        let client_id = if client_id.is_empty() {
+            "unavailable".into()
+        } else {
+            panel::safe_text(client_id)
+        };
+        let name = panel::safe_text(field(&entry, "name"));
+        let mut text = format!("Session: {name}\nClient ID: {client_id}");
         if field(&entry, "session_role") == "thread" {
-            let _ = write!(text, "\nThread ID: {}", field(&entry, "agent_id"));
+            let _ = write!(
+                text,
+                "\nThread ID: {}",
+                panel::safe_text(field(&entry, "agent_id"))
+            );
+            if let Some(summary) = session_summary(&entry) {
+                let _ = write!(text, "\nSummary: {}", panel::safe_text(summary));
+            }
         }
         if let Some(id) = group_id(&entry) {
-            let _ = write!(text, "\nExact recipient: {id}");
+            let _ = write!(text, "\nExact recipient: {}", panel::safe_text(id));
         }
-        self.chat_group_report(&text);
+        let event = json!({"type":"ssmcp.message","role":"system","author":"Sessions",
+            "format":"plain","text":text});
+        self.log_event("session", &event, format!("{text}\n").as_bytes());
+        self.chat_follow_latest();
+        self.conversation.content_focus = false;
     }
 
     pub(super) fn chat_session_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
@@ -292,15 +310,42 @@ impl State {
             } else {
                 "thread"
             };
+            let identity = if !process
+                && !observed
+                && entries
+                    .iter()
+                    .filter(|other| {
+                        field(other, "kind") != "observed"
+                            && field(other, "name") == field(entry, "name")
+                    })
+                    .count()
+                    > 1
+            {
+                // Keep same-name threads distinguishable even when their IDs share a prefix.
+                let suffix: String = id
+                    .chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                format!("…{suffix}")
+            } else {
+                short_id(id)
+            };
             let subtitle = if observed {
                 format!(
-                    "     {indent}{} · {} calls · {}",
-                    short_id(id),
+                    "     {indent}{identity} · {} calls · {}",
                     entry["calls"],
                     field(entry, "status")
                 )
+            } else if !process && let Some(summary) = session_summary(entry) {
+                let prefix = format!("     {indent}{identity} · ");
+                let available = usize::from(list_width).saturating_sub(prefix.width());
+                format!("{prefix}{}", panel::fit(summary, available))
             } else {
-                format!("     {indent}{} · {role}", short_id(id))
+                format!("     {indent}{identity} · {role}")
             };
             rows.push(self.chat_line(
                 &title,
