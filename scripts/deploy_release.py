@@ -28,6 +28,101 @@ SERVICE = "ssmcpd.service"
 BASE = Path("/var/lib/ssmcp-deployments")
 MANAGED_DROPIN = Path("/etc/systemd/system/ssmcpd.service.d/zzz-release.conf")
 REPOSITORY = "LIghtJUNction/ssmcp"
+
+# Reviewed exceptions for generated-artifact history removal only. This table
+# travels with the standalone helper; release metadata, CLI and environment
+# cannot supply or extend it. Original published artifacts were not rebuilt.
+RELEASE_SOURCE_REWRITES = {
+    "schema": 1,
+    "entries": [
+        {
+            "build_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+            "manifest_sha256": "b6e4a14bf019bdc3be4d440864fcdef00302696e73c430c928384fd7ccfab15d",
+            "proof": {
+                "audit_sha256": "5bb6c36d5755fc0c6e6b4f18b37a9be0e0b6fc96073557e9012a800b1315f258",
+                "build_retained_sha256": "3eced2ae1de334db27ecd6a078f5b3993bf8f9d464f44d44106655725c4a0e7e",
+                "build_tree": "17dff7b6dddbe1169d9211dc05f686fc44d2fc21",
+                "kind": "retained-git-tree-v1",
+                "removed_path_count": 76,
+                "removed_paths_sha256": "965f085434e25db1a75dd949008388634a3427b771aefa291507f6fb6738b60e",
+                "source_retained_sha256": "3eced2ae1de334db27ecd6a078f5b3993bf8f9d464f44d44106655725c4a0e7e",
+                "source_tree": "9dad00b18582eee3f4dda2e83e1f9d62fb629ff1"
+            },
+            "repository": "LIghtJUNction/ssmcp",
+            "source_commit": "961879e26ddf6697efbcc9acb4d39affb9968435",
+            "tag": "v0.10.10"
+        },
+        {
+            "build_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+            "manifest_sha256": "18c21b28dd523bf5ce0e4c8c5758a95fe68947bc09a68fa01320bdc7c6c82d33",
+            "proof": {
+                "audit_sha256": "7be4a1f75538e743d5d703d1aecf418240d7a77d5dc5491c7dee8cdcbe02c0ad",
+                "build_retained_sha256": "4f0f47862758e34da1b556985be8cd2609408b9ac79381e752f96eb3b4deb3cb",
+                "build_tree": "f122be555b8e0ea597b4561b63d2acb574057e57",
+                "kind": "retained-git-tree-v1",
+                "removed_path_count": 76,
+                "removed_paths_sha256": "965f085434e25db1a75dd949008388634a3427b771aefa291507f6fb6738b60e",
+                "source_retained_sha256": "4f0f47862758e34da1b556985be8cd2609408b9ac79381e752f96eb3b4deb3cb",
+                "source_tree": "1194828778ea2f1c5ad92bf5fdf9fac6b8ea595a"
+            },
+            "repository": "LIghtJUNction/ssmcp",
+            "source_commit": "ed067954d5279eb23245805e14e761d2e6971e5e",
+            "tag": "v0.10.13"
+        },
+        {
+            "build_commit": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+            "manifest_sha256": "52bf95a1cbd624b8532fddb6d5ee4895480c3b5bad901eab16cac1af8ee29f67",
+            "proof": {
+                "audit_sha256": "36e89477e5d4ac74eba04b01df92e5a44b4d926982e5dafe13c33915bc7d09a7",
+                "build_retained_sha256": "58a1566c31bfcdf40257b0e5eaf2b179269969383aa37a97275dc913b7335a6e",
+                "build_tree": "33943217ac15be08e5064d105db89cc9bbd03206",
+                "kind": "retained-git-tree-v1",
+                "removed_path_count": 91,
+                "removed_paths_sha256": "59113edc17cd474609277d88de9d5aabc0f5452b4215ced3a47977f497860e1f",
+                "source_retained_sha256": "58a1566c31bfcdf40257b0e5eaf2b179269969383aa37a97275dc913b7335a6e",
+                "source_tree": "70b066d2c4d6df30ce84b91ab2ecd1fd1be7f5d4"
+            },
+            "repository": "LIghtJUNction/ssmcp",
+            "source_commit": "54532e0916ce3dbb9609796684c24488824b2a73",
+            "tag": "v0.10.20"
+        },
+        {
+            "build_commit": "c75309a9acab27c684c0beaaf9d22fd991200760",
+            "manifest_sha256": "c6fbf596377412d0479548cc69f382f29677da9f2caaedcebcffda568e5d12e6",
+            "proof": {
+                "audit_sha256": "96f79ed94f4ebc368632c234a93ee93a6aa454cc1b56d447ecf9b7d29611e0d9",
+                "build_retained_sha256": "ea3700a1bdddf5d454366e85415c99b652109a4f81530c4186ec2c51c8190187",
+                "build_tree": "76a99d265fbf3711d273ba38b66239878adbb219",
+                "kind": "retained-git-tree-v1",
+                "removed_path_count": 2,
+                "removed_paths_sha256": "a1d4e11e0e7dd4ea4230fc57ab3f50ad1777cf47d4270c5d6e4c353b1dd8f7e6",
+                "source_retained_sha256": "ea3700a1bdddf5d454366e85415c99b652109a4f81530c4186ec2c51c8190187",
+                "source_tree": "d7f6779bb853906e2b00c7afd2fd5a5bf332f63e"
+            },
+            "repository": "LIghtJUNction/ssmcp",
+            "source_commit": "52187740ed00f538e2c3e40eda733f2cb075df40",
+            "tag": "v0.5.1"
+        },
+        {
+            "build_commit": "3e3b7b6f8cce30b77e83a11d7cc01e595a59a849",
+            "manifest_sha256": "82885ec6fa3b69b8ee857ba3d279a1bf61dcad4ecaf7e5cc4c585ed559733d76",
+            "proof": {
+                "audit_sha256": "36b968a813b94df12fa273c9aa810bcae730204f3c79cf150a2be7e0295684d5",
+                "build_retained_sha256": "ee050bd329ee96c1defbf966c0ad94e862bfc29a4c60847cb997005db12f3ab2",
+                "build_tree": "e4f016a08709dad012887886797fc27df8b110e6",
+                "kind": "retained-git-tree-v1",
+                "removed_path_count": 12,
+                "removed_paths_sha256": "8ab229561218a83f2039520b1f96595658e2411d721078e1c350c91cefd53b6e",
+                "source_retained_sha256": "ee050bd329ee96c1defbf966c0ad94e862bfc29a4c60847cb997005db12f3ab2",
+                "source_tree": "cdc487a2373fcef42477e0ed8aa4845827dd6488"
+            },
+            "repository": "LIghtJUNction/ssmcp",
+            "source_commit": "740782217036bdeb47261576e11414d51222b862",
+            "tag": "v0.6.3"
+        }
+    ]
+}
+RELEASE_SOURCE_REWRITES_SHA256 = 'd9cd1a5c0bccf2d6bd495d4bcc34bc764d9b120e6baa8caa730979e4b3e61b5e'
 CORE_ASSET_NAMES = {"portal.css", "portal-refresh.css", "traffic-meter.js", "client-install-copy.js", "copy-command.js"}
 LEGAL_PATHS = ("/legal/terms", "/legal/privacy", "/legal/refund")
 PROXY_CONFIG = "/etc/nginx/conf.d/ssmcp.lmm.best.conf"
@@ -582,11 +677,92 @@ def fetch(url, maximum, destination=None):
     return bytes(data)
 
 
-def select_release(tag, commit, release, manifest, machine):
+
+def release_source_rewrite(tag, commit, manifest, manifest_bytes):
+    """Accept only the fixed retained-tree proof; never reinterpret the build."""
+    require(isinstance(manifest_bytes, bytes), "release_source_mismatch")
+    try:
+        decoded = json.loads(manifest_bytes)
+        original_json = json.dumps(decoded, sort_keys=True, separators=(",", ":"),
+                                   ensure_ascii=True, allow_nan=False)
+        supplied_json = json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                   ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError, UnicodeError):
+        raise RuntimeError("release_source_mismatch") from None
+    require(original_json == supplied_json, "release_source_mismatch")
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    table = RELEASE_SOURCE_REWRITES
+    try:
+        encoded = json.dumps(table, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+    except (TypeError, ValueError):
+        raise RuntimeError("release_source_map_invalid") from None
+    require(hashlib.sha256(encoded).hexdigest() == RELEASE_SOURCE_REWRITES_SHA256,
+            "release_source_map_invalid")
+    require(isinstance(table, dict) and set(table) == {"schema", "entries"}
+            and type(table["schema"]) is int and table["schema"] == 1
+            and isinstance(table["entries"], list), "release_source_map_invalid")
+
+    def digest(value, length):
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value)
+
+    seen, matches = set(), []
+    for row in table["entries"]:
+        require(isinstance(row, dict) and set(row) == {
+            "repository", "tag", "build_commit", "source_commit", "manifest_sha256", "proof"
+        }, "release_source_map_invalid")
+        require(row["repository"] == REPOSITORY and isinstance(row["tag"], str)
+                and re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", row["tag"])
+                and digest(row["build_commit"], 40) and digest(row["source_commit"], 40)
+                and row["build_commit"] != row["source_commit"]
+                and digest(row["manifest_sha256"], 64), "release_source_map_invalid")
+        key = (row["repository"], row["tag"])
+        require(key not in seen, "release_source_map_invalid")
+        seen.add(key)
+        proof = row["proof"]
+        require(isinstance(proof, dict) and set(proof) == {
+            "kind", "build_tree", "source_tree", "build_retained_sha256",
+            "source_retained_sha256", "removed_paths_sha256", "removed_path_count",
+            "audit_sha256"
+        }, "release_source_map_invalid")
+        require(proof["kind"] == "retained-git-tree-v1"
+                and all(digest(proof[key], 40) for key in ("build_tree", "source_tree"))
+                and all(digest(proof[key], 64) for key in (
+                    "build_retained_sha256", "source_retained_sha256",
+                    "removed_paths_sha256", "audit_sha256"))
+                and proof["build_retained_sha256"] == proof["source_retained_sha256"]
+                and type(proof["removed_path_count"]) is int
+                and proof["removed_path_count"] >= 0
+                and ((proof["removed_path_count"] == 0) == (proof["build_tree"] == proof["source_tree"])),
+                "release_source_map_invalid")
+        if (row["tag"] == tag and row["source_commit"] == commit
+                and row["build_commit"] == manifest.get("commit")
+                and row["manifest_sha256"] == manifest_sha256):
+            matches.append(row)
+    require(len(matches) == 1, "release_source_mismatch")
+    proof = matches[0]["proof"]
+    return {
+        "kind": "generated-artifact-history-removal",
+        "allowlist_sha256": RELEASE_SOURCE_REWRITES_SHA256,
+        "manifest_sha256": manifest_sha256,
+        "proof_kind": proof["kind"],
+        "build_tree": proof["build_tree"], "source_tree": proof["source_tree"],
+        "retained_tree_sha256": proof["build_retained_sha256"],
+        "removed_paths_sha256": proof["removed_paths_sha256"],
+        "removed_path_count": proof["removed_path_count"],
+        "audit_sha256": proof["audit_sha256"],
+        "artifact_rebuilt": False,
+    }
+
+
+def select_release(tag, commit, release, manifest, machine, *, manifest_bytes=None):
     require(release.get("tag_name") == tag and not release.get("draft") and
             not release.get("prerelease") and release.get("published_at"), "published_stable_release_required")
-    require(manifest.get("package") == "ssmcp" and manifest.get("version") == tag[1:] and
-            manifest.get("commit") == commit, "release_source_mismatch")
+    require(manifest.get("package") == "ssmcp" and manifest.get("version") == tag[1:],
+            "release_source_mismatch")
+    rewrite = None
+    if manifest.get("commit") != commit:
+        rewrite = release_source_rewrite(tag, commit, manifest, manifest_bytes)
     target = {"x86_64": "x86_64-unknown-linux-gnu", "aarch64": "aarch64-unknown-linux-gnu"}.get(machine)
     require(target is not None, "unsupported_server_architecture")
     prefix = "ssmcp-" + tag[1:] + "-" + target
@@ -603,8 +779,12 @@ def select_release(tag, commit, release, manifest, machine):
     require(asset.get("browser_download_url") == url and asset.get("size") == record["bytes"], "archive_metadata_mismatch")
     if asset.get("digest"):
         require(asset["digest"] == "sha256:" + record["sha256"], "github_archive_digest_mismatch")
-    return {"repository": REPOSITORY, "tag": tag, "commit": commit, "archive": name,
-            "archive_prefix": prefix + "/" if name == prefix + ".tar.gz" else "", "archive_sha256": record["sha256"], "archive_bytes": record["bytes"], "archive_url": url}
+    selected = {"repository": REPOSITORY, "tag": tag, "commit": commit, "archive": name,
+                "archive_prefix": prefix + "/" if name == prefix + ".tar.gz" else "", "archive_sha256": record["sha256"], "archive_bytes": record["bytes"], "archive_url": url,
+                "build_commit": manifest["commit"], "source_commit": commit}
+    if rewrite is not None:
+        selected["source_history_rewrite"] = rewrite
+    return selected
 
 
 def extract_runtime(archive, folder, record):
@@ -666,7 +846,8 @@ def prepare(intent, folder):
     manifest_bytes = fetch(manifest_url, 1_048_576)
     if manifest_assets[0].get("digest"):
         require(manifest_assets[0]["digest"] == "sha256:" + hashlib.sha256(manifest_bytes).hexdigest(), "manifest_digest")
-    record = select_release(tag, commit, release, json.loads(manifest_bytes), platform.machine())
+    record = select_release(tag, commit, release, json.loads(manifest_bytes), platform.machine(),
+                            manifest_bytes=manifest_bytes)
     archive = folder / "release.tar.gz"
     fetch(record["archive_url"], record["archive_bytes"], archive)
     extract_runtime(archive, folder, record)

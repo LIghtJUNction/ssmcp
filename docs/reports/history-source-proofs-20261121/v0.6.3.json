@@ -1,0 +1,30 @@
+{
+  "build_commit": "3e3b7b6f8cce30b77e83a11d7cc01e595a59a849",
+  "clean_commit_base64": "dHJlZSBjZGM0ODdhMjM3M2ZjZWY0MjQ3N2UwZWQ4YWE0ODQ1ODI3ZGQ2NDg4CnBhcmVudCA1MmY5MjRjMzE1MTIxMjE5MWFmODg1YTg2OTFiMGVmMTVjMTc3ODRhCmF1dGhvciBMSWdodEpVTmN0aW9uIDxsaWdodGp1bmN0aW9uLm1lQGdtYWlsLmNvbT4gMTc5NDg5MjY4NSArMDgwMApjb21taXR0ZXIgTElnaHRKVU5jdGlvbiA8bGlnaHRqdW5jdGlvbi5tZUBnbWFpbC5jb20+IDE3OTQ4OTI2ODUgKzA4MDAKCnRlc3Q6IGFsaWduIGRpc2NvdmVyeSBhY2NlcHRhbmNlIHdpdGggb3B0aW9uYWwgYnJvd3NlciB0b29scyBmb3IgMC42LjMK",
+  "deleted": [
+    "100644 blob 35c6ad8efd508f41fb912df0e07f2a92e0096943\tdocs/assets/computer-use-consent-desktop.jpg",
+    "100644 blob 79d0691a507557a9cbc4161ab9a62aaf058502bb\tdocs/assets/computer-use-consent-narrow.jpg",
+    "100644 blob 81817e1bcfd8f43318a81185fb4908c61fb5b66e\tdocs/assets/computer-use-runtime-browser.jpg",
+    "100644 blob 31ef9780ae615858ec504d0a075e2147eae529dd\tdocs/assets/readable-logs-100.png",
+    "100644 blob 1e7b6e4f12f23db05086f8b1939450aa8e2f1cc4\tdocs/assets/readable-logs-80.png",
+    "100644 blob 6a6321a57599b4dd9c4021fdf6ba0a11f3cfd575\tdocs/assets/readme-preview.jpg",
+    "100644 blob 90bdd28af4f5879b57c7b027b5e8803a917d9a28\tdocs/assets/terminal-logs.png",
+    "100644 blob 2bda7d6427ac04ab0f9ffe853845ec7e581da978\tdocs/assets/terminal-sidebar-r5-20261116.jpg",
+    "100644 blob 7ff2d47ff4980de79aeec3263f79251807c79adc\tdocs/reports/terminal-control-2026-11-16/cua-browser.jpg",
+    "100644 blob ef5d737fe75428a819deb8f9f2eb310fccaec16c\tdocs/reports/terminal-control-2026-11-16/terminal-build.png",
+    "100644 blob 6288685949e3dba302236a8fba9af067f08dae8c\tdocs/reports/terminal-control-2026-11-16/terminal-logs.png",
+    "100644 blob b0dbbe34f087a35b929fa1d024800ad5f2858eb6\tdocs/reports/terminal-control-2026-11-16/terminal-main.png"
+  ],
+  "manifest_sha256": "82885ec6fa3b69b8ee857ba3d279a1bf61dcad4ecaf7e5cc4c585ed559733d76",
+  "new_tree": "cdc487a2373fcef42477e0ed8aa4845827dd6488",
+  "old_tree": "e4f016a08709dad012887886797fc27df8b110e6",
+  "original_commit_base64": "dHJlZSBlNGYwMTZhMDg3MDlkYWQwMTI4ODc4ODY3OTdmYzI3ZGY4YjExMGU2CnBhcmVudCBiODBkNzYxNDNlZGE4YTBmMDI1YTg4NzI2MGIwNjU3Mjg0OTVmNWE5CmF1dGhvciBMSWdodEpVTmN0aW9uIDxsaWdodGp1bmN0aW9uLm1lQGdtYWlsLmNvbT4gMTc5NDg5MjY4NSArMDgwMApjb21taXR0ZXIgTElnaHRKVU5jdGlvbiA8bGlnaHRqdW5jdGlvbi5tZUBnbWFpbC5jb20+IDE3OTQ4OTI2ODUgKzA4MDAKZ3Bnc2lnIC0tLS0tQkVHSU4gUEdQIFNJR05BVFVSRS0tLS0tCiAKIGlIVUVBQllLQUIwV0lRU2ZhdUM4MjMvNUY3N0c0alR6Qk4xbEhSR1NuQVVDYXZ2ampRQUtDUkR6Qk4xbEhSR1MKIG5FSElBUURnRnJrTUFWckVRZUQ2dFoyRndHR0h1TnU5TjZ2aGUrTkYwdUJUd0JtWTdBRUE5LzFxVUk1WGlTWjAKIExvaGhzdWwyRDJpOFF0TzZ6Z3l2ZHU3NjRlUmdWZ1k9CiA9ZjBFVAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCgp0ZXN0OiBhbGlnbiBkaXNjb3ZlcnkgYWNjZXB0YW5jZSB3aXRoIG9wdGlvbmFsIGJyb3dzZXIgdG9vbHMgZm9yIDAuNi4zCg==",
+  "published_artifacts_rebuilt": false,
+  "removed_paths_sha256": "8ab229561218a83f2039520b1f96595658e2411d721078e1c350c91cefd53b6e",
+  "repository": "LIghtJUNction/ssmcp",
+  "retained_encoding": "git ls-tree -r -z entries, original order; mode/type/object/path preserved",
+  "retained_sha256": "ee050bd329ee96c1defbf966c0ad94e862bfc29a4c60847cb997005db12f3ab2",
+  "schema": "ssmcp.retained-git-tree-proof.v1",
+  "source_commit": "740782217036bdeb47261576e11414d51222b862",
+  "tag": "v0.6.3"
+}

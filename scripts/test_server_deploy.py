@@ -357,5 +357,247 @@ class DeploymentContracts(unittest.TestCase):
         self.simulate_switch(had_managed_unit=True, public_failure=True)
 
 
+
+class ReleaseHistoryRewriteContracts(unittest.TestCase):
+    setUp = DeploymentContracts.setUp
+    release = DeploymentContracts.release
+    SOURCE = "c" * 40
+
+    def fixture(self):
+        release, manifest = self.release()
+        raw = (json.dumps(manifest, indent=2) + "\n").encode()
+        retained = hashlib.sha256(b"synthetic retained git entries").hexdigest()
+        table = {"schema": 1, "entries": [{
+            "repository": deploy.REPOSITORY, "tag": TAG,
+            "build_commit": COMMIT, "source_commit": self.SOURCE,
+            "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+            "proof": {
+                "kind": "retained-git-tree-v1",
+                "build_tree": "d" * 40, "source_tree": "e" * 40,
+                "build_retained_sha256": retained, "source_retained_sha256": retained,
+                "removed_paths_sha256": hashlib.sha256(b'["docs/old-screenshot.png"]').hexdigest(),
+                "removed_path_count": 1,
+                "audit_sha256": hashlib.sha256(b"synthetic independently reviewed proof").hexdigest(),
+            },
+        }]}
+        return release, manifest, raw, table
+
+    def trusted(self, table, checksum=None):
+        encoded = json.dumps(table, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+        return mock.patch.multiple(
+            deploy, RELEASE_SOURCE_REWRITES=table,
+            RELEASE_SOURCE_REWRITES_SHA256=checksum or hashlib.sha256(encoded).hexdigest())
+
+    def select(self, release, manifest, raw, source=None):
+        return deploy.select_release(TAG, source or self.SOURCE, release, manifest,
+                                     "x86_64", manifest_bytes=raw)
+
+    def test_equal_source_release_does_not_consult_history_exceptions(self):
+        release, manifest = self.release()
+        with mock.patch.object(deploy, "release_source_rewrite",
+                               side_effect=AssertionError("ordinary release used exception path")):
+            record = deploy.select_release(TAG, COMMIT, release, manifest, "x86_64")
+        self.assertEqual(record["commit"], COMMIT)
+        self.assertEqual(record["build_commit"], COMMIT)
+        self.assertEqual(record["source_commit"], COMMIT)
+        self.assertNotIn("source_history_rewrite", record)
+
+    def test_reviewed_history_map_retains_original_build_and_clean_source(self):
+        release, manifest, raw, table = self.fixture()
+        original = copy.deepcopy(manifest)
+        with self.trusted(table):
+            record = self.select(release, manifest, raw)
+        self.assertEqual(record["commit"], self.SOURCE)
+        self.assertEqual(record["source_commit"], self.SOURCE)
+        self.assertEqual(record["build_commit"], COMMIT)
+        self.assertEqual(record["archive_sha256"], "b" * 64)
+        self.assertEqual(record["archive_url"], URL)
+        self.assertFalse(record["source_history_rewrite"]["artifact_rebuilt"])
+        self.assertEqual(record["source_history_rewrite"]["manifest_sha256"],
+                         hashlib.sha256(raw).hexdigest())
+        self.assertEqual(record["source_history_rewrite"]["audit_sha256"],
+                         table["entries"][0]["proof"]["audit_sha256"])
+        self.assertEqual(manifest, original)
+
+    def test_release_metadata_cannot_advertise_its_own_source_exception(self):
+        release, manifest, raw, table = self.fixture()
+        release["source_rewrites"] = table
+        release["source_commit"] = self.SOURCE
+        with self.trusted({"schema": 1, "entries": []}), \
+             self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+            self.select(release, manifest, raw)
+
+    def test_wrong_tag_build_source_or_manifest_digest_is_rejected(self):
+        for field, value in [
+            ("tag", "v0.10.4"), ("build_commit", "f" * 40),
+            ("source_commit", "f" * 40), ("manifest_sha256", "f" * 64)
+        ]:
+            release, manifest, raw, table = self.fixture()
+            table["entries"][0][field] = value
+            with self.subTest(field=field), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+                self.select(release, manifest, raw)
+
+    def test_wrong_requested_source_and_changed_original_build_are_rejected(self):
+        release, manifest, raw, table = self.fixture()
+        with self.trusted(table), self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+            self.select(release, manifest, raw, source="f" * 40)
+        manifest["commit"] = "f" * 40
+        with self.trusted(table), self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+            self.select(release, manifest, json.dumps(manifest).encode())
+
+    def test_exact_original_manifest_bytes_are_required(self):
+        release, manifest, raw, table = self.fixture()
+        for changed in (None, bytearray(raw), raw + b" ", b"{invalid"):
+            with self.subTest(raw_type=type(changed).__name__), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+                self.select(release, manifest, changed)
+
+    def test_manifest_object_cannot_diverge_from_the_pinned_bytes(self):
+        release, manifest, raw, table = self.fixture()
+        # Python's ordinary dict equality considers 200.0 == 200; JSON identity must not.
+        for changed in ({"untrusted": True}, {"bytes": 200.0}):
+            supplied = copy.deepcopy(manifest)
+            supplied["artifacts"][0].update(changed)
+            with self.subTest(changed=changed), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "release_source_mismatch"):
+                self.select(release, supplied, raw)
+
+    def test_unreviewed_allowlist_mutation_fails_the_canonical_pin(self):
+        release, manifest, raw, table = self.fixture()
+        with self.trusted(table):
+            table["entries"][0]["source_commit"] = "f" * 40
+            with self.assertRaisesRegex(RuntimeError, "release_source_map_invalid"):
+                self.select(release, manifest, raw, source="f" * 40)
+
+    def test_other_repository_and_duplicate_tag_are_not_authorized(self):
+        for kind in ("repository", "duplicate"):
+            release, manifest, raw, table = self.fixture()
+            if kind == "repository":
+                table["entries"][0]["repository"] = "other/ssmcp"
+            else:
+                table["entries"].append(copy.deepcopy(table["entries"][0]))
+            with self.subTest(kind=kind), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "release_source_map_invalid"):
+                self.select(release, manifest, raw)
+
+    def test_invalid_or_unequal_retained_tree_proof_is_rejected(self):
+        changes = [
+            ("kind", "unverified"),
+            ("build_tree", "short"),
+            ("source_retained_sha256", "f" * 64),
+            ("removed_paths_sha256", ""),
+            ("removed_path_count", True),
+            ("removed_path_count", -1),
+            ("removed_path_count", 0),
+            ("source_tree", "d" * 40),
+            ("audit_sha256", None),
+        ]
+        for field, value in changes:
+            release, manifest, raw, table = self.fixture()
+            table["entries"][0]["proof"][field] = value
+            with self.subTest(field=field, value=value), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "release_source_map_invalid"):
+                self.select(release, manifest, raw)
+
+    def test_ancestor_only_rewrite_requires_the_same_tree(self):
+        release, manifest, raw, table = self.fixture()
+        proof = table["entries"][0]["proof"]
+        proof["source_tree"] = proof["build_tree"]
+        proof["removed_path_count"] = 0
+        proof["removed_paths_sha256"] = hashlib.sha256(b"[]").hexdigest()
+        with self.trusted(table):
+            record = self.select(release, manifest, raw)
+        self.assertEqual(record["source_history_rewrite"]["removed_path_count"], 0)
+        self.assertFalse(record["source_history_rewrite"]["artifact_rebuilt"])
+
+    def test_mapped_release_keeps_published_and_archive_integrity_gates(self):
+        for field, value in (("draft", True), ("prerelease", True), ("published_at", None)):
+            release, manifest, raw, table = self.fixture()
+            release[field] = value
+            with self.subTest(field=field), self.trusted(table), \
+                 self.assertRaisesRegex(RuntimeError, "published_stable_release_required"):
+                self.select(release, manifest, raw)
+        for field, value in [
+            ("size", 201), ("digest", "sha256:" + "c" * 64),
+            ("browser_download_url", "https://example.test/file")
+        ]:
+            release, manifest, raw, table = self.fixture()
+            release["assets"][0][field] = value
+            with self.subTest(field=field), self.trusted(table), self.assertRaises(RuntimeError):
+                self.select(release, manifest, raw)
+        release, manifest, raw, table = self.fixture()
+        release["assets"].append(copy.deepcopy(release["assets"][0]))
+        with self.trusted(table), self.assertRaisesRegex(RuntimeError, "one_server_archive_required"):
+            self.select(release, manifest, raw)
+
+    def test_prepare_uses_exact_manifest_bytes_and_clean_source_for_runtime_files(self):
+        release, manifest, raw, table = self.fixture()
+        api = "https://api.github.com/repos/" + deploy.REPOSITORY + "/releases/tags/" + TAG
+        manifest_url = "https://github.com/" + deploy.REPOSITORY + "/releases/download/" + TAG + "/release-manifest.json"
+        release["assets"].append({
+            "name": "release-manifest.json", "browser_download_url": manifest_url,
+            "digest": "sha256:" + hashlib.sha256(raw).hexdigest()
+        })
+        source_url = "https://raw.githubusercontent.com/" + deploy.REPOSITORY + "/" + self.SOURCE
+        runner = b"synthetic retained code-mode runner"
+        fetched = []
+
+        def fetch(url, maximum, destination=None):
+            fetched.append(url)
+            if destination is not None:
+                self.assertEqual(url, URL)
+                self.assertEqual(maximum, 200)
+                destination.write_bytes(b"synthetic archive")
+                return destination.stat().st_size
+            if url == api:
+                return json.dumps(release).encode()
+            if url == manifest_url:
+                return raw
+            if url == source_url + "/src/code_mode.js":
+                return runner
+            for name in deploy.CORE_ASSET_NAMES:
+                if url == source_url + "/src/portal/" + name:
+                    return ("synthetic " + name).encode()
+            raise AssertionError("unexpected source fetch: " + url)
+
+        def extract(_archive, folder, record):
+            self.assertEqual(record["build_commit"], COMMIT)
+            (folder / "candidate").write_bytes(b"synthetic never-executed binary")
+            (folder / "runner.js").write_bytes(runner)
+
+        before = {"exe": "/synthetic/live-ssmcpd", "live_sha256": "d" * 64, "prestart_commands": []}
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+
+            def version(argv):
+                self.assertIn(argv, [[str(folder / "candidate"), "--version"],
+                                     [before["exe"], "--version"]])
+                return "ssmcpd 0.10.3"
+
+            intent = {"tag": TAG, "commit": self.SOURCE, "run_id": "123-1", "stage_only": True}
+            with self.trusted(table), \
+                 mock.patch.object(deploy, "configure_target", return_value="https://example.test"), \
+                 mock.patch.object(deploy, "fetch", side_effect=fetch), \
+                 mock.patch.object(deploy, "extract_runtime", side_effect=extract), \
+                 mock.patch.object(deploy, "snapshot", return_value=before), \
+                 mock.patch.object(deploy, "run", side_effect=version), \
+                 mock.patch.object(deploy.platform, "machine", return_value="x86_64"):
+                request = deploy.prepare(intent, folder)
+            saved = json.loads((folder / "request.json").read_text())
+            self.assertEqual(request["release"], saved["release"])
+            self.assertEqual(saved["release"]["build_commit"], COMMIT)
+            self.assertEqual(saved["release"]["source_commit"], self.SOURCE)
+            self.assertEqual(saved["release"]["source_history_rewrite"]["manifest_sha256"],
+                             hashlib.sha256(raw).hexdigest())
+            self.assertFalse((folder / "backup.tar").exists())
+        self.assertEqual(fetched.count(manifest_url), 1)
+        self.assertIn(source_url + "/src/code_mode.js", fetched)
+        self.assertTrue(all(source_url + "/src/portal/" + name in fetched
+                            for name in deploy.CORE_ASSET_NAMES))
+        self.assertFalse(any("/" + COMMIT + "/" in url for url in fetched))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

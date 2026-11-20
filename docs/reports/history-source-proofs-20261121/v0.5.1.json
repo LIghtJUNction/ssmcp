@@ -1,0 +1,20 @@
+{
+  "build_commit": "c75309a9acab27c684c0beaaf9d22fd991200760",
+  "clean_commit_base64": "dHJlZSBkN2Y2Nzc5YmI4NTM5MDZlMmIwMGM3YWZkMmZkNWE1YmYzMzJmNjNlCnBhcmVudCA4ZjVhZGY0NWYyMTFlNDkzYWZjZTg3MmJjYTY3MzU0MTVkOTk1NjEwCmF1dGhvciBMSWdodEpVTmN0aW9uIDxsaWdodGp1bmN0aW9uLm1lQGdtYWlsLmNvbT4gMTc5NDgyMDM2MCArMDgwMApjb21taXR0ZXIgTElnaHRKVU5jdGlvbiA8bGlnaHRqdW5jdGlvbi5tZUBnbWFpbC5jb20+IDE3OTQ4MjAzNjAgKzA4MDAKCmNob3JlOiByZWxlYXNlIHNzbWNwIDAuNS4x",
+  "deleted": [
+    "100644 blob 6a6321a57599b4dd9c4021fdf6ba0a11f3cfd575\tdocs/assets/readme-preview.jpg",
+    "100644 blob 90bdd28af4f5879b57c7b027b5e8803a917d9a28\tdocs/assets/terminal-logs.png"
+  ],
+  "manifest_sha256": "c6fbf596377412d0479548cc69f382f29677da9f2caaedcebcffda568e5d12e6",
+  "new_tree": "d7f6779bb853906e2b00c7afd2fd5a5bf332f63e",
+  "old_tree": "76a99d265fbf3711d273ba38b66239878adbb219",
+  "original_commit_base64": "dHJlZSA3NmE5OWQyNjVmYmYzNzExZDI3M2JhMzhiNjYyMzk4NzhhZGJiMjE5CnBhcmVudCA1N2Y5MGU3NDZhNjFlNTc5ODY4YWVjN2Y0OTUzYjI3NjI2Mzg4ZjMzCmF1dGhvciBMSWdodEpVTmN0aW9uIDxsaWdodGp1bmN0aW9uLm1lQGdtYWlsLmNvbT4gMTc5NDgyMDM2MCArMDgwMApjb21taXR0ZXIgTElnaHRKVU5jdGlvbiA8bGlnaHRqdW5jdGlvbi5tZUBnbWFpbC5jb20+IDE3OTQ4MjAzNjAgKzA4MDAKCmNob3JlOiByZWxlYXNlIHNzbWNwIDAuNS4x",
+  "published_artifacts_rebuilt": false,
+  "removed_paths_sha256": "a1d4e11e0e7dd4ea4230fc57ab3f50ad1777cf47d4270c5d6e4c353b1dd8f7e6",
+  "repository": "LIghtJUNction/ssmcp",
+  "retained_encoding": "git ls-tree -r -z entries, original order; mode/type/object/path preserved",
+  "retained_sha256": "ea3700a1bdddf5d454366e85415c99b652109a4f81530c4186ec2c51c8190187",
+  "schema": "ssmcp.retained-git-tree-proof.v1",
+  "source_commit": "52187740ed00f538e2c3e40eda733f2cb075df40",
+  "tag": "v0.5.1"
+}
