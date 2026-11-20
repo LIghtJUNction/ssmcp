@@ -246,6 +246,9 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
     if request_id.is_some() && idempotency_key.is_some() {
         return Err("resume with request_id or create with idempotency_key, not both".into());
     }
+    // Capture before the queue mutex. History publication uses the same owner
+    // after the mutex is released, even if the UI selects another conversation.
+    let owner = super::history::capture();
     // Subscribe before examining state so an immediate local answer is retained.
     let mut changes = CHANGES.get_or_init(|| watch::channel(0).0).subscribe();
     let (id, created) = {
@@ -264,14 +267,18 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
                 idempotency_key,
                 ..request
             };
-            let (question, created) =
-                queue.ask_for(request, Some(scope.clone()), QuestionKind::Finish)?;
+            let (question, created) = queue.ask_owned(
+                request,
+                Some(scope.clone()),
+                QuestionKind::Finish,
+                Some(owner),
+            )?;
             (question.id, created)
         }
     };
     if created {
         if let Some(question) = get(&id) {
-            let _ = super::super::history::record("assistant", &history_text(&question));
+            let _ = super::history::record_created(&question);
         }
         changed();
     }

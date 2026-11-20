@@ -458,6 +458,7 @@ impl EventView {
                 panel: CommandPanel::default(),
                 group_panel: CommandPanel::default(),
                 group_expanded: false,
+                group_automatic: false,
                 truncated: entry.truncated,
                 tone: tone(&entry.tone),
                 cache: None,
@@ -594,21 +595,25 @@ impl ReloadPosition {
 impl EventPosition {
     pub(in crate::client::terminal) fn for_reload(&self, view: &EventView) -> ReloadPosition {
         let index = |id: u64| view.events.iter().position(|event| event.id == id);
+        // Canvas members can all have been evicted while that canvas was idle.
+        // Resolve stable display groups now; persist only current ordinals.
+        let retained_group = self.selected_tool_group(view);
         ReloadPosition {
             scroll: self.scroll,
             follow: self.follow,
             reading: Some(Reading {
-                selected: self.selected.and_then(index),
-                selected_group: self.selected_group.and_then(index),
+                selected: retained_group.or(self.selected).and_then(index),
+                selected_group: retained_group.or(self.selected_group).and_then(index),
                 expanded: self
                     .chat_expanded
                     .iter()
                     .filter_map(|id| index(*id))
                     .collect(),
-                panels: self
-                    .panel_scroll
+                panels: view
+                    .events
                     .iter()
-                    .filter_map(|(id, panel)| index(*id).map(|index| (index, *panel)))
+                    .enumerate()
+                    .filter_map(|(index, event)| self.panel_for(event).map(|panel| (index, panel)))
                     .collect(),
             }),
         }

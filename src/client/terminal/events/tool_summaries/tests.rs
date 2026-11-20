@@ -114,23 +114,22 @@ fn group_id(view: &EventView, source: &Source) -> String {
         .to_owned()
 }
 
-async fn command(view: &mut EventView, runtime: &Runtime, request: u64, argv: &[&str]) -> Source {
+async fn command_call(view: &mut EventView, runtime: &Runtime, request: u64) -> Source {
     let source = source(runtime, request, "123", None, "same-label").await;
+    let job = format!("summary-command-{request}");
     view.summary_call_started(&source, "ssmcp.exec.start");
-    let id = format!("summary-command-{request}");
-    let started = json!({
-        "type":"exec.started", "job_id":id,
-        "title":"Optional purpose text", "command":argv,
-    });
-    let bytes = crate::client::render::render_event_for_test("shell", &started, 120).unwrap();
-    view.ingest_scoped_event("shell", &started, &bytes, source.display());
-    view.summary_call_finished(&source, true);
     view.ingest_scoped_event(
         "shell",
-        &json!({"type":"exec.exited","job_id":id,"exit_code":0}),
-        b"[OK] command exited\n",
+        &json!({"type":"exec.started","job_id":job,"command":["printf",format!("command-{request}")]}),
+        b"[RUN] command\n", source.display(),
+    );
+    view.ingest_scoped_event(
+        "shell",
+        &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+        b"[OK] exit=0\n",
         source.display(),
     );
+    view.summary_call_finished(&source, true);
     source
 }
 
@@ -335,6 +334,21 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
             true
         );
         assert_eq!(view.tool_groups().len(), 1);
+        for width in [120, 48] {
+            let ui = Ui {
+                color: false,
+                ..Ui::default()
+            };
+            let rows = view.render(width, 24, &ui, true);
+            let text = rows.join("\n");
+            assert_eq!(text.matches("Read process output").count(), 1, "{text}");
+            assert_eq!(text.matches("Ran printf hello").count(), 1, "{text}");
+            assert!(text.contains("Show details"), "{text}");
+            assert!(
+                rows.iter()
+                    .all(|row| unstyled(row).width() <= usize::from(width))
+            );
+        }
         for (request, name) in [
             (2, "ssmcp.exec.status"),
             (3, "ssmcp.exec.read"),
@@ -347,6 +361,229 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
         assert_eq!(view.events.len(), 4);
         assert_eq!(view.snapshot()["tool_groups"][0]["call_count"], 4);
         assert!(view.take_tool_summary_reminder(&call).is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn commands_and_other_tools_share_one_visible_summary_and_exact_count() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        stat(&mut view, &fixture.runtime, 1).await;
+        let command = command_call(&mut view, &fixture.runtime, 2).await;
+        let read = source(&fixture.runtime, 3, "123", None, "same-label").await;
+        view.summary_call_started(&read, "ssmcp.fs.read_text");
+        view.ingest_scoped_event(
+            "workspace",
+            &json!({"type":"ssmcp.file.read","path":"src/main.rs"}),
+            b"[READ] src/main.rs\n",
+            read.display(),
+        );
+        view.summary_call_finished(&read, true);
+        command_call(&mut view, &fixture.runtime, 4).await;
+        for _ in 0..3 {
+            view.ingest_scoped_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"summary-command-2"}),
+                b"checked\n",
+                command.display(),
+            );
+        }
+        view.ingest_scoped_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"summary-command-2","exit_code":0}),
+            b"[OK] exit=0\n",
+            command.display(),
+        );
+        let id = group_id(&view, &first);
+        let receipt = view
+            .tool_summary_set(&first, &id, "Inspect workspace and tools", Some(0))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["call_count"], 4);
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot["tool_groups"].as_array().unwrap().len(), 1);
+        assert_eq!(snapshot["tool_groups"][0]["group_id"], id);
+        assert_eq!(snapshot["tool_groups"][0]["count"], 4);
+        assert_eq!(snapshot["tool_groups"][0]["call_count"], 4);
+        assert_eq!(view.events.len(), 4);
+        for width in [120, 48] {
+            let ui = Ui {
+                color: false,
+                ..Ui::default()
+            };
+            for index in [1, 3] {
+                view.selected = Some(view.events[index].id);
+                view.selected_group = None;
+                view.follow = false;
+                view.reveal = true;
+                let rows = view.render(width, 24, &ui, true);
+                let text = rows.join("\n");
+                assert_eq!(
+                    text.matches("Inspect workspace and tools").count(),
+                    1,
+                    "{text}"
+                );
+                assert_eq!(text.matches("4 calls").count(), 1, "{text}");
+                assert!(
+                    text.contains(&format!("Ran printf command-{}", index + 1)),
+                    "{text}"
+                );
+                assert!(text.contains("Show details"), "{text}");
+                assert!(
+                    rows.iter()
+                        .all(|row| unstyled(row).width() <= usize::from(width))
+                );
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn exec_reminder_summary_and_retention_never_reopen_an_explicit_fold() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        for request in 1..=11 {
+            let call = command_call(&mut view, &fixture.runtime, request).await;
+            let reminder = view.take_tool_summary_reminder(&call);
+            if request < 11 {
+                assert!(reminder.is_none());
+            } else {
+                assert_eq!(reminder.unwrap()["call_count"], 11);
+                assert!(view.take_tool_summary_reminder(&call).is_none());
+            }
+        }
+        let id = group_id(&view, &first);
+        let receipt = view
+            .tool_summary_set(&first, &id, "Checked eleven commands", Some(0))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["covered_call_count"], 11);
+        assert_eq!(view.tool_groups().len(), 1);
+        assert!(view.tool_groups()[0].expanded);
+        view.select(isize::MIN);
+        assert!(view.back());
+        let group = view.tool_groups()[0].clone();
+        assert!(!view.events[group.start].group_automatic);
+        let next = command_call(&mut view, &fixture.runtime, 12).await;
+        assert!(view.take_tool_summary_reminder(&next).is_none());
+        let receipt = view
+            .tool_summary_set(&next, &id, "Checked twelve commands", Some(1))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["call_count"], 12);
+        assert!(!view.tool_groups()[0].expanded);
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let text = view.render(48, 24, &ui, true).join("\n");
+        assert_eq!(text.matches("Checked twelve commands").count(), 1, "{text}");
+        assert!(!text.contains("printf"), "{text}");
+        let saved_canvas = view.position();
+        let old_head = view.tool_groups()[0].head;
+        for request in 13..=(MAX_EVENTS as u64 + 5) {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(group_id(&view, &first), id);
+        assert_eq!(view.tool_groups().len(), 1);
+        assert!(!view.tool_groups()[0].expanded);
+        assert!(!view.events[view.tool_groups()[0].start].group_automatic);
+        assert_eq!(
+            view.snapshot()["tool_groups"][0]["call_count"],
+            MAX_EVENTS as u64 + 5
+        );
+        assert_ne!(view.tool_groups()[0].head, old_head);
+        view.restore_position(&saved_canvas);
+        let text = view.render(48, 24, &ui, true).join("\n");
+        assert!(!view.tool_groups()[0].expanded);
+        assert!(!view.events[view.tool_groups()[0].start].group_automatic);
+        assert_eq!(view.selected_group, Some(view.tool_groups()[0].head));
+        assert!(!text.contains("printf"), "{text}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn inactive_canvas_keeps_group_choice_after_every_saved_command_is_evicted() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        for request in 1..=12 {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        let id = group_id(&view, &first);
+        view.tool_summary_set(&first, &id, "Keep this group folded", Some(0))
+            .unwrap();
+        view.select(isize::MIN);
+        assert!(view.back());
+        let first_canvas = view.position();
+        assert_eq!(first_canvas.tool_groups.len(), 1);
+        let saved_ids = view.events.iter().map(|event| event.id).collect::<Vec<_>>();
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+
+        // A second canvas has its own default, while the first stays inactive.
+        view.restore_position(&super::super::EventPosition::default());
+        view.render(120, 24, &ui, false);
+        assert!(view.tool_groups()[0].expanded);
+        let second_canvas = view.position();
+        for request in 13..=(MAX_EVENTS as u64 + 12) {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert!(
+            view.events
+                .iter()
+                .all(|event| !saved_ids.contains(&event.id))
+        );
+        assert_eq!(view.tool_groups().len(), 1);
+        assert_eq!(group_id(&view, &first), id);
+        assert_eq!(
+            view.snapshot()["tool_groups"][0]["call_count"],
+            MAX_EVENTS as u64 + 12
+        );
+        assert!(view.tool_groups()[0].expanded);
+        assert!(view.position().tool_groups.len() <= MAX_EVENTS);
+
+        // Reload may capture the inactive canvas before it is visited again.
+        // Rebase its group reading state to current ordinals, not stale IDs.
+        let reading = serde_json::to_value(first_canvas.for_reload(&view)).unwrap();
+        assert_eq!(reading["reading"]["selected"], 0);
+        assert_eq!(reading["reading"]["selected_group"], 0);
+        let panels = reading["reading"]["panels"].as_array().unwrap();
+        assert_eq!(panels.len(), MAX_EVENTS);
+        assert!(panels.iter().all(|panel| {
+            panel[1]["group_expanded"] == false && panel[1]["group_automatic"] == false
+        }));
+        assert!(!reading.to_string().contains(&id));
+
+        for width in [120, 48] {
+            view.restore_position(&first_canvas);
+            let text = view.render(width, 24, &ui, true).join("\n");
+            let group = view.tool_groups()[0].clone();
+            assert!(!group.expanded);
+            assert!(!view.events[group.start].group_automatic);
+            assert_eq!(view.selected, Some(group.head));
+            assert_eq!(view.selected_group, Some(group.head));
+            assert_eq!(text.matches("Keep this group folded").count(), 1, "{text}");
+            assert!(!text.contains("printf"), "{text}");
+
+            view.restore_position(&second_canvas);
+            let text = view.render(width, 24, &ui, false).join("\n");
+            assert!(view.tool_groups()[0].expanded);
+            assert!(view.events[view.tool_groups()[0].start].group_automatic);
+            assert!(text.contains("Ran printf command-"), "{text}");
+        }
     })
     .await;
 }
@@ -464,6 +701,7 @@ async fn updating_summary_preserves_fold_scroll_and_fits_both_widths() {
                     page: 24,
                     palette: "",
                     ui: &ui,
+                    diff_mode: super::super::DiffMode::Single,
                     selected: view.selected,
                     selected_group: view.selected_group,
                     focused: true,
@@ -647,200 +885,12 @@ async fn ui_mutations_keep_non_conversation_image_question_and_task_events() {
 }
 
 #[tokio::test]
-async fn command_only_summaries_keep_argv_readable_before_and_after_labelling() {
-    let fixture = Fixture::new().await;
-    history::with_test_history(fixture.root.join("command-summary-history"), async {
-        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
-        let mut view = new_view(&first);
-        command(
-            &mut view,
-            &fixture.runtime,
-            1,
-            &["git", "status", "--short"],
-        )
-        .await;
-        command(
-            &mut view,
-            &fixture.runtime,
-            2,
-            &["cargo", "check", "--quiet"],
-        )
-        .await;
-        let id = group_id(&view, &first);
-        let ui = Ui {
-            color: false,
-            ..Ui::default()
-        };
-        for width in [120, 48] {
-            let text = view.render(width, 24, &ui, false).join("\n");
-            assert!(view.tool_groups().is_empty(), "{text}");
-            assert!(text.contains("Ran git status --short"), "{text}");
-            assert!(text.contains("Ran cargo check --quiet"), "{text}");
-            assert!(!text.contains("Optional purpose text"), "{text}");
-            assert!(!text.contains("Tools ·"), "{text}");
-        }
-        let receipt = view
-            .tool_summary_set(&first, &id, "Inspect repository state", Some(0))
-            .unwrap();
-        assert_eq!(receipt["shown"], true);
-        assert!(view.tool_groups()[0].expanded);
-        for width in [120, 48] {
-            let rows = view.render(width, 24, &ui, false);
-            let text = rows.join("\n");
-            assert_eq!(
-                text.matches("Inspect repository state").count(),
-                1,
-                "{text}"
-            );
-            assert!(text.contains("2 calls"), "{text}");
-            assert!(text.contains("Ran git status --short"), "{text}");
-            assert!(text.contains("Ran cargo check --quiet"), "{text}");
-            assert!(!text.contains("Optional purpose text"), "{text}");
-            assert!(
-                rows.iter()
-                    .all(|row| unstyled(row).width() <= usize::from(width))
-            );
-            let snapshot = view.snapshot();
-            assert_eq!(snapshot["tool_groups"].as_array().unwrap().len(), 1);
-            assert_eq!(snapshot["tool_groups"][0]["group_id"], id);
-            assert_eq!(snapshot["tool_groups"][0]["count"], 2);
-            assert_eq!(snapshot["tool_groups"][0]["call_count"], 2);
-            assert_eq!(
-                snapshot["tool_groups"][0]["members"]
-                    .as_array()
-                    .unwrap()
-                    .len(),
-                2
-            );
-        }
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn mixed_commands_and_reads_share_one_summary_header_and_exact_members() {
-    let fixture = Fixture::new().await;
-    history::with_test_history(fixture.root.join("mixed-summary-history"), async {
-        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
-        let mut view = new_view(&first);
-        stat(&mut view, &fixture.runtime, 1).await;
-        command(
-            &mut view,
-            &fixture.runtime,
-            2,
-            &["git", "status", "--short"],
-        )
-        .await;
-        stat(&mut view, &fixture.runtime, 3).await;
-        let id = group_id(&view, &first);
-        assert!(view.tool_groups().is_empty());
-        assert_eq!(
-            view.tool_summary_list(&first).unwrap()["groups"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        view.tool_summary_set(&first, &id, "Inspect mixed work", Some(0))
-            .unwrap();
-        // A separately requested wait is another logical call, not another job.
-        let wait = source(&fixture.runtime, 4, "123", None, "same-label").await;
-        view.summary_call_started(&wait, "ssmcp.exec.wait");
-        view.summary_call_finished(&wait, true);
-        let expected = view.events.iter().map(|event| event.id).collect::<Vec<_>>();
-        let ui = Ui {
-            color: false,
-            ..Ui::default()
-        };
-        for width in [120, 48] {
-            let text = view.render(width, 24, &ui, false).join("\n");
-            assert_eq!(text.matches("Inspect mixed work").count(), 1, "{text}");
-            assert!(
-                text.contains("4 calls") && text.contains("Ran git status --short"),
-                "{text}"
-            );
-            let groups = view.tool_groups();
-            assert_eq!(groups.len(), 1);
-            assert_eq!(groups[0].info.as_ref().unwrap().group_id, id);
-            assert_eq!(
-                groups[0]
-                    .members
-                    .iter()
-                    .map(|index| view.events[*index].id)
-                    .collect::<Vec<_>>(),
-                expected
-            );
-            let snapshot = view.snapshot();
-            assert_eq!(snapshot["tool_groups"][0]["count"], 4);
-            assert_eq!(snapshot["tool_groups"][0]["call_count"], 4);
-        }
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn an_explicit_fold_before_the_first_summary_survives_commands_and_refreshes() {
-    let fixture = Fixture::new().await;
-    history::with_test_history(fixture.root.join("fold-intent-history"), async {
-        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
-        let mut view = new_view(&first);
-        stat(&mut view, &fixture.runtime, 1).await;
-        stat(&mut view, &fixture.runtime, 2).await;
-        let id = group_id(&view, &first);
-        let group = view.tool_groups()[0].clone();
-        assert!(view.set_tool_expanded(&group, true));
-        let group = view.tool_groups()[0].clone();
-        assert!(view.set_tool_expanded(&group, false));
-        // No frame has been painted: rows/scroll cannot stand in for user intent.
-        assert_eq!(view.events[0].group_panel.rows, 0);
-        command(
-            &mut view,
-            &fixture.runtime,
-            3,
-            &["git", "status", "--short"],
-        )
-        .await;
-        assert!(view.tool_groups().is_empty());
-        view.tool_summary_set(&first, &id, "Keep this group folded", Some(0))
-            .unwrap();
-        assert!(!view.tool_groups()[0].expanded);
-        stat(&mut view, &fixture.runtime, 4).await;
-        view.tool_summary_set(&first, &id, "Keep refreshed work folded", Some(1))
-            .unwrap();
-        let ui = Ui {
-            color: false,
-            ..Ui::default()
-        };
-        for width in [120, 48, 120] {
-            let before = view.scroll;
-            let text = view.render(width, 24, &ui, false).join("\n");
-            assert!(!view.tool_groups()[0].expanded, "{text}");
-            assert_eq!(
-                text.matches("Keep refreshed work folded").count(),
-                1,
-                "{text}"
-            );
-            assert!(!text.contains("Ran git status --short"), "{text}");
-            assert_eq!(view.scroll, before);
-        }
-        assert_eq!(view.snapshot()["tool_groups"][0]["call_count"], 4);
-    })
-    .await;
-}
-
-#[tokio::test]
 async fn command_summary_scroll_and_explicit_fold_survive_position_and_reload() {
     let fixture = Fixture::new().await;
     history::with_test_history(fixture.root.join("summary-position-history"), async {
         let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
         let mut view = new_view(&first);
-        command(
-            &mut view,
-            &fixture.runtime,
-            1,
-            &["git", "status", "--short"],
-        )
-        .await;
+        command_call(&mut view, &fixture.runtime, 1).await;
         for request in 2..=18 {
             stat(&mut view, &fixture.runtime, request).await;
         }
@@ -883,7 +933,7 @@ async fn command_summary_scroll_and_explicit_fold_survive_position_and_reload() 
             restored.events[group.start].group_panel.scroll,
             inner_scroll
         );
-        assert!(restored.events[group.start].group_panel.user_folded);
+        assert!(!restored.events[group.start].group_automatic);
         assert!(restored.set_tool_expanded(&group, true));
         restored.render(120, 24, &ui, true);
         assert_eq!(restored.events[group.start].group_panel.offset(), 2);

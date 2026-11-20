@@ -81,6 +81,55 @@ class ReadableCommands(Interactions):
             raise AssertionError("expected one retained command for " + title)
         return found[0]
 
+    def command_group(self, event_ids):
+        groups = [group for group in self.events()["tool_groups"]
+                  if event_ids.intersection(group["members"])]
+        if (len(groups) != 1 or not event_ids.issubset(groups[0]["members"])
+                or groups[0]["count"] != len(set(groups[0]["members"]))):
+            raise AssertionError("adjacent native commands must each belong to one logical group")
+        return groups[0]
+
+    @staticmethod
+    def card_text(shot, heading):
+        rows = shot["rows"]
+        matches = [index for index, row in enumerate(rows) if heading in row]
+        if not matches:
+            return ""
+        if len(matches) != 1:
+            raise AssertionError("a command header was rendered more than once: " + heading)
+        card = [rows[matches[0]]]
+        for row in rows[matches[0] + 1:]:
+            if "Tools ·" in row or "scroll tools" in row or re.search(r"\b(?:Ran|Running) ", row):
+                break
+            card.append(row)
+            if "Show details" in row:
+                break
+        return "\n".join(card)
+
+    def group_view(self, front, event_ids, predicate, description):
+        # Scroll the real shared window without changing its expansion choice.
+        # A bounded group need not fit every adjacent card in the same frame.
+        group = self.command_group(event_ids)
+        limit = group["rows"] + 2
+        for direction in (64, 65):
+            for _ in range(limit):
+                shot = front.snapshot(cells=True)
+                group = self.command_group(event_ids)
+                if not group["expanded"]:
+                    raise AssertionError("command group folded before explicit local input")
+                label = f"Tools · {group['call_count']} calls"
+                headers = [index for index, row in enumerate(shot["rows"]) if label in row]
+                if len(headers) != 1:
+                    raise AssertionError("the logical command group needs one visible summary header")
+                if predicate(shot):
+                    return shot
+                if ((direction == 64 and group["scroll"] == 0)
+                        or (direction == 65 and group["scroll"] + group["visible_rows"] >= group["rows"])):
+                    break
+                front.send(f"\x1b[<{direction};9;{headers[0] + 1}M".encode())
+                front.pump(0.15)
+        raise AssertionError(description)
+
     def capture(self, front, name):
         shot = front.snapshot(cells=True)
         encoded = json.dumps(shot, ensure_ascii=False, indent=2) + "\n"
@@ -126,31 +175,59 @@ class ReadableCommands(Interactions):
             ("Inspect eight output lines", ["python3", "-c", script]),
             ("Inspect empty output", ["true"]),
         ]
+        headings = ["Ran git status --short", "Ran python3 -c", "Ran true"]
         before = {job["job_id"] for job in self.call("ssmcp.exec.list")["jobs"]}
         jobs = []
-        for title, argv in commands:
+        for (title, argv), heading in zip(commands, headings):
             job = self.call("ssmcp.exec.start",
                             {"command": argv, "cwd": str(self.workspace),
                              "title": title, "timeout_ms": 15000})
             finished = self.finish_job(job, front)
             self.check(finished["exit_code"] == 0, title + ": the real native command completed")
             jobs.append(finished)
+            self.quiet_until(front, lambda shot, heading=heading: heading in text(shot),
+                             title + ": the completed argv arrives without opening its group")
         self.check(counter.read_text() == "once\n", "the Python command executed exactly once")
-        self.quiet_until(front, lambda shot: "Ran true" in text(shot)
-                         and "Ran python3 -c" in text(shot)
-                         and "Ran git status --short" in text(shot),
-                         "all completed command argv arrive in the real conversation")
 
         event_ids = {self.command_event(title)["id"] for title, _ in commands}
+        group = self.command_group(event_ids)
+        self.check(len(event_ids) == 3 and group["expanded"] is True,
+                   "fresh adjacent native commands belong to one default-expanded logical group")
+        group_identity = {key: group[key] for key in
+                          ("id", "group_id", "count", "members", "call_count")}
+        draft_before = self.ui("/display/conversation")["draft"]
+        queue_before = self.queue()["queue"]
         for columns in (120, 48):
             front.resize(ROWS, columns)
             front.pump(0.15)
-            front.until(lambda shot: shot["size"] == [ROWS, columns]
-                        and "Ran true" in text(shot)
-                        and "Ran python3 -c" in text(shot)
-                        and "Ran git status --short" in text(shot),
-                        "all adjacent command cards at " + str(columns) + " columns")
-            shot = self.capture(front, f"folded-{columns}")
+            front.until(lambda shot: shot["size"] == [ROWS, columns],
+                        "the command viewport resizes to " + str(columns) + " columns")
+            group = self.command_group(event_ids)
+            self.check(group["expanded"] is True,
+                       f"{columns} columns: resizing preserves the readable command group")
+            previews = {}
+            for heading, marker, stem in (
+                (headings[0], "?? readable-result.txt", "preview-git"),
+                (headings[2], "(no output)", "preview-empty"),
+                (headings[1], "+5 lines · Show details · Enter", "folded"),
+            ):
+                self.group_view(
+                    front, event_ids,
+                    lambda value, heading=heading, marker=marker:
+                    marker in self.card_text(value, heading)
+                    and "Show details" in self.card_text(value, heading),
+                    heading + ": the complete folded preview must be reachable in its group")
+                preview = self.capture(front, f"{stem}-{columns}")
+                card = self.card_text(preview, heading)
+                self.check(preview["size"] == [ROWS, columns] and card.count(heading) == 1
+                           and marker in card and "Show details" in card,
+                           f"{columns} columns: {heading} has its full argv, output and detail affordance")
+                group = self.command_group(event_ids)
+                self.check({key: group[key] for key in group_identity} == group_identity
+                           and text(preview).count(f"Tools · {group['call_count']} calls") == 1,
+                           f"{columns} columns: {heading} shares one unchanged logical count and header")
+                previews[heading] = preview
+            shot = previews[headings[1]]
             visible = text(shot)
             compact = re.sub(r"\s+", "", visible)
             self.check(visible.count("Ran python3 -c") == 1 and "<script>" in visible,
@@ -160,19 +237,15 @@ class ReadableCommands(Interactions):
                        and "boundedinlineparameterpadding" not in compact
                        and "frompathlibimportPath" not in compact,
                        f"{columns} columns: folded command details hide the inline source body")
-            state = self.events()
-            self.check(not any(event_ids.intersection(group["members"])
-                               for group in state["tool_groups"]),
-                       f"{columns} columns: commands are not members of a Tools group")
-            self.check("Tools ·" not in visible,
-                       f"{columns} columns: adjacent commands remain individually visible")
-            self.check("?? readable-result.txt" in visible,
+            self.check("?? readable-result.txt" in self.card_text(previews[headings[0]], headings[0]),
                        f"{columns} columns: the real git status output is visible")
-            shown = set(re.findall(r"\bOUTPUT_ROW_[0-7]\b", visible))
+            shown = set(re.findall(r"\bOUTPUT_ROW_[0-7]\b", self.card_text(shot, headings[1])))
             self.check(shown == {"OUTPUT_ROW_5", "OUTPUT_ROW_6", "OUTPUT_ROW_7"},
                        f"{columns} columns: the long command previews exactly three output rows")
             self.check("+5 lines · Show details · Enter" in visible
-                       and visible.count("Show details") >= 3 and "(no output)" in visible,
+                       and all("Show details" in self.card_text(previews[heading], heading)
+                               for heading in headings)
+                       and "(no output)" in self.card_text(previews[headings[2]], headings[2]),
                        f"{columns} columns: long, short and empty commands expose details")
             for title, _ in commands:
                 event = self.command_event(title)
@@ -229,6 +302,37 @@ class ReadableCommands(Interactions):
             self.check(not self.command_event(commands[1][0])["expanded"],
                        f"{columns} columns: Enter folds the same command again")
 
+            group = self.command_group(event_ids)
+            label = f"Tools · {group['call_count']} calls"
+            outer = front.until(lambda value: text(value).count(label) == 1,
+                                "the real group header is available for explicit folding")
+            row = next(index for index, value in enumerate(outer["rows"]) if label in value)
+            col = outer["rows"][row].index("Tools ·") + 1
+            front.send(f"\x1b[<0;{col};{row + 1}M\x1b[<0;{col};{row + 1}m".encode())
+            front.pump(0.15)
+            if self.command_group(event_ids)["expanded"]:
+                self.check(self.events()["selected_group"] == group["id"],
+                           "the real click selects the exact logical group header")
+                front.send(ENTER)
+            front.until(lambda value: label in text(value)
+                        and not any(heading in text(value) for heading in headings),
+                        "explicit group folding hides its command cards")
+            folded = self.capture(front, f"group-folded-{columns}")
+            current = self.command_group(event_ids)
+            self.check(current["expanded"] is False
+                       and {key: current[key] for key in group_identity} == group_identity
+                       and text(folded).count(label) == 1
+                       and not any(heading in text(folded) for heading in headings),
+                       f"{columns} columns: explicit outer fold preserves one group and its exact members")
+            front.send(ENTER)
+            front.until(lambda value: label in text(value)
+                        and any(heading in text(value) for heading in headings),
+                        "selected Enter reopens the same logical group")
+            self.check(self.command_group(event_ids)["expanded"] is True
+                       and self.ui("/display/conversation")["draft"] == draft_before
+                       and self.queue()["queue"] == queue_before,
+                       f"{columns} columns: outer fold and reopen preserve the exact draft, cursor and queue")
+
         after_jobs = self.call("ssmcp.exec.list")["jobs"]
         self.check({job["job_id"] for job in after_jobs}
                    == before | {job["job_id"] for job in jobs},
@@ -244,6 +348,8 @@ class ReadableCommands(Interactions):
         self.check(not self.ui("/display/conversation")["draft"]["text"]
                    and not self.queue()["queue"],
                    "command inspection leaves the composer and outgoing queue empty")
+        self.check(self.ui("/display/conversation")["draft"] == draft_before,
+                   "all command and group inspection preserves the exact original composer cursor")
         return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks,
                 "frames": self.frames, "pngs": self.pngs, "quiet_checks": self.quiet_checks,
                 "widths": [120, 48], "native_commands": 3,

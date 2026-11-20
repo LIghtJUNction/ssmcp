@@ -2,8 +2,8 @@
 """Check command summaries using two isolated authenticated relays and real PTYs.
 
 Consumes frozen client/server/router/VT binaries. No Cargo, model, installed
-account, existing client or service is used. Unsummarized standalone commands
-are covered separately by e2e_readable_commands.py.
+account, existing client or service is used. Readable command cards before
+summary updates are covered separately by e2e_readable_commands.py.
 """
 
 import argparse
@@ -167,9 +167,8 @@ class SummaryCommands(ToolSummaries):
                    else "Mixed file and command checks")
         labeled = self.update(initial, summary)
         visible = self.visible_canonical(front, group_id, summary)
-        if not visible["expanded"]:
-            self.mouse(front, summary, 0)
-            self.visible_canonical(front, group_id, summary, expanded=True)
+        self.check(visible["expanded"] is True,
+                   "the first summary preserves the command group's readable default")
         front.until(lambda shot: body_text(shot).count(summary) == 1
                     and "Ran python3 -c" in body_text(shot),
                     "the same summary ID has one real title and readable native argv")
@@ -302,4 +301,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

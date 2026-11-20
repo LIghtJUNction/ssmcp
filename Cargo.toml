@@ -78,6 +78,8 @@ include = [
     "/scripts/e2e_tool_summaries.py",
     "/scripts/e2e_readable_commands.py",
     "/scripts/e2e_summary_commands.py",
+    "/scripts/e2e_human_finish.py",
+    "/scripts/e2e_goal_startup.py",
     "/docs/terminal-images.md",
     "/docs/client-input.md",
     "/docs/conversation-history.md",

@@ -532,3 +532,33 @@ fn only_observation_timeout_requests_continuation_and_never_grants_permission() 
     assert_eq!(denied["results"][0]["error"]["code"], "await_unauthorized");
     assert_eq!(denied.get("completion_permission"), Some(&Value::Null));
 }
+
+#[test]
+fn only_exact_native_capacity_errors_keep_observation_retryable() {
+    for target in [
+        Target::Exec {
+            job_id: "exec_fixture".into(),
+        },
+        Target::Finish {
+            request_id: "question_fixture".into(),
+        },
+    ] {
+        assert_eq!(
+            target_error_status(&target, "client busy; retry later"),
+            Status::Busy
+        );
+        for error in [
+            "client request timed out; its outcome may be unknown",
+            "client disconnected or busy; tool was not dispatched",
+            "scope probe timed out",
+            "native wait returned no structured result; upgrade the selected client",
+            "client busy; retry later (outcome unknown)",
+        ] {
+            assert_eq!(
+                target_error_status(&target, error),
+                Status::Unavailable,
+                "{error}"
+            );
+        }
+    }
+}
