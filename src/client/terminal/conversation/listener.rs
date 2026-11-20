@@ -459,7 +459,11 @@ mod tests {
             state.chat_change_view(View::Activity);
             assert!(state.notice.is_none());
             let frame = state.frame(Instant::now());
-            let mut screen = vt100::Parser::new(frame.geometry.rows, frame.geometry.cols, 0);
+            let mut screen = vt100::Parser::new(
+                std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
+                std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
+                0,
+            );
             screen.process(&frame.diff(None));
             let visible = screen.screen().contents();
             assert_eq!(visible.matches("上次连接").count(), 1, "{visible}");

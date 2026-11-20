@@ -1,5 +1,4 @@
 use super::*;
-use crate::client::render::Renderer;
 
 fn plain_ui() -> Ui {
     Ui {
@@ -17,9 +16,7 @@ fn concise_renderer_keeps_full_redacted_command_in_expandable_view() {
     let event = json!({"type":"exec.started","job_id":"command-full",
         "command":["python3","-c",script],"cwd":"/fixture"});
     let original = event.clone();
-    let mut renderer = Renderer::new(false, false, 48);
-    let mut bytes = Vec::new();
-    renderer.event(&mut bytes, "shell", &event).unwrap();
+    let bytes = crate::client::render::render_event_for_test("shell", &event, 48).unwrap();
     let concise = String::from_utf8(bytes.clone()).unwrap();
     assert!(!concise.contains("last-marker"));
     let mut view = EventView::new();
