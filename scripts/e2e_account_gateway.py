@@ -88,7 +88,8 @@ class AccountGateway:
         h.fixture_binary = binary
         self.directory = h.directory.resolve() / "account-gateway"
         self.directory.mkdir(mode=0o700)
-        environment = direct_loopback({key: value for key, value in os.environ.items()
+        inherited = getattr(h, "fixture_environment", os.environ)
+        environment = direct_loopback({key: value for key, value in inherited.items()
                                        if not key.startswith("SSMCP_")})
         environment["SSMCP_RELAY_COMPOSER_FIXTURE"] = str(self.directory)
         lifetime = getattr(h, "fixture_timeout_seconds", None)
