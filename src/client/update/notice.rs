@@ -12,7 +12,7 @@ pub(in crate::client) struct ConnectionVersions {
 }
 
 impl ConnectionVersions {
-    fn new(
+    pub(in crate::client) fn new(
         notice: Notice,
         server: &str,
         current: &str,
@@ -87,31 +87,6 @@ pub(super) fn current_target() -> Option<&'static str> {
     }
 }
 
-#[derive(Default)]
-struct NoticeHistory(std::collections::VecDeque<ConnectionVersions>);
-
-impl NoticeHistory {
-    fn claim(&mut self, versions: &ConnectionVersions) -> bool {
-        if self.0.contains(versions) {
-            return false;
-        }
-        if self.0.len() == 16 {
-            self.0.pop_front();
-        }
-        self.0.push_back(versions.clone());
-        true
-    }
-}
-
-pub(in crate::client) fn claim_connection_notice(versions: &ConnectionVersions) -> bool {
-    static SHOWN: std::sync::OnceLock<std::sync::Mutex<NoticeHistory>> = std::sync::OnceLock::new();
-    SHOWN
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .claim(versions)
-}
-
 pub(in crate::client) fn report_connection(notice: Notice, server: &str) {
     let Some(versions) =
         ConnectionVersions::new(notice, server, env!("CARGO_PKG_VERSION"), current_target())
@@ -175,29 +150,6 @@ mod tests {
                 .unwrap()
                 .contains("ssmcp update --check")
         );
-    }
-
-    #[test]
-    fn connection_notice_deduplicates_reconnects_but_keeps_new_releases_bounded() {
-        let mut shown = NoticeHistory::default();
-        let initial = state("0.10.17", Some("0.10.18"), &["x86_64-unknown-linux-gnu"]);
-        assert!(shown.claim(&initial));
-        assert!(!shown.claim(&initial));
-        let newer = state("0.10.17", Some("0.10.19"), &["x86_64-unknown-linux-gnu"]);
-        assert!(shown.claim(&newer));
-        for patch in 20..45 {
-            assert!(shown.claim(&state(
-                "0.10.17",
-                Some(&format!("0.10.{patch}")),
-                &["x86_64-unknown-linux-gnu"]
-            )));
-        }
-        assert_eq!(shown.0.len(), 16);
-        assert!(!shown.claim(&state(
-            "0.10.17",
-            Some("0.10.44"),
-            &["x86_64-unknown-linux-gnu"]
-        )));
     }
 
     #[test]

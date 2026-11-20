@@ -216,28 +216,5 @@ pub(in crate::client) async fn available_notice() -> Option<String> {
     notice_at(client, API, directory, current, target, now).await
 }
 
-fn claim_notice(shown: &mut std::collections::VecDeque<String>, message: &str) -> bool {
-    if shown.iter().any(|previous| previous == message) {
-        return false;
-    }
-    if shown.len() == 16 {
-        shown.pop_front();
-    }
-    shown.push_back(message.into());
-    true
-}
-
-pub(in crate::client) fn mark_notice_shown(message: &str) -> bool {
-    static SHOWN: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<String>>> =
-        std::sync::OnceLock::new();
-    claim_notice(
-        &mut SHOWN
-            .get_or_init(Default::default)
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()),
-        message,
-    )
-}
-
 #[cfg(test)]
 mod tests;

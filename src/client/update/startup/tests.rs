@@ -120,19 +120,6 @@ async fn startup_notice_uses_cached_release_and_semver_without_repeated_http() {
     }
 }
 
-#[test]
-fn startup_notice_deduplicates_each_release_without_disabling_future_checks() {
-    let mut shown = std::collections::VecDeque::new();
-    assert!(claim_notice(&mut shown, "v1.2.4"));
-    assert!(!claim_notice(&mut shown, "v1.2.4"));
-    assert!(claim_notice(&mut shown, "v1.2.5"));
-    for version in 6..40 {
-        assert!(claim_notice(&mut shown, &format!("v1.2.{version}")));
-    }
-    assert_eq!(shown.len(), 16);
-    assert!(!claim_notice(&mut shown, "v1.2.39"));
-}
-
 #[tokio::test]
 async fn startup_notice_failure_backoff_preserves_only_a_verified_target_cache() {
     let server = Server::start("503 Unavailable", "offline").await;

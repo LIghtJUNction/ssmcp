@@ -28,7 +28,9 @@ fn startup_update_frame_is_readable_at_120_and_48_columns_without_changing_draft
         state.conversation.content_focus = false;
         state.conversation.target = Some("chosen-agent".into());
         state.events.latest();
-        state.update_notice = Some("ssmcp update --check · v1.2.4 available".into());
+        state.update_notice = Some(super::super::update_notice::Notice::Release(
+            "ssmcp update --check · v1.2.4 available".into(),
+        ));
         let canvas = state.conversation.canvas.snapshot();
         let shown = screen(&mut state);
         assert!(shown.contains("ssmcp update --check"), "{width}: {shown}");
@@ -77,7 +79,9 @@ fn startup_update_frame_keeps_help_and_question_navigation_visible() {
         state.conversation.view = view;
         state.conversation.content_focus = true;
         let before = state.frame(Instant::now()).rows.pop().unwrap();
-        state.update_notice = Some("ssmcp update --check · v1.2.4 available".into());
+        state.update_notice = Some(super::super::update_notice::Notice::Release(
+            "ssmcp update --check · v1.2.4 available".into(),
+        ));
         let after = state.frame(Instant::now()).rows.pop().unwrap();
         assert_eq!(after, before, "{view:?}");
     }
@@ -89,7 +93,9 @@ fn startup_update_frame_keeps_help_and_question_navigation_visible() {
             ..Ui::default()
         },
     );
-    state.update_notice = Some("ssmcp update --check · v1.2.4 available".into());
+    state.update_notice = Some(super::super::update_notice::Notice::Release(
+        "ssmcp update --check · v1.2.4 available".into(),
+    ));
     assert!(screen(&mut state).contains("ssmcp update --check"));
     state.filter_editing = true;
     state.filter_draft = "error".into();
