@@ -65,6 +65,11 @@ F7/Esc resumes updates and restores interface scrolling and clicks.
 On terminals supporting it, Shift+drag selects directly without entering copy mode.
 /copy still copies only the latest agent reply.
 
+## Tool results
+Verified consecutive tool calls share a bounded container.
+On the left half, scroll the output, then its container, then the conversation at each edge. The right half always scrolls the conversation.
+Enter expands a selected result; PgUp/PgDn and Home/End use the same layers.
+
 ## Queued requests
 /queue: Up/Down select; Enter take back; i/I inspect without editing.
 Delete cancels a revocable request. R copies delivered text.
@@ -151,6 +156,11 @@ F7 或 /select：暂停界面重绘，使用终端原生鼠标拖选。
 F7/Esc 恢复更新、界面滚动与点击。
 在支持该功能的终端中，可直接 Shift+拖动选择，无需进入选择模式。
 /copy 只复制智能体最近的回复。
+
+## 工具结果
+连续工具调用按确认的来源分组，显示在高度有上限的区域内。
+左半区滚轮优先滚动输出，触边后滚动工具组，再触边后滚动会话。右半区始终滚动整个会话。
+Enter 展开选中的结果；PgUp/PgDn 和 Home/End 使用相同层级。
 
 ## 请求队列
 /queue：↑/↓ 选择；Enter 取回；i/I 只查看，不进入编辑。

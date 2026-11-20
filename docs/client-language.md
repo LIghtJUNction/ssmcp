@@ -31,6 +31,12 @@ A receipt marked “Read” / “已读” means that the request was included i
 
 User-defined agent names, commit subjects, questions, answers, and rich content from tools are preserved. External error details stay verbatim within translated local context.
 
+## Tool results and input waits
+
+Tool container labels and their scrolling hints use the chosen language. On the left half, scrolling proceeds through the output and its container before reaching the conversation; the right half scrolls the conversation directly. The native help describes the matching keyboard controls.
+
+The input-wait overlay translates both its large and compact wake hints. It centers them by terminal cell width, including Chinese characters. A display-language change preserves the active wait and draft; waking the display does not answer the wait.
+
 ## Preview and verification
 
 ```sh

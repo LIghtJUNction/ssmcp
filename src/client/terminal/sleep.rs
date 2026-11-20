@@ -1,7 +1,8 @@
 //! A visual pause for authenticated input waits. Waking never answers a wait.
 use super::{Frame, Key, State, nonzero};
-use crate::client::interface::user_wait;
+use crate::client::{interface::user_wait, language::Language};
 use std::collections::VecDeque;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const DISMISSED_LIMIT: usize = 32;
 
@@ -130,7 +131,7 @@ impl State {
             // Renderer::update removes only our Kitty placements. Its cache
             // reuploads them on wake; opaque native pixels cannot cover the dim.
             self.media.clear();
-            dim(frame, self.ui.color);
+            dim(frame, self.ui.color, self.ui.language);
         }
         // Copy mode must keep reporting the mouse release after a click wakes
         // the overlay. Restore its original capture mode only after release.
@@ -138,44 +139,63 @@ impl State {
     }
 }
 
-fn logo(rows: u16, cols: u16) -> &'static [&'static str] {
+fn logo(rows: u16, cols: u16, language: Language) -> &'static [&'static str] {
     if rows >= 12 && cols >= 24 {
-        &[
-            "        z",
-            "     Z",
-            " .----------.",
-            " |  -    -  |",
-            " |    __    |",
-            " '----------'",
-            "",
-            "Waiting for input",
-            "Click or type to wake",
-        ]
+        match language {
+            Language::English => &[
+                "        z",
+                "     Z",
+                " .----------.",
+                " |  -    -  |",
+                " |    __    |",
+                " '----------'",
+                "",
+                "Waiting for input",
+                "Click or type to wake",
+            ],
+            Language::Chinese => &[
+                "        z",
+                "     Z",
+                " .----------.",
+                " |  -    -  |",
+                " |    __    |",
+                " '----------'",
+                "",
+                "等待输入",
+                "单击或输入以唤醒",
+            ],
+        }
     } else if rows >= 5 && cols >= 14 {
-        &["z Z", "(-.-)", "Waiting", "Click to wake"]
+        match language {
+            Language::English => &["z Z", "(-.-)", "Waiting", "Click to wake"],
+            Language::Chinese => &["z Z", "(-.-)", "等待", "单击唤醒"],
+        }
     } else {
         &["z"]
     }
 }
 
-fn dim(frame: &mut Frame, color: bool) {
+fn dim(frame: &mut Frame, color: bool, language: Language) {
     let rows = frame.geometry.rows;
     let cols = frame.geometry.cols;
     // Parse the real compositor output before recoloring. Prefixing SGR 2
     // alone would let embedded resets/inverse/bright colors escape the dim.
     let mut parser = vt100::Parser::new(nonzero(rows), nonzero(cols), 0);
     parser.process(&frame.diff(None));
-    let lines = logo(rows, cols);
+    let lines = logo(rows, cols, language);
     let top = rows.saturating_sub(lines.len() as u16) / 2;
     let mut marks = Vec::new();
     for (offset, line) in lines.iter().enumerate() {
         let row = top + offset as u16;
-        let left = cols.saturating_sub(line.len() as u16) / 2;
+        let left = cols.saturating_sub(line.width() as u16) / 2;
         parser.process(format!("\x1b[{};{}H{line}", row + 1, left + 1).as_bytes());
-        for (offset, byte) in line.bytes().enumerate() {
-            if byte != b' ' {
-                marks.push((row, left + offset as u16));
+        let mut col = left;
+        for ch in line.chars() {
+            let width = ch.width().unwrap_or(0) as u16;
+            if ch != ' ' {
+                marks.extend((col..col.saturating_add(width).min(cols)).map(|col| (row, col)));
             }
+            col = col.saturating_add(width);
         }
     }
     let muted = if color {
@@ -456,7 +476,7 @@ mod tests {
         let mut state = state(12, 48);
         let mut frame = state.base_frame(now);
         frame.rows[0] = "\x1b[1;7;97;107mBRIGHT\x1b[0m reset \x1b[22m tail".into();
-        dim(&mut frame, true);
+        dim(&mut frame, true, Language::English);
         let parsed = parse(&frame);
         for col in [0, 8, 17] {
             let cell = parsed.screen().cell(0, col).unwrap();
@@ -497,5 +517,50 @@ mod tests {
         assert_eq!(after.rows, before.rows);
         state.dirty = false;
         assert!(!state.should_redraw(Some(&after), state.graphics.cell()));
+    }
+    #[test]
+    fn sleep_language_uses_cell_width_and_preserves_wait_and_draft_state() {
+        let now = Instant::now();
+        for (rows, cols) in [(1, 1), (4, 10), (5, 14), (12, 23), (12, 24), (28, 120)] {
+            let mut state = state(rows, cols);
+            state.ui.color = false;
+            state.conversation.composer.set_text("RAW draft 界 👩🏽‍💻");
+            let before = state.conversation.snapshot();
+            let active = state.sleep.active.clone();
+            let dismissed = state.sleep.dismissed.clone();
+            for language in [Language::English, Language::Chinese, Language::English] {
+                let mut ui = state.ui.clone();
+                ui.language = language;
+                assert_eq!(state.apply_settings(&ui), None);
+                let frame = state.frame(now);
+                let parsed = parse(&frame);
+                let lines = logo(rows, cols, language);
+                let top = rows.saturating_sub(lines.len() as u16) / 2;
+                for (index, line) in lines.iter().enumerate() {
+                    let row = top + index as u16;
+                    let mut col = cols.saturating_sub(line.width() as u16) / 2;
+                    for ch in line.chars() {
+                        if ch != ' ' {
+                            assert_eq!(
+                                parsed.screen().cell(row, col).unwrap().contents(),
+                                ch.to_string(),
+                                "locale={language:?} rows={rows} cols={cols} row={row} col={col}"
+                            );
+                        }
+                        col += ch.width().unwrap_or(0) as u16;
+                    }
+                }
+                assert!(
+                    parsed
+                        .screen()
+                        .rows(0, cols)
+                        .all(|row| row.width() <= usize::from(cols))
+                );
+                assert!(frame.hidden && frame.mouse_capture && state.sleep.visible);
+                assert_eq!(state.conversation.snapshot(), before);
+                assert_eq!(state.sleep.active, active);
+                assert_eq!(state.sleep.dismissed, dismissed);
+            }
+        }
     }
 }
