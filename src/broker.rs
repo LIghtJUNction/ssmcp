@@ -526,7 +526,8 @@ impl Session {
                             .iter()
                             .any(|tool| tool["name"] == crate::code_mode::tool_summaries::TOOL)
                     }))
-                || audit_tool.as_deref() == Some(crate::code_mode::tool_summaries::TOOL))
+                || (audit_tool.as_deref() == Some(crate::code_mode::tool_summaries::TOOL)
+                    && crate::code_mode::tool_summaries::valid_native_receipt(value)))
         {
             self.tool_summary_advertised.store(true, Ordering::Release);
         }

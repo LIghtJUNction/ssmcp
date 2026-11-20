@@ -184,6 +184,90 @@ async fn eleventh_real_call_reminds_once_and_summary_restarts_the_counter() {
 }
 
 #[tokio::test]
+async fn oversized_native_reply_restores_only_its_original_summary_reservation() {
+    let fixture = Fixture::new().await;
+    let other_connection = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        for request in 1..=10 {
+            stat(&mut view, &fixture.runtime, request).await;
+        }
+        let eleventh = stat(&mut view, &fixture.runtime, 11).await;
+        let reminder = view.take_tool_summary_reminder(&eleventh).unwrap();
+        let id = reminder["group_id"].as_str().unwrap().to_owned();
+        assert!(view.take_tool_summary_reminder(&eleventh).is_none());
+        let oversized = crate::client::interface::tool_summary::attach_metadata(
+            json!({"content":[{"type":"text","text":"x".repeat(crate::wire::MAX_FRAME)}]}),
+            Some(reminder.clone()),
+        );
+        let rejected = crate::client::bounded_native_reply(Ok(oversized), |notice| {
+            assert!(view.restore_tool_summary_reminder(&eleventh, notice));
+        });
+        assert!(rejected.unwrap_err().contains("4 MiB bridge frame limit"));
+
+        // Recover by observing state, not by dispatching the original business
+        // operation again. The real guard above is the only overflow boundary.
+        let probe = source(&fixture.runtime, 12, "123", None, "same-label").await;
+        view.summary_call_started(&probe, "ssmcp.ui.tool_summary");
+        let body = view.tool_summary_list(&probe).unwrap();
+        assert_eq!(body["groups"][0]["call_count"], 11);
+        assert_eq!(body["groups"][0]["revision"], 0);
+        assert_eq!(view.events.len(), 11);
+        let retry = view.take_tool_summary_reminder(&probe).unwrap();
+        assert_eq!(retry, reminder);
+        let reply = crate::client::interface::tool_summary::attach_metadata(
+            crate::backend::result(body),
+            Some(retry),
+        );
+        let delivered = crate::client::bounded_native_reply(Ok(reply), |_| {
+            panic!("a bounded summary reply must keep its reservation")
+        })
+        .unwrap();
+        let mut captured = crate::code_mode::tool_summaries::Capture::default();
+        captured.reconcile("fixture", None, &delivered);
+        captured.observe("fixture", None, &delivered);
+        let outer = crate::code_mode::tool_summaries::append(
+            json!({"content":[],"structuredContent":{"result":null},"isError":true}),
+            captured.for_scope("fixture", None),
+        );
+        assert_eq!(outer["isError"], true);
+        let notices = outer["structuredContent"]["tool_summary_reminders"]
+            .as_array()
+            .unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0]["group_id"], id);
+        assert_eq!(notices[0]["revision"], 0);
+        assert!(view.take_tool_summary_reminder(&probe).is_none());
+
+        // A late cancellation cannot rewind the replacement reply, even when
+        // both requests refer to the same group and summary revision.
+        assert!(!view.restore_tool_summary_reminder(&eleventh, &reminder));
+        for other in [
+            source(&fixture.runtime, 12, "456", None, "same-label").await,
+            source(&fixture.runtime, 12, "123", Some('a'), "same-label").await,
+            source(&other_connection.runtime, 12, "123", None, "same-label").await,
+        ] {
+            assert!(!view.restore_tool_summary_reminder(&other, &reminder));
+        }
+        assert!(view.take_tool_summary_reminder(&probe).is_none());
+
+        view.tool_summary_set(&probe, &id, "Inspected the workspace", Some(0))
+            .unwrap();
+        let mut latest = probe.clone();
+        for request in 13..=23 {
+            latest = stat(&mut view, &fixture.runtime, request).await;
+        }
+        let newer = view.take_tool_summary_reminder(&latest).unwrap();
+        assert_eq!(newer["revision"], 1);
+        assert_eq!(newer["call_count"], 22);
+        assert!(!view.restore_tool_summary_reminder(&probe, &reminder));
+        assert!(view.take_tool_summary_reminder(&latest).is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
     let fixture = Fixture::new().await;
     history::with_test_history(fixture.root.join("history"), async {
