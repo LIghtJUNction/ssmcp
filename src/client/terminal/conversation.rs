@@ -84,6 +84,16 @@ struct InputStamp {
     revision: u64,
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct InputWork {
+    decoder_calls: usize,
+    paste_spans: usize,
+    paste_bytes: usize,
+    completion_queries: usize,
+    completion_input_bytes: usize,
+}
+
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
@@ -139,6 +149,8 @@ pub(super) struct Conversation {
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
+    #[cfg(test)]
+    input_work: InputWork,
     input_task: Option<attachments::Task>,
     paste_recovery: Option<String>,
     retrying_paste: bool,
@@ -944,6 +956,12 @@ impl State {
             && !(self.conversation.send_to_group
                 && listener::body(self.conversation.composer.text()).is_some())
             && !self.chat_native_has_mention();
+        #[cfg(test)]
+        if enabled {
+            self.conversation.input_work.completion_queries += 1;
+            self.conversation.input_work.completion_input_bytes +=
+                self.conversation.composer.text().len();
+        }
         self.conversation.composer.refresh_completions(enabled);
     }
 
@@ -1964,7 +1982,12 @@ impl State {
 
     fn chat_character(&mut self, character: char) {
         self.chat_disarm_exit();
-        self.chat_refresh_completions();
+        // Ordinary edits do not read the suggestion menu. Refresh once after
+        // the input batch, and before the controls that consume suggestions.
+        // Navigation keys refresh separately in chat_key.
+        if matches!(character, '\t' | '\r' | '\u{1b}') {
+            self.chat_refresh_completions();
+        }
         if self.selection {
             if character == '\u{1b}' {
                 self.chat_key(Key::Select);
@@ -2256,7 +2279,7 @@ impl State {
             } else if context {
                 "Reading local context…"
             } else {
-                "Preparing local input… · keep this draft unchanged to insert the result"
+                "Preparing local input… · You can keep editing; changed drafts will not be replaced"
             }
             .into(),
         );
@@ -2518,9 +2541,32 @@ impl State {
         if bytes.iter().any(|byte| *byte != 0x03) {
             self.chat_disarm_exit();
         }
-        // Keep text and navigation in their original order, including coalesced reads.
-        for byte in bytes {
-            let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
+        self.chat_process_input(bytes, now, flush);
+        self.chat_persist_draft();
+        Vec::new()
+    }
+
+    /// Keep controls in order while accumulating literal paste spans in bulk.
+    fn chat_process_input(&mut self, mut bytes: &[u8], now: Instant, flush: bool) {
+        while !bytes.is_empty() {
+            let length = self.keyboard.paste_literal_prefix(bytes, now);
+            if length > 0 {
+                #[cfg(test)]
+                {
+                    self.conversation.input_work.paste_spans += 1;
+                    self.conversation.input_work.paste_bytes += length;
+                }
+                self.sleep_wake_text(&bytes[..length]);
+                self.chat_output(&bytes[..length]);
+                bytes = &bytes[length..];
+                continue;
+            }
+            #[cfg(test)]
+            {
+                self.conversation.input_work.decoder_calls += 1;
+            }
+            let (output, keys) = self.keyboard.feed(&bytes[..1], now, false, true, false);
+            bytes = &bytes[1..];
             self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
@@ -2528,6 +2574,10 @@ impl State {
             }
         }
         if flush {
+            #[cfg(test)]
+            {
+                self.conversation.input_work.decoder_calls += 1;
+            }
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
             self.sleep_wake_text(&output);
             self.chat_output(&output);
@@ -2536,8 +2586,6 @@ impl State {
             }
         }
         self.chat_refresh_completions();
-        self.chat_persist_draft();
-        Vec::new()
     }
 
     /// Reuse one bounded row parser; serialize cells, never cursor/erase controls.
@@ -3280,6 +3328,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    mod paste_batch;
     mod tool_groups;
     use super::*;
 

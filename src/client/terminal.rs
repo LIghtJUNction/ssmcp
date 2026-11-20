@@ -1213,6 +1213,23 @@ struct Keyboard {
     paste_last_input: Option<Instant>,
 }
 impl Keyboard {
+    /// Consume only literal paste bytes. Escape sequences and split markers stay
+    /// on `feed`, which must preserve their ordering relative to local actions.
+    fn paste_literal_prefix(&mut self, bytes: &[u8], now: Instant) -> usize {
+        if !self.pasting || !self.pending.is_empty() {
+            return 0;
+        }
+        let length = bytes
+            .iter()
+            .position(|byte| *byte == 0x1b)
+            .unwrap_or(bytes.len());
+        if length > 0 {
+            self.paste_last_input = Some(now);
+            self.paste_png.feed(&bytes[..length]);
+        }
+        length
+    }
+
     fn image_paste_expired(&self, now: Instant) -> bool {
         self.pasting
             && self.paste_png.is_image_prefix()
