@@ -301,15 +301,29 @@ mod tests {
         view.render(width, 40, &ui(), true);
         view.scroll_tool_group(head, isize::MIN + 1);
         let mut result = Vec::new();
+        let mut covered = 0usize;
         loop {
-            result.extend(view.render(width, 40, &ui(), true));
+            let rows = view.render(width, 40, &ui(), true);
             let group = view.tool_groups()[0].clone();
             let panel = &view.events[group.start].group_panel;
-            if panel.offset() == panel.rows.saturating_sub(panel.page) {
+            let offset = panel.offset();
+            let page = panel.page;
+            let end = panel.rows.saturating_sub(page);
+            result.extend(
+                rows.into_iter()
+                    .enumerate()
+                    .filter(|(row, _)| {
+                        view.group_hit_rows[*row] == Some(head)
+                            && view.group_header_hit_rows[*row].is_none()
+                    })
+                    .skip(covered.saturating_sub(offset))
+                    .map(|(_, row)| row),
+            );
+            covered = offset + page;
+            if offset == end {
                 break;
             }
-            let page = panel.page.max(1) as isize;
-            view.scroll_tool_group(head, page);
+            view.scroll_tool_group(head, page.max(1) as isize);
         }
         result
     }

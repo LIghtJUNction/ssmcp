@@ -47,7 +47,7 @@ pub(super) fn stats(events: &VecDeque<Event>, group: &Group) -> Stats {
 pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
     let eligible = |index: usize| {
         let event = &events[index];
-        event.meta.kind == Kind::Tool && event.image.is_none()
+        event.meta.kind == Kind::Tool && event.image.is_none() && !event.reload_boundary
     };
     let mut result = Vec::new();
     let mut start = 0;
@@ -59,7 +59,7 @@ pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
         let mut members = vec![start];
         let mut end = start + 1;
         while end < events.len() {
-            if eligible(end) {
+            if eligible(end) && events[end].historical == events[start].historical {
                 members.push(end);
             } else if !(events[end].meta.kind == Kind::Log
                 && events[end].meta.read_bookkeeping
@@ -116,8 +116,13 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
     let stats = stats(events, group);
     let active = selected_group == Some(group.head);
     let marker = if group.expanded { "▾" } else { "▸" };
+    let history = if group.members.iter().all(|index| events[*index].historical) {
+        " · history"
+    } else {
+        ""
+    };
     let title = format!(
-        "{} {marker} Tools · {} calls",
+        "{} {marker} Tools · {} calls{history}",
         if active && focused { "›" } else { " " },
         group.members.len()
     );

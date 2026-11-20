@@ -16,9 +16,21 @@ pub(in crate::client) struct Snapshot {
     filter_draft: String,
     #[serde(default)]
     groups: groups::ReloadGroups,
+    #[serde(default)]
+    display: events::ReloadDisplay,
 }
 
 impl Snapshot {
+    pub(in crate::client) fn discard_display(&mut self) {
+        self.display.discard();
+        self.canvas.discard_display_positions();
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn fixture_for_test() -> Self {
+        State::new(24, 80, &Ui::default()).chat_reload_snapshot()
+    }
+
     pub(in crate::client) fn validate(&self) -> Result<(), String> {
         self.canvas.validate()?;
         self.input_history.validate()?;
@@ -65,7 +77,7 @@ pub(in crate::client) fn restore(
 }
 
 impl State {
-    fn chat_reload_snapshot(&mut self) -> Snapshot {
+    pub(super) fn chat_reload_snapshot(&mut self) -> Snapshot {
         Snapshot {
             canvas: self.canvas_reload_snapshot(),
             input_history: self.conversation.composer.reload_history(),
@@ -76,6 +88,7 @@ impl State {
             filter_editing: self.filter_editing,
             filter_draft: self.filter_draft.clone(),
             groups: self.conversation.groups.reload_snapshot(),
+            display: self.events.reload_display(),
         }
     }
 
@@ -87,7 +100,7 @@ impl State {
         restore(Some(snapshot), true, None);
     }
 
-    fn chat_apply_reload_snapshot(
+    pub(super) fn chat_apply_reload_snapshot(
         &mut self,
         saved: Snapshot,
         sessions: Vec<history_store::SessionSummary>,
@@ -97,10 +110,14 @@ impl State {
         self.conversation.preferred_input_rows = saved.preferred_input_rows;
         self.resize(self.geometry.rows, self.geometry.cols);
         self.conversation.sessions = sessions;
+        let display_notice = self.events.restore_reload_display(saved.display);
         self.canvas_restore_reload(saved.canvas);
         self.conversation.reload_input_history = Some(saved.input_history);
         if let Err(error) = self.conversation.groups.restore(saved.groups) {
             self.notice = Some(error);
+        }
+        if let Some(notice) = display_notice {
+            self.notice = Some(notice);
         }
         self.help = saved.help;
         self.conversation.help_scroll = saved.help_scroll;
