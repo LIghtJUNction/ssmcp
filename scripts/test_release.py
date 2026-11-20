@@ -6,7 +6,9 @@ import io
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import textwrap
 import tarfile
 import unittest
 from unittest import mock
@@ -55,6 +57,94 @@ class EventTests(unittest.TestCase):
                        {"build_only": "yes"}, {"build_only": 1}, {"tag": 5}):
             with self.subTest(inputs=inputs), self.assertRaises(ValueError):
                 release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
+
+
+class DeploymentPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Execute the actual current workflow policy. The release checkout may
+        # be an older immutable tag whose helper knows only publish/build_only.
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
+        lines = workflow.read_text(encoding="utf-8").splitlines(keepends=True)
+        starts = [i for i, line in enumerate(lines) if line.strip() == "# BEGIN release deployment policy"]
+        ends = [i for i, line in enumerate(lines) if line.strip() == "# END release deployment policy"]
+        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+            raise AssertionError("the workflow must contain one executable deployment policy")
+        cls.policy = textwrap.dedent("".join(lines[starts[0] + 1:ends[0]]))
+
+    def run_policy(self, event, *, name="workflow_dispatch", publish="true", existing=""):
+        with tempfile.TemporaryDirectory(prefix="ssmcp-deployment-policy-") as temporary:
+            root = Path(temporary)
+            event_path, output = root / "event.json", root / "output"
+            event_path.write_text(json.dumps(event), encoding="utf-8")
+            output.write_text(existing, encoding="utf-8")
+            environment = {"GITHUB_EVENT_NAME": name, "GITHUB_EVENT_PATH": str(event_path),
+                           "GITHUB_OUTPUT": str(output), "RELEASE_PUBLISH": publish}
+            result = subprocess.run([sys.executable, "-I", "-c", self.policy],
+                                    env=environment, capture_output=True, text=True, timeout=10)
+            return result, output.read_text(encoding="utf-8")
+
+    def assert_policy(self, event, expected, **kwargs):
+        result, output = self.run_policy(event, **kwargs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, f"deploy_server={expected}\n")
+        self.assertEqual(json.loads(result.stdout)["deploy_server"], expected)
+
+    def test_legacy_tag_without_deployment_output_keeps_the_default(self):
+        # Only the old helper's validated publish field is available to the
+        # current workflow; no deploy_server output is supplied by that tag.
+        for event in ({}, {"inputs": {}}, {"inputs": {"tag": "v0.10.13"}}):
+            with self.subTest(event=event):
+                self.assert_policy(event, "true")
+
+    def test_dispatch_accepts_exact_boolean_choices_for_old_or_new_tags(self):
+        for requested, expected in ((True, "true"), ("true", "true"),
+                                    (False, "false"), ("false", "false")):
+            with self.subTest(requested=requested):
+                self.assert_policy({"inputs": {"tag": "v0.10.13", "deploy_server": requested}}, expected)
+
+    def test_tag_push_preserves_automatic_deployment(self):
+        self.assert_policy({}, "true", name="push")
+        self.assert_policy({"inputs": {"deploy_server": False}}, "true", name="push")
+
+    def test_build_only_never_deploys_even_when_requested(self):
+        for name, event in (("workflow_dispatch", {}),
+                            ("workflow_dispatch", {"inputs": {"deploy_server": True}}),
+                            ("workflow_dispatch", {"inputs": {"deploy_server": "true"}}),
+                            ("workflow_dispatch", {"inputs": {"deploy_server": False}}),
+                            ("push", {}), ("create", {})):
+            with self.subTest(name=name, event=event):
+                self.assert_policy(event, "false", name=name, publish="false")
+
+    def test_invalid_deployment_inputs_fail_before_writing_an_output(self):
+        for requested in (None, 0, 1, "", "yes", "TRUE", "FALSE", "false\n", [], {}):
+            for publish in ("true", "false"):
+                with self.subTest(requested=requested, publish=publish):
+                    result, output = self.run_policy({"inputs": {"deploy_server": requested}}, publish=publish)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("must be a boolean", result.stderr)
+                    self.assertEqual(output, "")
+
+    def test_malformed_input_containers_fail_before_writing_an_output(self):
+        for inputs in (None, 0, 1, "false", [], ["deploy_server"]):
+            with self.subTest(inputs=inputs):
+                result, output = self.run_policy({"inputs": inputs})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must be an object", result.stderr)
+                self.assertEqual(output, "")
+
+    def test_missing_or_invalid_publication_output_never_enables_deployment(self):
+        for publish in ("", "True", "1", "true\n", "unknown"):
+            with self.subTest(publish=publish):
+                result, output = self.run_policy({}, publish=publish)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("validated publish output", result.stderr)
+                self.assertEqual(output, "")
+
+    def test_policy_appends_one_result_without_replacing_existing_outputs(self):
+        result, output = self.run_policy({"inputs": {"deploy_server": False}}, existing="retained=value\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output, "retained=value\ndeploy_server=false\n")
 
 
 class ReleaseTests(unittest.TestCase):

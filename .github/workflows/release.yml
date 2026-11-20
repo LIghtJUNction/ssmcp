@@ -11,6 +11,11 @@ on:
         description: Existing tag to publish or retry; leave empty to build and test main without publishing
         required: false
         type: string
+      deploy_server:
+        description: Deploy after publication; disable only when an explicit later server switch is required
+        required: false
+        default: true
+        type: boolean
       build_only:
         description: Explicit preflight flag; an empty tag already selects preflight
         required: false
@@ -47,6 +52,7 @@ jobs:
       sha: ${{ steps.tag.outputs.sha }}
       publish: ${{ steps.tag.outputs.publish }}
       build_only: ${{ steps.tag.outputs.build_only }}
+      deploy_server: ${{ steps.deployment.outputs.deploy_server }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,6 +66,39 @@ jobs:
       - name: Validate the tag, versions, main ancestry and pinned submodules
         id: tag
         run: python scripts/release.py validate --event
+      - name: Select deployment after validated publication
+        id: deployment
+        env:
+          RELEASE_PUBLISH: ${{ steps.tag.outputs.publish }}
+        run: |
+          python - <<'PY'
+          # BEGIN release deployment policy
+          import json
+          import os
+
+          publish = os.environ["RELEASE_PUBLISH"]
+          if publish not in ("true", "false"):
+              raise ValueError("validated publish output must be true or false")
+          requested = True
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+                  event = json.load(stream)
+              inputs = event.get("inputs", {})
+              if not isinstance(inputs, dict):
+                  raise ValueError("workflow inputs must be an object")
+              requested = inputs.get("deploy_server", True)
+              if type(requested) is bool:
+                  pass
+              elif isinstance(requested, str) and requested in ("true", "false"):
+                  requested = requested == "true"
+              else:
+                  raise ValueError("the deploy_server input must be a boolean")
+          deploy = "true" if publish == "true" and requested else "false"
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(f"deploy_server={deploy}\n")
+          print(json.dumps({"publish": publish, "deploy_server": deploy}))
+          # END release deployment policy
+          PY
       - name: Test publication safeguards
         run: python -m unittest discover -s scripts -p 'test_release.py' -v
       - name: Test deployment identity, artifact and rollback safeguards
@@ -338,7 +377,7 @@ jobs:
 
   deploy_server:
     needs: [validate, publish_release]
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.deploy_server == 'true'
     permissions:
       contents: read
       deployments: write
