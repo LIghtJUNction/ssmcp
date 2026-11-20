@@ -2971,6 +2971,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    mod tool_groups;
     use super::*;
 
     fn preview(rows: u16, cols: u16) -> State {
@@ -3163,6 +3164,14 @@ mod tests {
                 &json!({"type":"exec.stdout","job_id":id}),
                 format!("[STDOUT] preview {id}\n{output}").as_bytes(),
             );
+            if id == "build" {
+                // A retained diagnostic splits adjacency even while hidden in Chat.
+                state.log_event(
+                    "preview",
+                    &json!({"type":"ssmcp.status"}),
+                    b"separating diagnostic\n",
+                );
+            }
         }
         state.log_event(
             "preview",
@@ -3215,7 +3224,7 @@ mod tests {
             let first = state.events.snapshot();
             assert_eq!(first["scroll"], before["scroll"]);
             assert_eq!(first["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(first["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(first["events"][3]["panel"]["scroll"], 37);
             state.chat_key(Key::Mouse {
                 button: 64,
                 x: 8,
@@ -3225,7 +3234,7 @@ mod tests {
             display(&mut state);
             let both = state.events.snapshot();
             assert_eq!(both["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(both["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(both["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "independent-scroll");
             state.chat_key(Key::Mouse {
                 button: 64,
@@ -3256,7 +3265,7 @@ mod tests {
                 "{expanded}"
             );
             assert_eq!(state.events.snapshot()["events"][1]["panel"]["scroll"], 0);
-            assert_eq!(state.events.snapshot()["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(state.events.snapshot()["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "expanded");
             state.chat_key(Key::Down);
             display(&mut state);
@@ -3321,7 +3330,7 @@ mod tests {
             let left = state.events.snapshot();
             assert_eq!(left["scroll"], before["scroll"]);
             assert_eq!(left["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(left["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(left["events"][3]["panel"]["scroll"], 37);
             save_command_panel_preview(&mut state, "scroll-zones-left");
 
             state.chat_key(Key::Mouse {
@@ -3341,8 +3350,8 @@ mod tests {
                 left["events"][1]["panel"]["scroll"]
             );
             assert_eq!(
-                right["events"][2]["panel"]["scroll"],
-                left["events"][2]["panel"]["scroll"]
+                right["events"][3]["panel"]["scroll"],
+                left["events"][3]["panel"]["scroll"]
             );
             assert_eq!(state.conversation.snapshot()["draft"], draft);
             save_command_panel_preview(&mut state, "scroll-zones-page");
