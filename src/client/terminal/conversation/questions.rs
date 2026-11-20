@@ -831,7 +831,11 @@ mod tests {
 
     fn screen(state: &mut State, name: &str) -> String {
         let frame = state.chat_frame(Instant::now());
-        let mut parser = vt100::Parser::new(frame.geometry.rows, frame.geometry.cols, 0);
+        let mut parser = vt100::Parser::new(
+            std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
+            std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
+            0,
+        );
         let bytes = frame.diff(None);
         parser.process(&bytes);
         if let Some(directory) = std::env::var_os("SSMCP_INTERACTION_PREVIEW_DIR") {

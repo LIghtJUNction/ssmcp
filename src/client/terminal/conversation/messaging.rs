@@ -736,7 +736,11 @@ mod tests {
             let mut state = state(columns);
             state.chat_native_picker("").unwrap();
             let frame = state.chat_frame(Instant::now());
-            let mut parser = vt100::Parser::new(frame.geometry.rows, frame.geometry.cols, 0);
+            let mut parser = vt100::Parser::new(
+                std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
+                std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
+                0,
+            );
             let bytes = frame.diff(None);
             parser.process(&bytes);
             let contents = parser.screen().contents();
