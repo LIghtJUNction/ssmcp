@@ -1,0 +1,1583 @@
+{
+  "schema": "ssmcp.generated-history-archive.v1",
+  "source_main": "7ddaeab07be67f25f8277aa37486474710cb1fa3",
+  "delete_path_count": 110,
+  "current_path_count": 91,
+  "distinct_blob_count": 116,
+  "entries": [
+    {
+      "blob": "001cf64c6b1e7751d46d747022f58d8be46a4cdc",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png",
+      "bytes": 81833,
+      "sha256": "d33d306f3ec0d8baa87f297fd879a73e5ba0d891ed56bc1b6ed7fdcac96cfd5f"
+    },
+    {
+      "blob": "00b5d767bea7fec257ab2936c2c1f39e8741170f",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-left-120.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-120.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-left-120.png",
+      "bytes": 51951,
+      "sha256": "f1c20c49a785b33003b0be8ae16cf6e9405fa292df580966629ce01895ef33b1"
+    },
+    {
+      "blob": "091c533360c32b165d3e7de52ea45b3e2cf7b0bd",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/desktop-admin.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/desktop-admin.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/desktop-admin.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/desktop-admin.png",
+      "bytes": 79056,
+      "sha256": "5db48a6915bb114c784fe47db49bf50d6a45afe05218ee684ba64c82d3a8eba8"
+    },
+    {
+      "blob": "0c477c838f61b833aaefb0818d16dbed4293dbe9",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/native-tall-top.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/native-tall-top.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/native-tall-top.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/native-tall-top.png",
+      "bytes": 78165,
+      "sha256": "935f8df66f6d7ffb7fe2227716fae9853287c7dd36ae059277ff8a4f5d5be88f"
+    },
+    {
+      "blob": "0ce7270e2832a0fbc5091e73bf8f17d98ef2e590",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/native-image.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/native-image.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/native-image.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/native-image.png",
+      "bytes": 32679,
+      "sha256": "620adaaa5b5f2c1b6235c70f565c692d2543d6b3dfdb2fac984b86dcbbab6935"
+    },
+    {
+      "blob": "0fb00ff41f7716cfa39dbe23ccb93fc8e09c55af",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/small-mobile-registration.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/small-mobile-registration.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/small-mobile-registration.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/small-mobile-registration.png",
+      "bytes": 34457,
+      "sha256": "b1e43fa13068afe446b4cec3d2fdef703f0f9273b1a574bb8737379a1310a060"
+    },
+    {
+      "blob": "133a68a23d7e27e05bd5eb46a085e8e57328d8a0",
+      "witness_commit": "220e5d39e99c885410a66e9e74fc2c04f05f486b",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-main.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-main.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/133a68a23d7e27e05bd5eb46a085e8e57328d8a0/docs/reports/terminal-control-2026-11-16/terminal-main.png",
+      "bytes": 116956,
+      "sha256": "9ceb10e2b37e3caf37bd547a27df9939a89498682e33cc20733e4f53211a70e9"
+    },
+    {
+      "blob": "1356d1a80d51a5aff0eb395a63c41d567cf4b655",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/mobile-admin.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/mobile-admin.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/mobile-admin.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/mobile-admin.png",
+      "bytes": 40783,
+      "sha256": "bbe1c980f899071aacf585a422d408dd7a79bd78bc1058fb47b53067a35d3c19"
+    },
+    {
+      "blob": "13aff196c13a77944cfa550b8a145061018fc971",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/small-mobile-long-amount.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/small-mobile-long-amount.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/small-mobile-long-amount.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/small-mobile-long-amount.png",
+      "bytes": 34934,
+      "sha256": "de35bc7a1a057911f2942d6df7095899aabe7d515fdb0041dc246c1bd99bb8b1"
+    },
+    {
+      "blob": "154006e6424c0e27842e52b28b9c5663dda19429",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-page-48.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-48.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-48.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-page-48.png",
+      "bytes": 39969,
+      "sha256": "8dec529f0e1f26e950d467dae9b649409168eeaab39bb3475cfa3ebfc06ee3d2"
+    },
+    {
+      "blob": "1b04605142786872b57f717398c3fe336e057411",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/ssmcp-eclipse.jpg",
+      "paths": [
+        "docs/assets/ssmcp-eclipse.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/ssmcp-eclipse.jpg"
+      ],
+      "archive_path": "current/docs/assets/ssmcp-eclipse.jpg",
+      "bytes": 34553,
+      "sha256": "e3999743595d69491b01d0a4989778d4ed8ab89e5e2123cd1108ab1e701eb116"
+    },
+    {
+      "blob": "1c7a103617d55f76ccd0fa65134e04d50de0f864",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/portal-live-desktop.jpg",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/portal-live-desktop.jpg"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/1c7a103617d55f76ccd0fa65134e04d50de0f864/docs/reports/ssmcp-iteration-20261119/images/portal-live-desktop.jpg",
+      "bytes": 66618,
+      "sha256": "8be2b843b6dd060b9a8ab326bcfee9fa1f821c4a1d75648cbd835c8fa2fd00d7"
+    },
+    {
+      "blob": "1cc3e342650f55fce0917b5f3cdc0842c7f4dc91",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/small-mobile-error.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/small-mobile-error.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/small-mobile-error.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/small-mobile-error.png",
+      "bytes": 22167,
+      "sha256": "4604f975d856a19956e66328da0ccb00acd24e55ecac6961d538e21bd9e07289"
+    },
+    {
+      "blob": "1e7b6e4f12f23db05086f8b1939450aa8e2f1cc4",
+      "witness_commit": "1d0c184c9f7bb8f1b568ecccf71870213e2d6cdc",
+      "witness_path": "docs/assets/readable-logs-80.png",
+      "paths": [
+        "docs/assets/readable-logs-80.png"
+      ],
+      "current_paths": [
+        "docs/assets/readable-logs-80.png"
+      ],
+      "archive_path": "current/docs/assets/readable-logs-80.png",
+      "bytes": 209023,
+      "sha256": "d3cd64d3ffc43da093a837a45697ce67f15fdd91882a6ccc4e2f419155701570"
+    },
+    {
+      "blob": "20695bfd8f0cb332e6df09a353b6e6675c16420a",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/force-unknown-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/force-unknown-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/20695bfd8f0cb332e6df09a353b6e6675c16420a/docs/reports/ssmcp-iteration-20261119/images/force-unknown-48.png",
+      "bytes": 59571,
+      "sha256": "b5dae2d2aea6b7ed112df20f57e57e22d9683df81a23ccc7b1a6df9b3614255e"
+    },
+    {
+      "blob": "21d9f6afb29b4274dcbc719162dbc41f8ef512bd",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/named-accounts-admin-mobile.png",
+      "paths": [
+        "docs/assets/named-accounts-admin-mobile.png"
+      ],
+      "current_paths": [
+        "docs/assets/named-accounts-admin-mobile.png"
+      ],
+      "archive_path": "current/docs/assets/named-accounts-admin-mobile.png",
+      "bytes": 141453,
+      "sha256": "b01b0e31d67870a343793354713276c8ee6fe3c60c340dcb0d9ef84ad0e47cd9"
+    },
+    {
+      "blob": "2296d68f7077a4b299920f78a394747420f8ae0e",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/pty-sleep-120.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-sleep-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-sleep-120.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/pty-sleep-120.png",
+      "bytes": 30723,
+      "sha256": "69c7f871ff5c4f7afcb8125ff676957a491aef3bebbf668c988575b137c188fa"
+    },
+    {
+      "blob": "2491dab41c4864bd853620bc5d6e7a985d8f7c74",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/desktop-redirect.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/desktop-redirect.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/desktop-redirect.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/desktop-redirect.png",
+      "bytes": 28525,
+      "sha256": "7025c3f9928d5e2431c9468a612e28e72071bd5e31ec5e491c8253941acd0720"
+    },
+    {
+      "blob": "28345a5efe1733fc17b779f9da9dca43c32527bd",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/named-accounts-admin-desktop.png",
+      "paths": [
+        "docs/assets/named-accounts-admin-desktop.png"
+      ],
+      "current_paths": [
+        "docs/assets/named-accounts-admin-desktop.png"
+      ],
+      "archive_path": "current/docs/assets/named-accounts-admin-desktop.png",
+      "bytes": 129679,
+      "sha256": "6ad03933027d3dcfef45d070e5450ba90f47fe920a82197a10f0d5a43523c2f5"
+    },
+    {
+      "blob": "2bda7d6427ac04ab0f9ffe853845ec7e581da978",
+      "witness_commit": "976869c317cbba24b670164b5045a44d7f786476",
+      "witness_path": "docs/assets/terminal-sidebar-r5-20261116.jpg",
+      "paths": [
+        "docs/assets/terminal-sidebar-r5-20261116.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/terminal-sidebar-r5-20261116.jpg"
+      ],
+      "archive_path": "current/docs/assets/terminal-sidebar-r5-20261116.jpg",
+      "bytes": 112257,
+      "sha256": "6fac8d012e7cd58bcd5e3489c4bda1bde181f15a2b4dbe4ec7a9764013dfbf9f"
+    },
+    {
+      "blob": "2bdf9ba33995dad56e23994fa321495d59499220",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/desktop-account.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/desktop-account.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/desktop-account.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/desktop-account.png",
+      "bytes": 81947,
+      "sha256": "bcd823d5fa86689bec582d4608277b1fb2be908853b98d2b36f41ea59f9d8c35"
+    },
+    {
+      "blob": "2d85a8ed97d8a5eca00acc6c626f79c899e05c6c",
+      "witness_commit": "220e5d39e99c885410a66e9e74fc2c04f05f486b",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-build.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-build.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/2d85a8ed97d8a5eca00acc6c626f79c899e05c6c/docs/reports/terminal-control-2026-11-16/terminal-build.png",
+      "bytes": 131230,
+      "sha256": "8665957824a19d3e4ae25146809ecda4e5fd49c7033263b31bba27f173fc576e"
+    },
+    {
+      "blob": "2e191b1475b4341fb7645ab60e898c5fb6ec4ac3",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/agent-panel-wide.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-wide.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-wide.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/agent-panel-wide.png",
+      "bytes": 58628,
+      "sha256": "b1a19086dfae925164f96f6d170960dc13f6ca6d411e998f7323398821712ff7"
+    },
+    {
+      "blob": "2e6038bfb0a6945e16641517123c7d522f9afe11",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/2e6038bfb0a6945e16641517123c7d522f9afe11/docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-48.png",
+      "bytes": 30014,
+      "sha256": "39735f65f74464f07030db991b3c000207c4a28f1eb369096af2b9a03e5f5732"
+    },
+    {
+      "blob": "2e8df555f886400078e937c219fb4df4e7c5e616",
+      "witness_commit": "ad3fa5c90efe6c5720de056285592940eb0a72b0",
+      "witness_path": "docs/reports/session-service-2026-11-17/manager-attach-live.png",
+      "paths": [
+        "docs/reports/session-service-2026-11-17/manager-attach-live.png"
+      ],
+      "current_paths": [
+        "docs/reports/session-service-2026-11-17/manager-attach-live.png"
+      ],
+      "archive_path": "current/docs/reports/session-service-2026-11-17/manager-attach-live.png",
+      "bytes": 114458,
+      "sha256": "ebd2c1bd1400e7eda54ba95c66465a1c1b42993dfed2adbcf1a5404fd3967971"
+    },
+    {
+      "blob": "31ef9780ae615858ec504d0a075e2147eae529dd",
+      "witness_commit": "1d0c184c9f7bb8f1b568ecccf71870213e2d6cdc",
+      "witness_path": "docs/assets/readable-logs-100.png",
+      "paths": [
+        "docs/assets/readable-logs-100.png"
+      ],
+      "current_paths": [
+        "docs/assets/readable-logs-100.png"
+      ],
+      "archive_path": "current/docs/assets/readable-logs-100.png",
+      "bytes": 211404,
+      "sha256": "64529e42461436ae680b8aa32797fb7cb0de9df173f27d28f8ca6d705e8de197"
+    },
+    {
+      "blob": "32752918149ac84d97421f5ace72621883a84a93",
+      "witness_commit": "66cce3c136fa0a3acc18cea7a6c6d970a837e1fe",
+      "witness_path": "docs/assets/portal-console-20261117/admin-desktop-demo.jpg",
+      "paths": [
+        "docs/assets/portal-console-20261117/admin-desktop-demo.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/portal-console-20261117/admin-desktop-demo.jpg"
+      ],
+      "archive_path": "current/docs/assets/portal-console-20261117/admin-desktop-demo.jpg",
+      "bytes": 53058,
+      "sha256": "d3320d8e1a814f509206fd3474f9ba89a787c22baa29273a435455105026f577"
+    },
+    {
+      "blob": "342b1002f8209b358ae68318d0a38371224802e1",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/342b1002f8209b358ae68318d0a38371224802e1/docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-48.png",
+      "bytes": 82641,
+      "sha256": "ad96d7f86192946b7f53afd553f5d8c11eee8bcfed8ef6b14ab02056064f4b97"
+    },
+    {
+      "blob": "354e2665da4dcba74ad35a47e857d16839acee9b",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/desktop-sessions.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/desktop-sessions.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/desktop-sessions.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/desktop-sessions.png",
+      "bytes": 72131,
+      "sha256": "0fa55cfb9f69a63ca7f2afc50fba7af6c80468f56e2d16654a85ee5543b7a770"
+    },
+    {
+      "blob": "35be3faa14ff6286f12bee985f1097bcde82dca4",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/agent-panel-call-details.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-call-details.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-call-details.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/agent-panel-call-details.png",
+      "bytes": 54218,
+      "sha256": "d77c94839fecc90d5f167d48e5d9609255e8ffcb037f8cc09efaf507c31f246e"
+    },
+    {
+      "blob": "35c6ad8efd508f41fb912df0e07f2a92e0096943",
+      "witness_commit": "b6a19100355e74b220275bb57159ec76cdde1e53",
+      "witness_path": "docs/assets/computer-use-consent-desktop.jpg",
+      "paths": [
+        "docs/assets/computer-use-consent-desktop.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/computer-use-consent-desktop.jpg"
+      ],
+      "archive_path": "current/docs/assets/computer-use-consent-desktop.jpg",
+      "bytes": 48726,
+      "sha256": "7042f5cbec9a8fa2d5aca6d1b2f56a7346722de9bd433b62c4740e1fae91f392"
+    },
+    {
+      "blob": "39b3502c2eca3506273b9524959cb7afc6eea01e",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/tty-observer-kitty-20261118.png",
+      "paths": [
+        "docs/reports/tty-observer-kitty-20261118.png"
+      ],
+      "current_paths": [
+        "docs/reports/tty-observer-kitty-20261118.png"
+      ],
+      "archive_path": "current/docs/reports/tty-observer-kitty-20261118.png",
+      "bytes": 88854,
+      "sha256": "4d6a600e3c890be1c9404c4f90db87ee67ea63cbaf3376eb3a7b9c433cd5da28"
+    },
+    {
+      "blob": "3f100a1a648342a8f68785f442081ca23d50dcfc",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/ssmcp-eclipse.mp4",
+      "paths": [
+        "docs/assets/ssmcp-eclipse.mp4"
+      ],
+      "current_paths": [
+        "docs/assets/ssmcp-eclipse.mp4"
+      ],
+      "archive_path": "current/docs/assets/ssmcp-eclipse.mp4",
+      "bytes": 3640649,
+      "sha256": "636c9d9b3c0a5da2897d7c1966227192dd4ed39c274803197fc389dda53d3db2"
+    },
+    {
+      "blob": "410a1a8d74062a9fcf1cd60a11f122dc48da634c",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/compact-tools-20261118/ui-command-expanded.png",
+      "paths": [
+        "docs/reports/compact-tools-20261118/ui-command-expanded.png"
+      ],
+      "current_paths": [
+        "docs/reports/compact-tools-20261118/ui-command-expanded.png"
+      ],
+      "archive_path": "current/docs/reports/compact-tools-20261118/ui-command-expanded.png",
+      "bytes": 61112,
+      "sha256": "461e4556ce0f582e4490d3b28962fec3d3d4dc88b25c8aa98648812b27620181"
+    },
+    {
+      "blob": "44f4d0dc27fd0d98f9a60d712c196b12c376b1ef",
+      "witness_commit": "4bb0c25f0ef7a7230a3246a4679391ac96fd104a",
+      "witness_path": "docs/assets/client-audit.png",
+      "paths": [
+        "docs/assets/client-audit.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/44f4d0dc27fd0d98f9a60d712c196b12c376b1ef/docs/assets/client-audit.png",
+      "bytes": 72891,
+      "sha256": "a4d8cd3a1f9d10154e8a4c76a6e992af81a034193a04d9c4b8ec74d0bdba229f"
+    },
+    {
+      "blob": "466d7bbb43f6131081dbe58d3206a01d07e3af08",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/frame-sleep-48.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-sleep-48.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-sleep-48.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/frame-sleep-48.png",
+      "bytes": 35119,
+      "sha256": "cd34fd38dcdacd6c47de4fb5d8d52b2f6644394cfb888a472524d6ed71971810"
+    },
+    {
+      "blob": "46bf000f0727f788aab157b56fde80671fa6eae9",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/mobile-consent.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-consent.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-consent.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/mobile-consent.png",
+      "bytes": 50403,
+      "sha256": "08af3bf53a8e23a95e89b1c580f2d7685433ee12dc434ad0d198de484c7714dc"
+    },
+    {
+      "blob": "48899ef946ff0e8f743303b1b5b42e9d1f12f31a",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/conversation-ui-20261119/chat-dark.png",
+      "paths": [
+        "docs/reports/conversation-ui-20261119/chat-dark.png"
+      ],
+      "current_paths": [
+        "docs/reports/conversation-ui-20261119/chat-dark.png"
+      ],
+      "archive_path": "current/docs/reports/conversation-ui-20261119/chat-dark.png",
+      "bytes": 60708,
+      "sha256": "13ddd2c5926cd954508bd7d040ecb6f41124f590139deea45bcfd093f2b1f038"
+    },
+    {
+      "blob": "4abf4215259f02472095ffc358d3fa3c4bb93dc9",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/native-width-fit.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/native-width-fit.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/native-width-fit.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/native-width-fit.png",
+      "bytes": 78311,
+      "sha256": "39bf8498c333851acc669a891cd2d7c02de95c678a7d521ba9f6244438a05614"
+    },
+    {
+      "blob": "4b7619155e404e96408e587068dcb07862191d0e",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/native-after-rejection.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/native-after-rejection.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/native-after-rejection.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/native-after-rejection.png",
+      "bytes": 34382,
+      "sha256": "be8df5cb9663283411f02cf9fd556f3cad3f060797a8377234ea8b82bcfdc3e6"
+    },
+    {
+      "blob": "4d4fdd84b05edf5792fdc7f6da87d64c7e6d16bc",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/desktop-install.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/desktop-install.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/desktop-install.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/desktop-install.png",
+      "bytes": 77634,
+      "sha256": "045ccbbf72cf2013adb247196e5044d70785a46ba47218408b5ae6591d29ec73"
+    },
+    {
+      "blob": "54fb26663925b10515d9035ee279a35305f87b49",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/force-no-listener-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/force-no-listener-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/54fb26663925b10515d9035ee279a35305f87b49/docs/reports/ssmcp-iteration-20261119/images/force-no-listener-120.png",
+      "bytes": 30671,
+      "sha256": "e1c3d123a165a6b0c7acdf437a54db01d8da748066e930aa0aad4c4f46027e76"
+    },
+    {
+      "blob": "5db9c5ae78cb0668b96f85409a461bf7aaf8fa8c",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/desktop-guest.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/desktop-guest.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/desktop-guest.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/desktop-guest.png",
+      "bytes": 96553,
+      "sha256": "fab852780c9434bc704906f1f697daab8b67cf8c82d4df287128966777b52104"
+    },
+    {
+      "blob": "6288685949e3dba302236a8fba9af067f08dae8c",
+      "witness_commit": "967f6c4b12bbef1c97ab81582269080b0d40404a",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-logs.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-logs.png"
+      ],
+      "current_paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-logs.png"
+      ],
+      "archive_path": "current/docs/reports/terminal-control-2026-11-16/terminal-logs.png",
+      "bytes": 164134,
+      "sha256": "939fb4e3e38f2bfe60663fed5548a6ee3daacfb7bfe0098f4839743c1fceeceb"
+    },
+    {
+      "blob": "65ef8fabf44a107cedef6087e44ab3da702a26ec",
+      "witness_commit": "8e2d791d7ed8e6c88735dc8ebf38accb9104b0b4",
+      "witness_path": "docs/reports/ztty-mcp-2026-11-19/window.png",
+      "paths": [
+        "docs/reports/ztty-mcp-2026-11-19/window.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/65ef8fabf44a107cedef6087e44ab3da702a26ec/docs/reports/ztty-mcp-2026-11-19/window.png",
+      "bytes": 11855,
+      "sha256": "d790ac01c7c7f78fd8bd0912f3ce90b645f8573c70bc591fdc9396d8b01d4ed2"
+    },
+    {
+      "blob": "6791605fff1a290a719eab0bbd953aa1f3165b0e",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/compact-tools-20261118/ui-chat.png",
+      "paths": [
+        "docs/reports/compact-tools-20261118/ui-chat.png"
+      ],
+      "current_paths": [
+        "docs/reports/compact-tools-20261118/ui-chat.png"
+      ],
+      "archive_path": "current/docs/reports/compact-tools-20261118/ui-chat.png",
+      "bytes": 53642,
+      "sha256": "93f95e1256ce1eb31c713dfb62194cbf373f23ba6cd7031f3a916189f5e86ce6"
+    },
+    {
+      "blob": "68ed258c335d84f34ee45754c9424a755f8689a6",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/tty-observer-ztty-20261118.png",
+      "paths": [
+        "docs/reports/tty-observer-ztty-20261118.png"
+      ],
+      "current_paths": [
+        "docs/reports/tty-observer-ztty-20261118.png"
+      ],
+      "archive_path": "current/docs/reports/tty-observer-ztty-20261118.png",
+      "bytes": 65018,
+      "sha256": "d8bc3a30efc04c3194c427ee25b2dad12d0c730982f8362956a9d7457fa248b6"
+    },
+    {
+      "blob": "6a29e3b173c6acc818294a1e6c80076c010cf6af",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-page-49.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-49.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-49.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-page-49.png",
+      "bytes": 40037,
+      "sha256": "a7f7347dba480b3191af446413bbb3178de13d1570129a57374ca53f36d0408e"
+    },
+    {
+      "blob": "6a6321a57599b4dd9c4021fdf6ba0a11f3cfd575",
+      "witness_commit": "27271057637c96e268ddd692bc03be76316497b6",
+      "witness_path": "docs/assets/readme-preview.jpg",
+      "paths": [
+        "docs/assets/readme-preview.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/readme-preview.jpg"
+      ],
+      "archive_path": "current/docs/assets/readme-preview.jpg",
+      "bytes": 94763,
+      "sha256": "530d0ec081bc8ce28c106a77cb083a2c7a3e6acac46a5d2359a257e23e532161"
+    },
+    {
+      "blob": "6da10c42b0aca70742b1dcf16c93e06c08147a27",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/qr-60x16.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/qr-60x16.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/qr-60x16.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/qr-60x16.png",
+      "bytes": 56854,
+      "sha256": "b8f33f459939a4971965d375927f73bbc36879247dcbb253ba9b90cc2b1b16f8"
+    },
+    {
+      "blob": "6fcefd21d450ef4921248982f1add598e5447444",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/mobile-redirect.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-redirect.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-redirect.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/mobile-redirect.png",
+      "bytes": 20723,
+      "sha256": "e28154b94e5bab2c68925163fae77320b7104fd8a15eded9daef9c67994570fa"
+    },
+    {
+      "blob": "720bfbd57b75bc2c0978446127cd86cf46ed84b8",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/pty-sleep-48.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-sleep-48.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-sleep-48.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/pty-sleep-48.png",
+      "bytes": 24815,
+      "sha256": "f0e6c764059e96340ed878d214dc29d96eeb3d295e8bf3d92ecd373ab4fd3bb6"
+    },
+    {
+      "blob": "733667354820152229a6d51a9c1e496ffc85db8a",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png",
+      "bytes": 31546,
+      "sha256": "9dcb0d25cba44d7ef69be2990e07b5a3e5f8cb8b9afb7f7ed69e5098fe13ac59"
+    },
+    {
+      "blob": "73d682babd3a6cf6e853c4b830b51995a5991ebd",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-narrow.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-narrow.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/73d682babd3a6cf6e853c4b830b51995a5991ebd/docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-narrow.png",
+      "bytes": 39248,
+      "sha256": "170a77bc542b7c7eb99b20f1e18cb7d3cedb297d295065ba33bf9c78109250a9"
+    },
+    {
+      "blob": "7500c7d24da4f6ce08fb76d6302d1df939cab935",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/sidebar-qr.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/sidebar-qr.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/sidebar-qr.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/sidebar-qr.png",
+      "bytes": 106619,
+      "sha256": "cc311471ca4c870d7d5194d99c326316e47cb03f0592ca487ec62a04c333e773"
+    },
+    {
+      "blob": "779168f1ec90228595429d6ac25e5fae3c682798",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/compact-tools-20261118/ui-raw-activity.png",
+      "paths": [
+        "docs/reports/compact-tools-20261118/ui-raw-activity.png"
+      ],
+      "current_paths": [
+        "docs/reports/compact-tools-20261118/ui-raw-activity.png"
+      ],
+      "archive_path": "current/docs/reports/compact-tools-20261118/ui-raw-activity.png",
+      "bytes": 61693,
+      "sha256": "4fb436f2f68538bb13c7f06a5bcd93367eabcdc41c3798080fd06202a4d1e118"
+    },
+    {
+      "blob": "79d0691a507557a9cbc4161ab9a62aaf058502bb",
+      "witness_commit": "b6a19100355e74b220275bb57159ec76cdde1e53",
+      "witness_path": "docs/assets/computer-use-consent-narrow.jpg",
+      "paths": [
+        "docs/assets/computer-use-consent-narrow.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/computer-use-consent-narrow.jpg"
+      ],
+      "archive_path": "current/docs/assets/computer-use-consent-narrow.jpg",
+      "bytes": 37636,
+      "sha256": "99289f0c8895bac65ed6db0e123ef05c8d691cea4600e46603e5f443b846f5b1"
+    },
+    {
+      "blob": "7bb2509c47d03f6faaa5247208be4d96ef5a6956",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/native-image-resized.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/native-image-resized.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/native-image-resized.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/native-image-resized.png",
+      "bytes": 29169,
+      "sha256": "0c542a6a599a9091da527f13f7a4a52bed5037dea2366cc46ef37a4ee3415d73"
+    },
+    {
+      "blob": "7be0273fbad8e9080136af97e31e560e7c70fb11",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/client-ui-light.png",
+      "paths": [
+        "docs/assets/client-ui-light.png"
+      ],
+      "current_paths": [
+        "docs/assets/client-ui-light.png"
+      ],
+      "archive_path": "current/docs/assets/client-ui-light.png",
+      "bytes": 89808,
+      "sha256": "690973549d80a43aa2bbf7705fc6c0dd5bd67095823ae6332002eff6efd8c799"
+    },
+    {
+      "blob": "7e573b6a487bd1a42162c92c48c0bcc75b600a2b",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/ui-chat.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/ui-chat.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/ui-chat.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/ui-chat.png",
+      "bytes": 83807,
+      "sha256": "42bf49898a537466c47c0c0061b2254542c573bbf8e550a4dc98d6de8d004577"
+    },
+    {
+      "blob": "7ff2d47ff4980de79aeec3263f79251807c79adc",
+      "witness_commit": "967f6c4b12bbef1c97ab81582269080b0d40404a",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/cua-browser.jpg",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/cua-browser.jpg"
+      ],
+      "current_paths": [
+        "docs/reports/terminal-control-2026-11-16/cua-browser.jpg"
+      ],
+      "archive_path": "current/docs/reports/terminal-control-2026-11-16/cua-browser.jpg",
+      "bytes": 17024,
+      "sha256": "d93ce0aa2babf37113ba09a421ca1be22279f53e6f8cffbd787b543d97e2714a"
+    },
+    {
+      "blob": "81817e1bcfd8f43318a81185fb4908c61fb5b66e",
+      "witness_commit": "b6a19100355e74b220275bb57159ec76cdde1e53",
+      "witness_path": "docs/assets/computer-use-runtime-browser.jpg",
+      "paths": [
+        "docs/assets/computer-use-runtime-browser.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/computer-use-runtime-browser.jpg"
+      ],
+      "archive_path": "current/docs/assets/computer-use-runtime-browser.jpg",
+      "bytes": 13711,
+      "sha256": "d19d23713d97c825b09398c6e0050f5262da49d99c7f30941689c2a4ebeaf02e"
+    },
+    {
+      "blob": "83d43df03d84ffb396d85fb13dcdb6b23753b683",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-left-48.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-48.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-48.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-left-48.png",
+      "bytes": 42499,
+      "sha256": "21c4119d394600eaa884947f9807bb3fb86855ef045ddc37ae3b1c6c5b5cc181"
+    },
+    {
+      "blob": "8521fdba13fae1846f7fb45711627de58c73ef20",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/8521fdba13fae1846f7fb45711627de58c73ef20/docs/reports/ssmcp-iteration-20261119/images/read-activity-collapsed-120.png",
+      "bytes": 33413,
+      "sha256": "ecb59cebb5c58e10fd4630aba029727afa31fc11d383b0638c71265a5e5d2a31"
+    },
+    {
+      "blob": "85628bd871ad7765477fcebb741d738920192f34",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/conversation-ui-20261119/chat-narrow.png",
+      "paths": [
+        "docs/reports/conversation-ui-20261119/chat-narrow.png"
+      ],
+      "current_paths": [
+        "docs/reports/conversation-ui-20261119/chat-narrow.png"
+      ],
+      "archive_path": "current/docs/reports/conversation-ui-20261119/chat-narrow.png",
+      "bytes": 46122,
+      "sha256": "0e44796ace9ad7316919cf659cec5172d6f6608b16482665340825d9b2b771ba"
+    },
+    {
+      "blob": "8742eced26d1b77817a2e5d239e5767e86c1d858",
+      "witness_commit": "66cce3c136fa0a3acc18cea7a6c6d970a837e1fe",
+      "witness_path": "docs/assets/portal-console-20261117/home-desktop.jpg",
+      "paths": [
+        "docs/assets/portal-console-20261117/home-desktop.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/portal-console-20261117/home-desktop.jpg"
+      ],
+      "archive_path": "current/docs/assets/portal-console-20261117/home-desktop.jpg",
+      "bytes": 71354,
+      "sha256": "dc4693917652dc5bf4e1e61fc2febf3b0d842fc7371622c7cb87ce3f6ed09331"
+    },
+    {
+      "blob": "880ce75f98179736c2798fbf53250186dfe62df3",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/mobile-history.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/mobile-history.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/mobile-history.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/mobile-history.png",
+      "bytes": 47726,
+      "sha256": "772226440d70e3a879600a7816cd457703e34e598db89e8fda6202e589f23e01"
+    },
+    {
+      "blob": "8b63e476bb346724fc6f778d66823b8b64779153",
+      "witness_commit": "cc25ae988cb426b530eed2e881674ab6609ab1fb",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/user-wait-inspect-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/user-wait-inspect-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/8b63e476bb346724fc6f778d66823b8b64779153/docs/reports/ssmcp-iteration-20261119/images/user-wait-inspect-120.png",
+      "bytes": 121200,
+      "sha256": "dd965544b7369c1fc44ee8ca88fa54e9921fe0465a311270f1588003dda0e2a0"
+    },
+    {
+      "blob": "8e919eaef0f1c28a96a8b7c14ff804824472b00f",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/frame-sleep-120.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-sleep-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-sleep-120.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/frame-sleep-120.png",
+      "bytes": 45356,
+      "sha256": "3a5052bd39202974aa40c3ff632173a7cad74aad3c45e888493555f96210c61c"
+    },
+    {
+      "blob": "8f30b7d019fa0e34e6b12a5c40429be08138d4e4",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/desktop-consent.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/desktop-consent.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/desktop-consent.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/desktop-consent.png",
+      "bytes": 65216,
+      "sha256": "d2aa4c729d13a9b0f902aecc95c6cf6e93e72ff58089b131a1e424bf45f41c88"
+    },
+    {
+      "blob": "8f4ad9471d5721317afac357ed66bbaa953e04e1",
+      "witness_commit": "cc25ae988cb426b530eed2e881674ab6609ab1fb",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/user-wait-timeout-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/user-wait-timeout-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/8f4ad9471d5721317afac357ed66bbaa953e04e1/docs/reports/ssmcp-iteration-20261119/images/user-wait-timeout-48.png",
+      "bytes": 80657,
+      "sha256": "faad46f3d4991bfe01b77aceef6c589b26d32dbb65437b670e933ff020213260"
+    },
+    {
+      "blob": "90bdd28af4f5879b57c7b027b5e8803a917d9a28",
+      "witness_commit": "e13afa886c1bace8b33019f6379844b0d39acdd6",
+      "witness_path": "docs/assets/terminal-logs.png",
+      "paths": [
+        "docs/assets/terminal-logs.png"
+      ],
+      "current_paths": [
+        "docs/assets/terminal-logs.png"
+      ],
+      "archive_path": "current/docs/assets/terminal-logs.png",
+      "bytes": 90662,
+      "sha256": "bb71a5265385bcf1d1146d7e9104529161442796a547445144efac49ed10c5e4"
+    },
+    {
+      "blob": "97a160cbeff92325cf385d7c2fe70a023e8a7de8",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/frame-awake-120.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-awake-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-awake-120.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/frame-awake-120.png",
+      "bytes": 48181,
+      "sha256": "feeda8a47d5c6243c6562743c9e013b4edc09bc46c1fe061b655b07baf608a67"
+    },
+    {
+      "blob": "9af51e24f5cfdb023388defd12ede1a26d0d3d9d",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/mobile-account.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/mobile-account.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/mobile-account.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/mobile-account.png",
+      "bytes": 34009,
+      "sha256": "9fd73c97d9a83a0eda576c8bf0b2e601365109725a07a31ba016ecf3057e5001"
+    },
+    {
+      "blob": "9f8bb2bb62e883f37396c159ace62eea3072faeb",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/agent-panel-narrow.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-narrow.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-narrow.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/agent-panel-narrow.png",
+      "bytes": 31481,
+      "sha256": "685d34a6aa920713bd9a9b05407a7294824f5d7369ca92c4dc3174e6c1539cd6"
+    },
+    {
+      "blob": "9fe505eaa8ea0548eaeaff6af4ac67f4a4e87fbe",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/conversation-ui-20261119/chat-light.png",
+      "paths": [
+        "docs/reports/conversation-ui-20261119/chat-light.png"
+      ],
+      "current_paths": [
+        "docs/reports/conversation-ui-20261119/chat-light.png"
+      ],
+      "archive_path": "current/docs/reports/conversation-ui-20261119/chat-light.png",
+      "bytes": 60787,
+      "sha256": "7042a5d3ce9fa1bb571c71982b9a61cb52c25837bcbf9ae10054dd49ef413a65"
+    },
+    {
+      "blob": "a38196a009de80f1cf35e01fe1b5f0fdf05152f5",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/queue-requests-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/queue-requests-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/a38196a009de80f1cf35e01fe1b5f0fdf05152f5/docs/reports/ssmcp-iteration-20261119/images/queue-requests-120.png",
+      "bytes": 47126,
+      "sha256": "4291149e8d0a85ed4f7eecd8f750cc1231477c9c13c430c5bedc7640bcde65b5"
+    },
+    {
+      "blob": "a5aa13500de5220f403340a02de5596a70451ae0",
+      "witness_commit": "4bb0c25f0ef7a7230a3246a4679391ac96fd104a",
+      "witness_path": "docs/assets/client-ui.png",
+      "paths": [
+        "docs/assets/client-ui.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/a5aa13500de5220f403340a02de5596a70451ae0/docs/assets/client-ui.png",
+      "bytes": 87462,
+      "sha256": "114521aacfd79fe5a13d2115ce7f27c2910fc7670c0f3ed325b66e254f484b84"
+    },
+    {
+      "blob": "aa95e8982f2ba00de3cf888fecb2b77063aa7b98",
+      "witness_commit": "66cce3c136fa0a3acc18cea7a6c6d970a837e1fe",
+      "witness_path": "docs/assets/portal-console-20261117/sessions-mobile-demo.jpg",
+      "paths": [
+        "docs/assets/portal-console-20261117/sessions-mobile-demo.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/portal-console-20261117/sessions-mobile-demo.jpg"
+      ],
+      "archive_path": "current/docs/assets/portal-console-20261117/sessions-mobile-demo.jpg",
+      "bytes": 29590,
+      "sha256": "1fa06fed5ea2ce33a6272f6994b06b51fc41446e99c43fecf080c5c9d6d1b7fb"
+    },
+    {
+      "blob": "b0dbbe34f087a35b929fa1d024800ad5f2858eb6",
+      "witness_commit": "967f6c4b12bbef1c97ab81582269080b0d40404a",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-main.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-main.png"
+      ],
+      "current_paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-main.png"
+      ],
+      "archive_path": "current/docs/reports/terminal-control-2026-11-16/terminal-main.png",
+      "bytes": 148941,
+      "sha256": "7aa4fa504a76b8c5d45c9b1fda1289893a7718fd7fb20c5a14415962dee2ec91"
+    },
+    {
+      "blob": "b15cf90a4665343b98ab6fdc2ffdbf0a90cbd5aa",
+      "witness_commit": "cc25ae988cb426b530eed2e881674ab6609ab1fb",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/user-wait-reconnected-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/user-wait-reconnected-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/b15cf90a4665343b98ab6fdc2ffdbf0a90cbd5aa/docs/reports/ssmcp-iteration-20261119/images/user-wait-reconnected-48.png",
+      "bytes": 20567,
+      "sha256": "46d3f8610c3ca1116bdb1be30e6b610f0bfc82765542d2dd8fee72be869d504c"
+    },
+    {
+      "blob": "b75b1283dbb53fe27f1d769ad3953449c5bc4005",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png",
+      "bytes": 104126,
+      "sha256": "b497da09a55e42ecf21a2ddb24eee86e55410f2dc29e9303e92773ab8805dbf0"
+    },
+    {
+      "blob": "ba028615bcf0e5be21ed30d44ecd8a006507a9ec",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/frontend-polish-20261119/mobile-traffic.png",
+      "paths": [
+        "docs/reports/frontend-polish-20261119/mobile-traffic.png"
+      ],
+      "current_paths": [
+        "docs/reports/frontend-polish-20261119/mobile-traffic.png"
+      ],
+      "archive_path": "current/docs/reports/frontend-polish-20261119/mobile-traffic.png",
+      "bytes": 49059,
+      "sha256": "1535d00d18b529c5094f7eb063770cc75e84c4d988823cfbf314f385c1af76db"
+    },
+    {
+      "blob": "bb88df21daef4b1d52a4b91d1df99fd76ba7ff9c",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/cua-client-capabilities-20261118/memory-merged-owned-background-browser.jpg",
+      "paths": [
+        "docs/reports/cua-client-capabilities-20261118/memory-merged-owned-background-browser.jpg",
+        "docs/reports/cua-client-capabilities-20261118/owned-background-browser.jpg"
+      ],
+      "current_paths": [
+        "docs/reports/cua-client-capabilities-20261118/memory-merged-owned-background-browser.jpg",
+        "docs/reports/cua-client-capabilities-20261118/owned-background-browser.jpg"
+      ],
+      "archive_path": "current/docs/reports/cua-client-capabilities-20261118/memory-merged-owned-background-browser.jpg",
+      "bytes": 15209,
+      "sha256": "38e901c31f1bca334236b64c096e0dcc45779b29b3c25c1a03a994727cd77d33"
+    },
+    {
+      "blob": "c3374c87644cb2538cc7c567cd8104a1d7fd1210",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-page-120.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-120.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-page-120.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-page-120.png",
+      "bytes": 49433,
+      "sha256": "ad2e8b93378714783e769d7e2824c10a664d8fa414f80220c11f11e0d8e0f1af"
+    },
+    {
+      "blob": "ca4d5945d51ac457fc68d25e2dbf457fbd5275fa",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/ui-audit.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/ui-audit.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/ui-audit.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/ui-audit.png",
+      "bytes": 81760,
+      "sha256": "472cb5cf2f49d0f93236c7e4f15b4fa5e0ce39e36e307130801b9002edbff0d0"
+    },
+    {
+      "blob": "cc99d88ca1e9b6e62ca011471770a29882abb45d",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png"
+      ],
+      "current_paths": [
+        "docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png"
+      ],
+      "archive_path": "current/docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png",
+      "bytes": 101417,
+      "sha256": "81461e79f5b95d293baa8ae7f977ead17329532742dc311ee418ea4cd24913c4"
+    },
+    {
+      "blob": "d0742b6ec4c30c6d6fd845d06ffa7c19bb90277c",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/conversation-ui-20261119/chat-composer.png",
+      "paths": [
+        "docs/reports/conversation-ui-20261119/chat-composer.png"
+      ],
+      "current_paths": [
+        "docs/reports/conversation-ui-20261119/chat-composer.png"
+      ],
+      "archive_path": "current/docs/reports/conversation-ui-20261119/chat-composer.png",
+      "bytes": 98970,
+      "sha256": "f98274ee7e094d6ec7b4be6ac291d8b6113caa255cec23942a76811831258187"
+    },
+    {
+      "blob": "d1392d47aa678be2c2e6acf65e0778e1c757e49a",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/client-audit.png",
+      "paths": [
+        "docs/assets/client-audit.png"
+      ],
+      "current_paths": [
+        "docs/assets/client-audit.png"
+      ],
+      "archive_path": "current/docs/assets/client-audit.png",
+      "bytes": 78614,
+      "sha256": "ace31f231bafa7e51cbad9e5db0c0bb2e9129cdaefa3960fb314414df391719b"
+    },
+    {
+      "blob": "d237a5cfdf903f43d355ae76d1e87f9ddc0f26f5",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/d237a5cfdf903f43d355ae76d1e87f9ddc0f26f5/docs/reports/ssmcp-iteration-20261119/images/read-activity-expanded-120.png",
+      "bytes": 131510,
+      "sha256": "9e5d46210f0d349e863b3aa9110df1f045dbc55b6b6ccff92250624db6fe96b0"
+    },
+    {
+      "blob": "d7c2ea3e6a01bc4ae36639f3e5080f5c60eb8ad6",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/native-image.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/native-image.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/native-image.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/native-image.png",
+      "bytes": 32690,
+      "sha256": "f11269261647bd15fe4d83fc29df75f7176f8f59902aee02e1825dd6bb435654"
+    },
+    {
+      "blob": "d85c63573fc71986256ea4b1abcd071e7b14b03e",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/queue-requests-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/queue-requests-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/d85c63573fc71986256ea4b1abcd071e7b14b03e/docs/reports/ssmcp-iteration-20261119/images/queue-requests-48.png",
+      "bytes": 41416,
+      "sha256": "1861a4bf63aaa46a0ea6a1ebfe542cf8c8271376c950bb247562409bf569f7ac"
+    },
+    {
+      "blob": "d8bacdd1aa36563c18df8af31ae4bea469538b7d",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/d8bacdd1aa36563c18df8af31ae4bea469538b7d/docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-120.png",
+      "bytes": 35996,
+      "sha256": "1af18f3846df37eeeb96964686a1f9549ba9048f59ab9d13783384f8cbe6b3b6"
+    },
+    {
+      "blob": "de54c212125fbe705285525f4c37b5b034e928d3",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/user-wait-sleep-20261120/frame-awake-48.png",
+      "paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-awake-48.png"
+      ],
+      "current_paths": [
+        "docs/reports/user-wait-sleep-20261120/frame-awake-48.png"
+      ],
+      "archive_path": "current/docs/reports/user-wait-sleep-20261120/frame-awake-48.png",
+      "bytes": 39804,
+      "sha256": "a12e09f81a22433c8327733a75652b0286f39d69ac94ef7029246c63ce5232a2"
+    },
+    {
+      "blob": "e359ee61338768d3fc05873091dc776f24500dfe",
+      "witness_commit": "4bb0c25f0ef7a7230a3246a4679391ac96fd104a",
+      "witness_path": "docs/assets/client-ui-light.png",
+      "paths": [
+        "docs/assets/client-ui-light.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/e359ee61338768d3fc05873091dc776f24500dfe/docs/assets/client-ui-light.png",
+      "bytes": 87505,
+      "sha256": "c9b598794a5bb8a9fc75d70d1aa1ab9e4a9bedca9322c7aba09e6aee4a8508a8"
+    },
+    {
+      "blob": "e4e034df04a284857e33a2afaa0d0166f46538e3",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-wide.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-wide.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/e4e034df04a284857e33a2afaa0d0166f46538e3/docs/reports/ssmcp-iteration-20261119/images/at-mouse-completed-wide.png",
+      "bytes": 43433,
+      "sha256": "7dde10786817f123afcd67194b64c79826c0cbc2c80676772f1c7d7eac78b59e"
+    },
+    {
+      "blob": "ea4368f8d847e013db62d442dc2aaef012694c60",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/guide-mobile.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/guide-mobile.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/guide-mobile.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/guide-mobile.png",
+      "bytes": 66129,
+      "sha256": "bf043e226a6d7e6e28acf1101a98f8b7058b7dbc37511f1b304ff64938647b0d"
+    },
+    {
+      "blob": "ea940c14792e1b52f9e965b44a9af7a9a30a5712",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-48.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-48.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/ea940c14792e1b52f9e965b44a9af7a9a30a5712/docs/reports/ssmcp-iteration-20261119/images/queue-request-inspect-48.png",
+      "bytes": 30050,
+      "sha256": "4870fffd08e27d83f72b2ca1b38647a7e929e4416afc68531294f5b08107480b"
+    },
+    {
+      "blob": "ebf2cce7a7dd98311e4b29b37b56d66edc2334f9",
+      "witness_commit": "2c9bb11d2cfbad20a643a75744e3f6ec174ea09a",
+      "witness_path": "docs/reports/listener-integration-20261120/scroll-zones-left-49.png",
+      "paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-49.png"
+      ],
+      "current_paths": [
+        "docs/reports/listener-integration-20261120/scroll-zones-left-49.png"
+      ],
+      "archive_path": "current/docs/reports/listener-integration-20261120/scroll-zones-left-49.png",
+      "bytes": 42500,
+      "sha256": "ed1f3886e6ba1b82ca39b8ce0bdb3271fb538d13c97a17449220ef4cdb4e4d8f"
+    },
+    {
+      "blob": "edc04d5f80f5ee9a9e958353b36a780162763fe4",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/assets/client-ui.png",
+      "paths": [
+        "docs/assets/client-ui.png"
+      ],
+      "current_paths": [
+        "docs/assets/client-ui.png"
+      ],
+      "archive_path": "current/docs/assets/client-ui.png",
+      "bytes": 88294,
+      "sha256": "fc03d6450e7845eaf9a1d6adf12f68c92386f8706522b9691efd2ba68bb9c04c"
+    },
+    {
+      "blob": "ee0e8c02d6582dda38344b9c60c3d95f2c3dc0a6",
+      "witness_commit": "66cce3c136fa0a3acc18cea7a6c6d970a837e1fe",
+      "witness_path": "docs/assets/portal-console-20261117/history-mobile-demo.jpg",
+      "paths": [
+        "docs/assets/portal-console-20261117/history-mobile-demo.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/portal-console-20261117/history-mobile-demo.jpg"
+      ],
+      "archive_path": "current/docs/assets/portal-console-20261117/history-mobile-demo.jpg",
+      "bytes": 28313,
+      "sha256": "c7ecbb03b1d8c838f5abdeb5f28310d7a3994edb353b8e50993833f2721b9619"
+    },
+    {
+      "blob": "ef0bb435871922201dcb928e70cfa7da4fce314b",
+      "witness_commit": "4835c6af82c5f29ab788ce2e1e64a61a9a9e322d",
+      "witness_path": "docs/assets/portal-console-20261117/live-home.jpg",
+      "paths": [
+        "docs/assets/portal-console-20261117/live-home.jpg"
+      ],
+      "current_paths": [
+        "docs/assets/portal-console-20261117/live-home.jpg"
+      ],
+      "archive_path": "current/docs/assets/portal-console-20261117/live-home.jpg",
+      "bytes": 69380,
+      "sha256": "6eeafa8d46ff9dd43e409426e27a561ff5e9bbc57b09986025a6ad992dd3a51d"
+    },
+    {
+      "blob": "ef5d737fe75428a819deb8f9f2eb310fccaec16c",
+      "witness_commit": "967f6c4b12bbef1c97ab81582269080b0d40404a",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-build.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-build.png"
+      ],
+      "current_paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-build.png"
+      ],
+      "archive_path": "current/docs/reports/terminal-control-2026-11-16/terminal-build.png",
+      "bytes": 157807,
+      "sha256": "3796458adc2a4a3ae7acc9719e6b2b4365c13be054b4f748e95c7b3d10c506ed"
+    },
+    {
+      "blob": "f1204633a26463249e393ef76a3eaead1f16748f",
+      "witness_commit": "3f514bc1951fe4ed5d90f7fde3d15fa63d4a10de",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/force-accepted-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/force-accepted-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/f1204633a26463249e393ef76a3eaead1f16748f/docs/reports/ssmcp-iteration-20261119/images/force-accepted-120.png",
+      "bytes": 47244,
+      "sha256": "bdbe65d3a0f4bc3570659e2e4f768eb7e57eab5d082f6db0607ee5b622e06ad1"
+    },
+    {
+      "blob": "f17e734fef3a51687467f8868ce478fbe0224a0f",
+      "witness_commit": "cc25ae988cb426b530eed2e881674ab6609ab1fb",
+      "witness_path": "docs/reports/ssmcp-iteration-20261119/images/user-wait-active-120.png",
+      "paths": [
+        "docs/reports/ssmcp-iteration-20261119/images/user-wait-active-120.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/f17e734fef3a51687467f8868ce478fbe0224a0f/docs/reports/ssmcp-iteration-20261119/images/user-wait-active-120.png",
+      "bytes": 32480,
+      "sha256": "6d067c6906f9bfe327159e35be984fad5077677a259142307bf220b5bec53cb5"
+    },
+    {
+      "blob": "f2dba4e214a579adaec16e11dcfad66a7494ffdc",
+      "witness_commit": "6679a358dfac28901162f232b6fc651196e81bf5",
+      "witness_path": "docs/assets/terminal-logs.png",
+      "paths": [
+        "docs/assets/terminal-logs.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/f2dba4e214a579adaec16e11dcfad66a7494ffdc/docs/assets/terminal-logs.png",
+      "bytes": 90007,
+      "sha256": "b34548287f2f760f0b65260672cb849876c2599c09d41cc5711fd4dcc5d58d72"
+    },
+    {
+      "blob": "f33b55f4f0cb76f93eb466937d83de95c1997a26",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/reports/portal-air-20261119/mobile-exhausted.png",
+      "paths": [
+        "docs/reports/portal-air-20261119/mobile-exhausted.png"
+      ],
+      "current_paths": [
+        "docs/reports/portal-air-20261119/mobile-exhausted.png"
+      ],
+      "archive_path": "current/docs/reports/portal-air-20261119/mobile-exhausted.png",
+      "bytes": 32048,
+      "sha256": "d4923d867461c8c3a8d229ac3d4911c37841d861bd055ea3c74827dd11141e6c"
+    },
+    {
+      "blob": "f4570646e2c84eec8856de9db7a5203386a3ba15",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg",
+      "paths": [
+        "docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg"
+      ],
+      "current_paths": [
+        "docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg"
+      ],
+      "archive_path": "current/docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg",
+      "bytes": 12639,
+      "sha256": "41fbcdbdf5fc2965bb51eb0cc8fd1dd882a6544df5310f3f2088d805e4a0b961"
+    },
+    {
+      "blob": "f609893c32db84a39afc6d8bebc08a54b784ac1b",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/agent-panel-narrow-models.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-narrow-models.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-narrow-models.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/agent-panel-narrow-models.png",
+      "bytes": 32167,
+      "sha256": "0c49cc90b5150d916676e228a8450e2e1534bb47e52cad11225b46b1174b0efd"
+    },
+    {
+      "blob": "f6ee4b4e43fe214d7e4db999374f847d99f1e3df",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/2026-11-18-execution-state-integrity.validation.json.gz",
+      "paths": [
+        "docs/reports/2026-11-18-execution-state-integrity.validation.json.gz"
+      ],
+      "current_paths": [
+        "docs/reports/2026-11-18-execution-state-integrity.validation.json.gz"
+      ],
+      "archive_path": "current/docs/reports/2026-11-18-execution-state-integrity.validation.json.gz",
+      "bytes": 11939,
+      "sha256": "65b52ffac4b5c0eacfb22d09272eec5ac19533faef5c4e33c8c43925b833e6bc"
+    },
+    {
+      "blob": "fa2a2f420a65e53bc5bd477001890ab83e88791a",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png",
+      "bytes": 38502,
+      "sha256": "af2501260d39c709a38e93eb7889db400a1182f191a7e20085d5e227113eeb3f"
+    },
+    {
+      "blob": "fab6f76b4364989272f830770b6aa4d18b2c36b0",
+      "witness_commit": "220e5d39e99c885410a66e9e74fc2c04f05f486b",
+      "witness_path": "docs/reports/terminal-control-2026-11-16/terminal-logs.png",
+      "paths": [
+        "docs/reports/terminal-control-2026-11-16/terminal-logs.png"
+      ],
+      "current_paths": [],
+      "archive_path": "historical/fab6f76b4364989272f830770b6aa4d18b2c36b0/docs/reports/terminal-control-2026-11-16/terminal-logs.png",
+      "bytes": 131891,
+      "sha256": "68b1143e312fa459c1a4845ed7f5077ab0d0428ea9807a208701a7fe9e8f0dc8"
+    },
+    {
+      "blob": "fc75041735797f19e2cc50feca8d5f4709926664",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/agent-panel-readability-20261118/agent-panel-callers.png",
+      "paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-callers.png"
+      ],
+      "current_paths": [
+        "docs/reports/agent-panel-readability-20261118/agent-panel-callers.png"
+      ],
+      "archive_path": "current/docs/reports/agent-panel-readability-20261118/agent-panel-callers.png",
+      "bytes": 55356,
+      "sha256": "3cc9e1a07fae776756dc12fb62c2bc74886d1db48de0f1a1dd83b78121c10792"
+    },
+    {
+      "blob": "fce61e64f7d58c466a34c9fd4f66dcfcc18295f2",
+      "witness_commit": "887b3824c1c3f0e66bc4cde1e7fd02ccecdbc9bf",
+      "witness_path": "docs/reports/client-completion-20261118/ui-scroll-hint.png",
+      "paths": [
+        "docs/reports/client-completion-20261118/ui-scroll-hint.png"
+      ],
+      "current_paths": [
+        "docs/reports/client-completion-20261118/ui-scroll-hint.png"
+      ],
+      "archive_path": "current/docs/reports/client-completion-20261118/ui-scroll-hint.png",
+      "bytes": 61948,
+      "sha256": "4300dc3f1aee4d22963a3da1e50a10320d5deeaffc8d45949dcb117a2c21f59f"
+    },
+    {
+      "blob": "fee341850f1b138a0f6bfcbe8ddae9ae04d7282f",
+      "witness_commit": "704f8bbea0bab3b5e0d5a454b2b151385184f209",
+      "witness_path": "docs/qa/oauth-air-2026-11-19/mobile-login-code.png",
+      "paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-login-code.png"
+      ],
+      "current_paths": [
+        "docs/qa/oauth-air-2026-11-19/mobile-login-code.png"
+      ],
+      "archive_path": "current/docs/qa/oauth-air-2026-11-19/mobile-login-code.png",
+      "bytes": 60069,
+      "sha256": "a6b74552932ca323bcb02d2a5c5cf33b063160cea5ce618445ad30d8f4c1a02c"
+    },
+    {
+      "blob": "ffba1ab03d2cb4f9e8407f811169c477e7c2d94f",
+      "witness_commit": "66a1fbd4905b8cc26ff43dc09454764a6465cdd2",
+      "witness_path": "docs/reports/zuse-integration-20261120/native-desktop.jpg",
+      "paths": [
+        "docs/reports/zuse-integration-20261120/native-desktop.jpg"
+      ],
+      "current_paths": [
+        "docs/reports/zuse-integration-20261120/native-desktop.jpg"
+      ],
+      "archive_path": "current/docs/reports/zuse-integration-20261120/native-desktop.jpg",
+      "bytes": 12824,
+      "sha256": "15297c66ba8ea5f5d269f79b00881917a78c0888f64538b9003cc2bc8b2214b5"
+    }
+  ]
+}

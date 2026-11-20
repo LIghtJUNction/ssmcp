@@ -96,9 +96,9 @@ release 构建和 `cargo package --workspace --locked` 均已通过。本地 Arc
 
 以下图片由真实 PTY 的 VT 单元快照逐格渲染，保留原始颜色与文字；它们不模拟光标闪烁或 Kitty 图片层。原生图片和二维码另有真实 ztty 窗口截图及像素/扫码检查。
 
-![活动区与语义颜色](client-completion-20261118/ui-chat.png)
+[活动区与语义颜色](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/client-completion-20261118/ui-chat.png`）
 
-![滚动提示与返回底部快捷键](client-completion-20261118/ui-scroll-hint.png)
+[滚动提示与返回底部快捷键](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/client-completion-20261118/ui-scroll-hint.png`）
 
 ## 7. 证据索引
 

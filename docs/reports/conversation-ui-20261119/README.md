@@ -33,19 +33,19 @@
 
 ### 深色默认布局
 
-![深色默认对话页](chat-dark.png)
+[深色默认对话页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/conversation-ui-20261119/chat-dark.png`）
 
 ### 浅色主题
 
-![浅色对话页](chat-light.png)
+[浅色对话页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/conversation-ui-20261119/chat-light.png`）
 
 ### 80 列窄窗口
 
-![80 列窄窗口](chat-narrow.png)
+[80 列窄窗口](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/conversation-ui-20261119/chat-narrow.png`）
 
 ### 中文多行输入与按需打开的侧栏
 
-![中文多行输入](chat-composer.png)
+[中文多行输入](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/conversation-ui-20261119/chat-composer.png`）
 
 截图脚本增加了可选字体回退：默认等宽字体负责常规字符，缺失的中文字形由指定字体补足；布局仍来自原始 VT 单元格。
 

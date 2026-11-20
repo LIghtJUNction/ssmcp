@@ -30,9 +30,9 @@
 
 以下是最终公网首屏的原始截图，使用临时 profile 的独立 headless Chromium，未连接用户浏览器或操作用户桌面。根端已查看桌面和手机首屏；完整页面另有浏览器布局及资源检查。
 
-![英文桌面首屏](ssmcp-iteration-20261118/images/guide-english-desktop.png)
+[英文桌面首屏](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png`）
 
-![中文手机首屏](ssmcp-iteration-20261118/images/guide-chinese-mobile.png)
+[中文手机首屏](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png`）
 
 ### 版本边界
 
@@ -57,7 +57,7 @@
 
 同一源码的 R7 实机界面验收包括 client UI 45 项、原生图片 50 项、指南 34 项，共 129 项断言。它们采用真实 PTY、独立 Xvfb 和实际 ztty 0.2.1。二维码已从真实终端截图被 zbar 精确解码；小终端显示完整文字链接，没有残留裁切图。[界面](ssmcp-iteration-20261118/r7-client-ui.json) · [图片](ssmcp-iteration-20261118/r7-native-images.json) · [指南](ssmcp-iteration-20261118/r7-guide.json)
 
-![120 × 30 的真实二维码](ssmcp-iteration-20261118/images/qr-120x30.png)
+[120 × 30 的真实二维码](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png`）
 
 ## 已安装的优化版
 

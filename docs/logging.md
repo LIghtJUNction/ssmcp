@@ -69,7 +69,7 @@ HEAD 改变时先清除旧历史，再读取对应提交链，失败显示 unava
 
 Codex 命令调用以一次原生 `command/exec` 请求和响应为显示单位。外层工具调用通过桥接端生成的 `harness_call_id` 与原生请求精确对应；默认日志显示一套开始和结果，右侧活动区跟踪同一条命令。并行命令乱序完成时仍按各自 ID 配对。派发或发送失败、没有收到原生响应时保留外层失败提示；verbose 和 JSONL 保留外层审计元数据。其他工具调用继续显示各自的开始和结束。[调用关联](../src/backend/rpc.rs) · [回归事件](../src/client/readable_log_fixture.rs)
 
-![默认活动流、输入框与侧栏](assets/client-ui.png)
+[默认活动流、输入框与侧栏](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui.png`）
 
 图片使用固定示例数据，由客户端实际渲染器生成；其中的命令与耗时属于样例。运行 `ssmcp ui preview` 可以在自己的终端检查布局、配色和操作。
 

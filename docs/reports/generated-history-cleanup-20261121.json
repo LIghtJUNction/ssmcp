@@ -1,0 +1,173 @@
+{
+  "schema": "ssmcp.generated-history-cleanup.v1",
+  "repository": "LIghtJUNction/ssmcp",
+  "status": "completed_for_controlled_branch_and_tag_history",
+  "scope": "Remove confirmed generated binary media and prepared evidence archives from Git history while preserving source, necessary runtime assets, original evidence bytes in external archives, and original published build identities.",
+  "first_pass": {
+    "report": "history-cleanup-20261121.json",
+    "report_git_blob_sha1": "80af2421872869276d217844884ccf172753c170",
+    "removed_paths": 42,
+    "status": "completed",
+    "completed_at": "2026-11-20T16:57:07.567879+00:00"
+  },
+  "second_pass": {
+    "removed_paths": 110,
+    "current_tip_paths": 91,
+    "historical_only_paths": 19,
+    "unique_removed_blob_versions": 116,
+    "removed_payload_bytes": 10978074,
+    "rewritten_history_commits": 1205,
+    "unchanged_commits_preserved": 17,
+    "unique_historical_root_trees_checked": 1150,
+    "retained_recursive_tree_entries_identical": true,
+    "remaining_selected_paths_in_controlled_history": 0,
+    "changed_branches": 112,
+    "changed_tags": 29,
+    "annotated_tags": 27,
+    "lightweight_tags": 2,
+    "annotated_tag_message_and_tagger_preserved": true,
+    "invalid_commit_signature_headers_removed": 635,
+    "necessary_runtime_asset_preserved": "src/portal/brand-mark.png",
+    "old_main": "7ddaeab07be67f25f8277aa37486474710cb1fa3",
+    "cleaned_main": "0128c356746b6a29b2cee811c3374c2f891c581f",
+    "source_compatibility_commit": "4b73e6b339cd1880c6c7327295189fc96d74cb42"
+  },
+  "total_removed_distinct_paths_across_both_passes": 152,
+  "publication": {
+    "branches": {
+      "status": "branches_pushed_tags_unchanged",
+      "exit_code": 0,
+      "atomic": true,
+      "explicit_force_with_lease": true,
+      "changed_branches": 112,
+      "old_main": "7ddaeab07be67f25f8277aa37486474710cb1fa3",
+      "new_main": "0128c356746b6a29b2cee811c3374c2f891c581f",
+      "published_tags_unchanged": true,
+      "all_remote_heads_and_tags_match": true,
+      "stdout_sha256": "3c942b7de3d69267b5d19a63dc1ad83f34eabc7b1c76ec70b2a429342c01b505",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "finished_at": "2026-11-20T17:47:51.997179+00:00"
+    },
+    "tags": {
+      "status": "all_controlled_branches_and_tags_cleaned",
+      "atomic_tag_update": true,
+      "explicit_force_with_lease": true,
+      "changed_tags": 29,
+      "source_compatibility_commit": "4b73e6b339cd1880c6c7327295189fc96d74cb42",
+      "all_remote_heads_and_tags_match": true,
+      "removed_paths": 110,
+      "remaining_selected_paths_in_controlled_history": 0,
+      "release_assets_modified_by_this_operation": false,
+      "manifest_build_commits_modified": false,
+      "stdout_sha256": "ef8ae87f0169492032094cbfaa5189eea5363be1fab8b0c9ef281e6b8a867103",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "finished_at": "2026-11-20T17:59:34.985344+00:00",
+      "scope_limit": "GitHub-managed pull-request refs, caches and physical server garbage collection are not writable or verified by this operation."
+    }
+  },
+  "proof_receipts": [
+    {
+      "file": "rewrite-receipt.json",
+      "bytes": 110743,
+      "sha256": "9e8dfb15a9b145b7ad8050e77306aa884e811a3883bdaa3e34693113643a45a5"
+    },
+    {
+      "file": "push-branches-receipt.json",
+      "bytes": 571,
+      "sha256": "e209735d1810ea0b2105895d7192bda88ad84b9caba5a3927b4694db3253dd0e"
+    },
+    {
+      "file": "push-tags-receipt.json",
+      "bytes": 819,
+      "sha256": "7288a4b96b5d5636a8a76c6b6fc9b0d33989ca5313d6b9c00c905947eb69dd69"
+    }
+  ],
+  "backup": {
+    "before_rewrite_bundle": {
+      "file_name": "before-all-generated-cleanup.bundle",
+      "bytes": 22784134,
+      "sha256": "e3feb5d740564b4c0f558ad4d8f8f17f9285bf1b34e390dbd94f30f0f44b6dc6"
+    },
+    "removed_paths_list": {
+      "file_name": "remove-paths.txt",
+      "bytes": 6428,
+      "sha256": "cc6a99fed11e73fd11cfe6dbb05f86fcdc1ba738e5c6294d54866b15434aaf27"
+    },
+    "original_media_manifest": {
+      "repository_path": "docs/reports/generated-history-media-manifest-20261121.json",
+      "bytes": 70382,
+      "sha256": "f5215181a9aa625ae51c701028d94011b698dd9c231d9dd83adee9998c86a7ed"
+    },
+    "cloud_archive": {
+      "file_id": "1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF",
+      "url": "https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view",
+      "bytes": 10046099,
+      "sha256": "23ba02e5e21cdbfbe62a9e93b405d27bd606d1425aa4ddf7a9c7102cc3befc4d",
+      "zip_members": 118,
+      "original_payload_members": 116,
+      "downloaded_complete_archive_verified": true,
+      "all_payload_git_blob_sha1_sha256_and_bytes_verified": true,
+      "drive_sharing_permissions_changed": false,
+      "location_receipt": "generated-history-media-locations-20261121.json"
+    }
+  },
+  "published_release_identity": {
+    "status": "post_publication_release_identity_verified",
+    "checked_at": "2026-11-20T18:11:50.655052+00:00",
+    "release_count": 5,
+    "manifest_bytes_downloaded_and_equal_before_after": true,
+    "actual_linux_asset_metadata_checks": 10,
+    "binary_archives_redownloaded": false,
+    "deployment_executed": false,
+    "receipt": {
+      "path": "post-publication-release-check-20261121.json",
+      "bytes": 5041,
+      "sha256": "f5d16fde47598d5ffa790f43ebfaa3b795ce1eed41b0720f6e122da8bec169f4"
+    },
+    "source_build_identity_document": "../release-history.md",
+    "releases": [
+      {
+        "tag": "v0.10.10",
+        "build_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+        "source_commit": "961879e26ddf6697efbcc9acb4d39affb9968435",
+        "manifest_sha256": "b6e4a14bf019bdc3be4d440864fcdef00302696e73c430c928384fd7ccfab15d",
+        "remote_tag_verified": true
+      },
+      {
+        "tag": "v0.10.13",
+        "build_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+        "source_commit": "ed067954d5279eb23245805e14e761d2e6971e5e",
+        "manifest_sha256": "18c21b28dd523bf5ce0e4c8c5758a95fe68947bc09a68fa01320bdc7c6c82d33",
+        "remote_tag_verified": true
+      },
+      {
+        "tag": "v0.10.20",
+        "build_commit": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+        "source_commit": "54532e0916ce3dbb9609796684c24488824b2a73",
+        "manifest_sha256": "52bf95a1cbd624b8532fddb6d5ee4895480c3b5bad901eab16cac1af8ee29f67",
+        "remote_tag_verified": true
+      },
+      {
+        "tag": "v0.5.1",
+        "build_commit": "c75309a9acab27c684c0beaaf9d22fd991200760",
+        "source_commit": "52187740ed00f538e2c3e40eda733f2cb075df40",
+        "manifest_sha256": "c6fbf596377412d0479548cc69f382f29677da9f2caaedcebcffda568e5d12e6",
+        "remote_tag_verified": true
+      },
+      {
+        "tag": "v0.6.3",
+        "build_commit": "3e3b7b6f8cce30b77e83a11d7cc01e595a59a849",
+        "source_commit": "740782217036bdeb47261576e11414d51222b862",
+        "manifest_sha256": "82885ec6fa3b69b8ee857ba3d279a1bf61dcad4ecaf7e5cc4c585ed559733d76",
+        "remote_tag_verified": true
+      }
+    ]
+  },
+  "limits": [
+    "GitHub-managed pull-request refs, caches, and physical server garbage collection are not writable or verified by this operation.",
+    "Historical Release binaries and their original manifest build commits were not rebuilt, replaced, or relabeled as binaries built from the cleaned source commits.",
+    "A later new-source product acceptance and formal release are separate operations; this report does not claim that the new time or paste features passed runtime tests.",
+    "Older Makefiles in the documented historical tags may reference removed image globs. Historical deployment must use the updated source/build identity helper where applicable; old tags do not acquire new helper behavior."
+  ],
+  "native_proof_directory": "/home/lightjunction/Documents/GITHUB/ssmcp-history-cleanup-all-generated-20261121"
+}

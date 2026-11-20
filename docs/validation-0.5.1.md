@@ -84,7 +84,7 @@ return await reload(clientId);
 
 终端显示任务 ID、命令、工作目录、耗时及退出状态，stdout 与 stderr 按任务标识分组，文件修改提供受限的差异预览；长输出保存位置可直接定位。支持 `--log-format jsonl`、`--verbose`、`--no-color` 和 `NO_COLOR`。结构化输出与终端美化分开，自动化程序可继续读取事件字段。[渲染实现与样本测试](https://github.com/LIghtJUNction/ssmcp/blob/c75309a9acab27c684c0beaaf9d22fd991200760/src/client/render.rs)
 
-![终端事件排版样本](https://raw.githubusercontent.com/LIghtJUNction/ssmcp/c75309a9acab27c684c0beaaf9d22fd991200760/docs/assets/terminal-logs.png)
+[终端事件排版样本](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/terminal-logs.png`）
 
 图片是固定事件输入的排版样本，用于检查颜色、层次和换行，不代表生产运行耗时。当前提交的真实渲染输出另保存在 CI 的 `terminal-preview` artifact 中。
 

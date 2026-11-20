@@ -33,7 +33,7 @@
 
 [工作区清理摘要](reports/workspace-cleanup-20261116-summary.json)记录移除一个干净且已合并的旧 worktree，并清理另外两个 worktree 的 Cargo 缓存；父目录源码和本地证据保留。两个缓存清理前共分配 3,941,148 KiB，约 3.76 GiB，这是目录占用合计而非文件系统可用空间的独立实测增量。其余七个 worktree、原工作区九个已记录哈希的未提交文件及当前构建和证据受到保护。
 
-![r5 实际终端中的并行任务、文件 Diff 与 Git 历史](assets/terminal-sidebar-r5-20261116.jpg)
+[r5 实际终端中的并行任务、文件 Diff 与 Git 历史](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/terminal-sidebar-r5-20261116.jpg`）
 
 图片来自 2026-11-16 16:19:03.898 UTC 的实际物理窗口，绑定 r5 `5798d181…` 镜像，原样保留输入法叠层。[精简来源记录](reports/terminal-sidebar-r5-20261116.json)区分初始 TTY 尺寸采样与截图中的子窗格尺寸。此预览省略 metadata title 以连接旧 Broker，不代表完整 title daemon 线上验收或最终发布镜像。后续须在 Broker 升级后保留完整参数复验。
 

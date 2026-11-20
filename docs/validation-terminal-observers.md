@@ -47,8 +47,8 @@ and the interactive shell marker. The Kitty screenshot also shows the Unicode ar
 and exit code 7; the ztty screenshot shows the retained tail after window reopening.
 Only disposable fixture content appears in these images.
 
-- [Kitty screenshot](reports/tty-observer-kitty-20261118.png)
-- [ztty screenshot](reports/tty-observer-ztty-20261118.png)
+- [Kitty screenshot](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/tty-observer-kitty-20261118.png`）
+- [ztty screenshot](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/tty-observer-ztty-20261118.png`）
 
 ## Reproduction
 

@@ -37,7 +37,7 @@
 
 浏览器实际检查了公开首页和未登录管理员入口。下图是已上线的公开首页；其他文档中的管理员、会话及历史截图为明确标注的演示数据。没有代替用户完成真实 GitHub 登录。
 
-![实际线上门户首页](../../assets/portal-console-20261117/live-home.jpg)
+[实际线上门户首页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/portal-console-20261117/live-home.jpg`）
 
 ## 部署过程与回执恢复
 

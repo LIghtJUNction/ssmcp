@@ -1,0 +1,132 @@
+{
+  "status": "post_publication_release_identity_verified",
+  "published_release_count": 5,
+  "manifest_bytes_downloaded_and_equal_before_after": true,
+  "actual_linux_asset_metadata_checks": 10,
+  "binary_archives_redownloaded": false,
+  "deployment_executed": false,
+  "helper_sha256": "7b54024af74bd87a8a2ba5c7b8be65513ca2bcdd7cc4fcb427d3591676550c2c",
+  "releases": [
+    {
+      "tag": "v0.10.10",
+      "manifest_asset_id": 767667985,
+      "manifest_bytes": 1798,
+      "manifest_sha256": "b6e4a14bf019bdc3be4d440864fcdef00302696e73c430c928384fd7ccfab15d",
+      "original_manifest_bytes_equal": true,
+      "build_commit": "52a531a59e9ec9236a76eafc0f4f068799e44b15",
+      "source_commit": "961879e26ddf6697efbcc9acb4d39affb9968435",
+      "remote_tag_verified": true,
+      "linux_archives_metadata_verified": [
+        {
+          "machine": "x86_64",
+          "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "bytes": 8096043,
+          "sha256": "42c22dabfe41d4fc2fecbabaaf222c9d35bb9b77b4550c4daccada4290530920"
+        },
+        {
+          "machine": "aarch64",
+          "archive": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "bytes": 7835073,
+          "sha256": "4065ded7d71f5d7cb1ee33f32c5f306402f3825825aa68fa549bf9c998c080ce"
+        }
+      ]
+    },
+    {
+      "tag": "v0.10.13",
+      "manifest_asset_id": 769221231,
+      "manifest_bytes": 1798,
+      "manifest_sha256": "18c21b28dd523bf5ce0e4c8c5758a95fe68947bc09a68fa01320bdc7c6c82d33",
+      "original_manifest_bytes_equal": true,
+      "build_commit": "4e3132d60600dca5053af81cdefa6962c3058ac4",
+      "source_commit": "ed067954d5279eb23245805e14e761d2e6971e5e",
+      "remote_tag_verified": true,
+      "linux_archives_metadata_verified": [
+        {
+          "machine": "x86_64",
+          "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "bytes": 9529375,
+          "sha256": "b5042d0125a70356f83b2995453d377ae4ffcbb079aaade53abe896133fbf12b"
+        },
+        {
+          "machine": "aarch64",
+          "archive": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "bytes": 9217874,
+          "sha256": "d188e807d3e8e8e6e892e90f0f962052a3747ed0def7a2a005fa988e1aad6c48"
+        }
+      ]
+    },
+    {
+      "tag": "v0.10.20",
+      "manifest_asset_id": 771257869,
+      "manifest_bytes": 2118,
+      "manifest_sha256": "52bf95a1cbd624b8532fddb6d5ee4895480c3b5bad901eab16cac1af8ee29f67",
+      "original_manifest_bytes_equal": true,
+      "build_commit": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+      "source_commit": "54532e0916ce3dbb9609796684c24488824b2a73",
+      "remote_tag_verified": true,
+      "linux_archives_metadata_verified": [
+        {
+          "machine": "x86_64",
+          "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "bytes": 10141793,
+          "sha256": "33ab32051b99fa36c11935dd8438d0987c073bcb64317bec11a227d29eacb2cc"
+        },
+        {
+          "machine": "aarch64",
+          "archive": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "bytes": 9826170,
+          "sha256": "3b6784c5df3e8193cdc9c7b7919c601fdce398eda40db5ed500d262704267eab"
+        }
+      ]
+    },
+    {
+      "tag": "v0.5.1",
+      "manifest_asset_id": 754245037,
+      "manifest_bytes": 1448,
+      "manifest_sha256": "c6fbf596377412d0479548cc69f382f29677da9f2caaedcebcffda568e5d12e6",
+      "original_manifest_bytes_equal": true,
+      "build_commit": "c75309a9acab27c684c0beaaf9d22fd991200760",
+      "source_commit": "52187740ed00f538e2c3e40eda733f2cb075df40",
+      "remote_tag_verified": true,
+      "linux_archives_metadata_verified": [
+        {
+          "machine": "x86_64",
+          "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "bytes": 5664950,
+          "sha256": "1829b50022a442c4d4083bcafd33433b12e48d8cd2565d020e6c010197580ad8"
+        },
+        {
+          "machine": "aarch64",
+          "archive": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "bytes": 5353752,
+          "sha256": "b40626c44ae860a26bae0653edd91aa7454a0122707f2da3c021479ff8974600"
+        }
+      ]
+    },
+    {
+      "tag": "v0.6.3",
+      "manifest_asset_id": 757788908,
+      "manifest_bytes": 1449,
+      "manifest_sha256": "82885ec6fa3b69b8ee857ba3d279a1bf61dcad4ecaf7e5cc4c585ed559733d76",
+      "original_manifest_bytes_equal": true,
+      "build_commit": "3e3b7b6f8cce30b77e83a11d7cc01e595a59a849",
+      "source_commit": "740782217036bdeb47261576e11414d51222b862",
+      "remote_tag_verified": true,
+      "linux_archives_metadata_verified": [
+        {
+          "machine": "x86_64",
+          "archive": "ssmcp-x86_64-unknown-linux-gnu.tar.gz",
+          "bytes": 6997191,
+          "sha256": "1af72cd8af221911b5cd7b432d22e9d9393340d18c56ce2cdc3b2e2269719bba"
+        },
+        {
+          "machine": "aarch64",
+          "archive": "ssmcp-aarch64-unknown-linux-gnu.tar.gz",
+          "bytes": 6569088,
+          "sha256": "40c0e0f5a1e478704525f52232ffec7e42d64f22d13d530802c950bc1dcb1249"
+        }
+      ]
+    }
+  ],
+  "checked_at": "2026-11-20T18:11:50.655052+00:00"
+}

@@ -8,7 +8,7 @@
 
 默认客户端改为连续活动流、固定多行输入框和可折叠状态侧栏。深色主题采用浅色文字、低对比度辅助信息与暖色强调；浅色主题和逐项自定义颜色仍可使用。旧终端区域由原始 `code_mode` 审计取代，Shell 能力保留在独立的原生终端接口中。
 
-![默认客户端](../../assets/client-ui.png)
+[默认客户端](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/assets/client-ui.png`）
 
 图片由生产渲染器回放固定示例生成。成员、命令输出和耗时是用于检查排版的示例；它们不作为运行测试通过的证据。
 

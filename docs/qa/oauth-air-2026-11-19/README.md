@@ -29,12 +29,12 @@ Two initial browser assertions expected values that were absent from their fixtu
 
 | Screenshot | Capture |
 | --- | --- |
-| [desktop-redirect.png](desktop-redirect.png) | 1440×1100 login handoff |
-| [desktop-consent.png](desktop-consent.png) | 1440×1100 consent |
-| [mobile-redirect.png](mobile-redirect.png) | 390×844 login handoff |
-| [mobile-consent.png](mobile-consent.png) | 390×844 consent |
-| [mobile-login-code.png](mobile-login-code.png) | 390px wide full page, 1118px tall; CSS viewport 390×844 |
-| [small-mobile-error.png](small-mobile-error.png) | 320×740 error |
+| [desktop-redirect.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/desktop-redirect.png`） | 1440×1100 login handoff |
+| [desktop-consent.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/desktop-consent.png`） | 1440×1100 consent |
+| [mobile-redirect.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/mobile-redirect.png`） | 390×844 login handoff |
+| [mobile-consent.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/mobile-consent.png`） | 390×844 consent |
+| [mobile-login-code.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/mobile-login-code.png`） | 390px wide full page, 1118px tall; CSS viewport 390×844 |
+| [small-mobile-error.png](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/qa/oauth-air-2026-11-19/small-mobile-error.png`） | 320×740 error |
 
 The six captures were visually inspected. The machine-readable results, source hashes and screenshot sizes are in [browser-qa.json](browser-qa.json).
 

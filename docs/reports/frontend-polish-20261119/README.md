@@ -101,16 +101,16 @@ ztty 修复已在最新 0.3.1 主线基础上重新构建。实际合并提交�
 
 ### 桌面会话页
 
-![桌面会话页](desktop-sessions.png)
+[桌面会话页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/frontend-polish-20261119/desktop-sessions.png`）
 
 ### 桌面管理页
 
-![桌面管理页](desktop-admin.png)
+[桌面管理页](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/frontend-polish-20261119/desktop-admin.png`）
 
 ### 手机端
 
 | 历史记录 | 管理员 | 流量与订单 |
 |---|---|---|
-| ![历史记录](mobile-history.png) | ![管理员](mobile-admin.png) | ![流量与订单](mobile-traffic.png) |
+| [历史记录](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/frontend-polish-20261119/mobile-history.png`） | [管理员](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/frontend-polish-20261119/mobile-admin.png`） | [流量与订单](https://drive.google.com/file/d/1Rr9t9SpoMdwQJuHbW3eYRbgtg-krhUkF/view)（ZIP 内：`current/docs/reports/frontend-polish-20261119/mobile-traffic.png`） |
 
 截图中的账户、配额、价格与订单均为合成测试数据。
