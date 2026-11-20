@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "recorded_utc": "2026-11-20T03:13:29.404868+00:00",
+  "status": "partial_validation; native completion is pending resource admission",
+  "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+  "compiled_source_tree": "b24ba5c998431522c280b8ee534cde91c4611a91",
+  "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+  "cargo_package_version": "0.10.14",
+  "formal_application_release": false,
+  "submodules": [
+    "e3580c01c7252da090d04e59b59762bc561777d1 crates/zharness (v0.5.1)",
+    "00d566eedcff7b2932e90b9dfeb44910c783d305 crates/zplugin (v0.3.1)",
+    "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e crates/ztuio (v0.1.0)",
+    "d930769005d307c42639e8abedc81ab039427e40 crates/zuse (v0.2.1)"
+  ],
+  "environment": {
+    "build_and_cloud_runtime": "Debian GNU/Linux 13.6 (trixie), x86_64, glibc 2.41",
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "rustc_commit": "0ef1bc386059596dada8fb65b50425aab2ea637a",
+    "cargo": "1.100.0 (3acc79c0c 2026-11-05)",
+    "profile": "repository dev/test profiles; no release-profile claim",
+    "cloud_resource_mechanism": "userspace RSS and MemAvailable watchdog; no cgroup hard limit",
+    "cargo_jobs": 1,
+    "nice": 19,
+    "cloud_host_reserve_bytes": 3221225472,
+    "source_and_lock_unchanged": true
+  },
+  "build": {
+    "clippy": {
+      "command": "cargo clippy --workspace --all-targets --locked --offline -- -D warnings",
+      "name": "clippy",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 206.717,
+      "peak_group_rss_bytes": 138371072,
+      "peak_group_swap_bytes": 0,
+      "minimum_available_bytes": 6373687296,
+      "measurement_note": "This successful invocation included a build-lock wait and reused the same target cache; its sampled RSS is not the entire cold compilation peak."
+    },
+    "preserved_three_gib_attempt": {
+      "name": "test-artifacts",
+      "status": "owned_group_rss_stopped",
+      "exit_code": -15,
+      "duration_seconds": 83.09,
+      "peak_group_rss_bytes": 3222134784,
+      "peak_group_swap_bytes": 0,
+      "minimum_available_bytes": 6418653184,
+      "stop_reason": "owned_group_rss_stopped",
+      "termination": "supervisor SIGTERM at the configured RSS threshold; not an OOM result",
+      "rss_threshold_bytes": 3221225472
+    },
+    "completed_four_gib_attempt": {
+      "status": "passed",
+      "rss_threshold_bytes": 4294967296,
+      "host_reserve_bytes": 3221225472,
+      "steps": [
+        {
+          "name": "test-artifacts",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 182.762,
+          "peak_group_rss_bytes": 3747651584,
+          "peak_group_swap_bytes": 0,
+          "minimum_available_bytes": 5960253440
+        },
+        {
+          "name": "application-artifacts",
+          "status": "passed",
+          "exit_code": 0,
+          "duration_seconds": 1.816,
+          "peak_group_rss_bytes": 231849984,
+          "peak_group_swap_bytes": 0,
+          "minimum_available_bytes": 9131503616
+        }
+      ],
+      "commands": [
+        "cargo test --lib --test terminals --test zuse_worker_entry --no-run --locked --offline --message-format=json",
+        "cargo build --bins --example native_plugin_fixture --locked --offline --message-format=json"
+      ],
+      "scope": "Compilation of the test/application artifacts; --no-run is not runtime test success."
+    }
+  },
+  "cloud_runtime": {
+    "measurement": "owned descendant tree including new sessions; userspace subreaper and reserve watchdog",
+    "computer_tests": {
+      "selector": "computer:: --test-threads=1",
+      "exit_code": 101,
+      "passed": 44,
+      "failed": 2,
+      "ignored": 9,
+      "filtered_out": 1475,
+      "status": "partial; two socket-binding operations denied by the cloud environment",
+      "blocked_tests": [
+        {
+          "name": "computer::isolated::tests::owned_x11_files_remove_the_same_inode_and_preserve_replacements",
+          "source": "src/computer/isolated.rs:736",
+          "operation": "UnixListener::bind",
+          "error": "EPERM (Operation not permitted)"
+        },
+        {
+          "name": "computer::zuse_backend::wayland_tests::wayland_preflight_refusals_preserve_same_host_connection",
+          "source": "src/computer/zuse_backend/wayland_tests.rs:107 (owned IPC fixture)",
+          "operation": "tokio::net::UnixListener::bind",
+          "error": "EPERM (Operation not permitted)"
+        }
+      ],
+      "ignored_note": "The nine ignored entries include fixture entry points and native desktop cases. They are not counted as passed by this invocation."
+    },
+    "pty_tests": {
+      "status": "passed",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "scope": "Real PTYs: independent cwd/environment/output, interactive isolation, scoped close, and capacity/argument validation."
+    },
+    "mcp_account_pty": {
+      "status": "partial; the complete suite did not pass",
+      "exit_code": 1,
+      "completed_checks": 69,
+      "completed_check_descriptions": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "the account API rejects missing or incorrect device credentials",
+        "the account API rejects missing or incorrect device credentials",
+        "the owned account credential resolves its stable provider identity",
+        "the real WebSocket Ready connection belongs to the authenticated account",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "OAuth never redirects to an unregistered callback",
+        "OAuth rejects a PKCE downgrade to plain",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "provider login rejects a missing browser binding cookie",
+        "provider login rejects a cross-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "authorization code rejects an incorrect PKCE verifier",
+        "authorization code cannot be exchanged for another resource",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "the account connection advertises its shared MCP endpoint",
+        "missing Bearer is rejected",
+        "incorrect Bearer is rejected",
+        "an identity token cannot select an unrelated protected resource",
+        "foreign Origin is rejected",
+        "legacy initialize negotiates 2025-03-26",
+        "legacy initialize negotiates 2025-06-18",
+        "legacy initialize negotiates 2025-11-25",
+        "initialized notification returns empty 202",
+        "legacy tools/list exposes list, code_mode and collab",
+        "list returns client identity, display name, launch cwd, backend type and code API",
+        "list discovers exact native capability names and schemas for code_mode: missing=[], extra=[], duplicates=0, invalid_schemas=[]",
+        "MCP responses cannot be stored by caches",
+        "configured Origin is accepted",
+        "unsupported GET and DELETE return 405",
+        "malformed JSON is rejected",
+        "JSON-RPC batches are rejected",
+        "unsupported protocol version is rejected",
+        "oversize HTTP body is rejected",
+        "modern server/discover completes",
+        "modern tools/list exposes the same public tools",
+        "modern method header must match body",
+        "modern version header must match metadata",
+        "modern tool name header must match body",
+        "modern encoded tool name is decoded",
+        "unknown modern method returns 404",
+        "tool notification is acknowledged without a response",
+        "native terminal tools cannot bypass code_mode through public tools/call",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "multiple same-user clients with duplicate display names retain distinct IDs and directories"
+      ],
+      "blocked_action": "first code_mode terminal.write",
+      "error": "bwrap: loopback: Failed to create NETLINK_ROUTE socket: Operation not permitted",
+      "scope": "Real production account/router fixture, HTTP/WebSocket, discovery and OAuth with a synthetic upstream provider; no real account authentication or external model run."
+    },
+    "source_lock_and_frozen_artifacts_unchanged": true
+  },
+  "artifacts": [
+    {
+      "name": "terminals",
+      "original_sha256": "58931fdf4ef13d3773536411b0dee6a5e0d3eb3840cac79cad59d10d35c5cb1f",
+      "original_bytes": 13981456,
+      "sha256": "ec55ab90f898fc28de8e13a7065729270617401ac3dad6e21fd6e93d8a84f0cf",
+      "bytes": 8274880,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "ssmcp",
+      "original_sha256": "a5573a46d9673901aaeb63823e5fb7e05ba33615cdb4daa9cbc6e53f2d81cdd1",
+      "original_bytes": 79614232,
+      "sha256": "7f6555313b8de524075e2b3730e8aa090a6121e4bbf9f9d7a7675185656a0b9a",
+      "bytes": 47702592,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "zuse_worker_entry",
+      "original_sha256": "e0d8f6b53d6b7ca18c6de07fc377107ea372c2a7c4330b6e67ed3c2a712a4e01",
+      "original_bytes": 8892392,
+      "sha256": "630085a08bcf1fcfb37cff92ef41aea73cf5e068b4fed3717fc99c4894c54f1c",
+      "bytes": 5398200,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "ssmcpd",
+      "original_sha256": "5a1988c9dbb4bc689f260cb0c503cb8eb24bc9df87e59da60596b83e6781b446",
+      "original_bytes": 47616000,
+      "sha256": "14805dd9ee25e8b86f2d9196f5611f1baeebdd3b4299073c2852a4a55d803e30",
+      "bytes": 27683736,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "ssmcp-frontend",
+      "original_sha256": "9d7cb864cb021b72f03546dabf7f040d8cf218135ab6fe6d773875f7acba22ed",
+      "original_bytes": 7692016,
+      "sha256": "a88cde5a3831a902777f84d584ec0aa0ba3e51632313bb4c95f1ce4420cd65a7",
+      "bytes": 4809272,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "ssmcp-tests",
+      "original_sha256": "00cf898091e64289696fd9db07c9df78a0d200d73d6b69b982a868aa825aaabc",
+      "original_bytes": 131102800,
+      "sha256": "b9a6aa766ec480e0f0c7a83df9f28e2fc719e570593e7e1b098af8a08fca73ae",
+      "bytes": 73686088,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    },
+    {
+      "name": "libnative_plugin_fixture.so",
+      "original_sha256": "18f7b5f5219e2801a24a106cb40e76db22b771274c0852c8bd355e3727114254",
+      "original_bytes": 1048192,
+      "sha256": "69a9b801a7edd82f4f6b5cb88975d9faffb64270cc9c72558cebba6b9d464653",
+      "bytes": 726640,
+      "transformation": "GNU strip --strip-unneeded on a copied artifact"
+    }
+  ],
+  "artifact_transformation_tool": "GNU strip (GNU Binutils for Debian) 2.44",
+  "native_handoff": {
+    "archive_name": "ssmcp-c44c2cf-cloud-linux-native-candidates.tar.gz",
+    "archive_bytes": 44689342,
+    "archive_sha256": "88e8ab43f7c74613920f9950e80bf76089828c5a6c5ff5748cc280befe9f3576",
+    "archive_contents": [
+      "ssmcp",
+      "ssmcpd",
+      "ssmcp-tests",
+      "libnative_plugin_fixture.so",
+      "manifest.json"
+    ],
+    "transfer_status": "downloaded on the native development machine; exact archive SHA-256 verified",
+    "transport": "authenticated Drive raw-file reference supplied a short-lived signed provider URL",
+    "native_libc": "glibc 2.44",
+    "native_link_checks": [
+      {
+        "name": "ssmcp",
+        "sha256": "7f6555313b8de524075e2b3730e8aa090a6121e4bbf9f9d7a7675185656a0b9a",
+        "bytes": 47702592,
+        "dynamic_link_check": "passed"
+      },
+      {
+        "name": "ssmcpd",
+        "sha256": "14805dd9ee25e8b86f2d9196f5611f1baeebdd3b4299073c2852a4a55d803e30",
+        "bytes": 27683736,
+        "dynamic_link_check": "passed"
+      },
+      {
+        "name": "ssmcp-tests",
+        "sha256": "b9a6aa766ec480e0f0c7a83df9f28e2fc719e570593e7e1b098af8a08fca73ae",
+        "bytes": 73686088,
+        "dynamic_link_check": "passed"
+      },
+      {
+        "name": "libnative_plugin_fixture.so",
+        "sha256": "69a9b801a7edd82f4f6b5cb88975d9faffb64270cc9c72558cebba6b9d464653",
+        "bytes": 726640,
+        "dynamic_link_check": "passed"
+      }
+    ],
+    "dynamic_link_command": "ldd -r on each of the four verified copied ELF files",
+    "installed_application_runtime_changed": false
+  },
+  "native_small_socket_attempt": {
+    "status": "resource_not_started",
+    "exit_code": 75,
+    "observed_utc": "2026-11-20T03:09:18Z",
+    "initial_available_bytes": 3190042624,
+    "admission_bytes": 3388997632,
+    "host_reserve_bytes": 3221225472,
+    "memory_max_bytes": 134217728,
+    "memory_high_bytes": 100663296,
+    "memory_swap_max_bytes": 0,
+    "cpu_quota_percent": 50,
+    "nice": 19,
+    "host_reserve_poll_seconds": 0.25,
+    "unit_and_test_started": false,
+    "frozen_test_binary_sha256": "b9a6aa766ec480e0f0c7a83df9f28e2fc719e570593e7e1b098af8a08fca73ae",
+    "second_case": "not attempted again within the same insufficient resource window"
+  },
+  "pending_native_completion": [
+    "The two exact non-GUI socket cases, after a fresh admitted resource window.",
+    "Ignored high-display allocation, socket ownership, app-launch and private input/capture cases.",
+    "The frozen zuse_worker_entry integration case (its additional test ELF still needs native delivery).",
+    "The real GTK whole-string X11 worker suite for the client and daemon.",
+    "The owned-desktop MCP same-Computer rejection/recovery suite and the complete base MCP suite."
+  ],
+  "evidence_sha256": {
+    "lifecycle-c44c2cf/gates.json": "378bb8ef98757bbfbb8f166a0126b48ca32c8a92ce97a6904d1b0139e80f6904",
+    "artifacts-c44c2cf-4g/gates.json": "bc9b2370cab07133e008e10406c78b7669a9a16c3f12934c9bc7e8b5d350ddce",
+    "runtime-c44c2cf/gates.json": "519447442e39390b92336a98d771af39c64d97b4d14e703b49f7481592f598c9",
+    "runtime-c44c2cf/computer-unit-tests.stdout.log": "dfdf50dc568cf9ee65c810906e5f76ed95ecab0ec97af6be6572b9a08035fb1e",
+    "protocol-c44c2cf/gates.json": "2e1dacc836f5f18bff6a809c0666c622567844eb7efaa259010a137e942cc266",
+    "protocol-c44c2cf/pty-integration.stdout.log": "1f38371ca6aa3c0b556aeccc7a4d1f0de69b829e2b46092bae42b21a64b60ddd",
+    "protocol-c44c2cf/mcp-account-pty.stdout.log": "3b8416a8abb746d56def808512dc82b22804e1c1450606982214bdaa4878f3ad",
+    "protocol-c44c2cf/mcp-account-pty.stderr.log": "fb41ed9be4ad60eb4b94d24102fc1c02d3660b9a05475e74002f08698d88183a",
+    "frozen-c44c2cf/manifest.json": "973413cf72968c20d554f87ece20230331d9e21703c10f4d790f278678cfc70c"
+  }
+}
