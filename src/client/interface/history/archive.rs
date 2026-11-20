@@ -135,9 +135,9 @@ impl History {
 
 pub(crate) fn change(id: Option<&str>, archived: bool) -> Result<Value, String> {
     with(|history| {
-        let selected = history.ownership.current.is_some();
+        let selected = history.ownership.current.get().is_some();
         let result = history.archive_change(id, archived)?;
-        if selected && history.ownership.current.is_none() {
+        if selected && history.ownership.current.get().is_none() {
             super::super::messages::restore_copy(&[]);
         }
         Ok(result)
