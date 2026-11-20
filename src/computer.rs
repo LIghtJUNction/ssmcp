@@ -37,10 +37,40 @@ const RELEASE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 static HOST_INPUT_SERIAL: Mutex<()> = Mutex::const_new(());
 static HOST_INPUT_CLEANUP_FAILED: AtomicBool = AtomicBool::new(false);
 
+/// These controls are local operator entry points, absent from the native catalog.
+pub(crate) fn host_input_status() -> Value {
+    host_control::local().status()
+}
+
+pub(crate) fn set_host_input_local(enabled: bool) -> Result<Value, String> {
+    if enabled {
+        host_input_can_enable()?;
+    }
+    host_control::local().set_local(enabled)
+}
+
+pub(crate) fn toggle_host_input_local() -> Result<Value, String> {
+    if let Err(error) = host_input_can_enable() {
+        // A cleanup failure must still allow the shortcut to stop other input.
+        host_control::local().set_local(false)?;
+        return Err(error);
+    }
+    host_control::local().toggle_local()
+}
+
+fn host_input_can_enable() -> Result<(), String> {
+    if HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire) {
+        Err("host input remains off after incomplete release cleanup; restart the client after checking the desktop input state".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Retain the process input lock even if the entire remote call is cancelled.
 /// Platform release guards register cleanup before this outer guard is dropped.
 struct HostInputGuard {
     serial: Option<tokio::sync::MutexGuard<'static, ()>>,
+    shared: Option<host_control::InputLease>,
     releases: Arc<ReleaseTasks>,
 }
 
@@ -49,7 +79,11 @@ impl HostInputGuard {
         let result = self.releases.wait(RELEASE_WAIT_TIMEOUT).await;
         if result.is_err() {
             HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+            if let Some(shared) = &self.shared {
+                shared.revoke();
+            }
         }
+        self.shared.take();
         self.serial.take();
         result
     }
@@ -60,19 +94,27 @@ impl Drop for HostInputGuard {
         let Some(serial) = self.serial.take() else {
             return;
         };
+        let shared = self.shared.take();
         let releases = self.releases.clone();
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(async move {
                     if releases.wait(RELEASE_WAIT_TIMEOUT).await.is_err() {
                         HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+                        if let Some(shared) = &shared {
+                            shared.revoke();
+                        }
                     }
+                    drop(shared);
                     drop(serial);
                 });
             }
             Err(_) => {
                 // No runtime is available to prove release completion.
                 HOST_INPUT_CLEANUP_FAILED.store(true, Ordering::Release);
+                if let Some(shared) = &shared {
+                    shared.revoke();
+                }
             }
         }
     }
@@ -314,7 +356,7 @@ impl Computer {
             ),
             tool(
                 "desktop_stop",
-                "Stop only this connection's private desktop and its owned applications. Host input stays locked unless the operator makes a short local handoff.",
+                "Stop only this connection's private desktop and its owned applications. The shared foreground on/off switch is unchanged.",
                 json!({}),
                 &[],
                 false,
@@ -415,7 +457,7 @@ impl Computer {
             ) {
                 descriptor["inputSchema"]["properties"]["desktop"] = json!({
                     "type":"string", "enum":["isolated","host"], "default":"isolated",
-                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host observation requires explicit host selection. Host input also requires a short handoff made locally in the ssmcp terminal using /computer host [seconds]; remote tool arguments cannot enable or renew it."
+                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host observation requires explicit host selection. Host input uses this machine's OS-user switch: new local state starts on, explicit /computer off persists, and /computer on or Super+Alt+C changes it locally. Remote tool arguments cannot change the switch; isolated desktop and background browser control remain enabled."
                 });
             }
         }
@@ -426,18 +468,29 @@ impl Computer {
         isolated::dispatch(self, name, args).await
     }
 
-    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
-        if self.closed.load(Ordering::Acquire) || self.environment.is_some() {
-            return Err("a live host connection is required for local handoff".into());
+    pub(crate) fn set_host_input_local(&self, enabled: bool) -> Result<Value, String> {
+        if (enabled && self.closed.load(Ordering::Acquire)) || self.environment.is_some() {
+            return Err("a live host connection is required for local input control".into());
         }
-        if HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire) {
-            return Err("host input remains locked after incomplete release cleanup; restart the client after checking the desktop input state".into());
+        if enabled {
+            host_input_can_enable()?;
         }
-        self.host_control.handoff_local(seconds)
+        self.host_control.set_local(enabled)
     }
 
-    pub(crate) fn revoke_host_input(&self) -> bool {
-        self.host_control.revoke()
+    pub(crate) fn toggle_host_input_local(&self) -> Result<Value, String> {
+        if self.closed.load(Ordering::Acquire) || self.environment.is_some() {
+            return Err("a live host connection is required for local input control".into());
+        }
+        if let Err(error) = host_input_can_enable() {
+            self.host_control.set_local(false)?;
+            return Err(error);
+        }
+        self.host_control.toggle_local()
+    }
+
+    pub(crate) fn cancel_host_input(&self) {
+        self.host_control.close();
     }
 
     pub(crate) fn host_input_status(&self) -> Value {
@@ -455,18 +508,20 @@ impl Computer {
             if HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire) {
                 return Err("host input remains locked after incomplete release cleanup".into());
             }
+            let shared = self.host_control.acquire(ticket).await?;
             let serial = HostInputGuard {
                 serial: Some(serial),
+                shared: Some(shared),
                 releases: self.releases.clone(),
             };
             // Dropping a cancelled platform future invokes the existing release guard.
-            // Keep the process lock until those releases finish, before another caller can act.
+            // Keep both input locks until those releases finish, before another
+            // connection or process can act on the same physical desktop.
             let result = self
                 .host_control
                 .run(ticket, self.perform_local(name, args))
                 .await;
             if let Err(error) = serial.finish().await {
-                self.host_control.revoke();
                 return Err(format!("host input release cleanup incomplete: {error}"));
             }
             result?
@@ -622,7 +677,7 @@ impl Computer {
 
     pub async fn shutdown(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
-        self.host_control.revoke();
+        self.host_control.close();
         if let Some(mut desktop) = self.isolated.lock().await.take() {
             desktop.shutdown().await;
         }
@@ -631,7 +686,7 @@ impl Computer {
 
     async fn shutdown_local(&self) -> Result<(), String> {
         self.closed.store(true, Ordering::Release);
-        self.host_control.revoke();
+        self.host_control.close();
         tokio::time::timeout(RELEASE_WAIT_TIMEOUT, async {
             let _lock = self.serial.lock().await;
             self.releases.wait(RELEASE_WAIT_TIMEOUT).await
@@ -2309,6 +2364,7 @@ mod host_handoff_tests {
     #[tokio::test]
     async fn remote_host_parameters_cannot_enable_any_input_operation() {
         let computer = computer();
+        computer.set_host_input_local(false).unwrap();
         for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
             let error = computer
                 .perform(
@@ -2325,6 +2381,7 @@ mod host_handoff_tests {
     #[tokio::test]
     async fn host_observation_remains_available_while_input_is_locked() {
         let computer = computer();
+        computer.set_host_input_local(false).unwrap();
         let status = computer
             .perform("ssmcp.computer.status", json!({"desktop":"host"}))
             .await
@@ -2340,6 +2397,10 @@ mod host_handoff_tests {
     #[tokio::test]
     async fn cancelling_entire_call_holds_process_lock_until_fake_release_finishes() {
         static SERIAL: Mutex<()> = Mutex::const_new(());
+        let control = host_control::HostControl::default();
+        control.set_local(true).unwrap();
+        let ticket = control.ticket().unwrap();
+        let shared = control.acquire(ticket).await.unwrap();
         let releases = Arc::new(ReleaseTasks::default());
         let (finish, finished) = std::sync::mpsc::channel();
         let fake_release = std::thread::spawn(move || {
@@ -2351,6 +2412,7 @@ mod host_handoff_tests {
         let worker = tokio::spawn(async move {
             let _guard = HostInputGuard {
                 serial: Some(SERIAL.lock().await),
+                shared: Some(shared),
                 releases,
             };
             let _ = started.send(());
@@ -2363,20 +2425,54 @@ mod host_handoff_tests {
             SERIAL.try_lock().is_err(),
             "cleanup must retain the input lock"
         );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), control.acquire(ticket))
+                .await
+                .is_err(),
+            "cleanup must also retain the cross-process input lock"
+        );
         finish.send(()).unwrap();
         let serial = tokio::time::timeout(Duration::from_secs(1), SERIAL.lock())
             .await
             .expect("input lock must become available after fake release completes");
         drop(serial);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), control.acquire(ticket))
+                .await
+                .unwrap()
+                .is_ok()
+        );
     }
 
     #[tokio::test]
-    async fn shutdown_revokes_local_handoff_and_cannot_be_rearmed() {
+    async fn foreground_switch_does_not_change_default_isolated_routing() {
         let computer = computer();
-        computer.handoff_host_input_local(15).unwrap();
+        for enabled in [false, true, false] {
+            computer.set_host_input_local(enabled).unwrap();
+            let status = computer
+                .perform("ssmcp.computer.status", json!({}))
+                .await
+                .unwrap();
+            assert_eq!(status["structuredContent"]["desktop"], "isolated");
+            assert_eq!(status["structuredContent"]["moves_host_pointer"], false);
+            assert_eq!(status["structuredContent"]["background_enabled"], true);
+            assert_eq!(computer.host_input_status()["enabled"], enabled);
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_this_connection_without_clearing_shared_setting() {
+        let computer = computer();
+        computer.set_host_input_local(true).unwrap();
+        let ticket = computer.host_control.ticket().unwrap();
         assert_eq!(computer.host_input_status()["enabled"], true);
         computer.shutdown().await.unwrap();
-        assert_eq!(computer.host_input_status()["enabled"], false);
-        assert!(computer.handoff_host_input_local(15).is_err());
+        assert_eq!(computer.host_input_status()["enabled"], true);
+        assert!(computer.host_control.ticket().is_err());
+        assert_eq!(
+            computer.host_control.run(ticket, async { Ok(()) }).await,
+            Err(host_control::ENDED.into())
+        );
+        assert!(computer.set_host_input_local(true).is_err());
     }
 }

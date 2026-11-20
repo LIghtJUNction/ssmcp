@@ -73,7 +73,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/computer",
-        description: "Local host-input handoff: status, host [1..60 seconds], stop",
+        description: "Shared foreground input: on, off, status; background stays on",
     },
     SlashCommand {
         name: "/command",
@@ -264,6 +264,8 @@ pub(super) struct Composer {
     suggestion_index: usize,
     suggestions_dismissed: bool,
     reference_query: Option<completion::Query>,
+    reference_input: Option<(u64, usize, bool)>,
+    reference_version: Option<completion::Version>,
     references: completion::Matches,
 }
 
@@ -593,24 +595,42 @@ impl Composer {
     }
 
     pub(super) fn refresh_completions(&mut self, enabled: bool) {
-        let query = enabled
-            .then(|| completion::query(&self.text, self.cursor))
-            .flatten();
-        if query != self.reference_query {
-            self.reference_query = query;
-            self.references = completion::Matches::default();
-            self.suggestion_index = 0;
-            self.suggestions_dismissed = false;
+        self.refresh_completions_with(enabled, completion::lookup);
+    }
+
+    fn refresh_completions_with(
+        &mut self,
+        enabled: bool,
+        lookup: impl FnOnce(
+            &completion::Query,
+            Option<completion::Version>,
+        ) -> Option<(completion::Version, completion::Matches)>,
+    ) {
+        let input = (self.revision, self.cursor, enabled);
+        if self.reference_input != Some(input) {
+            self.reference_input = Some(input);
+            let query = enabled
+                .then(|| completion::query(&self.text, self.cursor))
+                .flatten();
+            if query != self.reference_query {
+                self.reference_query = query;
+                self.reference_version = None;
+                self.references = completion::Matches::default();
+                self.suggestion_index = 0;
+                self.suggestions_dismissed = false;
+            }
         }
         if !self.suggestions_dismissed
             && let Some(query) = &self.reference_query
+            && let Some((version, references)) = lookup(query, self.reference_version)
         {
             let selected = self
                 .references
                 .items
                 .get(self.suggestion_index)
                 .map(|item| item.name.clone());
-            self.references = completion::lookup(query);
+            self.reference_version = Some(version);
+            self.references = references;
             self.suggestion_index = selected
                 .and_then(|name| {
                     self.references
@@ -628,7 +648,8 @@ impl Composer {
     pub(super) fn reference_active(&self) -> bool {
         !self.suggestions_dismissed
             && self.reference_query.is_some()
-            && completion::query(&self.text, self.cursor) == self.reference_query
+            && (self.reference_input == Some((self.revision, self.cursor, true))
+                || completion::query(&self.text, self.cursor) == self.reference_query)
     }
 
     pub(super) fn completion_loading(&self) -> bool {
@@ -1250,6 +1271,118 @@ mod tests {
             assert!(draft.suggestions().is_empty());
         }
     }
+    fn completion_fixture(names: &[&str]) -> completion::Matches {
+        completion::Matches {
+            items: names
+                .iter()
+                .map(|name| completion::Candidate {
+                    name: (*name).into(),
+                    description: "File".into(),
+                    replacement: format!("{name} "),
+                })
+                .collect(),
+            ..completion::Matches::default()
+        }
+    }
+
+    #[test]
+    fn unchanged_completion_keeps_query_storage_menu_and_selection() {
+        let mut draft = Composer::default();
+        draft.set_text("@docs");
+        draft.refresh_completions_with(true, |query, previous| {
+            assert_eq!(query.prefix, "docs");
+            assert!(previous.is_none());
+            Some((
+                completion::Version::fixture_for_test(1),
+                completion_fixture(&["@docs-a", "@docs-b"]),
+            ))
+        });
+        draft.suggestion_index = 1;
+        let query_storage = draft.reference_query.as_ref().unwrap().prefix.as_ptr();
+        let menu_storage = draft.references.items.as_ptr();
+        for _ in 0..100 {
+            draft.refresh_completions_with(true, |query, previous| {
+                assert_eq!(query.prefix.as_ptr(), query_storage);
+                assert!(previous.is_some());
+                None
+            });
+            assert!(draft.reference_active());
+            assert_eq!(draft.references.items.as_ptr(), menu_storage);
+            assert_eq!(draft.selected_suggestion().unwrap().name, "@docs-b");
+        }
+        draft.refresh_completions_with(true, |query, previous| {
+            assert_eq!(query.prefix.as_ptr(), query_storage);
+            assert!(previous.is_some());
+            Some((
+                completion::Version::fixture_for_test(2),
+                completion_fixture(&["@docs-b", "@docs-a", "@docs-c"]),
+            ))
+        });
+        assert_eq!(draft.suggestion_index, 0);
+        assert_eq!(draft.selected_suggestion().unwrap().name, "@docs-b");
+        assert_eq!(draft.references.items.len(), 3);
+        draft.dismiss_suggestions();
+        draft.refresh_completions_with(true, |_, _| {
+            panic!("a late discovery must not reopen a dismissed menu")
+        });
+        assert!(!draft.reference_active());
+    }
+
+    #[test]
+    fn completion_refresh_tracks_loading_cursor_edits_and_disabled_menus() {
+        let mut draft = Composer::default();
+        draft.set_text("@docs");
+        draft.refresh_completions_with(true, |_, _| {
+            Some((
+                completion::Version::fixture_for_test(1),
+                completion::Matches {
+                    notice: Some("Loading".into()),
+                    loading: true,
+                    ..completion::Matches::default()
+                },
+            ))
+        });
+        assert!(draft.completion_loading());
+        draft.refresh_completions_with(true, |_, previous| {
+            assert!(previous.is_some());
+            Some((
+                completion::Version::fixture_for_test(2),
+                completion_fixture(&["@docs"]),
+            ))
+        });
+        assert!(!draft.completion_loading());
+        assert!(draft.left());
+        draft.refresh_completions_with(true, |query, previous| {
+            assert_eq!(query.prefix, "doc");
+            assert!(previous.is_none());
+            Some((
+                completion::Version::fixture_for_test(2),
+                completion_fixture(&["@docs"]),
+            ))
+        });
+        draft.refresh_completions_with(false, |_, _| panic!("disabled menu lookup"));
+        assert!(!draft.reference_active());
+        draft.refresh_completions_with(true, |query, previous| {
+            assert_eq!(query.prefix, "doc");
+            assert!(previous.is_none());
+            Some((
+                completion::Version::fixture_for_test(2),
+                completion_fixture(&["@docs"]),
+            ))
+        });
+        assert!(draft.insert("x"));
+        draft.refresh_completions_with(true, |query, previous| {
+            assert_eq!(query.prefix, "docx");
+            assert!(previous.is_none());
+            Some((
+                completion::Version::fixture_for_test(2),
+                completion_fixture(&[]),
+            ))
+        });
+        assert_eq!(draft.text(), "@docxs");
+        assert!(draft.references.items.is_empty());
+    }
+
     fn reference_fixture(text: &str, cursor: usize, replacement: &str) -> Composer {
         let mut draft = Composer::default();
         draft.set_text(text);

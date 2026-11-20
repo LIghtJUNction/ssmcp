@@ -38,7 +38,7 @@ pub(crate) fn bind(runtime: &Arc<Runtime>) {
         .as_ref()
         .and_then(|binding| binding.runtime.upgrade())
     {
-        previous.revoke_host_input();
+        previous.cancel_host_input();
     }
     *binding = Some(Binding {
         runtime: Arc::downgrade(runtime),

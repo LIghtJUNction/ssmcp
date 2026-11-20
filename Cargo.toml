@@ -151,6 +151,8 @@ include = [
     "/scripts/test_setup_server.py",
     "/scripts/render_log_preview.py",
     "/packaging/ssmcp-portal.service",
+    "/packaging/ssmcp-computer.lua",
+    "/scripts/e2e_computer_controls.py",
     "/docs/backends.md",
     "/docs/optional-harnesses.md",
     "/docs/dependencies.md",

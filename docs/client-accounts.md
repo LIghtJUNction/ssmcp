@@ -62,11 +62,20 @@ ssmcp whoami --server https://relay.example --json
 ssmcp list --server https://relay.example
 ssmcp list --server https://relay.example --json
 ssmcp -i --server https://relay.example --client SESSION_ID
+ssmcp attach --server https://relay.example SESSION_ID
+ssmcp attach --remote UNIQUE_DEVICE_NAME
+ssmcp attach 2
+ssmcp attach --remote SESSION_ID --read-only
+ssmcp attach --local workstation
 ~~~
 
 ChatGPT 等 MCP 应用使用该服务器的 `/mcp` OAuth 入口。CLI 登录和 MCP 应用授权分别管理，二者都需要真实账号身份。`list` 只返回当前账号有权控制的在线设备；知道设备 ID、伪造显示名称或填写 `--allow` 字符串都不能替代控制端认证。[HTTP 控制接口](../src/device.rs) · [MCP 授权](../src/http.rs)
 
-`ssmcp sessions list` 查看本机保存的后台会话，`ssmcp attach NAME` 连接本机后台会话；它们与账号的远程设备列表用途不同。远程交互中 Ctrl-] 离开当前控制界面，设备进程继续运行。
+`ssmcp attach ID` 和 `ssmcp attach UNIQUE_NAME` 可直接连接列表中的获授权在线设备。完整客户端 ID 不受显示名称重复影响；远端重名时必须使用 ID。远程 attach 打开该设备的 PTY，不恢复原聊天面板；Ctrl-] 分离后设备进程与 PTY 继续运行。普通模式下 Ctrl-C 发给远端终端，`--read-only` 则不发送输入，也不修改远端终端尺寸。
+
+序号只引用最近一次 `ssmcp list` 的快照，保存 5 分钟，并绑定服务器 origin 和登录身份。连接前仍按原客户端 ID 检查在线状态与授权；对象离线或快照失效时会要求重新 list，不能因为列表顺序变化而连接到另一台设备。快照不保存访问凭据。
+
+`ssmcp sessions list` 与裸 `ssmcp attach` 查看本机保存的后台会话。已有合法本地名称优先使用本地连接，无须登录或访问网络；`--remote` 明确选择在线设备，`--local` 明确选择本地保存会话（包括数字名称）。本地 manifest 损坏、权限错误或会话停止均按本地错误报告，不改投远端。
 
 ## 修改名单与连接生命周期
 

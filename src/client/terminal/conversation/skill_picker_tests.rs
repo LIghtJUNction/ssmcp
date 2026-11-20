@@ -140,10 +140,15 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         // populate the cache, but may neither reopen the menu nor publish.
         let query = crate::client::completion::query("$", 1).unwrap();
         let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut version = None;
             loop {
-                let completed = crate::client::completion::lookup(&query);
-                if !completed.loading {
-                    break completed;
+                if let Some((current, completed)) =
+                    crate::client::completion::lookup(&query, version)
+                {
+                    version = Some(current);
+                    if !completed.loading {
+                        break completed;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }

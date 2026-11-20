@@ -1,29 +1,74 @@
-//! Short, process-local host-input handoffs. Remote tool arguments never grant one.
+//! Explicit local foreground input switch, shared by this machine's OS user.
+mod storage;
+
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{future::Future, sync::Mutex, time::Duration};
-use tokio::{sync::Notify, time::Instant};
+use std::{
+    future::Future,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+use storage::Store;
+use tokio::sync::Notify;
 
-pub(crate) const DEFAULT_SECONDS: u64 = 15;
-pub(crate) const MAX_SECONDS: u64 = 60;
-pub(super) const LOCKED: &str = "host input is locked; use an isolated desktop or background browser control. The operator can locally run /computer host [seconds] in the ssmcp terminal for a short handoff";
-pub(super) const ENDED: &str = "host input handoff ended; control returned to the operator";
+pub(super) use storage::InputLease;
 
-#[derive(Clone, Copy)]
-pub(super) struct Ticket {
-    generation: u64,
-    expires: Instant,
-}
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub(super) const LOCKED: &str = "host input is off; the local operator can use /computer on or Super+Alt+C. Isolated desktop and background browser control remain enabled";
+pub(super) const ENDED: &str =
+    "host input was switched off or this connection closed; control returned to the operator";
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct State {
-    generation: u64,
-    expires: Option<Instant>,
+    schema_version: u8,
+    enabled: bool,
+    generation: [u8; 16],
 }
 
-#[derive(Default)]
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            enabled: false,
+            generation: [0; 16],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Ticket {
+    generation: [u8; 16],
+}
+
 pub(super) struct HostControl {
-    state: Mutex<State>,
+    store: Result<Arc<Store>, String>,
+    stopped: AtomicBool,
     changed: Notify,
+}
+
+impl Default for HostControl {
+    fn default() -> Self {
+        #[cfg(not(test))]
+        let store = {
+            // Initialize a fresh store once per process. Reconnection must not
+            // recreate an on setting after a live store disappears or fails.
+            static STORE: OnceLock<Result<Arc<Store>, String>> = OnceLock::new();
+            STORE.get_or_init(|| Store::shared().map(Arc::new)).clone()
+        };
+        // Unit tests must never observe or change the operator's real switch.
+        #[cfg(test)]
+        let store = Store::temporary().map(Arc::new);
+        Self::with_store(store)
+    }
+}
+
+pub(super) fn local() -> &'static HostControl {
+    static CONTROL: OnceLock<HostControl> = OnceLock::new();
+    CONTROL.get_or_init(HostControl::default)
 }
 
 pub(super) fn input_tool(name: &str) -> bool {
@@ -39,78 +84,116 @@ pub(super) fn input_tool(name: &str) -> bool {
     )
 }
 
+fn generation() -> Result<[u8; 16], String> {
+    let mut bytes = [0; 16];
+    crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
+    if bytes == [0; 16] {
+        return Err("could not create a foreground input generation".into());
+    }
+    Ok(bytes)
+}
+
+fn generation_text(bytes: [u8; 16]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 impl HostControl {
-    /// Only the local interactive command path may call this method.
-    pub(super) fn handoff_local(&self, seconds: u64) -> Result<(), String> {
-        if !(1..=MAX_SECONDS).contains(&seconds) {
-            return Err(format!(
-                "host handoff must be between 1 and {MAX_SECONDS} seconds"
-            ));
+    fn with_store(store: Result<Arc<Store>, String>) -> Self {
+        Self {
+            store,
+            stopped: AtomicBool::new(false),
+            changed: Notify::new(),
         }
-        self.handoff_until(Instant::now() + Duration::from_secs(seconds));
-        Ok(())
     }
 
-    fn handoff_until(&self, expires: Instant) {
-        {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.generation = state.generation.wrapping_add(1);
-            state.expires = Some(expires);
-        }
-        // A fresh local handoff invalidates queued and running calls from the old one.
-        self.changed.notify_waiters();
+    fn store(&self) -> Result<&Arc<Store>, String> {
+        self.store.as_ref().map_err(Clone::clone)
     }
 
-    pub(super) fn revoke(&self) -> bool {
-        let active = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            let active = state
-                .expires
-                .is_some_and(|expires| expires > Instant::now());
-            if state.expires.take().is_none() {
-                return false;
-            }
-            state.generation = state.generation.wrapping_add(1);
-            active
-        };
+    #[cfg(test)]
+    fn at(path: std::path::PathBuf) -> Self {
+        Self::with_store(Ok(Arc::new(Store::at(path))))
+    }
+
+    /// Called only by decoded local operator commands, never a native tool.
+    pub(super) fn set_local(&self, enabled: bool) -> Result<Value, String> {
+        self.update_local(Some(enabled))
+    }
+
+    pub(super) fn toggle_local(&self) -> Result<Value, String> {
+        self.update_local(None)
+    }
+
+    fn update_local(&self, enabled: Option<bool>) -> Result<Value, String> {
+        if self.stopped.load(Ordering::Acquire) && enabled != Some(false) {
+            return Err("computer connection is closed".into());
+        }
+        let state = self.store()?.update(enabled)?;
         self.changed.notify_waiters();
-        active
+        Ok(status_value(state, None))
+    }
+
+    /// Closing one connection cancels only its own tickets, not the user's
+    /// persistent setting or other live ssmcp sessions.
+    pub(super) fn close(&self) {
+        self.stopped.store(true, Ordering::Release);
+        self.changed.notify_waiters();
     }
 
     pub(super) fn ticket(&self) -> Result<Ticket, String> {
-        self.ticket_at(Instant::now())
-    }
-
-    fn ticket_at(&self, now: Instant) -> Result<Ticket, String> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        match state.expires {
-            Some(expires) if expires > now => Ok(Ticket {
-                generation: state.generation,
-                expires,
-            }),
-            _ => Err(LOCKED.into()),
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(ENDED.into());
         }
+        let state = self.store()?.read()?;
+        if !state.enabled {
+            return Err(LOCKED.into());
+        }
+        Ok(Ticket {
+            generation: state.generation,
+        })
     }
 
     fn valid(&self, ticket: Ticket) -> bool {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.generation == ticket.generation
-            && state.expires == Some(ticket.expires)
-            && Instant::now() < ticket.expires
+        !self.stopped.load(Ordering::Acquire)
+            && self
+                .store()
+                .and_then(|store| store.read())
+                .is_ok_and(|state| state.enabled && state.generation == ticket.generation)
     }
 
     pub(super) async fn cancelled(&self, ticket: Ticket) {
         loop {
+            // Register first so a local off/close cannot be lost between
+            // checking the file and waiting. Polling observes other processes.
             let changed = self.changed.notified();
             tokio::pin!(changed);
-            // Register before inspecting state so revoke cannot be lost between check and await.
             changed.as_mut().enable();
             if !self.valid(ticket) {
                 return;
             }
             tokio::select! {
-                _ = changed => {},
-                _ = tokio::time::sleep_until(ticket.expires) => return,
+                _ = changed => {}
+                _ = tokio::time::sleep(POLL_INTERVAL) => {}
+            }
+        }
+    }
+
+    pub(super) async fn acquire(&self, ticket: Ticket) -> Result<InputLease, String> {
+        loop {
+            if !self.valid(ticket) {
+                return Err(ENDED.into());
+            }
+            if let Some(lease) = self.store()?.try_input()? {
+                // Off or off->on while queued must not rearm this old call.
+                if !self.valid(ticket) {
+                    return Err(ENDED.into());
+                }
+                return Ok(lease);
+            }
+            tokio::select! {
+                biased;
+                _ = self.cancelled(ticket) => return Err(ENDED.into()),
+                _ = tokio::time::sleep(POLL_INTERVAL) => {}
             }
         }
     }
@@ -123,163 +206,39 @@ impl HostControl {
         tokio::select! {
             biased;
             _ = self.cancelled(ticket) => Err(ENDED.into()),
-            result = operation => result,
+            result = operation => {
+                if self.valid(ticket) { result } else { Err(ENDED.into()) }
+            }
         }
     }
 
     pub(super) fn status(&self) -> Value {
-        let now = Instant::now();
-        let remaining = self
-            .ticket_at(now)
-            .ok()
-            .map(|ticket| ticket.expires.saturating_duration_since(now));
-        json!({
-            "enabled": remaining.is_some(),
-            "remaining_seconds": remaining.map(|duration|
-                duration.as_secs() + u64::from(duration.subsec_nanos() != 0)
-            ).unwrap_or(0),
-            "default_seconds": DEFAULT_SECONDS,
-            "max_seconds": MAX_SECONDS,
-            "local_handoff": "/computer host [seconds]",
-            "local_stop": "/computer stop",
-            "revoked_by": "input in the ssmcp terminal, expiry, or client shutdown",
-            "all_application_input_detection": false,
-            "serialization_scope": "this client process",
-        })
+        match self.store().and_then(|store| store.read()) {
+            Ok(state) => status_value(state, None),
+            Err(error) => status_value(State::default(), Some(error)),
+        }
     }
+}
+
+fn status_value(state: State, error: Option<String>) -> Value {
+    let mut status = json!({
+        "enabled":state.enabled,
+        "mode":if state.enabled {"on"} else {"off"},
+        "background_enabled":true,
+        "scope":"machine_os_user",
+        "generation":generation_text(state.generation),
+        "local_on":"/computer on",
+        "local_off":"/computer off",
+        "local_toggle":"Super+Alt+C",
+        "revoked_by":"local off or Super+Alt+C; closing a connection cancels only its calls",
+        "all_application_input_detection":false,
+        "serialization_scope":"this machine and OS user"
+    });
+    if let Some(error) = error {
+        status["error"] = json!(error);
+    }
+    status
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    #[test]
-    fn host_input_is_locked_by_default_and_new_connections_do_not_inherit_handoffs() {
-        let control = HostControl::default();
-        assert!(control.ticket().is_err());
-        assert_eq!(control.status()["enabled"], false);
-        control.handoff_local(DEFAULT_SECONDS).unwrap();
-        assert!(control.ticket().is_ok());
-        assert!(HostControl::default().ticket().is_err());
-    }
-
-    #[test]
-    fn local_handoff_is_bounded_and_reading_does_not_renew_it() {
-        let control = HostControl::default();
-        assert!(control.handoff_local(0).is_err());
-        assert!(control.handoff_local(MAX_SECONDS + 1).is_err());
-        let expires = Instant::now() + Duration::from_secs(20);
-        control.handoff_until(expires);
-        let a = control.ticket().unwrap();
-        let b = control.ticket().unwrap();
-        assert_eq!(a.expires, expires);
-        assert_eq!(b.expires, expires);
-        assert!(control.ticket_at(expires).is_err());
-        assert!(control.ticket_at(expires + Duration::from_secs(1)).is_err());
-    }
-
-    #[test]
-    fn local_retake_and_fresh_handoff_invalidate_prior_queued_calls() {
-        let control = HostControl::default();
-        control.handoff_local(15).unwrap();
-        let old = control.ticket().unwrap();
-        assert!(control.revoke());
-        assert!(!control.valid(old));
-        assert!(!control.revoke());
-        control.handoff_local(15).unwrap();
-        let next = control.ticket().unwrap();
-        assert!(!control.valid(old));
-        assert!(control.valid(next));
-        control.handoff_local(15).unwrap();
-        assert!(!control.valid(next));
-    }
-
-    #[test]
-    fn every_pointer_keyboard_and_focus_operation_requires_handoff() {
-        for name in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
-            assert!(input_tool(&format!("ssmcp.computer.{name}")));
-        }
-        for name in [
-            "status",
-            "monitors",
-            "windows",
-            "screenshot",
-            "desktop_start",
-            "desktop_stop",
-            "app_launch",
-        ] {
-            assert!(!input_tool(&format!("ssmcp.computer.{name}")));
-        }
-    }
-
-    #[tokio::test]
-    async fn revoked_queued_operation_does_not_start() {
-        let control = HostControl::default();
-        control.handoff_local(15).unwrap();
-        let ticket = control.ticket().unwrap();
-        control.revoke();
-        let started = AtomicBool::new(false);
-        let result = control
-            .run(ticket, async {
-                started.store(true, Ordering::SeqCst);
-                Ok(())
-            })
-            .await;
-        assert_eq!(result.unwrap_err(), ENDED);
-        assert!(!started.load(Ordering::SeqCst));
-    }
-
-    struct Dropped(Arc<AtomicBool>);
-    impl Drop for Dropped {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    #[tokio::test]
-    async fn terminal_retake_cancels_running_operation_and_drops_its_input_guard() {
-        let control = Arc::new(HostControl::default());
-        control.handoff_local(15).unwrap();
-        let ticket = control.ticket().unwrap();
-        let dropped = Arc::new(AtomicBool::new(false));
-        let flag = dropped.clone();
-        let worker_control = control.clone();
-        let (started, started_rx) = tokio::sync::oneshot::channel();
-        let worker = tokio::spawn(async move {
-            worker_control
-                .run(ticket, async move {
-                    let _guard = Dropped(flag);
-                    let _ = started.send(());
-                    std::future::pending::<Result<(), String>>().await
-                })
-                .await
-        });
-        started_rx.await.unwrap();
-        control.revoke();
-        let result = tokio::time::timeout(Duration::from_secs(1), worker)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.unwrap_err(), ENDED);
-        assert!(dropped.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn expired_handoff_cancels_pending_operation_without_a_new_input_event() {
-        let control = HostControl::default();
-        control.handoff_until(Instant::now() + Duration::from_millis(20));
-        let ticket = control.ticket().unwrap();
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            control.run(ticket, std::future::pending::<Result<(), String>>()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.unwrap_err(), ENDED);
-        assert_eq!(control.status()["enabled"], false);
-    }
-}
+mod tests;
