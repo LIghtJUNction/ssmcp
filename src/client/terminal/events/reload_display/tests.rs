@@ -88,6 +88,12 @@ fn reload_display_restores_new_inert_ids_and_bounded_reading_positions() {
     assert_eq!(after.selected, Some(after.events[2].id));
     assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["running"], 0);
     assert_eq!(after.snapshot()["tool_groups"][0]["stats"]["unknown"], 1);
+    assert!(
+        after
+            .events
+            .iter()
+            .all(|event| event.meta.status != Some(Status::Running))
+    );
     let old_text = after.events[1].text.clone();
     after.ingest_event(
         "shell",
