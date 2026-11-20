@@ -1,0 +1,162 @@
+{
+  "release": {
+    "source_commit": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+    "annotated_tag_object": "ae483355fd85e40ecb3e0f04ff64338b17a9ffc9",
+    "tag": "v0.10.20",
+    "id": 452506742,
+    "published_at": "2026-11-20T09:43:48Z",
+    "asset_count": 16,
+    "api": "https://api.github.com/repos/LIghtJUNction/ssmcp/releases/tags/v0.10.20",
+    "initial_latest": {
+      "url": "https://api.github.com/repos/LIghtJUNction/ssmcp/releases/latest",
+      "tag": "v0.10.20",
+      "release_id": 452506742
+    },
+    "latest_recheck": {
+      "http_status": 403,
+      "result": "unavailable"
+    },
+    "workflow": {
+      "run_id": 44710769033,
+      "head_sha": "4f4dd88275c205e0e61a7601b4e0d11f56038769",
+      "event": "workflow_dispatch",
+      "conclusion": "success",
+      "job_count": 19,
+      "job_conclusions": {
+        "publish_crates": "success",
+        "publish_release": "success",
+        "deploy_server": "skipped"
+      },
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44710769033"
+    }
+  },
+  "assets": {
+    "ssmcp-x86_64-unknown-linux-gnu.tar.gz": {
+      "bytes": 10141793,
+      "sha256": "33ab32051b99fa36c11935dd8438d0987c073bcb64317bec11a227d29eacb2cc",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/ssmcp-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    "release-manifest.json": {
+      "bytes": 2118,
+      "sha256": "52bf95a1cbd624b8532fddb6d5ee4895480c3b5bad901eab16cac1af8ee29f67",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/release-manifest.json"
+    },
+    "SHA256SUMS": {
+      "bytes": 762,
+      "sha256": "df65ef071e1574e621a33dd1ec77fd15ec9f002a85fd548528c78a1e59200712",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/download/v0.10.20/SHA256SUMS"
+    }
+  },
+  "archived_client": {
+    "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+    "bytes": 13434720,
+    "version_output": "ssmcp 0.10.20",
+    "help_sha256": "d7d6c1b4eb6bfa9e40e1384aa969b149dec1e057cb73f9c61917576b317f17ae",
+    "target": "x86_64-unknown-linux-gnu",
+    "elf": "ELF64 little-endian x86-64 PIE",
+    "interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "maximum_glibc_symbol_version": "2.34",
+    "host_glibc_version": "2.44",
+    "runtime_checks": [
+      "--version",
+      "--help"
+    ]
+  },
+  "registry": {
+    "payload_url": "https://static.crates.io/crates/ssmcp/ssmcp-0.10.20.crate",
+    "bytes": 8877099,
+    "payload_sha256": "192a5dd1a8623b82d7353cf7abfb28df6957b60934af43ceaef37a07a7696a78",
+    "matches_coordinator_supplied_checksum": true,
+    "cargo_vcs_info": {
+      "git": {
+        "sha1": "4f4dd88275c205e0e61a7601b4e0d11f56038769"
+      },
+      "path_in_vcs": ""
+    },
+    "metadata_url": "https://crates.io/api/v1/crates/ssmcp/0.10.20",
+    "metadata_http_status": 403,
+    "metadata_checksum_independently_read": false
+  },
+  "local": {
+    "baseline_sample_at": "2026-11-20T09:53:45.947916+00:00",
+    "checkpoint_sample_at": "2026-11-20T09:54:22.005079+00:00",
+    "path_selected": "$HOME/.local/bin/ssmcp",
+    "before": {
+      "$HOME/.local/bin/ssmcp": {
+        "version": "0.10.10",
+        "kind": "symlink",
+        "resolved": "$HOME/.local/share/oh-my-ztty/releases/0.2.5-linux-x86_64/bin/ssmcp",
+        "sha256": "409af30e7af8f4c43be24e1f9fc87ec46320a7531f89b590eab31265812055e7"
+      },
+      "$HOME/.cargo/bin/ssmcp": {
+        "version": "0.10.15",
+        "kind": "regular",
+        "resolved": "$HOME/.cargo/bin/ssmcp",
+        "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+      },
+      "/usr/bin/ssmcp": {
+        "version": "0.9.1",
+        "kind": "regular",
+        "resolved": "/usr/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13"
+      }
+    },
+    "checkpoint": {
+      "$HOME/.local/bin/ssmcp": {
+        "version": "0.10.10",
+        "kind": "symlink",
+        "resolved": "$HOME/.local/share/oh-my-ztty/releases/0.2.5-linux-x86_64/bin/ssmcp",
+        "sha256": "409af30e7af8f4c43be24e1f9fc87ec46320a7531f89b590eab31265812055e7"
+      },
+      "$HOME/.cargo/bin/ssmcp": {
+        "version": "0.10.15",
+        "kind": "regular",
+        "resolved": "$HOME/.cargo/bin/ssmcp",
+        "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+      },
+      "/usr/bin/ssmcp": {
+        "version": "0.9.1",
+        "kind": "regular",
+        "resolved": "/usr/bin/ssmcp",
+        "sha256": "59f29540db09e78dc21d49e17bedc279f7c0721bf5aba8939a7d1ef99d13bc13"
+      }
+    },
+    "executable_replacement": false,
+    "rollback_backup_created": false,
+    "destination_blocker": "PATH-selected symlink into an oh-my-ztty-managed bundle",
+    "cargo": {
+      ".crates.toml": {
+        "sha256": "2028570d9e67929b0e9a5934222b945b8c9506c8d127ffd6d7d24567aa915a36",
+        "other_package_count": 37,
+        "ssmcp_version": "0.10.15",
+        "ssmcp_record_source_kind": "local_path"
+      },
+      ".crates2.json": {
+        "sha256": "ba7ea1dccccf14b993e8c74ce8c6b4f00ea1179da6a28375f7935ef4407d6c32",
+        "other_package_count": 37,
+        "ssmcp_version": "0.10.15",
+        "ssmcp_record_source_kind": "local_path"
+      }
+    },
+    "user_state_existing_files_hashed": 7,
+    "user_state_hashes_unchanged": true,
+    "cargo_records_byte_identical": true,
+    "path_unchanged": true
+  },
+  "continuity": {
+    "processes_sampled": 33,
+    "same_pid_start_ticks_and_executable": 31,
+    "sampled_pids_absent_at_checkpoint": 2,
+    "loaded_service_records_unchanged": true,
+    "active_units_sampled": 5,
+    "task_sent_process_signals": 0,
+    "task_service_mutations": 0,
+    "identity_read_limitations": 0
+  },
+  "acceptance": {
+    "zero_argument_probe": "not_launched_destination_blocked",
+    "legacy_self_fallback": "source_review_only",
+    "native_printf": "pending",
+    "production_server_inspection": "not_performed"
+  }
+}
