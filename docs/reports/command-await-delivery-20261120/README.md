@@ -2,7 +2,21 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（2026-11-20 21:55 UTC）
+## 当前状态（截至 2026-11-20 22:16 UTC）
+
+固定源码 [`441814bf`](https://github.com/LIghtJUNction/ssmcp/commit/441814bf9945e0b49bb3dde170e57762abf8318e) 的 [Session service CI 44826521363](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363) 已于 22:15:37 UTC 完成，Linux、Windows、macOS 三个 job 全部成功。Linux 该次库测试实际为 2034 通过、0 失败、23 忽略，30.44 秒；Windows/macOS 的 session、protocol、构建和 native lifecycle 步骤均成功。本结果只归属于这份源码和本次 CI，旧 c248 失败及其计数继续保留原归属。
+
+开发机已取得构建锁并完成输入身份检查，当前仍在库测试产物的 `--no-run` 编译阶段；五份新产物及开发机产品验收尚未完成。下方 22:11 及更早内容均保留为历史状态，粘贴 A/B、最终 P1 和正式发布结果仍待取得。
+
+本次来源与范围见[结构化检查点](integration-checkpoint-2216.json)。
+
+## 历史状态（截至 2026-11-20 22:11 UTC）
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 的公开头提交为 [`441814bf`](https://github.com/LIghtJUNction/ssmcp/commit/441814bf9945e0b49bb3dde170e57762abf8318e)，仍为 draft、未合并。它在 42e9 的 `--input none` Snapshot/重载源码修正之后，补充 c248 暴露的 UI 与 portable fixture 修改。[新 CI 44826521363](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363) 在本截止点仍运行中，没有通过结论；开发机也正按 441 构建，新的五份产物尚未完成验收。
+
+c248 的三平台失败保留原归属：Linux 单元测试 2030 通过、3 失败、23 忽略；Windows/macOS 的 session、protocol 和构建通过，随后 native lifecycle 分别记录 40 条 PASS/1 条 FAIL、39 条 PASS/1 条 FAIL，PASS 含重复阶段检查。下方时间点均为历史记录。当前仍无新粘贴 A/B、最终 P1 或正式发布结果。
+
+## 历史状态（2026-11-20 21:55 UTC）
 
 [PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 已推送到 [`c248d420`](https://github.com/LIghtJUNction/ssmcp/commit/c248d420e01d04c06be967e84543ce7d883f4cb3)，仍为 draft、未合并。该提交补齐两个 Linux socket 测试调用的新增参数，并将只供 Linux 测试使用的 `connect` 辅助函数限制到相应平台。[自动 CI 44824373375](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375) 在 21:55 UTC 实读时仍运行中。固定 tree 为 `0017f29c650f2ecdc2beb80662da1b4e2ba90280`；这次两文件补丁已核对，运行结果待取得。
 
@@ -332,3 +346,51 @@ cae Linux 原日志 85,145 字节，SHA256 `6626494818643d6249ea4c103fe642673e5c
 | Ctrl+V 后继脚本 | `db2db3cfd14c1e6be0b36b4605a1c6f4790da4cab5a3515ad352739912ae238f` |
 
 启动器仍调用 1300 驱动并绑定 db2；db2 的 `FROZEN_SHA` 仍须指向 1300。仅启动器改变不需要重设这个摘要，也不需要另造 Ctrl+V 后继脚本。724 的辅助文件集合只作参考；共同源码、构建与导出清单及五份实际二进制尚未绑定，本轮没有执行粘贴比较。
+
+## c248 失败与后继修正（截至 2026-11-20 22:11 UTC）
+
+### 三个平台的实际失败范围
+
+[c248 运行 44824373375](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375) 固定源码为 `c248d420e01d04c06be967e84543ce7d883f4cb3`。三平台 fmt 与严格 Clippy 均成功，后续结果如下；各行计数属于不同执行范围，不相加为整套验收。
+
+| 平台与 job | 实际结果 |
+| --- | --- |
+| [Linux / 136593082355](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593082355) | 库测试 2030 通过、3 失败、23 忽略，30.02 秒，exit 101；后续构建与 lifecycle 跳过 |
+| [Windows / 136593083004](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593083004) | session 52 项、protocol 10 项及构建通过；native lifecycle 40 条 PASS 记录、1 条 FAIL 记录（含重复阶段） |
+| [macOS / 136593083123](https://github.com/LIghtJUNction/ssmcp/actions/runs/44824373375/job/136593083123) | session、protocol 及构建通过；native lifecycle 39 条 PASS 记录、1 条 FAIL 记录（含重复阶段） |
+
+Linux 三个失败分别是 Agents 列表头右键没有切到 Logs、48 列时钟行的紧凑控制标签不在测试白名单内，以及 Logs 页脚只显示域名而断言要求完整 HTTPS 地址。原日志已独立实读并原样保全：883,294 字节，SHA256 `48666ff1df08987b7abdcb51d09014df4dff94a94583725b26c6295298a4640d`；[Library](https://chatgpt.com/library?file_id=libfile_fde3_f-305066a573c4819186cb4b5306813245_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) 和 [Drive](https://drive.google.com/file/d/1CRymWjoLpoivHhc20knttxO_P2ttaaPR/view?usp=drivesdk) 副本均已保存，Drive 实际下载逐字节一致。
+
+独立复核实际下载并核对了两份 native lifecycle ZIP：Windows artifact `14674230483` 为 2,515 字节，SHA256 `0db05bc524bcf20e10464d7eafbea489dcdb7283b38d5dab1205c0671c234743`；macOS artifact `14673681804` 为 2,384 字节，SHA256 `bb65072d54e6c8946bc1221775abe70248e1919d9a588aba8f2f72401e4b8745`。最终产物中，login start/poll 各为 1、whoami 为 8、unexpected 为 1，connect 分别为 Windows 20、macOS 14。清理阶段会重写这些计数，因此不能把最终文件当作失败断言瞬间独立保存的快照。
+
+源码解释指向 [fixture 第 447 行](https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/scripts/e2e_service_portable.py#L447)：`attach absent-fixture` 未带 `--local`，会按 Auto 路径进入 [account attach](https://github.com/LIghtJUNction/ssmcp/blob/c248d420e01d04c06be967e84543ce7d883f4cb3/src/client/account/attach.rs#L147-L166) 的 `GET /api/client/sessions`，继而落入 fixture 的 unexpected 分支。产物没有捕获实际请求路由；这条路径是源码推断，不作为已记录的 HTTP 路由事实。
+
+### 后继源码的修正范围
+
+[42e9a25b](https://github.com/LIghtJUNction/ssmcp/commit/42e9a25bb3a71a5fd06226a2b1d03c845532ef6e) 的 tree 为 `dd5e413dd0e024caf973afa8968fc75f3feef597`，仅处理 `--input none` 的 Snapshot/重载路径。主审与独立源码复核已检查该修改，尚无运行复现；它对应的 [CI 44825725216](https://github.com/LIghtJUNction/ssmcp/actions/runs/44825725216) 已取消，不能作为验收通过。
+
+后继 [441814bf](https://github.com/LIghtJUNction/ssmcp/commit/441814bf9945e0b49bb3dde170e57762abf8318e) 的父提交为 42e9，tree 为 `72f4d06f61b06f62ae22ce1837dd429465ef0b39`。作者报告该源码阶段于 22:08:21 UTC 完成；实际完整补丁为五文件、15 行增加/11 行删除：
+
+- 线程历史鼠标处理返回是否命中；未命中时恢复 Logs 回退，并保留 Escape 返回后的选择。
+- 时钟行断言精确接受实际中文长、短控制标签；页脚仍要求最后一个 token 为同一 host 的完整或简写地址。
+- portable fixture 的 absent attach 显式加上 `--local`，保留原严格请求计数检查。
+
+这些是固定源码的已审变化；截至 22:11，[441 的新 CI](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363) 仍运行中，未宣称通过。
+
+### 构建产物与执行边界
+
+441 开发机构建仍在进行，新的五份产物尚未验收。另一个被取消的 c248 开发机构建，负责人补记已留下五件套中的一份库测试副本；因此既不是零副本，也不是完整五件套，且未被后续验收消费。这项补记来自构建负责人，不能代替完整产物身份核验。CI、开发机构建、组合验收和正式发布继续分别记录。
+
+## 22:16 后续更新：441 的 CI 已完成
+
+[运行 44826521363](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363) 的实际 head 为 `441814bf9945e0b49bb3dde170e57762abf8318e`，于 22:15:37 UTC 结束为 success。已实读 run 和三个 job 元数据；三平台 fmt、严格 Clippy、程序构建及 native lifecycle 步骤均成功，测试范围分别如下。
+
+| 平台与 job | 实际成功范围 |
+| --- | --- |
+| [Linux / 136600512288](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600512288) | 工作区库测试步骤成功；外层库批次 2034 通过、0 失败、23 忽略、0 筛除，30.44 秒；独立 session/protocol 筛选步骤跳过 |
+| [Windows / 136600512121](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600512121) | session 与 protocol 步骤成功；仅限 Linux 的工作区测试步骤跳过 |
+| [macOS / 136600511790](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363/job/136600511790) | session 与 protocol 步骤成功；仅限 Linux 的工作区测试步骤跳过 |
+
+Linux 完整原日志的独立复核确认了精确 checkout 与上述外层计数，三个嵌套子进程的单项摘要没有重复相加。新增 `disabled_chat_keeps_the_outbox_and_advances_reload_without_queue_commands`，以及此前失败的滚动列表鼠标选择、实时钟行、统一页脚三个回归，均在 441 原日志中明确显示 `ok`。`--input none` 的这条回归证据因此已从源码审查推进到固定 441 的真实库测试通过；实际进程重执行、粘贴 A/B 和最终 P1 仍未完成。Windows/macOS 此处不沿用 c248 的旧测试数量。
+
+开发机另在 22:15:38 UTC 实读确认：目标构建锁已取得，源码、metadata 和依赖身份检查已完成，库 `--no-run` 编译自 22:14:50 UTC 起实际运行。尚无完整五份产物或开发机产品测试通过回执；因此本次 CI 成功与后续产物验收继续分开记录。
