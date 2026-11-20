@@ -558,25 +558,30 @@ fn verification_url(server: &str, raw: &str, secret: &str) -> Result<Url> {
     Ok(url)
 }
 
-async fn open_browser(url: &Url) -> Result<()> {
+/// Shared native opener selection. URLs are one literal argv element; no shell.
+pub(super) fn browser_command(url: &Url) -> std::process::Command {
     let mut command = if cfg!(windows) {
-        let mut c = Command::new("rundll32.exe");
+        let mut c = std::process::Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);
         c
     } else if cfg!(target_os = "macos") {
-        let mut c = Command::new("/usr/bin/open");
+        let mut c = std::process::Command::new("/usr/bin/open");
         c.arg(url.as_str());
         c
     } else {
-        let mut c = Command::new("xdg-open");
+        let mut c = std::process::Command::new("xdg-open");
         c.arg(url.as_str());
         c
     };
-    let mut child = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    command
+}
+
+async fn open_browser(url: &Url) -> Result<()> {
+    let mut child = Command::from(browser_command(url)).spawn()?;
     tokio::spawn(async move {
         let _ = child.wait().await;
     });

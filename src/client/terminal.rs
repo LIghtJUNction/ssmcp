@@ -26,6 +26,7 @@ mod events;
 mod footer;
 mod guide;
 mod images;
+mod links;
 pub(crate) mod markdown;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
@@ -36,9 +37,9 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 // Rendered cells cost much more than UTF-8 output. Keep a short interactive
 // window; raw command/event captures keep their existing retention policy.
 const SCROLLBACK_ROWS: usize = 128;
-const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
+const ENTER: &[u8] = b"\x1b[?1;6;25;66;1000;1002;1006;2004s\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?6l\x1b[r\x1b[?25l\x1b[0m\x1b[H\x1b[2J";
 const COPY_HINT: &str = "Copy mode · drag to select · terminal Copy · F7/Esc back";
-const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1006;2004r";
+const LEAVE: &[u8] = b"\x1b[?2026l\x1b[0m\x1b[?1l\x1b>\x1b[?2004l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1049l\x1b[?1;6;25;66;1000;1002;1006;2004r";
 static DISPLAY: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 fn nonzero(value: u16) -> NonZeroU16 {
@@ -593,6 +594,33 @@ pub(crate) fn take_actions() -> Vec<&'static str> {
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     std::mem::take(&mut state.actions)
+}
+
+/// Run only from the UI input/timer loop, outside the display mutex.
+pub(crate) fn open_pending_link() {
+    let target = shared().and_then(|shared| {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.selection
+            || state.ui.layout != Layout::Chat
+            || state.help
+            || state.conversation.view != conversation::View::Activity
+        {
+            state.links.cancel();
+            return None;
+        }
+        state.links.take(Instant::now())
+    });
+    if let Some(target) = target
+        && links::open(&target).is_err()
+    {
+        notice(super::render::current_ui().language.text(
+            "Could not open link; wait for the browser launcher and try again.",
+            "暂时无法打开链接，请等待浏览器启动后再试。",
+        ));
+    }
 }
 
 pub(crate) fn notice(message: &str) {
@@ -1235,6 +1263,7 @@ struct State {
     geometry: Geometry,
     logs: vt100::Parser,
     events: events::EventView,
+    links: links::Display,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -1284,6 +1313,7 @@ impl State {
         let conversation = conversation::Conversation::default();
         let mut state = Self {
             events: events::EventView::new(),
+            links: links::Display::default(),
             context_label: String::new(),
             server_origin: None,
             logout_target: None,
@@ -1472,6 +1502,7 @@ impl State {
     fn resize(&mut self, rows: u16, cols: u16) {
         let geometry = Geometry::new(rows, cols, &self.ui, self.conversation.preferred_input_rows);
         if self.geometry != geometry {
+            self.links.invalidate();
             self.logs
                 .set_size(nonzero(geometry.log_rows), nonzero(geometry.left));
             self.pty
@@ -1669,6 +1700,9 @@ impl State {
             self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
+            if matches!(action, Key::Mouse { button, .. } if button & 32 != 0) {
+                continue;
+            }
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return Vec::new();
@@ -1874,6 +1908,7 @@ impl State {
             return;
         }
         self.selection = enabled;
+        self.links.invalidate();
         if enabled {
             self.notice = Some(COPY_HINT.into());
         } else if self.notice.as_deref() == Some(COPY_HINT) {
@@ -1911,6 +1946,7 @@ impl State {
             }
             return frame;
         }
+        self.links.stage(Vec::new());
         let g = self.geometry;
         let filtered = self.filtered_logs();
         let audit_rows = self.audit.render(g.left, g.pty_rows, &self.ui);
@@ -2350,6 +2386,13 @@ impl Frame {
         let mut output = String::new();
         ztui::write_diff(&mut output, self, previous)
             .expect("writing an ANSI frame into String cannot fail");
+        if previous.is_none_or(|old| old.mouse_capture != self.mouse_capture) {
+            output.push_str(if self.mouse_capture {
+                "\x1b[?1002h"
+            } else {
+                "\x1b[?1002l"
+            });
+        }
         output.into_bytes()
     }
 }
@@ -2460,6 +2503,13 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
         match drain(&mut output, &pending, &mut offset) {
             Ok(()) => {}
             Err(_) => break,
+        }
+        if offset >= pending.len() {
+            let mut state = shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.links.presented();
         }
         std::thread::sleep(FRAME_INTERVAL);
     }

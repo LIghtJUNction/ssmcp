@@ -85,6 +85,7 @@ fn handle(parser: &mut vt100::Parser, request: Request) -> Result<Value, String>
                                     "foreground": color(cell.fgcolor()),
                                     "background": color(cell.bgcolor()),
                                     "bold": cell.bold(),
+                                    "underline": cell.underline(),
                                     "dim": cell.dim(),
                                     "inverse": cell.inverse()
                                 })

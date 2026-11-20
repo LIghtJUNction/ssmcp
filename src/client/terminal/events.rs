@@ -1,6 +1,6 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
 //! reread of tools or an unbounded replacement for their original output archive.
-use super::{super::ui::Ui, images};
+use super::{super::ui::Ui, images, links};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -44,7 +44,7 @@ struct Event {
     panel: CommandPanel,
     truncated: bool,
     tone: &'static str,
-    cache: Option<(usize, String, Vec<String>)>,
+    cache: Option<(usize, String, links::Rows)>,
     meta: Meta,
     image: Option<images::Preview>,
     diagnostic: Option<(u64, u64)>,
@@ -432,6 +432,7 @@ pub(crate) struct EventView {
     reveal: bool,
     dropped: usize,
     hit_rows: Vec<Option<u64>>,
+    links: Vec<links::ScreenHit>,
     panel_hit_rows: Vec<Option<u64>>,
     tool_hit_rows: Vec<Option<tool_groups::Hit>>,
     tool_positions: std::collections::BTreeMap<u64, tool_groups::State>,
@@ -531,6 +532,7 @@ impl EventView {
         self.follow = false;
         self.reveal = true;
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.placements.clear();
@@ -552,6 +554,7 @@ impl EventView {
             }
         }
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.placements.clear();
@@ -572,6 +575,7 @@ impl EventView {
         self.scope = scope;
         self.new_image = None;
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.placements.clear();
@@ -685,6 +689,7 @@ impl EventView {
                 })
         });
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.placements.clear();
@@ -976,6 +981,7 @@ impl EventView {
         self.level = level;
         self.new_image = None;
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.preserve_read_selection();
@@ -1296,6 +1302,7 @@ impl EventView {
         self.reveal = false;
         self.dropped = 0;
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.tool_positions.clear();
@@ -1346,6 +1353,17 @@ impl EventView {
         })
     }
 
+    pub(super) fn screen_links(&self, top: u16) -> Vec<links::ScreenHit> {
+        self.links
+            .iter()
+            .cloned()
+            .map(|mut hit| {
+                hit.row = hit.row.saturating_add(top);
+                hit
+            })
+            .collect()
+    }
+
     pub(crate) fn render(
         &mut self,
         width: u16,
@@ -1367,6 +1385,7 @@ impl EventView {
             &self.events,
         );
         self.hit_rows.clear();
+        self.links.clear();
         self.panel_hit_rows.clear();
         self.tool_hit_rows.clear();
         self.placements.clear();
@@ -1574,7 +1593,7 @@ impl EventView {
                         conversation_body(&event.text)
                     };
                     let lines = if event.meta.raw_message && !event.meta.user {
-                        super::markdown::rows(body, body_width as u16, ui)
+                        super::markdown::linked_rows(body, body_width as u16, ui)
                     } else {
                         styled_rows(body, body_width, ui.color)
                     };
@@ -1649,7 +1668,7 @@ impl EventView {
                         event.command_output()
                     };
                     let lines = if body.is_empty() {
-                        Vec::new()
+                        links::Rows::default()
                     } else {
                         styled_rows(
                             &semantic_text(&body, ui, event.meta.language),
@@ -1828,7 +1847,7 @@ impl EventView {
                         if event.meta.user {
                             styled_rows(&event.text, body_width, ui.color)
                         } else {
-                            super::markdown::rows(&event.text, body_width as u16, ui)
+                            super::markdown::linked_rows(&event.text, body_width as u16, ui)
                         }
                     } else {
                         let read_detail = (chat || !self.query.is_empty())
@@ -1851,6 +1870,7 @@ impl EventView {
                         };
                         if event.meta.diff {
                             diff::rows(body, body_width, ui, event.meta.language, self.diff_mode)
+                                .into()
                         } else {
                             styled_rows(
                                 &semantic_text(body, ui, event.meta.language),
@@ -1921,7 +1941,7 @@ impl EventView {
                         event.cache = Some((
                             preview_width,
                             preview_palette,
-                            event.chat_preview(preview_width),
+                            event.chat_preview(preview_width).into(),
                         ));
                     }
                     let preview = &event.cache.as_ref().unwrap().2;
@@ -1991,8 +2011,30 @@ impl EventView {
             .into_iter()
             .skip(self.scroll)
             .take(page)
-            .map(|(id, row)| {
+            .enumerate()
+            .map(|(line, (id, row))| {
                 self.hit_rows.push(Some(id));
+                if !row.contains("\x1b]8;") {
+                    return row;
+                }
+                let Some((_, _, cache)) = self
+                    .events
+                    .iter()
+                    .find(|event| event.id == id)
+                    .and_then(|event| event.cache.as_ref())
+                else {
+                    return row;
+                };
+                let (row, hits) = cache.resolve(&row, width);
+                self.links.extend(
+                    hits.into_iter()
+                        .take(1024usize.saturating_sub(self.links.len()))
+                        .map(|hit| links::ScreenHit {
+                            row: line as u16,
+                            event: id,
+                            hit,
+                        }),
+                );
                 row
             })
             .collect::<Vec<_>>();
@@ -2117,6 +2159,10 @@ fn event_summary(plain: &str, first: &str) -> String {
 
 /// Reuse the shared lexer, preserving existing renderer SGR and exact text.
 fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
+    links::through(text, |plain| semantic_colors(plain, ui, language))
+}
+
+fn semantic_colors(text: &str, ui: &Ui, language: &str) -> String {
     if !ui.color {
         return sanitize(text, false);
     }
@@ -2245,53 +2291,10 @@ fn clip_plain(text: &str, width: usize) -> String {
     result
 }
 
-/// Retain SGR colors only. Cursor movement, OSC clipboard/hyperlink commands and
-/// all other control sequences are absent from the independently rendered view.
+/// General text remains terminal-safe; interactive links use a separately
+/// validated metadata path and are never forwarded as arbitrary OSC commands.
 fn sanitize(text: &str, keep_color: bool) -> String {
-    let mut result = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            match chars.next() {
-                Some('[') => {
-                    let mut sequence = String::new();
-                    for next in chars.by_ref() {
-                        sequence.push(next);
-                        if ('@'..='~').contains(&next) {
-                            break;
-                        }
-                        if sequence.len() > 128 {
-                            break;
-                        }
-                    }
-                    if keep_color
-                        && sequence.ends_with('m')
-                        && sequence[..sequence.len() - 1]
-                            .chars()
-                            .all(|c| c.is_ascii_digit() || c == ';')
-                    {
-                        result.push_str("\x1b[");
-                        result.push_str(&sequence);
-                    }
-                }
-                Some(']') => {
-                    while let Some(next) = chars.next() {
-                        if next == '\x07' || (next == '\x1b' && chars.next() == Some('\\')) {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        } else if ch == '\r' {
-            if chars.peek() != Some(&'\n') {
-                result.push('\n');
-            }
-        } else if !ch.is_control() || matches!(ch, '\n' | '\t') {
-            result.push(ch);
-        }
-    }
-    result
+    links::sanitize(text, keep_color, false)
 }
 
 fn unstyled(text: &str) -> String {
@@ -2300,101 +2303,61 @@ fn unstyled(text: &str) -> String {
 
 fn retained_text(bytes: &[u8]) -> (String, bool) {
     let raw = String::from_utf8_lossy(bytes);
-    let clean = sanitize(&raw, true);
+    let clean = links::sanitize(&raw, true, true);
     if clean.len() <= MAX_DETAIL {
         return (clean, false);
     }
     let note = "\n… preview truncated; inspect the original output archive …\n";
-    let budget = MAX_DETAIL - note.len();
-    let mut head = budget / 2;
-    while !clean.is_char_boundary(head) {
-        head -= 1;
-    }
-    let mut tail = clean.len() - (budget - head);
-    while !clean.is_char_boundary(tail) {
-        tail += 1;
-    }
+    let budget = MAX_DETAIL - note.len() - links::CLOSE.len();
+    let head = links::safe_cut(&clean, budget / 2, false);
+    let tail = links::safe_cut(&clean, clean.len() - (budget - head), true);
     (
         format!(
-            "{}{note}{}",
-            sanitize(&clean[..head], true),
-            sanitize(&clean[tail..], true)
+            "{}{}{note}{}",
+            links::sanitize(&clean[..head], true, true),
+            links::CLOSE,
+            links::sanitize(&clean[tail..], true, true)
         ),
         true,
     )
 }
 
-/// Reflow only the retained display text, maintaining SGR across soft wraps.
-fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
-    let text = sanitize(text, color);
-    let text = text.trim_matches('\n');
-    let mut rows = Vec::new();
-    let mut row = String::new();
-    let mut active = String::new();
-    let mut used = 0;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.next() == Some('[') {
-            let mut sequence = String::from("\x1b[");
-            for next in chars.by_ref() {
-                sequence.push(next);
-                if next == 'm' {
-                    break;
-                }
-            }
-            row.push_str(&sequence);
-            if sequence == "\x1b[0m" || sequence == "\x1b[m" {
-                active.clear();
-            } else {
-                if active.len() > 256 {
-                    active.clear();
-                }
-                active.push_str(&sequence);
-            }
-            continue;
-        }
-        if ch == '\n' {
-            if color {
-                row.push_str("\x1b[0m");
-            }
-            rows.push(row);
-            row = active.clone();
-            used = 0;
-            continue;
-        }
-        let expanded = if ch == '\t' {
-            " ".repeat(4 - used % 4)
-        } else {
-            ch.to_string()
-        };
-        for mut ch in expanded.chars() {
-            let mut cells = ch.width().unwrap_or(0);
-            if cells > width {
-                ch = '…';
-                cells = 1;
-            }
-            if used + cells > width && used != 0 {
-                if color {
-                    row.push_str("\x1b[0m");
-                }
-                rows.push(row);
-                row = active.clone();
-                used = 0;
-            }
-            row.push(ch);
-            used += cells;
-        }
-    }
-    if color {
-        row.push_str("\x1b[0m");
-    }
-    rows.push(row);
-    rows
+/// Reflow retained display text, keeping styles and bounded link IDs across wraps.
+fn styled_rows(text: &str, width: usize, color: bool) -> links::Rows {
+    links::wrapped(text, width, color)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_retained_truncation_closes_the_link_before_the_archive_notice() {
+        let raw = format!(
+            "\x1b]8;;https://example.test/full\x1b\\{}{}",
+            "a".repeat(MAX_DETAIL * 2),
+            links::CLOSE
+        );
+        let (retained, truncated) = retained_text(raw.as_bytes());
+        assert!(truncated);
+        assert!(retained.len() <= MAX_DETAIL);
+        let source = links::Source::new(&retained, false);
+        let note = source.text.find("preview truncated").unwrap();
+        assert!(source.spans.iter().all(|span| !span.range.contains(&note)));
+        assert!(source.text.ends_with('a'));
+        let payload = format!(
+            "before\x1b]8;;https://example.test/{}\x1b\\label{}after",
+            "x".repeat(1600),
+            links::CLOSE
+        );
+        for cut in 6..=1630 {
+            let before = links::safe_cut(&payload, cut, false);
+            let after = links::safe_cut(&payload, cut, true);
+            assert!(before <= cut && after >= cut);
+            assert!(!unstyled(&payload[..before]).contains("example.test"));
+            assert!(!unstyled(&payload[after..]).contains("example.test"));
+        }
+    }
 
     #[test]
     fn diff_modes_reflow_existing_events_without_changing_retained_content() {
