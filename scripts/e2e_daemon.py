@@ -300,8 +300,8 @@ class Daemon(Harness):
 
     def probe_tools(self):
         http, value, _ = self.rpc("tools/list", modern=True)
-        self.check(http == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "invite"],
-                   "daemon mode publishes exactly list, code_mode, collab and invite")
+        self.check(http == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab"],
+                   "daemon mode publishes exactly list, code_mode and collab")
         catalog = self.public_call("list", {"client_id": self.client_id})
         self.check(all(not tool["name"].startswith(("codex.", "claude.", "pi.", "opencode."))
                        for tool in catalog["tools"]), "the fixture discovers no installed coding Harness")

@@ -1,0 +1,50 @@
+{
+  "candidate": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "libtest_sha256": "b74d457c9934557a6588107c4478e68804f238a71e7e677c998d57b143a54793",
+  "decoder_sha256": "70ba4cb707cb572e9b1754dc673c0d57c04973e59fde6e6e6001b1e610a207a8",
+  "tests": [],
+  "scope": "production frames from six passing sleep tests; old local fixture assertion is tracked separately",
+  "previews": [
+    {
+      "file": ".local/user-wait-sleep-20261120/frames/sleep-120.png",
+      "sha256": "17ee48aa4d72953246ab72a8aca7849217c55c884a73705ef36c753a075afc88",
+      "bytes": 45127,
+      "ansi_sha256": "84164de3a6fafa523d374250838a2f105af32d526f7416f3b9829fabd46a741b",
+      "size": [
+        28,
+        120
+      ]
+    },
+    {
+      "file": ".local/user-wait-sleep-20261120/frames/awake-120.png",
+      "sha256": "7702e226e2c1a80aa24be9bb57b8554b298d04891a2e2788a8b8686fb0a1e1de",
+      "bytes": 47886,
+      "ansi_sha256": "cc326b0802df205c86c8ea75330e8d87196aa27b34749ebd5ba00469f3f459bb",
+      "size": [
+        28,
+        120
+      ]
+    },
+    {
+      "file": ".local/user-wait-sleep-20261120/frames/sleep-48.png",
+      "sha256": "bb4d2e9a337182c91d95793f7c926b97767bdcc453ed6700bdae81aa1558f526",
+      "bytes": 34882,
+      "ansi_sha256": "af075b8e9ef88ad87b6c7219bc0461d3552bb793c5f988a5e8c3dd2b5d3a3f75",
+      "size": [
+        24,
+        48
+      ]
+    },
+    {
+      "file": ".local/user-wait-sleep-20261120/frames/awake-48.png",
+      "sha256": "613c78a0101aafc861dc3e1bea18c4badc227ee6aa1118ca6371495003a8691f",
+      "bytes": 39512,
+      "ansi_sha256": "3bfb7fecda19d7d1d0f555ab423e3ce09f334e3bb17abe77d5982afc5e2d8bd5",
+      "size": [
+        24,
+        48
+      ]
+    }
+  ],
+  "status": "passed"
+}

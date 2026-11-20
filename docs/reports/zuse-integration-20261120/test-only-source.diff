@@ -1,0 +1,326 @@
+diff --git a/src/client.rs b/src/client.rs
+index 0a69296..4313870 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -2443,10 +2443,9 @@ mod tests {
+                 "--reconnect-delay",
+                 "20",
+                 "--allow",
+-                "octocat@github",
+-                "-F",
+-                "relative-ssh-config",
+-                "work-server",
++                "octocat@relay.example",
++                "--server",
++                "https://relay.example",
+             ]
+             .map(OsString::from),
+         )
+@@ -2468,9 +2467,9 @@ mod tests {
+             .unwrap();
+         assert_eq!(parsed.allow, parent.allow);
+         assert_eq!(parsed.destination, parent.destination);
++        assert_eq!(parsed.server, parent.server);
+         assert_eq!(parsed.title.as_deref(), Some("--help"));
+         assert_eq!(parsed.name.as_deref(), Some("worker"));
+-        assert!(PathBuf::from(parsed.config.unwrap()).is_absolute());
+         assert!(!parsed.session_control);
+         assert!(!parsed.daemon);
+         assert_eq!(parsed.reconnect_delay_secs, 2);
+@@ -2660,62 +2659,84 @@ mod tests {
+ 
+     #[test]
+     fn background_manifest_retains_native_connection_arguments_without_recursing() {
+-        let options = Options::parse(
+-            [
+-                "--daemon",
+-                "--watchdog",
+-                "--reconnect-delay",
+-                "7",
+-                "--name",
+-                "workstation",
+-                "--title",
+-                "--daemon",
+-                "--allow",
+-                "OctoCat@GitHub",
+-                "-i",
+-                "key with spaces",
+-                "-F",
+-                "config with spaces",
+-                "-p",
+-                "2222",
+-                "--theme",
+-                "nord",
+-                "user@host",
+-            ]
+-            .map(OsString::from),
+-        )
+-        .unwrap()
+-        .unwrap();
+-        let spec = options.session_spec().unwrap();
+-        assert_eq!(spec.name, "workstation");
+-        assert!(spec.cwd.is_absolute());
+-        assert!(spec.watchdog);
+-        assert_eq!(spec.reconnect_delay_secs, 7);
+-        assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
+-        let restored = Options::parse(spec.args.into_iter().map(OsString::from))
+-            .unwrap()
+-            .unwrap();
+-        assert!(!restored.daemon);
+-        assert_eq!(restored.title.as_deref(), Some("--daemon"));
+-        assert_eq!(restored.allow, ["octocat@github"]);
+-        assert_eq!(
+-            restored.identity,
+-            options
+-                .identity
+-                .as_ref()
+-                .map(|path| spec.cwd.join(path).into_os_string())
+-        );
+-        assert_eq!(
+-            restored.config,
+-            options
+-                .config
+-                .as_ref()
+-                .map(|path| spec.cwd.join(path).into_os_string())
+-        );
+-        assert_eq!(restored.port, options.port);
+-        assert_eq!(restored.destination, options.destination);
+-        assert_eq!(restored.shell, options.shell);
+-        assert!(restored.theme.is_none());
++        for (args, expected_allow) in [
++            (
++                vec![
++                    "--daemon",
++                    "--watchdog",
++                    "--reconnect-delay",
++                    "7",
++                    "--name",
++                    "workstation",
++                    "--title",
++                    "--daemon",
++                    "--server",
++                    "https://relay.example",
++                    "--allow",
++                    "OctoCat@Relay.Example",
++                    "--theme",
++                    "nord",
++                ],
++                vec!["octocat@relay.example"],
++            ),
++            (
++                vec![
++                    "--daemon",
++                    "--watchdog",
++                    "--reconnect-delay",
++                    "7",
++                    "--name",
++                    "workstation",
++                    "--title",
++                    "--daemon",
++                    "-i",
++                    "key with spaces",
++                    "-F",
++                    "config with spaces",
++                    "-p",
++                    "2222",
++                    "--theme",
++                    "nord",
++                    "user@host",
++                ],
++                vec![],
++            ),
++        ] {
++            let options = Options::parse(args.into_iter().map(OsString::from))
++                .unwrap()
++                .unwrap();
++            let spec = options.session_spec().unwrap();
++            assert_eq!(spec.name, "workstation");
++            assert!(spec.cwd.is_absolute());
++            assert!(spec.watchdog);
++            assert_eq!(spec.reconnect_delay_secs, 7);
++            assert_eq!(session_title(&spec).unwrap().as_deref(), Some("--daemon"));
++            let restored = Options::parse(spec.args.into_iter().map(OsString::from))
++                .unwrap()
++                .unwrap();
++            assert!(!restored.daemon);
++            assert_eq!(restored.title.as_deref(), Some("--daemon"));
++            assert_eq!(restored.allow, expected_allow);
++            assert_eq!(
++                restored.identity,
++                options
++                    .identity
++                    .as_ref()
++                    .map(|path| spec.cwd.join(path).into_os_string())
++            );
++            assert_eq!(
++                restored.config,
++                options
++                    .config
++                    .as_ref()
++                    .map(|path| spec.cwd.join(path).into_os_string())
++            );
++            assert_eq!(restored.port, options.port);
++            assert_eq!(restored.destination, options.destination);
++            assert_eq!(restored.server, options.server);
++            assert_eq!(restored.shell, options.shell);
++            assert!(restored.theme.is_none());
++        }
+     }
+ 
+     #[test]
+diff --git a/src/client/terminal.rs b/src/client/terminal.rs
+index e167d3d..49a0137 100644
+--- a/src/client/terminal.rs
++++ b/src/client/terminal.rs
+@@ -2931,7 +2931,8 @@ mod tests {
+         let frame = physical(&state.frame(Instant::now()));
+         let text = frame.screen().contents();
+         assert!(text.contains("本地会话"), "{text}");
+-        assert!(text.contains("一次性登录码"), "{text}");
++        assert!(text.contains("当前系统用户"), "{text}");
++        assert!(text.contains("/logs 查看 MCP 授权"), "{text}");
+         assert!(text.contains("http://127.0.0.1:43123"), "{text}");
+         assert!(
+             !text.contains("本月剩余") && !text.contains("未登录"),
+@@ -2983,12 +2984,18 @@ mod tests {
+         state.image(rejected, "image/png");
+         state.events.set_scope(events::EventScope::Conversation);
+         state.events.latest();
+-        assert!(!state.events.open(), "decoded images are already expanded");
++        assert!(
++            state.events.open(),
++            "explicitly expand the compact image preview"
++        );
+         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
+         state.image(retained, "image/png");
+         state.events.set_scope(events::EventScope::Conversation);
+         state.events.latest();
+-        assert!(!state.events.open(), "decoded images are already expanded");
++        assert!(
++            state.events.open(),
++            "explicitly expand the compact image preview"
++        );
+         let before = state.frame(now);
+         assert_eq!(state.media.len(), 2);
+         let mut media = images::Renderer::default();
+@@ -3025,7 +3032,10 @@ mod tests {
+         state.image(next, "image/png");
+         state.events.set_scope(events::EventScope::Conversation);
+         state.events.latest();
+-        assert!(!state.events.open(), "decoded images are already expanded");
++        assert!(
++            state.events.open(),
++            "explicitly expand the compact image preview"
++        );
+         let final_frame = state.frame(now);
+         assert_eq!(state.media.len(), 2);
+         let (_, upload) = media.update(
+@@ -3167,7 +3177,10 @@ mod tests {
+         state.image(image, "image/png");
+         state.events.set_scope(events::EventScope::Conversation);
+         state.events.latest();
+-        assert!(!state.events.open(), "decoded images are already expanded");
++        assert!(
++            state.events.open(),
++            "explicitly expand the compact image preview"
++        );
+         state.selection = true;
+         let before = state.frame(now);
+         let previous_cell = state.graphics.cell();
+diff --git a/src/client/terminal/events.rs b/src/client/terminal/events.rs
+index ec5435a..e6e1d9b 100644
+--- a/src/client/terminal/events.rs
++++ b/src/client/terminal/events.rs
+@@ -2991,10 +2991,14 @@ mod tests {
+         view.attach_image(image_preview(2, 2, false));
+         assert!(!view.is_empty());
+         assert_eq!(view.snapshot()["events"][0]["kind"], "tool");
+-        assert!(
+-            !view.open(),
+-            "decoded images start expanded in Conversation"
++        assert_eq!(
++            view.snapshot()["events"][0]["expanded"],
++            false,
++            "decoded images start as compact Conversation previews"
+         );
++        assert!(view.open(), "the user can expand a decoded image");
++        assert_eq!(view.snapshot()["events"][0]["expanded"], true);
++        assert!(!view.open(), "opening the same preview is idempotent");
+         assert!(
+             !view
+                 .render(80, 12, &plain_ui(), true)
+diff --git a/src/device.rs b/src/device.rs
+index 49cf9c1..917d93b 100644
+--- a/src/device.rs
++++ b/src/device.rs
+@@ -1157,6 +1157,39 @@ mod tests {
+                         )
+                         .await
+                 }));
++                if bound {
++                    // A verified binding first asks this connection whether it
++                    // accepts thread scope. This is not the requested Status.
++                    let probe = receive(&mut socket).await.expect("thread scope probe");
++                    let probe_id = match probe {
++                        wire::Frame::Call {
++                            id,
++                            operation: Operation::CallTool { name, arguments },
++                            controller,
++                            attribution,
++                            code_context,
++                        } => {
++                            assert_eq!(name, "ssmcp.client.capabilities");
++                            assert_eq!(arguments, json!({}));
++                            assert!(controller.is_none());
++                            assert!(attribution.is_none());
++                            assert!(code_context.is_none());
++                            id
++                        }
++                        _ => panic!("thread scope capability call"),
++                    };
++                    socket
++                        .send(Message::Binary(
++                            serde_json::to_vec(&wire::Frame::Reply {
++                                id: probe_id,
++                                result: Ok(json!({"thread_scope":1})),
++                            })
++                            .unwrap()
++                            .into(),
++                        ))
++                        .await
++                        .unwrap();
++                }
+                 let bytes = loop {
+                     match tokio::time::timeout(Duration::from_secs(4), socket.next())
+                         .await
+@@ -1175,16 +1208,27 @@ mod tests {
+                 let frame: wire::Frame = serde_json::from_slice(&bytes).unwrap();
+                 let (call_id, attribution) = match frame {
+                     wire::Frame::Call {
+-                        id,
++                        id: call_id,
++                        operation,
+                         attribution,
+                         controller,
+-                        ..
++                        code_context,
+                     } => {
++                        assert!(matches!(operation, Operation::Status {}));
+                         assert_eq!(
+                             controller.unwrap().name.as_deref(),
+                             Some("bob (unverified claim)")
+                         );
+-                        (id, attribution)
++                        let context = code_context.expect("code-mode audit context");
++                        assert_eq!(
++                            context.session_id.as_deref(),
++                            agent.as_ref().map(|_| id.as_str())
++                        );
++                        assert_eq!(
++                            context.thread_id.as_deref(),
++                            agent.as_ref().and_then(|agent| agent["agent_id"].as_str())
++                        );
++                        (call_id, attribution)
+                     }
+                     _ => panic!("call frame"),
+                 };

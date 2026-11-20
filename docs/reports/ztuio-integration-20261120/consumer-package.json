@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "package",
+    "--locked",
+    "--no-verify",
+    "--package",
+    "ssmcp"
+  ],
+  "exit_code": 0,
+  "source": "631fc9f9078fd6173d28f9efb204d587e741ba56",
+  "rustc_wrapper_unchanged": true,
+  "crate_sha256": "1bb16514b39312fb4f71a584bc5316d5192fbde5c8cabda4e269309859ad458d",
+  "crate_bytes": 8805421
+}
