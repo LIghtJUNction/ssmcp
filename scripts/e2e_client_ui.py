@@ -250,8 +250,9 @@ def main():
             check("Reviewer" not in text(initial) and "Builder" not in text(initial),
                   "the default conversation keeps the sidebar hidden")
             account_row = left_rows(initial)[prompt_start(initial)]
-            check("example" in account_row and "0.75 GB" in account_row,
-                  "the composer still shows its account and remaining traffic")
+            check("Local example" in account_row and "Max 1 GB" in account_row
+                  and "Reset 12-01" in account_row,
+                  "the composer shows its account, quota maximum and reset date")
             save_shot(args.out, "chat", initial)
             preview.send(b"\x1bOR")
             initial = preview.until(lambda s: "Builder" in text(s) and "Reviewer" in text(s)
