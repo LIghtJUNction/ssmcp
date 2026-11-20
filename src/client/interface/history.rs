@@ -1,5 +1,6 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
+pub(crate) mod descriptions;
 mod listener;
 pub(crate) use listener::{
     ensure_current_id, record_listener_result, record_request_in, with_listener_conversation,
@@ -61,6 +62,8 @@ pub(crate) struct SessionSummary {
     pub id: String,
     pub workspace: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub message_count: usize,
@@ -458,6 +461,7 @@ impl History {
             id: conversation.metadata.id.clone(),
             workspace: conversation.metadata.workspace.clone(),
             title,
+            summary: None,
             created_at_ms: conversation.metadata.created_at_ms,
             updated_at_ms: conversation
                 .messages
@@ -475,10 +479,10 @@ impl History {
         }
     }
 
-    fn histories(&self) -> Result<Vec<(SessionSummary, usize)>, String> {
+    fn histories(&self, names: &[String]) -> Result<Vec<(SessionSummary, usize)>, String> {
         let archived = self.archive_index()?;
         let mut output = Vec::new();
-        for name in self.directory.names()? {
+        for name in names {
             let Some(id) = name
                 .strip_suffix(".jsonl")
                 .filter(|id| valid_id(id, "conversation"))
@@ -489,7 +493,7 @@ impl History {
             let Ok(conversation) = self.load(id) else {
                 continue;
             };
-            let file = self.directory.open(&name, false, false, false)?;
+            let file = self.directory.open(name, false, false, false)?;
             let bytes = usize::try_from(
                 file.metadata()
                     .map_err(|_| "cannot inspect history size")?
@@ -511,7 +515,8 @@ impl History {
     }
 
     fn retain(&self, id: &str, bytes: usize) -> Result<(), String> {
-        let histories = self.histories()?;
+        let names = self.directory.names()?;
+        let histories = self.histories(&names)?;
         let mut count = 1 + histories
             .iter()
             .filter(|(history, _)| history.id != id)
@@ -540,6 +545,7 @@ impl History {
             return Err("conversation retention is full of active or archived sessions; restore an archive or close an older client and retry".into());
         }
         for (id, _lease) in reclaim {
+            self.remove_description(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }
@@ -747,12 +753,17 @@ impl History {
 
     fn sessions_filtered(&self, filter: archive::Filter) -> Result<Vec<SessionSummary>, String> {
         let _lock = self.directory.lock()?;
+        let names = self.directory.names()?;
         Ok(self
-            .histories()?
+            .histories(&names)?
             .into_iter()
             .map(|(summary, _)| summary)
             .filter(|summary| {
                 summary.workspace == self.workspace && filter.includes(summary.archived)
+            })
+            .map(|mut summary| {
+                self.describe_summary(&mut summary, &names);
+                summary
             })
             .collect())
     }
@@ -780,6 +791,7 @@ impl History {
             return Err("conversation belongs to a different workspace".into());
         }
         let mut summary = self.summary(&conversation);
+        self.describe_summary(&mut summary, &self.directory.names()?);
         summary.archived = self.archive_index()?.contains(id);
         Ok(json!({"schema_version":1,"metadata":conversation.metadata,"summary":summary}))
     }
@@ -1446,7 +1458,7 @@ pub(super) fn tool() -> Value {
     let offset = json!({"type":"integer","minimum":0,"default":0});
     json!({
         "name":"ssmcp.ui.history",
-        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible changes. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
+        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible archive changes and ssmcp.ui.history_update to edit saved titles/summaries without changing messages. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
         "inputSchema":{"type":"object","oneOf":[
             {"type":"object","required":["action"],"additionalProperties":false,"properties":{
                 "action":{"const":"list"},"state":{"type":"string","enum":["active","archived","all"],"default":"active"},"offset":offset,"limit":page
@@ -1474,9 +1486,9 @@ pub(super) fn tool() -> Value {
 mod tests {
     use super::*;
 
-    struct Temporary(PathBuf);
+    pub(super) struct Temporary(PathBuf);
     impl Temporary {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
@@ -1484,7 +1496,7 @@ mod tests {
             crate::platform::private_directory(&path).unwrap();
             Self(path)
         }
-        fn history(&self) -> History {
+        pub(super) fn history(&self) -> History {
             History::with_workspace(self.0.join("conversations"), "/fixture/workspace".into())
                 .unwrap()
         }

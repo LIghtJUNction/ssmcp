@@ -764,6 +764,9 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             {
                 return Err(Fault::params("collab requires client_id from list"));
             }
+            if args.contains_key("role") && args.contains_key("summary") {
+                return Err(Fault::params("provide only one of role and summary"));
+            }
             Ok(Action::Collab(arguments))
         }
         "code_mode" => {
@@ -1908,6 +1911,7 @@ fn collaboration_tool() -> Value {
         "token":{"type":"string","minLength":64,"maxLength":64,"description":"Private credential returned by join; never send it to peers."},
         "name":{"type":"string","minLength":1,"maxLength":128,"description":"Public display name, at most 128 UTF-8 bytes; required by join."},
         "role":{"type":"string","maxLength":128,"description":"Public role; at most 128 UTF-8 bytes, empty clears it."},
+        "summary":{"type":"string","maxLength":128,"description":"Alias for role. A public summary up to 128 UTF-8 bytes. Empty clears it."},
         "status":{"type":"string","minLength":1,"maxLength":128,"description":"Public activity status for update; at most 128 UTF-8 bytes."},
         "capabilities":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":64},"description":"Self-reported labels, each at most 64 UTF-8 bytes."},
         "to":{"type":"string","minLength":1,"maxLength":64,"description":"Recipient agent_id or '*' for current peers excluding yourself."},
@@ -1921,7 +1925,7 @@ fn collaboration_tool() -> Value {
         "through":{"type":"integer","minimum":0,"maximum":9007199254740991_u64,"description":"A delivered next_cursor; acknowledge only after processing all messages through it."}
     });
     let variants: Vec<Value> = [
-        ("join", vec!["name"], vec!["name", "role", "capabilities"]),
+        ("join", vec!["name"], vec!["name", "role", "summary", "capabilities"]),
         ("list", vec![], vec![]),
         (
             "update",
@@ -1931,6 +1935,7 @@ fn collaboration_tool() -> Value {
                 "token",
                 "name",
                 "role",
+                "summary",
                 "status",
                 "capabilities",
             ],
@@ -1974,7 +1979,12 @@ fn collaboration_tool() -> Value {
         }
         let mut required_fields = vec!["action", "client_id"];
         required_fields.extend(required);
-        json!({"properties":properties,"required":required_fields,"additionalProperties":false})
+        let mut variant =
+            json!({"properties":properties,"required":required_fields,"additionalProperties":false});
+        if matches!(action, "join" | "update") {
+            variant["not"] = json!({"required":["role","summary"]});
+        }
+        variant
     })
     .collect();
     json!({
@@ -3205,6 +3215,33 @@ mod tests {
             value["params"]["name"] = json!(name);
             value["params"]["arguments"] = json!({});
             assert!(operation(&parse(&value)).is_err());
+        }
+    }
+
+    #[test]
+    fn collaboration_summary_alias_is_exclusive_in_catalog_and_http_arguments() {
+        let schema = &collaboration_tool()["inputSchema"];
+        assert_eq!(schema["properties"]["summary"]["maxLength"], 128);
+        for variant in schema["oneOf"].as_array().unwrap() {
+            if matches!(
+                variant["properties"]["action"]["const"].as_str(),
+                Some("join" | "update")
+            ) {
+                assert!(variant["properties"].get("summary").is_some());
+                assert_eq!(variant["not"]["required"], json!(["role", "summary"]));
+            } else {
+                assert!(variant["properties"].get("summary").is_none());
+            }
+        }
+        for arguments in [
+            json!({"action":"join","client_id":"session","name":"Reviewer","summary":"Preparing review"}),
+            json!({"action":"update","client_id":"session","agent_id":"agent","token":"a".repeat(64),"summary":""}),
+        ] {
+            let mut request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"collab","arguments":arguments}});
+            assert!(matches!(operation(&parse(&request)), Ok(Action::Collab(_))));
+            request["params"]["arguments"]["role"] = json!("legacy");
+            assert!(operation(&parse(&request)).is_err());
         }
     }
 

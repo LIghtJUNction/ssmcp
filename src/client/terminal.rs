@@ -383,6 +383,17 @@ pub(super) fn invalidate() {
     }
 }
 
+pub(super) fn history_description_changed() {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.conversation.history_list_stale = true;
+        state.dirty = true;
+    }
+}
+
 pub(super) fn log_width() -> Option<usize> {
     let shared = shared()?;
     if !shared.alive.load(Ordering::Acquire) {
