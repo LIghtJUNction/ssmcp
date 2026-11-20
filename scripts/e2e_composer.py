@@ -47,9 +47,11 @@ def input_text(snapshot):
 def visible_record(snapshot, request_text, status, message_id=None, *, selected=False):
     rows = snapshot["rows"][:-4]
     expected = " ".join(request_text.split())
+    receipt_labels = {"queued": "Waiting", "delivered": "Read", "cancelled": "Cancelled"}
+    expected_label = receipt_labels[status] if status is not None else None
     for index, row in enumerate(rows):
-        meta = re.match(r"^\s*([^·]+?)\s*·\s*#([^\s·]+)(?:\s|·|$)", row)
-        if meta is None or (status is not None and meta[1].strip() != status):
+        meta = re.match(r"^\s*[○●] ([^·]+?)(?: · Enter edit)? · #([^\s·]+)(?:\s|·|$)", row)
+        if meta is None or (expected_label is not None and meta[1] != expected_label):
             continue
         if message_id is not None and meta[2] != message_id[:8]:
             continue
@@ -174,11 +176,14 @@ class Composer(Dashboard):
         # clears only test-owned text and does not depend on the current cursor.
         front.send(b"\x01\x0b" + request_text.encode() + ENTER)
         front.until(
-            lambda shot: visible_record(shot, request_text, "queued")
+            lambda shot: "Queued · delivered" in shot["rows"][-1]
                          and request_text not in input_text(shot),
             "the typed requirement becoming queued and its accepted draft clearing",
         )
+        self.activate_column(front, "queue")
         record = self.record(self.queue(), request_text=request_text)
+        front.until(lambda shot: visible_record(shot, request_text, "queued", record["id"]),
+                    "the accepted request visible in the queue")
         self.check(record["status"] == "queued", "typed input is acknowledged by the server queue")
         return record
 
@@ -226,7 +231,7 @@ class Composer(Dashboard):
         front.send(HOME + DOWN * index + ENTER)
         # The default recipient is shown in the compact footer; exact agents
         # retain the explicit recipient label above the input.
-        visible_recipient = "To Next caller" if member is None else f"To · {label}"
+        visible_recipient = "To Next caller" if member is None else f"To {label}"
         front.until(lambda shot: visible_recipient in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
@@ -251,6 +256,7 @@ class Composer(Dashboard):
 
     def wait_delivered(self, front, record, request_text=None):
         request_text = request_text if request_text is not None else record["text"]
+        self.activate_column(front, "queue")
         front.until(lambda shot: visible_record(shot, request_text, "delivered", record["id"]),
                     "the local queue observing response-boundary delivery")
 
@@ -292,10 +298,13 @@ class Composer(Dashboard):
         # One physical write gives the client an Enter followed by a new draft
         # before an asynchronous queue acknowledgement can be handled.
         front.send(first_text + "\r" + following_draft)
-        front.until(lambda shot: visible_record(shot, first_text, "queued")
+        front.until(lambda shot: "Queued · delivered" in shot["rows"][-1]
                                  and following_draft in input_text(shot),
                     "an accepted requirement without erasing later typed text")
+        self.activate_column(front, "queue")
         first = self.record(self.queue(), request_text=first_text)
+        front.until(lambda shot: visible_record(shot, first_text, "queued", first["id"]),
+                    "the accepted requirement visible in the queue")
         self.check(not (self.workspace / "composer-hidden-shell-leak").exists(),
                    "typing a requirement never executes it in an invisible shell")
         self.check(self.ui("/display/conversation")["draft"]["text"]
@@ -308,7 +317,7 @@ class Composer(Dashboard):
 
         second = self.submit(front, "COMPOSER_UP_EDIT_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: "Editing · next caller" in text(shot)
+        front.until(lambda shot: "Edit queue" in text(shot)
                                  and second["text"] in input_text(shot),
                     "Up reclaiming the pending request before editing")
         self.check(self.record(self.queue(), message_id=second["id"])["status"] == "editing",
@@ -316,7 +325,7 @@ class Composer(Dashboard):
         self.check(not self.messages(self.work()), "a request held for editing is excluded from delivery")
         revised = "COMPOSER_UP_EDIT_REVISED 界"
         front.send(b"\x01\x0b" + revised.encode() + ENTER)
-        front.until(lambda shot: visible_record(shot, revised, "queued", second["id"])
+        front.until(lambda shot: "Queued · delivered" in shot["rows"][-1]
                                  and revised not in input_text(shot),
                     "the edited text queued under its original identity")
         edited = self.record(self.queue(), message_id=second["id"])
@@ -331,12 +340,12 @@ class Composer(Dashboard):
         front.send(parked)
         self.select_request(front, third["id"])
         front.send(ENTER)
-        front.until(lambda shot: "Editing · next caller" in text(shot)
+        front.until(lambda shot: "Edit queue" in text(shot)
                                  and third["text"] in input_text(shot),
                     "queue Enter reclaiming the selected request")
         revised_third = "COMPOSER_ENTER_EDIT_REVISED"
         front.send(b"\x01\x0b" + revised_third.encode() + ENTER)
-        front.until(lambda shot: visible_record(shot, revised_third, "queued", third["id"])
+        front.until(lambda shot: "Queued · delivered" in shot["rows"][-1]
                                  and parked in input_text(shot),
                     "the original parked draft restored after matching edit acknowledgement")
         self.expect_delivery(self.work(), third, revised_third)
@@ -419,7 +428,7 @@ class Composer(Dashboard):
                    "horizontal navigation preserves the independently highlighted member")
         front.send(ENTER)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8)
-                                 and "To · Shared name" in text(shot) and not shot["hide_cursor"],
+                                 and "To Shared name" in text(shot) and not shot["hide_cursor"],
                     "Enter choosing the member and returning to the conversation")
         chosen = self.ui("/display/conversation")
         self.check(chosen["target"] == members[0]["agent_id"]
@@ -445,7 +454,7 @@ class Composer(Dashboard):
 
         retargeted = self.submit(front, "COMPOSER_RETARGET_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: "Editing · Shared name" in text(shot)
+        front.until(lambda shot: "Edit queue" in text(shot) and "Shared name" in text(shot)
                                  and retargeted["text"] in input_text(shot),
                     "an exact-agent requirement taken back for recipient editing")
         # Keep the held edit while navigating from Queue through the canvas;
@@ -457,7 +466,7 @@ class Composer(Dashboard):
                    and held["draft"] == {"text": retargeted["text"], "cursor": 0},
                    "Left preserves the held request identity and original text during retargeting")
         front.send(HOME + ENTER)
-        front.until(lambda shot: "Editing · next caller" in text(shot)
+        front.until(lambda shot: "Edit queue" in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
