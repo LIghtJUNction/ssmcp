@@ -2,6 +2,9 @@
 use super::*;
 use crate::code_mode::user_wait::Recipient;
 use tokio::time::{Instant, MissedTickBehavior};
+// The user's budget belongs to the native decision wait. Capability discovery,
+// audit work, queueing and the reply need their own bounded transport allowance.
+const NATIVE_RPC_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -235,7 +238,8 @@ pub(super) async fn execute(
         run: run.clone(),
         delivered: false,
     };
-    let mut native = json!({"op":"request","reason":arguments.reason,"timeout_ms":arguments.timeout_ms.saturating_sub(250).max(1)});
+    let mut native =
+        json!({"op":"request","reason":arguments.reason,"timeout_ms":arguments.timeout_ms});
     let mut cancel = json!({"op":"cancel"});
     if let Some(id) = arguments.request_id {
         native["request_id"] = json!(id);
@@ -267,7 +271,7 @@ pub(super) async fn execute(
     tokio::pin!(waiting);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(1));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    let deadline = Instant::now() + Duration::from_millis(arguments.timeout_ms);
+    let deadline = Instant::now() + Duration::from_millis(arguments.timeout_ms) + NATIVE_RPC_GRACE;
     let result = loop {
         tokio::select! {
             biased;
@@ -309,13 +313,13 @@ pub(super) async fn execute(
 
 pub(super) fn tool() -> Value {
     json!({"name":"request_finish",
-        "description":"Request permission to finish the current work. A nonempty reason is required. This direct Rust tool sleeps up to 25 seconds without occupying a JavaScript worker. Default No is not an invented user decision: pending returns decision null and approved false; resume the same request_id after timeout. The local human or another verified agent in this same client/account may decide; the requester cannot approve itself. Pass your existing collab id/token to bind the exact thread (join starts no model). An approved request permits one explicit native kind answer; new user input, cancellation or connection changes invalidate it. Current authentication and ACL remain required. External assistant final speech cannot be intercepted by SSMCP.",
+        "description":"Request permission to finish the current work. A nonempty reason is required. This direct Rust tool waits for a decision for 1..25000ms without occupying a JavaScript worker. Native RPC setup and reply have a separate bounded 5-second grace; authentication and response processing also take time, so timeout_ms is not an overall call deadline. Default No is not an invented user decision: pending returns decision null and approved false; resume the same request_id after timeout. The local human or another verified agent in this same client/account may decide; the requester cannot approve itself. Pass your existing collab id/token to bind the exact thread (join starts no model). An approved request permits one explicit native kind answer; new user input, cancellation or connection changes invalidate it. Current authentication and ACL remain required. External assistant final speech cannot be intercepted by SSMCP.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id","reason"],"properties":{
             "client_id":{"type":"string","minLength":1,"maxLength":64},
             "reason":{"type":"string","minLength":1,"maxLength":8192},
             "request_id":{"type":"string","minLength":1,"maxLength":128},
             "idempotency_key":{"type":"string","minLength":1,"maxLength":128},
-            "timeout_ms":{"type":"integer","minimum":1,"maximum":25000,"default":20000},
+            "timeout_ms":{"type":"integer","minimum":1,"maximum":25000,"default":20000,"description":"Native decision wait budget; the RPC has a separate 5-second transport grace, so total call duration may be longer."},
             "agent":{"type":"object","additionalProperties":false,"required":["id","token"],"properties":{
                 "id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}}}},
             "not":{"required":["request_id","idempotency_key"]}},
@@ -346,3 +350,6 @@ mod tests {
         assert!(Arguments::parse(both).is_err());
     }
 }
+
+#[cfg(test)]
+mod transport_tests;
