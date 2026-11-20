@@ -1,5 +1,9 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
+mod listener;
+pub(crate) use listener::{
+    ensure_current_id, record_listener_result, record_request_in, with_listener_conversation,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -231,7 +235,7 @@ fn safe_text(text: &str) -> String {
         .to_owned()
 }
 
-fn validate_content(text: &str) -> Result<(), String> {
+pub(super) fn validate_content(text: &str) -> Result<(), String> {
     if text.trim().is_empty() || text.len() > MAX_CONTENT {
         return Err("history text must contain 1..=16384 UTF-8 bytes".into());
     }

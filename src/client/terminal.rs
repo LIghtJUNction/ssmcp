@@ -427,6 +427,57 @@ pub(super) fn log_event(
     true
 }
 
+/// A listener result is scoped output, not an agent finish decision or user input.
+/// Lock order is Terminal -> Hub -> History; publication cannot move to a new view.
+pub(crate) fn listener_result(
+    receipt: &super::interface::listener::ReplyReceipt,
+    label: &str,
+    text: &str,
+) -> bool {
+    let event = serde_json::json!({
+        "type":"ssmcp.message","role":"assistant","kind":"execution_result",
+        "author":label,"text":text,"source":"local_listener",
+        "message_id":receipt.message_id,"delivery_id":receipt.delivery_id,
+        "connection_id":receipt.connection_id,"conversation_id":receipt.conversation_id,
+        "execution_state":receipt.execution_state,"task_completion_approved":false,
+    });
+    let header = format!(
+        "\n[LISTENER] {label} · {}\n",
+        receipt.execution_state.as_str()
+    );
+    let shown = if let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire))
+    {
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut bytes = header.into_bytes();
+        for row in markdown::rows(text, state.geometry.left.max(1), &state.ui) {
+            bytes.extend_from_slice(row.as_bytes());
+            bytes.push(b'\n');
+        }
+        bytes.push(b'\n');
+        super::interface::listener::with_current_reply(receipt, || {
+            if !shared.alive.load(Ordering::Acquire) {
+                return false;
+            }
+            state.log_event("listener", &event, &bytes);
+            crate::session::attach::record_event("listener", &event);
+            true
+        })
+        .unwrap_or(false)
+    } else {
+        super::interface::listener::with_current_reply(receipt, || {
+            let mut output = io::stderr().lock();
+            write!(output, "{header}{text}\n\n")
+                .and_then(|()| output.flush())
+                .is_ok()
+        })
+        .unwrap_or(false)
+    };
+    if shown {
+        super::interface::messages::remember_last(text);
+    }
+    shown
+}
+
 /// The renderer releases its lock before publishing these display-only updates.
 pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
     if updates.is_empty() {
