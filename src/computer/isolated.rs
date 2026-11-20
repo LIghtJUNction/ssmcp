@@ -455,8 +455,8 @@ impl Desktop {
             height: options.height,
             directory,
             x11_files: OwnedX11Files {
+                entries: Vec::new(),
                 reservation: Some(reservation),
-                ..OwnedX11Files::default()
             },
         };
         let ready = async {
