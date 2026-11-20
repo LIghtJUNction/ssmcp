@@ -1,6 +1,6 @@
 # 直接依赖迁移记录（2026-11-20）
 
-这次迁移将七个超出原版本约束的直接依赖升级到审查时的最新稳定版，并补齐 HTTP/TLS 与摘要格式化的必要调用点。四个直接 Z 库保持原版本和 gitlink。源码准备阶段已完成格式化和差分检查；**锁文件解析、编译、运行回归及六平台验证尚待最终合流后的统一门禁**，本记录不构成发布或部署回执。
+这次迁移将七个超出原版本约束的直接依赖升级到审查时的最新稳定版，并补齐 HTTP/TLS 与摘要格式化的必要调用点。源码准备阶段已完成格式化和差分检查。锁文件解析、编译、运行回归及六平台验证留待最终合流后的统一门禁。
 
 ## 版本与功能开关
 
@@ -18,7 +18,7 @@
 
 以上七项都使用 `default-features = false`。TOML 两项的版本约束省略 `+spec-1.1.0` 构建元数据；最终解析版本由 `Cargo.lock` 记录。项目声明的 Rust 版本仍为 1.100。
 
-直接 Z 依赖固定为：
+下表记录七项外部依赖适配审查时的 Project Z 基线。当时四项依赖使用对应 gitlink 的本地路径。后续 Git 源迁移保留版本约束，并同步 gitlink。当前规则见 [Project Z 依赖说明](dependencies.md)。
 
 | 库 | 版本 | gitlink |
 | --- | --- | --- |
@@ -100,16 +100,16 @@ sha2 0.11 将输出容器换为 `hybrid-array::Array`，现有 `Digest` 调用�
 
 ## 锁文件与验收交接
 
-`Cargo.lock` 不由本补丁手工改写。应先把最终源码正常合流到干净工作树，再由唯一构建负责人更新锁并记录实际结果。首选保守的工作区更新；Cargo 官方将其定义为保留已有非工作区锁项、按新 manifest 补入必要包的方式。[Cargo update 文档][cargo-update]
+`Cargo.lock` 留待协调者用实际 Cargo 解析更新。七个外部版本的切换和 Project Z Git heads 同步是同一最终源码上的两个检查项。保守的工作区更新可补入 manifest 所需的变更，已有 Git lock 项仍需按包显式刷新并核对默认分支提交。[Cargo update 文档][cargo-update]
 
 ```sh
-cargo update --workspace
+cargo metadata --locked --format-version 1
 cargo tree --locked -e features -i reqwest@0.13.5
 cargo tree --locked -e features -i base64@0.23.1
 cargo tree --locked -e features -i rustls
 ```
 
-需要检查的解析变化包括 reqwest 0.13 的平台验证器依赖、sha2/digest/crypto-common/hybrid-array 新版本链、WebSocket 和 TOML 新版本链。预配置 TLS 不使用平台验证器作为本项目普通 HTTP 的信任来源，但该 feature 仍会带入其平台依赖，六平台编译必须覆盖。不能为了把锁文件压成单版本而强制覆盖仍有合法旧约束的传递依赖；尤其保留 zharness 使用的 zcall 0.4 与 zmcpio 使用的 zcall 0.3 链。
+需要检查 reqwest 0.13 的平台验证器依赖、sha2/digest/crypto-common/hybrid-array，以及 WebSocket 和 TOML 新版本链。预配置 TLS 的证书验证使用捆绑的 WebPKI 根证书，平台验证器作为图中的依赖仍需纳入六平台编译。Project Z 的 Git 图与外部发行的规范化 registry 图分别验收。已发布的 zmcpio 0.4.0 仍要求 zcall 0.3.0，同版本的 Git 源码已要求 0.4.0。发行能否通过取决于实际 registry 解析和编译。[Project Z 依赖说明](dependencies.md)
 
 锁定后，统一门禁至少应包含新 `http_client::tests`、`hex::tests`，以及已有的账户 trust、OAuth、WebSocket、TOML 配置保存和资源校验回归。三项 HTTP 回归分别覆盖请求编码、默认拒绝私有 CA、显式 CA 覆盖下的 TLS 1.2/1.3 与 HTTP/1.1 成功路径及错误域名拒绝；拒绝路径检查未发送 HTTP 凭据。这些测试已写入源码，不能将静态审查或格式化成功记为测试通过。
 

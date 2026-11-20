@@ -9,20 +9,19 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 | `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 | `crates/zuse` | `zuse-computer = 0.2.2`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
 
-四个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
+应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 保留四项直接依赖的精确版本、包别名和 feature，以便 Cargo 生成外部发布包。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
 
-zuse-computer 0.2.2 固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`。Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，保留原有聚焦身份检查；各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
+四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须证明 Cargo 实际使用的 Git 提交及其工作树内容与对应 gitlink 相同。根级 `[patch.crates-io]` 将仍由上游以 registry 声明的 zplugin、zguard、zcall、zconv、zmcpio、zclap、z64 和 zsys 统一到各自的 Git 源。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。
 
-## 每轮迭代与发布前核对 Project Z 依赖
+## 每轮迭代与发行前同步
 
-每轮迭代开始时以及最终发布前，都要核对实际使用的 Project Z 直接和间接依赖，采用当时最新、未撤回的稳定发布版，并验证消费者。这里的“最新”以查询时的官方发布记录为准；日常构建继续使用固定版本和源码，不自动跟随上游分支。
+1. 按仓库辨别 Project Z 包。读取实际使用的默认分支 manifest，记录 URL、默认 ref、完整提交、树和 UTC 查询时间。
+2. 同步 manifest、相关 Git 锁项和源码 gitlink。同一个仓库的包版本取自实际 manifest。仅执行 `cargo update --workspace` 不会刷新已有的 Git heads。按当前 Cargo 图更新相应 Git 包，再核对完整锁定元数据与 checkout。
+3. 对受影响的消费者执行定向编译、契约或集成检查。记录已核对的版本、提交和结果。最终门禁使用协调者冻结的同一批源码和锁文件。
 
-1. 用 `cargo metadata --locked --format-version 1` 枚举实际解析图，再按包的 `repository` 身份确认 Project Z 范围。包名以 z 开头只供查找，第三方包另按自身维护流程处理。
-2. 查询 [crates.io API](https://crates.io/data-access) 的版本列表，排除 prerelease 与 yanked 版本，记录 UTC 查询时间、精确版本和仓库 tag。路径依赖还要核对发布归档摘要、包内源码记录与选定 gitlink。
-3. 对已发布的新版本一起更新消费者约束、子模块提交和锁文件；保持上游正式约束。上游尚未发布兼容版本时，记录完整依赖链、阻碍、后续发布顺序与负责仓库，继续完成可独立更新的部分。
-4. 对受影响的消费者执行本地定向编译、契约或集成检查，保留仍然适用的既有结果，再及时提交、推送。最终发布由验收负责人把应用与子模块固定到同一份最终源码，并执行正式发布门禁。依赖核对是一项每轮执行的维护要求，不是后台自动升级任务。
+外部发行还要通过独立的 registry 路径。Cargo 的标准打包过程会规范化 manifest，并使用包内的 registry 锁文件构建。预检检查解包后的 `Cargo.toml`、`Cargo.lock`、源提交和实际元数据，再将结果、Git 图和各项摘要写入发行收据。仅凭开发图能编译无法确认 registry 包可用。[Cargo 打包说明](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 
-### 2026-11-20 核对记录
+### 2026-11-20 迁移前核对记录
 
 2026-11-20 12:34:23–12:36:53 UTC 查询官方 registry，并核对对应仓库 tag。基线是 `fd0c58018605871ba04119e22c2ce089698c3f1c`。本次将 zharness 从 0.5.1 更新为 0.6.0，固定到 `db4206d3b74e37d57ff052948962f55514081d4b`；其发布归档与 v0.6.0 tag 指向同一份源码，带入 zcall 0.4.0 和 zguard 0.1.0。其余直接依赖已处于查询时的最新稳定版。逐项版本、摘要和源码证据见[核对记录](reports/project-z-dependencies-20261120.json)。
 
@@ -41,9 +40,9 @@ zuse-computer 0.2.2 固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`。Windo
 | [ztuio](https://crates.io/crates/ztuio) | 直接 | `0.1.0` | [0.1.0](https://github.com/LIghtJUNction/ztuio/tree/v0.1.0) |
 | [zuse-computer](https://crates.io/crates/zuse-computer) | 直接 | `0.2.2` | [0.2.2](https://github.com/LIghtJUNction/zuse/tree/v0.2.2) |
 
-`zcall 0.3.0` 暂由 `zuse-computer 0.2.2 → zmcpio 0.4.0` 保留；[zmcpio 当前发布源码](https://github.com/LIghtJUNction/zmcpio/blob/bc89d7fa3b0249b3a9037748e2113b31615e8c89/Cargo.toml) 精确要求 `=0.3.0`。新的 zharness 路径使用 0.4.0，两条调用链由 Cargo 分别解析。关闭这个例外需要 zmcpio 维护者先发布兼容 0.4.0 的版本，随后由 zuse 维护者发布新的精确依赖版本，再由 SSMCP 同步消费并验证。每轮核对都应重新检查该例外。
+表中两条 zcall 调用链属于迁移前的 registry 观察。当前检查的 [zmcpio Git 源码](https://github.com/LIghtJUNction/zmcpio/blob/a88d2accf0fa642eded27c844aaf7d7bb6dd3501/Cargo.toml) 仍为 0.4.0，其 zcall 要求为 `=0.4.0`。官方 registry 中已发布的 zmcpio 0.4.0 仍要求 `=0.3.0`。这两份代码的版本字符串相同，发行包能否使用实际发布的 registry 图仍取决于规范化打包构建。[官方索引条目](https://index.crates.io/zm/cp/zmcpio)
 
-本次消费者验证已通过锁定依赖解析、原生插件 fixture 构建及真实动态库调用契约（1 项通过），并通过 91 项发布规则测试；完整命令、源码提交和最终版本复核时间保存在上述核对记录中。
+当时的锁定解析、原生插件契约和 91 项发布规则测试属于上述历史源码，完整范围见核对记录。
 
 ## 获取与构建
 
@@ -59,21 +58,19 @@ cargo build --locked
 git submodule update --init --recursive
 ```
 
-GitHub 自动生成的源码压缩包不展开 Git 子模块。需要从源码编译时，用递归 Git checkout；普通用户可以直接使用正式 Release 中的可执行文件。发布 workflow 同样递归取回固定提交，不临时拉取各子库的最新代码。
+GitHub 自动生成的源码压缩包不展开 Git 子模块。源码与契约验证使用递归 Git checkout。发行 workflow 递归获取固定提交，并按已冻结的锁定图验证。
 
 ## 独立修改与验收
 
-更新任一库时，先在相应独立仓库提交并推送修改，再在 ssmcp 更新 gitlink 和精确依赖版本。提交父仓库前检查 `git submodule status --recursive`；不要只提交父仓库指针而遗漏子库提交。
+上游库的修改与 registry 发布各自由其仓库维护。应用同步时记录新默认分支提交，更新消费方的锁和源码 gitlink，并检查 `git submodule status --recursive`。四个子库从父 workspace 显式排除，`cargo test --workspace` 不涵盖各自的独立契约测试。发行既有的 ztuio 独立检查继续使用 `cargo test --manifest-path crates/ztuio/Cargo.toml --locked`。
 
-ztuio、zharness、zplugin、zuse 均从父 workspace 显式排除，应用通过路径依赖使用固定源码。ztuio 虽然是单包仓库，也明确排除，以免 Cargo 自动把路径依赖收入父 workspace。根级 `[patch.crates-io]` 将 zharness 传递使用的 zplugin 统一到同一个子模块，防止本机构建出现两套相同 ABI 类型。zplugin 0.3.1 与 zuse-computer 0.2.2 都精确依赖已发布的 `zsys = 0.1.1`；zplugin-macros 与 zplugin 同为 0.3.1。升级后需核对实际解析图只有一套这些共享包。
-
-父项目的 `cargo test --workspace` 不会执行已排除子库的独立契约测试。ztuio 使用 `cargo test --manifest-path crates/ztuio/Cargo.toml --locked` 验证；正式发布复用的 CI 配置也保留此显式检查。更新子库时，应在该子库执行自己的测试和发布检查，再对 ssmcp 做集成验证。发布到 crates.io 时使用精确 registry 版本；不把子库的正式依赖改成只在相邻目录才成立的路径。
-
-版本按实际变更分别递增。ssmcp 的版本递增不自动递增四个库。首次发布或升级公共依赖时，先发布对应库并核对包摘要，再发布应用。zplugin 的宏包先于 zplugin，新的 zharness 版本应依赖已发布的精确 zplugin 版本；ztuio 同样从自己的仓库发布，SSMCP 工作流只发布应用包。
+SSMCP 的 crates.io workflow 只发布应用包。独立依赖版本必须在各自的仓库发布，并通过 registry 摘要与应用实际规范化打包的检查。发布任务会比较独立目录中 Cargo dry-run 生成的包与已验证包，发布返回后再核对实际生成包与 registry 摘要。Cargo 上传命令本身会重新打包，因而这些检查提供可重现性和事后核对。[Cargo 发布说明](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
 
 ## zuse 桌面调用
 
-zuse 源码固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`，Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，精确版本为 0.2.2。SSMCP 用 gitlink 固定实际源码，不凭相同版本字符串把不同提交视为同一来源；本轮采用已发布的版本和聚合仓库提供的不可变提交，应用调用仍由 SSMCP 验收。
+zuse 的 Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，当前直接版本约束为 `=0.2.2`。开发图的实际提交以 Cargo.lock 和对应 gitlink 的一致性检查为准。相同版本字符串可出现在多个不同 Git 提交上。
+
+Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，以保留聚焦身份检查。各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
 
 每次受支持的电脑操作启动一个普通操作系统子进程，使用固定环境直接调用 Rust Desktop API；它只执行这次桌面请求，不运行模型。父进程等到输入释放和实际退出才交还输入锁，并拥有和清理截图临时目录。CLI 与 Linux 守护进程都注册 worker 入口；嵌入使用方缺少入口注册时会在创建子进程前得到明确错误。
 
