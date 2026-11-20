@@ -147,7 +147,7 @@ impl Process {
         });
         Ok(backend)
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_exec_projection(
         &self,
     ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {

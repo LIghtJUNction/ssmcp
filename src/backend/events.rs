@@ -190,7 +190,7 @@ enum Presentation {
     LocalDiscovery,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) type ProjectedEvent = (Value, crate::runtime::call_scope::Source);
 
 pub struct EventLog {
@@ -200,7 +200,7 @@ pub struct EventLog {
     changed: Notify,
     archive: Mutex<Option<crate::output::Capture>>,
     observer: Option<std::sync::Weak<crate::observer::Pool>>,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     projection: Mutex<Option<std::sync::mpsc::SyncSender<ProjectedEvent>>>,
 }
 
@@ -232,7 +232,7 @@ impl EventLog {
     ) -> Arc<Self> {
         Arc::new(Self {
             label: label.into(),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             projection: Mutex::new(None),
             audit_mode,
             buffer: Mutex::new(Buffer::default()),
@@ -246,7 +246,7 @@ impl EventLog {
     }
 
     /// Test a real producer-to-presentation boundary without a global terminal.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_projection(&self) -> std::sync::mpsc::Receiver<ProjectedEvent> {
         let (send, receive) = std::sync::mpsc::sync_channel(128);
         *self.projection.lock().unwrap() = Some(send);
@@ -315,7 +315,7 @@ impl EventLog {
                     Some("background_output" | "bash_execution_update")
                 ));
         if !external_output && presentation != Presentation::LocalDiscovery {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {
                 let _ = sink.try_send((event.clone(), source.clone()));
             }

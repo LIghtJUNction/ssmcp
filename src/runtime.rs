@@ -446,7 +446,7 @@ impl Runtime {
         self.files.prepare_references(text).await
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
         self.files.expand_references(text).await
     }

@@ -245,7 +245,7 @@ impl Shell {
     fn registry(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(|e| e.into_inner())
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_projection(
         &self,
     ) -> std::sync::mpsc::Receiver<super::events::ProjectedEvent> {

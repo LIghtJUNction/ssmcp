@@ -291,7 +291,7 @@ impl Workspace {
         tools
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_projection(
         &self,
     ) -> std::sync::mpsc::Receiver<crate::backend::events::ProjectedEvent> {

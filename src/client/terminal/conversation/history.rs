@@ -131,7 +131,7 @@ impl State {
         self.dirty = true;
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::client::terminal) fn resume_history_for_test(&mut self, id: &str) {
         self.chat_resume();
         self.conversation.selected = self
