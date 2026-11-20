@@ -956,8 +956,11 @@ impl Options {
         if let Some(title) = &self.title {
             args.extend([OsString::from("--title"), OsString::from(title)]);
         }
-        for principal in &self.allow {
-            args.extend([OsString::from("--allow"), OsString::from(principal)]);
+        // A signed-in account re-derives its self-allow from the saved credential.
+        if self.relay.is_none() || self.account_compat {
+            for principal in &self.allow {
+                args.extend([OsString::from("--allow"), OsString::from(principal)]);
+            }
         }
         if self.account_compat {
             args.push(OsString::from("--account-compat"));
@@ -3603,22 +3606,44 @@ mod named_entry_tests {
 
     #[test]
     fn username_destination_uses_https_without_ssh_options() {
-        let options = options(&["Alice@EXAMPLE.com:8443", "--no-browser", "--name", "dev"]);
+        let mut options = options(&["Alice@EXAMPLE.com:8443", "--no-browser", "--name", "dev"]);
         assert!(options.destination.is_none());
         assert_eq!(options.server.as_deref(), Some("https://example.com:8443"));
         assert_eq!(options.username.as_deref(), Some("alice"));
         assert!(options.no_browser);
         assert!(options.identity.is_none());
+
+        let server = options.server.as_deref().unwrap();
+        let username = options.username.as_deref().unwrap();
+        let token = "a".repeat(64);
+        options.allow = vec![crate::server_endpoint::allow_principal(username, server).unwrap()];
+        options.relay = Some(account::Credential {
+            server: server.into(),
+            token: token.clone(),
+            principal: "octocat@github".into(),
+            subject: Some("123".into()),
+            username: Some(username.into()),
+            expires_at: u64::MAX,
+        });
+        assert_eq!(
+            options.registration_metadata().unwrap().allow,
+            options.allow
+        );
         let spec = options.session_spec().unwrap();
         assert!(
             spec.args
                 .windows(2)
                 .any(|args| args == ["--username", "alice"])
         );
+        assert!(!spec.args.iter().any(|arg| arg == "--allow"));
+        assert!(!serde_json::to_string(&spec).unwrap().contains(&token));
         let restored = Options::parse_saved(&spec).unwrap().unwrap();
         assert_eq!(restored.username.as_deref(), Some("alice"));
         assert_eq!(restored.server, options.server);
         assert!(restored.destination.is_none());
+        assert!(restored.allow.is_empty());
+        assert!(restored.relay.is_none());
+        assert!(!restored.account_compat);
     }
 
     #[test]

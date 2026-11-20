@@ -956,7 +956,10 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
     )
     .await
     .unwrap();
-    assert_eq!(response["structuredContent"]["result"]["status"], "ready");
+    assert_eq!(
+        response["structuredContent"]["result"]["status"], "ready",
+        "{response:#}"
+    );
     assert_await_summary(&response, fixture.session.client_id());
     fixture.wait_for_ack().await;
     let state = fixture.native.lock().unwrap();
