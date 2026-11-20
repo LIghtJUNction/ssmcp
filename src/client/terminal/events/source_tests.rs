@@ -731,6 +731,86 @@ async fn verified_ui_present_retries_stay_with_the_original_jsonl() {
 }
 
 #[tokio::test]
+async fn rendered_messages_keep_distinct_jsonl_ids_across_reload() {
+    use crate::{
+        client::{interface::history, render},
+        session::attach,
+    };
+
+    let _serial = HISTORY_FIXTURES.lock().await;
+    let (root, _, runtime) = runtime().await;
+    history::with_test_history(root.0.join("message-id-history"), async {
+        let capture = attach::Handle::capture_for_test();
+        let text = "Repeated harness status";
+        verified(&runtime, 1, "123", 'a')
+            .scope(async {
+                render::message(text);
+                render::message(text);
+            })
+            .await;
+
+        let saved = history::current().unwrap().unwrap();
+        assert_eq!(saved.messages.len(), 2);
+        assert_ne!(saved.messages[0].id, saved.messages[1].id);
+        let owner = HistoryId::parse(&saved.metadata.id).unwrap();
+        let page = capture.read_for_test().await;
+        assert_eq!(page["active_history_id"], owner.as_str());
+        let frames: Vec<_> = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|frame| frame["local_history_id"] == owner.as_str())
+            .collect();
+        assert_eq!(frames.len(), saved.messages.len());
+
+        let mut view = EventView::new();
+        view.set_history_owner(Some(owner.clone()));
+        view.set_scope(EventScope::Conversation);
+        for (frame, message) in frames.into_iter().zip(&saved.messages) {
+            let (label, value, source) = attach::recorded_event(frame);
+            assert_eq!(label, "agent");
+            assert_eq!(message.role, "assistant");
+            assert_eq!(message.content, text);
+            assert_eq!(value["text"], text);
+            assert_eq!(value["message_id"].as_str(), Some(message.id.as_str()));
+            view.ingest_scoped_event(label, value, b"", source);
+        }
+
+        let snapshot = serde_json::to_vec(&view.reload_display()).unwrap();
+        let mut restored = EventView::new();
+        restored.set_history_owner(Some(owner));
+        assert!(
+            restored
+                .restore_reload_display(serde_json::from_slice(&snapshot).unwrap())
+                .is_none()
+        );
+        restored.reconcile_reload_history(&saved);
+
+        let visible = restored.visible_ids();
+        let cards: Vec<_> = restored
+            .events
+            .iter()
+            .filter(|event| visible.contains(&event.id))
+            .map(|event| {
+                assert!(
+                    event.reload_index.is_some(),
+                    "expected a restored display card"
+                );
+                (event.history_id.as_deref(), event.text.as_str())
+            })
+            .collect();
+        let expected: Vec<_> = saved
+            .messages
+            .iter()
+            .map(|message| (Some(message.id.as_str()), message.content.as_str()))
+            .collect();
+        assert_eq!(cards, expected);
+    })
+    .await;
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn history_capture_is_lazy_and_headless_first_message_uses_its_reserved_owner() {
     use crate::client::interface::history;
     use crate::runtime::call_scope::{Source, current_source};

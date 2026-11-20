@@ -210,25 +210,32 @@ fn with_owner<T>(
     with(|history| operation(history, owner))
 }
 
-/// Append using the captured capability, even when another history is selected.
+/// Append using the captured capability and return the persisted message ID.
 pub(crate) fn record_owned_agent(
     owner: &HistoryOwner,
     id: Option<&str>,
     text: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let committed: Option<Committed> = with_owner(owner, |history, owner| {
         if id.is_some_and(|id| !super::valid_id(id, "message")) {
             return Err("invalid agent message identity for conversation history".into());
         }
         history.record_owned(owner, "assistant", text, id.map(str::to_owned))
     })?;
+    let persisted_id = match &committed {
+        Some(saved) => saved.message.id.clone(),
+        // A matching explicit ID was already stored.
+        None => id
+            .ok_or("agent message was not committed to conversation history")?
+            .to_owned(),
+    };
     #[cfg(test)]
     if owner.fixture.is_some() {
         // Fixture history cannot write into a separately configured memory store.
-        return Ok(());
+        return Ok(persisted_id);
     }
     super::remember_committed(committed);
-    Ok(())
+    Ok(persisted_id)
 }
 
 pub(crate) fn record_owned_request(

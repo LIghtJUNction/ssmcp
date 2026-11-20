@@ -190,12 +190,11 @@ pub(crate) fn agent_message(
     source: crate::runtime::call_scope::Source,
 ) -> Result<bool, String> {
     let owner = source.require_owner()?.clone();
-    super::interface::history::record_owned_agent(&owner, id, text)?;
+    let id = super::interface::history::record_owned_agent(&owner, id, text)?;
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
-    let mut event = json!({"type":"ssmcp.message","format":"markdown","text":text,"kind":kind});
-    if let Some(id) = id {
-        event["message_id"] = json!(id);
-    }
+    let mut event = json!({
+        "type":"ssmcp.message", "format":"markdown", "text":text, "kind":kind, "message_id":id,
+    });
     if let Some(document) = presentation {
         event["format"] = json!("intelligence_ui.v1");
         event["presentation"] =
