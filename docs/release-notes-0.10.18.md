@@ -1,6 +1,6 @@
-# SSMCP 0.10.17
+# SSMCP 0.10.18
 
-本文是 0.10.17 的发行准备说明，功能范围以 `34b636615a867a5826e738495662925324567c73` 为基线。**本机最终门禁尚未通过，不能据此宣布正式发布或生产升级完成。** 后续测试修正及最终制品需要各自对应的源码、测试和发布回执。
+本文是 0.10.18 的发行准备说明，功能范围以 `34b636615a867a5826e738495662925324567c73` 为基线。**本机最终门禁尚未通过，不能据此宣布正式发布或生产升级完成。** 后续测试修正及最终制品需要各自对应的源码、测试和发布回执。
 
 ## 文件与技能引用
 
@@ -28,7 +28,7 @@
 
 状态结果的 `engine_routes` 报告每项操作的实际引擎、版本、后端和不可用原因。引擎探测失败时相关操作明确不可用。X11 当前不会合成光标，截图元数据如实返回 `cursor: false`。原生输入一旦派发，随后取消可能发生在文本已改变之后；返回结果会说明这一点，不自动重发或回滚。[computer use 说明](computer-use.md) · [zuse 适配](../src/computer/zuse_backend.rs)
 
-前轮私有 Xvfb / GTK 验收覆盖了错误目标拒绝、Unicode 输入、选区替换与取消清理；这些记录绑定当时的产品提交，不能替代 0.10.17 最终源码的验收。Windows GNU 的交叉目标检查也不能表述成 Windows 或 macOS 真机运行验证。[前轮桌面证据](reports/message-references-20261120/evidence/desktop.json) · [GTK 回执](reports/message-references-20261120/evidence/gtk-text.json)
+前轮私有 Xvfb / GTK 验收覆盖了错误目标拒绝、Unicode 输入、选区替换与取消清理；这些记录绑定当时的产品提交，不能替代 0.10.18 最终源码的验收。Windows GNU 的交叉目标检查也不能表述成 Windows 或 macOS 真机运行验证。[前轮桌面证据](reports/message-references-20261120/evidence/desktop.json) · [GTK 回执](reports/message-references-20261120/evidence/gtk-text.json)
 
 ## 旧中继兼容与预期提示
 
