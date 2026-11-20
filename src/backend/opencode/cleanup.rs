@@ -219,11 +219,11 @@ mod tests {
             });
         }
         runtime.shutdown_background();
+        release.send(()).unwrap();
         completed
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("queued archive must survive cancellation of the blocking pool");
         assert_eq!(count.load(Ordering::Acquire), 1);
-        release.send(()).unwrap();
         for task in finalizers.take() {
             task.join_blocking();
         }
