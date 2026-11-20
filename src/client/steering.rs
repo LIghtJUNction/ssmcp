@@ -138,6 +138,8 @@ pub(super) struct SavedDraft {
     pub cursor: usize,
     #[serde(default)]
     pub target: Option<String>,
+    #[serde(default)]
+    pub native_recipient: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -145,6 +147,8 @@ pub(super) struct SavedDraft {
 pub(super) struct DraftContext {
     pub editing: Option<String>,
     pub target: Option<String>,
+    #[serde(default)]
+    pub native_recipient: Option<String>,
     pub parked: Option<SavedDraft>,
 }
 
@@ -168,6 +172,20 @@ impl DraftContext {
             draft.text.len() > MAX_USER_MESSAGE_BYTES || !draft.text.is_char_boundary(draft.cursor)
         }) {
             return Err("invalid or oversized parked draft".into());
+        }
+        // Persistence validates only bounded syntax. The UI and relay must
+        // resolve the exact current descriptor/account/ACL before sending.
+        for recipient in [
+            self.native_recipient.as_deref(),
+            self.parked
+                .as_ref()
+                .and_then(|draft| draft.native_recipient.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            crate::wire::messages::parse_recipient(recipient)
+                .map_err(|_| "invalid native draft recipient")?;
         }
         Ok(())
     }
@@ -1272,10 +1290,16 @@ pub(super) fn snapshot() -> Value {
     with(|manager| manager.snapshot())
 }
 pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String> {
-    with(|manager| manager.submit(text, target))
+    let id = with(|manager| manager.submit(text, target))?;
+    super::interface::questions::user_input(target);
+    Ok(id)
 }
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
-    with(|manager| manager.publish_edit(id, text, target))
+    with(|manager| manager.publish_edit(id, text, target))?;
+    // An omitted edit target preserves its stored recipient; conservatively
+    // invalidate approvals rather than reuse one across a changed requirement.
+    super::interface::questions::user_input(target);
+    Ok(())
 }
 pub(super) fn take_back_latest() -> Result<Option<String>, String> {
     with(|manager| manager.take_back_latest())
@@ -1324,12 +1348,14 @@ pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport>
     let transport = with(|manager| manager.connect(room_id, protocol));
     super::interface::listener::connect(room_id);
     super::interface::user_wait::connect(room_id);
+    super::interface::questions::connect(room_id);
     transport
 }
 pub(super) fn disconnect() {
     with(Manager::disconnect);
     super::interface::listener::disconnect();
     super::interface::user_wait::disconnect();
+    super::interface::questions::disconnect();
     // Display invalidation happens only after releasing the request manager lock.
     super::terminal::callers_disconnected();
 }
@@ -2265,10 +2291,12 @@ mod tests {
         manager.outbox.context = DraftContext {
             editing: Some(message.id.clone()),
             target: Some("agent_one".into()),
+            native_recipient: Some(format!("client:{}", "a".repeat(64))),
             parked: Some(SavedDraft {
                 text: "parked request".into(),
                 cursor: 6,
                 target: Some("another_agent".into()),
+                native_recipient: None,
             }),
         };
         manager.begin_reload().unwrap();
@@ -2648,6 +2676,7 @@ mod tests {
                     text: "界".into(),
                     cursor: 1,
                     target: None,
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },
@@ -2656,6 +2685,7 @@ mod tests {
                     text: "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
                     cursor: 0,
                     target: None,
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },
@@ -2664,6 +2694,7 @@ mod tests {
                     text: String::new(),
                     cursor: 0,
                     target: Some("bad target".into()),
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },

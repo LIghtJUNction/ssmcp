@@ -645,6 +645,22 @@ pub async fn dispatch(
     let (_, authorization) = access.authorized().await?;
     let owner = owner(&access.user, &authorization)?;
     match name.as_str() {
+        name if name.starts_with("messages.") => {
+            let mut fields = arguments
+                .as_object()
+                .cloned()
+                .ok_or("messages arguments must be an object")?;
+            if fields.contains_key("action") {
+                return Err("action is selected by the messages helper".into());
+            }
+            fields.insert(
+                "action".into(),
+                serde_json::json!(&name["messages.".len()..]),
+            );
+            broker
+                .message_request(&access.user, &access.token, Value::Object(fields))
+                .await
+        }
         name if name.starts_with("collab.") => {
             let mut args = arguments
                 .as_object()
@@ -656,6 +672,9 @@ pub async fn dispatch(
                 .ok_or("collab requires client_id from list")?;
             valid_client(&client_id)?;
             let session = access.session(&client_id).await?;
+            if let Some(run) = &access.audit_run {
+                run.record_connection(&session)?;
+            }
             if name == "collab.bind" {
                 #[derive(Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -671,7 +690,10 @@ pub async fn dispatch(
                 let run = access.audit_run.as_ref().ok_or(
                     "collab.bind is scoped to code_mode; call it at the start of each run",
                 )?;
-                access.session(&client_id).await?;
+                let current = access.session(&client_id).await?;
+                if !Arc::ptr_eq(&current, &session) {
+                    return Err("collaboration connection changed before binding".into());
+                }
                 run.bind(&client_id, &owner, &binding.agent_id, &binding.token)?;
                 return Ok(json!({"client_id":client_id,"agent":agent,"bound":true}));
             }
@@ -679,9 +701,20 @@ pub async fn dispatch(
                 .collaboration
                 .dispatch(&owner, &name["collab.".len()..], Value::Object(args))
                 .await?;
-            // Waiting never grants authority beyond the current token and ACL.
-            access.session(&client_id).await?;
+            // Waiting never grants authority beyond the current token, connection and ACL.
+            let current = access.session(&client_id).await?;
+            if !Arc::ptr_eq(&current, &session) {
+                return Err("collaboration connection changed before response".into());
+            }
+            if name == "collab.leave"
+                && result["left"] == true
+                && let Authorization::Identity(identity) = &authorization
+                && let Some(agent_id) = result["agent_id"].as_str()
+            {
+                broker.retire_native_member(&session, identity, agent_id);
+            }
             if let Some(run) = &access.audit_run {
+                run.question_delivery_server_action(&client_id);
                 run.interacted(&client_id);
             }
             Ok(result)

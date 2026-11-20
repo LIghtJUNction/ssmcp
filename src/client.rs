@@ -24,6 +24,7 @@ pub(crate) mod interface;
 mod link_metrics;
 #[cfg(target_os = "linux")]
 mod local;
+pub(crate) mod messaging;
 pub(crate) mod notification;
 mod panel;
 pub(crate) mod presentation;
@@ -1565,6 +1566,7 @@ struct RegisteredSsh {
     reader: BufReader<ChildStdout>,
     ready: (String, String, u64, String),
     access_supported: bool,
+    messaging_supported: bool,
 }
 
 impl RegisteredSsh {
@@ -1669,6 +1671,9 @@ async fn register_ssh(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
+            capabilities
+                .iter()
+                .any(|capability| capability == crate::wire::messages::CAPABILITY),
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1693,7 +1698,7 @@ async fn register_ssh(
         }
     };
     *registered = true;
-    let (ready, access_supported) = ready;
+    let (ready, access_supported, messaging_supported) = ready;
     let github_auth = !metadata.allow.is_empty();
     if github_auth && (!ready.1.is_empty() || ready.2 != 0) {
         stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1710,6 +1715,7 @@ async fn register_ssh(
         reader,
         ready,
         access_supported,
+        messaging_supported,
     }))
 }
 
@@ -1773,6 +1779,7 @@ async fn reclaim_steering(
                 },
                 frame = incoming.frames.recv() => match frame {
                     Some(Ok(Some(Frame::SteeringReply { id, result }))) => steering::reply(id, result)?,
+                    Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
                     Some(Ok(Some(Frame::Call { id, .. }))) => {
@@ -1936,6 +1943,7 @@ async fn connect_inner(
         reader,
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
+        messaging_supported,
     } = registration;
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
@@ -2106,6 +2114,7 @@ async fn connect_inner(
     let writer = Arc::new(Mutex::new(writer));
     let mut steering_commands = steering::connect(&client_id, VERSION);
     let mut access_commands = access::connect(access_supported);
+    let mut message_commands = messaging::connect(messaging_supported);
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -2118,6 +2127,21 @@ async fn connect_inner(
             _ = steering_updates.tick() => {
                 if let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
+                messaging::poll();
+            },
+            Some(request) = message_commands.recv() => {
+                let sent = timeout(Duration::from_secs(10), async {
+                    let mut writer = writer.lock().await;
+                    if messaging::pending(request.id) {
+                        write_frame(&mut *writer, &Frame::Messages { id: request.id, command: request.command }).await?;
+                    }
+                    Ok::<(), io::Error>(())
+                }).await;
+                match sent {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => break Err(error.into()),
+                    Err(_) => break Err("native message request write timed out".into()),
+                }
             },
             Some(request) = access_commands.recv() => {
                 let sent = timeout(Duration::from_secs(10), async {
@@ -2230,6 +2254,7 @@ async fn connect_inner(
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
                                         Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
+                                        Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
                                         Some(Ok(Some(Frame::Call { id: next_id, .. }))) => {
                                             let mut writer = writer.lock().await;
@@ -2283,6 +2308,7 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
                     if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
                 }
+                Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                 Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                 Some(Ok(None)) | None => break Ok(()),
                 Some(Ok(Some(Frame::Reject {message}))) => break Err(relay::failure(message)),
@@ -2306,6 +2332,7 @@ async fn connect_inner(
     }
     steering::disconnect();
     access::disconnect();
+    messaging::disconnect();
     requests.abort_all();
     while requests.join_next().await.is_some() {}
     let pending_logout_message = terminal::finish_pending_logout().await;
