@@ -40,6 +40,8 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 程序监听器支持 HTTP 与 Unix socket，按经过认证的线程及连接代际约束投递和状态读取。队列回执保留实际来源，旧连接的监听状态不能冒充当前连接。[线程监听器](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/thread-listeners.md)
 
+OpenCode 取消订阅时会先释放网络连接，并在后台保留部分原始输出；shutdown 等待归档完成后再关闭事件记录。磁盘归档锁不再阻塞取消任务的析构。
+
 启用 OAuth 持久存储后，有效账号授权可在核心重启后恢复，保留原到期时间和撤销状态。未完成的登录及旧的连接绑定授权不跨进程恢复。[授权持久化](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/oauth-durability.md)
 
 新增可选公共前端进程，负责公开指南和已知静态资产；OAuth、动态账号、计费与设备连接仍由核心处理。未配置该进程时继续使用内置页面。[公共前端](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/public-frontend.md)
