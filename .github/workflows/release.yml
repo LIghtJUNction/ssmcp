@@ -11,6 +11,11 @@ on:
         description: Existing tag to publish or retry; leave empty to build and test main without publishing
         required: false
         type: string
+      deploy_server:
+        description: Deploy after publication; disable only when an explicit later server switch is required
+        required: false
+        default: true
+        type: boolean
       build_only:
         description: Explicit preflight flag; an empty tag already selects preflight
         required: false
@@ -47,6 +52,7 @@ jobs:
       sha: ${{ steps.tag.outputs.sha }}
       publish: ${{ steps.tag.outputs.publish }}
       build_only: ${{ steps.tag.outputs.build_only }}
+      deploy_server: ${{ steps.tag.outputs.deploy_server }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -338,7 +344,7 @@ jobs:
 
   deploy_server:
     needs: [validate, publish_release]
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.deploy_server == 'true'
     permissions:
       contents: read
       deployments: write
