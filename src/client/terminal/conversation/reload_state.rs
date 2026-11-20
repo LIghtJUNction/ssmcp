@@ -233,7 +233,7 @@ mod tests {
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed),
             ));
-            std::fs::create_dir(&path).unwrap();
+            crate::platform::private_directory(&path).unwrap();
             Self(path)
         }
     }
