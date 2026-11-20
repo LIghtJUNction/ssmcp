@@ -20,6 +20,8 @@ include = [
     "/docs/code-mode.md",
     "/docs/finish-and-questions.md",
     "/docs/thread-listeners.md",
+    "/docs/zcalld-listener.md",
+    "/scripts/e2e_zcalld_listener.py",
     "/docs/force-send-listener.md",
     "/docs/thread-messaging.md",
     "/docs/session-groups.md",
