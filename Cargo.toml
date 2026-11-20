@@ -231,16 +231,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
-[patch.crates-io]
-zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git" }
-zguard = { git = "https://github.com/LIghtJUNction/zguard.git" }
-zcall = { git = "https://github.com/LIghtJUNction/zcall.git" }
-zconv = { git = "https://github.com/LIghtJUNction/zconv.git" }
-zmcpio = { git = "https://github.com/LIghtJUNction/zmcpio.git" }
-zclap = { git = "https://github.com/LIghtJUNction/zclap.git" }
-z64 = { git = "https://github.com/LIghtJUNction/z64.git" }
-zsys = { git = "https://github.com/LIghtJUNction/zsys.git" }
-
 [[example]]
 name = "native_plugin_fixture"
 path = "tests/fixtures/native_plugin.rs"

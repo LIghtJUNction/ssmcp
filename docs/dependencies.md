@@ -11,7 +11,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 
 应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 保留四项直接依赖的精确版本、包别名和 feature，以便 Cargo 生成外部发布包。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
 
-四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须证明 Cargo 实际使用的 Git 提交及其工作树内容与对应 gitlink 相同。根级 `[patch.crates-io]` 将仍由上游以 registry 声明的 zplugin、zguard、zcall、zconv、zmcpio、zclap、z64 和 zsys 统一到各自的 Git 源。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。
+四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/cb63a9a0aa163214c6062664cd62fefb357be5a8/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/cf02c1d9db575b92b36297dfe1fde72de9ee51e4/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/564ede15db66530a6dbb78e8b1f4a85998b6f0d8/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/0fc2d9cb61feb27c49a797e2dcaa8f805ec89460/Cargo.toml)
 
 ## 每轮迭代与发行前同步
 
@@ -40,7 +40,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 | [ztuio](https://crates.io/crates/ztuio) | 直接 | `0.1.0` | [0.1.0](https://github.com/LIghtJUNction/ztuio/tree/v0.1.0) |
 | [zuse-computer](https://crates.io/crates/zuse-computer) | 直接 | `0.2.2` | [0.2.2](https://github.com/LIghtJUNction/zuse/tree/v0.2.2) |
 
-表中两条 zcall 调用链属于迁移前的 registry 观察。当前检查的 [zmcpio Git 源码](https://github.com/LIghtJUNction/zmcpio/blob/a88d2accf0fa642eded27c844aaf7d7bb6dd3501/Cargo.toml) 仍为 0.4.0，其 zcall 要求为 `=0.4.0`。官方 registry 中已发布的 zmcpio 0.4.0 仍要求 `=0.3.0`。这两份代码的版本字符串相同，发行包能否使用实际发布的 registry 图仍取决于规范化打包构建。[官方索引条目](https://index.crates.io/zm/cp/zmcpio)
+表中两条 zcall 调用链来自迁移前的 registry 核对。当时发布的 zmcpio 0.4.0 要求 zcall `=0.3.0`。本轮实取的 zmcpio Git 源码仍为 0.4.0，直接要求 canonical Git 的 zcall `=0.4.0`。外部发行使用实际 registry 图，其兼容性仍待规范化打包确认。[zmcpio Git manifest](https://github.com/LIghtJUNction/zmcpio/blob/84fc4978a248c2a3e2dd110f4f26fa52dd8b6890/Cargo.toml) · [官方索引条目](https://index.crates.io/zm/cp/zmcpio)
 
 当时的锁定解析、原生插件契约和 91 项发布规则测试属于上述历史源码，完整范围见核对记录。
 

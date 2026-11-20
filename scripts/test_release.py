@@ -629,10 +629,12 @@ class ReleaseTests(unittest.TestCase):
             original.replace(canonical, release.CRATES_IO),
             original.replace(canonical, canonical.replace(".git#", ".git?branch=main#")),
             original + f'\n[[package]]\nname = "ztuio"\nversion = "0.2.0"\nsource = "{canonical}"\n',
+            original + f'\n[[patch.unused]]\nname = "zguard"\nversion = "0.1.0"\n'
+                       f'source = "git+{release.project_z_url("zguard")}#{"2"*40}"\n',
         ):
             with self.subTest(lock=text):
                 lock.write_text(text)
-                with self.assertRaisesRegex(ValueError, "locked canonical|duplicate or split"):
+                with self.assertRaisesRegex(ValueError, "locked canonical|duplicate or split|unused Project Z override"):
                     release.validate_package("v0.5.0", self.root)
 
     def test_full_metadata_must_match_lock_and_actual_gitlink_tree(self):
@@ -952,6 +954,39 @@ class ReleaseTests(unittest.TestCase):
                 path.write_text(manifest + workspace)
                 with self.assertRaisesRegex(ValueError, "source and exact dependency version differ"):
                     release.registry_dependencies(self.root)
+
+    def test_registry_zharness_zplugin_requires_root_override(self):
+        self.add_registry_dependencies()
+        self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text().split("[patch.crates-io]", 1)[0])
+        with self.assertRaisesRegex(ValueError, "registry zplugin.*canonical crates.io patch"):
+            release.validate_package("v0.5.0", self.root)
+
+    def test_canonical_git_zharness_zplugin_needs_no_root_override(self):
+        self.add_registry_dependencies()
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text().split("[patch.crates-io]", 1)[0])
+        harness = self.root / "crates/zharness/Cargo.toml"
+        upstream = harness.read_text()
+        canonical = 'git = "https://github.com/LIghtJUNction/zplugin.git"'
+        for source, version, expected in (
+            (canonical, "=0.3.0", None),
+            (canonical.replace("LIghtJUNction", "other"), "=0.3.0", "canonical default-branch Git source"),
+            (canonical + ', rev = "' + "2" * 40 + '"', "=0.3.0", "canonical default-branch Git source"),
+            (canonical + ', tag = "v0.3.0"', "=0.3.0", "canonical default-branch Git source"),
+            (canonical + ', branch = "main"', "=0.3.0", "canonical default-branch Git source"),
+            (canonical, "=0.3.1", "require the same exact zplugin version"),
+            ('path = "../zplugin"', "=0.3.0", "must resolve zplugin through its canonical Git source"),
+            ('registry = "other"', "=0.3.0", "must resolve zplugin through its canonical Git source"),
+        ):
+            with self.subTest(source=source, version=version):
+                harness.write_text(upstream.replace('version = "=0.3.0"', f'version = "{version}", {source}'))
+                if expected:
+                    with self.assertRaisesRegex(ValueError, expected):
+                        release.validate_package("v0.5.0", self.root)
+                else:
+                    self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
 
     def test_zuse_alias_requires_initialized_source_and_exact_registry_package(self):
         manifest = self.root / "Cargo.toml"

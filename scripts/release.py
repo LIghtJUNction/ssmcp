@@ -141,12 +141,18 @@ def registry_dependencies(root=None):
             plugin = dependencies.get("zplugin", {})
             declared = local.get("dependencies", {}).get("zplugin")
             requirement = declared.get("version") if isinstance(declared, dict) else declared
-            if not plugin or requirement != plugin.get("version") or "zplugin" not in patches:
-                raise ValueError("zharness and ssmcp require the same exact zplugin version and canonical crates.io patch")
+            if not plugin or requirement != plugin.get("version"):
+                raise ValueError("zharness and ssmcp require the same exact zplugin version")
             if isinstance(declared, dict) and "git" in declared:
                 require_project_z_git("zplugin", declared, "zplugin")
-            elif isinstance(declared, dict) and set(declared) & {"path", "registry", "registry-index"}:
-                raise ValueError("zharness must resolve zplugin through its canonical Git source")
+            else:
+                if isinstance(declared, dict) and (
+                    declared.get("package", "zplugin") != "zplugin"
+                    or set(declared) - {"package", "version", "default-features", "features", "optional"}
+                ):
+                    raise ValueError("zharness must resolve zplugin through its canonical Git source")
+                if "zplugin" not in patches:
+                    raise ValueError("registry zplugin in zharness requires the canonical crates.io patch")
         result.append((package_name, release_version))
     return result
 
