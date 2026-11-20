@@ -130,7 +130,12 @@ impl State {
                         let _ = writeln!(record, "{row}");
                     }
                     record.push('\n');
-                    self.log_message(&message.role, &message.content, record.as_bytes());
+                    self.log_identified_message(
+                        &message.id,
+                        &message.role,
+                        &message.content,
+                        record.as_bytes(),
+                    );
                 }
                 self.conversation.history = Some(conversation.into());
                 self.conversation.history_width = 0;

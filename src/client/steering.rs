@@ -34,6 +34,8 @@ pub(super) enum UiEvent {
     Editable {
         id: String,
         text: String,
+        /// Only a confirmed takeback may retract the previous queued display.
+        recalled: bool,
     },
     Failed {
         id: String,
@@ -305,6 +307,7 @@ struct Manager {
     // Drained by transport replies even when no terminal frontend is running.
     // Pure Manager operations never perform history I/O.
     accepted_history: Vec<AcceptedHistory>,
+    recalled_history: Vec<AcceptedHistory>,
     delivered_memory: Vec<DeliveredMemory>,
     frozen: bool,
     reload_requested: bool,
@@ -600,10 +603,19 @@ impl Manager {
         if record.safe_to_publish {
             self.outbox.records[index].message.state = SteeringState::Editing;
             self.outbox.records[index].resume_after_reload = false;
+            let recalled = self.outbox.records[index].ever_sent;
+            if recalled {
+                self.recalled_history.push(AcceptedHistory {
+                    id: id.into(),
+                    text: super::references::source(&self.outbox.records[index].message.text)
+                        .to_owned(),
+                });
+            }
             self.event(UiEvent::Editable {
                 id: id.into(),
                 text: super::references::source(&self.outbox.records[index].message.text)
                     .to_owned(),
+                recalled,
             });
             return Ok(());
         }
@@ -664,6 +676,7 @@ impl Manager {
         self.event(UiEvent::Editable {
             id: id.into(),
             text,
+            recalled: false,
         });
         Ok(())
     }
@@ -947,6 +960,7 @@ impl Manager {
             self.event(UiEvent::Editable {
                 id: message_id,
                 text,
+                recalled: false,
             });
         }
     }
@@ -1181,9 +1195,14 @@ impl Manager {
                                         .resume_reclaimed(self.outbox.room_id.as_deref());
                                 }
                             } else {
+                                self.recalled_history.push(AcceptedHistory {
+                                    id: message_id.clone(),
+                                    text: super::references::source(&message.text).to_owned(),
+                                });
                                 self.event(UiEvent::Editable {
                                     id: message_id,
                                     text: super::references::source(&message.text).to_owned(),
+                                    recalled: true,
                                 });
                             }
                         }
@@ -1355,10 +1374,10 @@ pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result
     Ok(())
 }
 pub(super) fn take_back_latest() -> Result<Option<String>, String> {
-    with(|manager| manager.take_back_latest())
+    with_history(|manager| manager.take_back_latest())
 }
 pub(super) fn take_back(id: &str) -> Result<(), String> {
-    with(|manager| manager.take_back(id))
+    with_history(|manager| manager.take_back(id))
 }
 pub(super) fn cancel(id: &str) -> Result<(), String> {
     with(|manager| manager.cancel(id))
@@ -1431,11 +1450,16 @@ pub(super) fn sent(id: u64) -> bool {
     with(|manager| manager.sent(id))
 }
 pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result<(), String> {
-    let (outcome, accepted, delivered) = with(|manager| {
-        let outcome = manager.reply(id, result);
+    with_history(|manager| manager.reply(id, result))
+}
+
+fn with_history<T>(operation: impl FnOnce(&mut Manager) -> T) -> T {
+    let (outcome, accepted, recalled, delivered) = with(|manager| {
+        let outcome = operation(manager);
         (
             outcome,
             std::mem::take(&mut manager.accepted_history),
+            std::mem::take(&mut manager.recalled_history),
             std::mem::take(&mut manager.delivered_memory),
         )
     });
@@ -1447,6 +1471,17 @@ pub(super) fn reply(id: u64, result: Result<SteeringSnapshot, String>) -> Result
                 "history",
                 "Warning",
                 &format!("Request was accepted, but its history could not be saved: {error}"),
+            );
+        }
+    }
+    for message in recalled {
+        if let Err(error) = super::interface::history::recall_request(&message.id, &message.text) {
+            super::render::status(
+                "history",
+                "Warning",
+                &format!(
+                    "Request was recalled, but its queued history could not be removed: {error}"
+                ),
             );
         }
     }
@@ -1916,6 +1951,7 @@ mod tests {
             Some(UiEvent::Editable {
                 id: message_id,
                 text: draft.into(),
+                recalled: false,
             })
         );
         manager.poll().unwrap();
@@ -2210,7 +2246,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Editable {
                 id: message_id,
-                text: draft.into()
+                text: draft.into(),
+                recalled: true,
             })
         );
     }
@@ -2263,7 +2300,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Editable {
                 id: latest.clone(),
-                text: "edit this".into()
+                text: "edit this".into(),
+                recalled: false,
             })
         );
         assert_eq!(manager.snapshot()["queue"][0]["id"], first);
@@ -2333,10 +2371,70 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Editable {
                 id: latest,
-                text: "take back".into()
+                text: "take back".into(),
+                recalled: true,
             })
         );
         assert_eq!(manager.outbox.records[0].message, first);
+    }
+
+    #[test]
+    fn confirmed_takeback_records_exact_history_retraction_without_a_frontend() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let mut message = publish(&mut manager, &mut receiver, "QUEUED_SOURCE", None);
+        manager.take_back(&message.id).unwrap();
+        assert!(manager.recalled_history.is_empty());
+        let (request_id, _) = command(&mut manager, &mut receiver);
+        message.revision = 2;
+        message.state = SteeringState::Editing;
+        let snapshot = snapshot_for("room_one", 2, vec![message.clone()]);
+        manager.reply(request_id, Ok(snapshot.clone())).unwrap();
+        assert_eq!(
+            std::mem::take(&mut manager.recalled_history),
+            vec![AcceptedHistory {
+                id: message.id.clone(),
+                text: message.text.clone(),
+            }]
+        );
+        assert!(matches!(
+            manager.events.front(),
+            Some(UiEvent::Editable { recalled: true, .. })
+        ));
+        manager.reply(request_id, Ok(snapshot)).unwrap();
+        assert!(
+            manager.recalled_history.is_empty(),
+            "duplicate ACK cannot retract again"
+        );
+    }
+
+    #[test]
+    fn uncertain_retarget_and_local_edit_never_retract_previous_history() {
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", 7);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message = publish(&mut manager, &mut receiver, "POSSIBLY_DELIVERED", None);
+        manager.disconnect();
+        let mut receiver = manager.connect("room_two", 7);
+        ready(&mut manager, &mut receiver, "room_two");
+        manager.retarget(&message.id, None).unwrap();
+        assert!(matches!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                recalled: false,
+                ..
+            })
+        ));
+        manager.take_back(&message.id).unwrap();
+        assert!(matches!(
+            manager.events.pop_front(),
+            Some(UiEvent::Editable {
+                recalled: false,
+                ..
+            })
+        ));
+        assert!(manager.recalled_history.is_empty());
     }
 
     #[test]
@@ -2417,7 +2515,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Editable {
                 id: message.id.clone(),
-                text: message.text.clone()
+                text: message.text.clone(),
+                recalled: true,
             })
         );
         manager
@@ -2474,6 +2573,10 @@ mod tests {
         manager
             .reply(id, Ok(snapshot_for("room_one", 2, vec![message.clone()])))
             .unwrap();
+        assert!(
+            manager.recalled_history.is_empty(),
+            "delivery won; its history must remain"
+        );
         assert!(manager.publish_edit(&message.id, "retry", None).is_err());
         assert!(manager.cancel(&message.id).is_err());
         assert!(manager.retarget(&message.id, None).is_err());
@@ -2896,6 +2999,7 @@ mod tests {
             Some(UiEvent::Editable {
                 id,
                 text: "review this offline draft".into(),
+                recalled: false,
             })
         );
     }

@@ -52,6 +52,7 @@ struct Event {
     meta: Meta,
     image: Option<images::Preview>,
     diagnostic: Option<(u64, u64)>,
+    history_id: Option<String>,
 }
 
 /// Independently bounded display metadata never becomes native output or log text.
@@ -402,6 +403,7 @@ impl Event {
                 .command_source
                 .as_ref()
                 .map_or(0, |source| source.text.len())
+            + self.history_id.as_ref().map_or(0, String::len)
     }
 
     fn matches(&self, query: &str, level: u8, scope: EventScope) -> bool {
@@ -802,6 +804,57 @@ impl EventView {
         inserted
     }
 
+    /// Attach an internal JSONL identity; display text and external event fields
+    /// never grant the ability to retract a retained conversation message.
+    pub(crate) fn ingest_identified_message(
+        &mut self,
+        id: &str,
+        role: &str,
+        text: &str,
+        bytes: &[u8],
+    ) {
+        let next = self.next_id;
+        self.ingest_event(
+            "message",
+            &json!({"type":"ssmcp.message", "role":role, "text":text}),
+            bytes,
+        );
+        if let Some(event) = self.events.back_mut().filter(|event| event.id == next) {
+            event.history_id = Some(id.to_owned());
+            self.prune();
+        }
+    }
+
+    pub(crate) fn recall_message(&mut self, id: &str) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| {
+            !(event.meta.user
+                && event.meta.kind == Kind::Conversation
+                && event.history_id.as_deref() == Some(id))
+        });
+        if self.events.len() == before {
+            return false;
+        }
+        self.prune();
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self
+            .selected
+            .is_some_and(|selected| visible.contains(&selected))
+        {
+            self.selected = if self.follow {
+                visible.last()
+            } else {
+                visible.first()
+            }
+            .copied();
+            self.reveal = true;
+        }
+        self.hit_rows.clear();
+        self.panel_hit_rows.clear();
+        true
+    }
+
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
         self.ingest_scoped_event(label, event, bytes, None);
@@ -1010,6 +1063,7 @@ impl EventView {
                 cache: None,
                 image: None,
                 diagnostic: None,
+                history_id: None,
             });
         }
         self.prune();
@@ -2412,6 +2466,57 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recalled_message_uses_internal_identity_and_preserves_identical_other_messages() {
+        let mut view = EventView::new();
+        view.ingest_identified_message(
+            "message_pending",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        let removed = view.events[0].id;
+        view.ingest_identified_message(
+            "message_delivered",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        view.ingest_event(
+            "message",
+            &json!({
+                "type":"ssmcp.message", "role":"user", "text":"SAME_BODY",
+                "history_id":"message_pending",
+            }),
+            b"[USER] SAME_BODY\n",
+        );
+        view.selected = Some(removed);
+        assert!(view.recall_message("message_pending"));
+        assert_eq!(view.events.len(), 2);
+        assert!(view.events.iter().all(|event| event.text == "SAME_BODY"));
+        assert!(
+            view.selected
+                .is_some_and(|id| view.events.iter().any(|event| event.id == id))
+        );
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+        assert!(!view.recall_message("message_pending"));
+        assert_eq!(view.events.len(), 2);
+        // Resumed JSONL messages keep their internal identity as well.
+        view.clear();
+        view.ingest_identified_message(
+            "message_pending",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        assert!(view.recall_message("message_pending"));
+        assert!(view.events.is_empty());
+        assert_eq!(view.bytes, 0);
+    }
 
     #[test]
     fn diff_modes_reflow_existing_events_without_changing_retained_content() {

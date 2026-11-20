@@ -321,7 +321,11 @@ impl State {
             let _ = writeln!(record, "  Reference notice: {}", panel::safe_text(warning));
         }
         record.push('\n');
-        self.log_message("user", &text, record.as_bytes());
+        if let Ok(identity) = crate::client::interface::history::request_identity(&id, &text) {
+            self.log_identified_message(&identity, "user", &text, record.as_bytes());
+        } else {
+            self.log_message("user", &text, record.as_bytes());
+        }
         if self
             .conversation
             .submitting
@@ -339,6 +343,26 @@ impl State {
                 panel::safe_text(&warnings.join(" · "))
             )
         });
+        self.dirty = true;
+    }
+
+    fn chat_recalled(&mut self, id: &str, text: &str) {
+        let Ok(identity) = crate::client::interface::history::request_identity(id, text) else {
+            return;
+        };
+        self.events.recall_message(&identity);
+        if let Some(history) = self.conversation.history.as_mut() {
+            std::sync::Arc::make_mut(history)
+                .messages
+                .retain(|message| message.id != identity);
+            self.conversation.history_width = 0;
+            self.conversation.history_rows.clear();
+        }
+        // The audit transcript keeps the actual queue acceptance and its later
+        // confirmed recall; only the current conversation presentation retracts it.
+        self.log_raw(
+            format!("\n[RECALLED] #{id} · queued request returned to editing\n").as_bytes(),
+        );
         self.dirty = true;
     }
 
@@ -408,7 +432,10 @@ impl State {
                 } => {
                     self.chat_accepted(id, text, reference_warnings);
                 }
-                steering::UiEvent::Editable { id, text } => {
+                steering::UiEvent::Editable { id, text, recalled } => {
+                    if recalled {
+                        self.chat_recalled(&id, &text);
+                    }
                     let data = steering::snapshot();
                     let target = items(&data, "queue")
                         .iter()
@@ -5073,6 +5100,78 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with("Answer cleared")
+        );
+    }
+
+    #[test]
+    fn confirmed_recall_retracts_only_its_card_and_edited_resubmission_is_single() {
+        for columns in [48, 120] {
+            let mut state = preview(32, columns);
+            state.events.clear();
+            state.chat_accepted("delivered_request".into(), "SAME_BODY".into(), Vec::new());
+            state.chat_accepted("pending_request".into(), "SAME_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            state.chat_recall_started("pending_request".into());
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                2,
+                "an unconfirmed takeback must keep its queued card"
+            );
+            state.chat_recalled("pending_request", "SAME_BODY");
+            state.chat_editable("pending_request".into(), "SAME_BODY".into(), None);
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.conversation.composer.text(), "SAME_BODY");
+            assert_eq!(state.conversation.composer.cursor(), "SAME_BODY".len());
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(
+                screen.matches("SAME_BODY").count(),
+                2,
+                "only the other message and the editable draft remain: {screen}"
+            );
+            input(&mut state, b"\x03");
+            state.chat_escape();
+            assert!(state.conversation.composer.is_empty());
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("pending_request")
+            );
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                1,
+                "clearing or leaving the editor cannot restore the withdrawn card"
+            );
+            state.conversation.composer.set_text("EDITED_BODY");
+            state.chat_enqueued("pending_request".into(), "EDITED_BODY".into());
+            state.chat_accepted("pending_request".into(), "EDITED_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(screen.matches("SAME_BODY").count(), 1, "{screen}");
+            assert_eq!(screen.matches("EDITED_BODY").count(), 1, "{screen}");
+            assert!(
+                state.logs.screen().contents().contains("[RECALLED]"),
+                "the original audit transcript records the later recall"
+            );
+        }
+    }
+
+    #[test]
+    fn editable_without_confirmed_recall_keeps_existing_conversation() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            Vec::new(),
+        );
+        state.chat_editable(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            None,
+        );
+        assert_eq!(
+            state.events.snapshot()["retained_events"],
+            1,
+            "retarget or preparation recovery is not a confirmed recall"
         );
     }
 
