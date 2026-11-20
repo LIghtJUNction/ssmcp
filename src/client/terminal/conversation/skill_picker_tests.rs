@@ -308,3 +308,269 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         runtime.shutdown().await;
     });
 }
+
+async fn wait_for_send_reference_menu(state: &mut State) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            state.chat_refresh_completions();
+            if !state.conversation.composer.completion_loading() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("local reference suggestions finish");
+    assert!(state.chat_menu_visible());
+    assert_eq!(state.conversation.composer.suggestions().len(), 1);
+}
+
+async fn finish_send_reference_receipt(state: &mut State) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            state.chat_poll_force_send();
+            if state.conversation.force_task.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the accepted listener receipt reaches the composer");
+    assert!(state.conversation.composer.is_empty());
+}
+
+#[test]
+fn send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send() {
+    use crate::client::interface::{harness, listener as receiver};
+    use crate::wire::{ControlAccount, ControlAttribution};
+
+    const CHILD: &str = "SSMCP_TEST_SEND_REFERENCE_PICKER";
+    if std::env::var_os(CHILD).is_none() {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.0.join("资料 文件.txt"),
+            "Actual local file preview.\n",
+        )
+        .unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "client::terminal::conversation::skill_picker_tests::send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send", "--nocapture"])
+            .env(CHILD, "1")
+            .env("XDG_STATE_HOME", fixture.0.join("state"))
+            .env("XDG_CONFIG_HOME", fixture.0.join("config"))
+            .current_dir(&fixture.0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    executor.block_on(async {
+        let root = std::env::current_dir().unwrap();
+        let backend = crate::backend::Backend::with_output(
+            Path::new("/bin/sh"),
+            root.clone(),
+            crate::output::OutputStore::at_for_test(root.join("output")).unwrap(),
+        )
+        .await
+        .unwrap();
+        let runtime = crate::runtime::Runtime::new(backend, root).unwrap();
+        crate::client::completion::bind(&runtime);
+        harness::bind(&runtime);
+        receiver::connect("send-reference-fixture");
+        // This in-process receiver has no relay, external recipient or model.
+        let scope = runtime
+            .call_scope(
+                1,
+                Some(&ControlAttribution {
+                    account: ControlAccount {
+                        provider: "github".into(),
+                        subject: "send-reference-fixture".into(),
+                        login: "fixture".into(),
+                    },
+                    owner: None,
+                    agent: None,
+                }),
+                None,
+            )
+            .unwrap();
+        let opened = scope
+            .scope(receiver::call(json!({
+                "op":"open", "label":"reference fixture",
+                "idempotency_key":"send_reference_fixture"
+            })))
+            .await
+            .unwrap();
+        let id = opened["listener_id"].as_str().unwrap();
+        let token = opened["token"].as_str().unwrap();
+        let read = |wait_ms| {
+            receiver::call(json!({
+                "op":"read", "listener_id":id, "token":token, "wait_ms":wait_ms
+            }))
+        };
+        let mut state = State::new(
+            28,
+            96,
+            &Ui {
+                layout: Layout::Chat,
+                ..Ui::default()
+            },
+        );
+        assert!(!state.preview);
+
+        for (draft, selected, accept_key, kind) in [
+            (
+                "/send @资料",
+                "/send @\"资料 文件.txt\" ",
+                b"\r".as_slice(),
+                "text",
+            ),
+            ("/send $ch", "/send $chosen ", b"\t".as_slice(), "skill"),
+        ] {
+            state.keyboard(draft.as_bytes(), Instant::now(), false);
+            assert_eq!(state.conversation.composer.text(), draft);
+            // Files and skills have separate uncached keys. Without yielding,
+            // neither worker can finish before the first Enter.
+            assert!(state.conversation.composer.completion_loading());
+            state.keyboard(b"\r", Instant::now(), false);
+            assert_eq!(state.conversation.composer.text(), draft);
+            assert!(state.conversation.force_task.is_none());
+            assert!(
+                state
+                    .notice
+                    .as_deref()
+                    .unwrap()
+                    .contains("Loading reference suggestions")
+            );
+            assert!(receiver::snapshot()["pending"].is_null());
+            assert!(scope.scope(read(0)).await.unwrap()["delivery"].is_null());
+
+            wait_for_send_reference_menu(&mut state).await;
+            state.keyboard(accept_key, Instant::now(), false);
+            assert_eq!(state.conversation.composer.text(), selected);
+            assert!(!state.chat_menu_visible());
+            assert!(state.conversation.force_task.is_none());
+            assert!(scope.scope(read(0)).await.unwrap()["delivery"].is_null());
+
+            state.keyboard(b"\r", Instant::now(), false);
+            assert!(state.conversation.force_task.is_some());
+            assert_eq!(
+                state.conversation.composer.text(),
+                selected,
+                "the selected reference stays visible until receiver ACK"
+            );
+            let delivery = scope.scope(read(5000)).await.unwrap()["delivery"].clone();
+            let source = selected.strip_prefix("/send ").unwrap();
+            assert_eq!(delivery["source_text"], source);
+            assert_eq!(delivery["source"], "client_user");
+            let expanded = delivery["text"].as_str().unwrap();
+            assert_eq!(references::source(expanded), source);
+            let encoded = expanded
+                .split_once("<ssmcp-references-v1>\n")
+                .unwrap()
+                .1
+                .strip_suffix("\n</ssmcp-references-v1>")
+                .unwrap();
+            let payload: Value = serde_json::from_str(encoded).unwrap();
+            let attached = payload["references"].as_array().unwrap();
+            assert_eq!(attached.len(), 1);
+            assert_eq!(attached[0]["kind"], kind);
+            if kind == "text" {
+                assert_eq!(attached[0]["path"], "资料 文件.txt");
+                assert_eq!(attached[0]["preview"], "Actual local file preview.\n");
+            } else {
+                assert_eq!(attached[0]["name"], "chosen");
+                assert_eq!(attached[0]["path"], ".agents/skills/chosen/SKILL.md");
+                assert!(!expanded.contains("unselected"));
+                assert!(!expanded.contains("Private instructions"));
+            }
+            let ack = scope
+                .scope(receiver::call(json!({
+                    "op":"ack", "listener_id":id, "token":token,
+                    "delivery_id":delivery["delivery_id"], "status":"accepted"
+                })))
+                .await
+                .unwrap();
+            assert_eq!(ack["receipt"]["status"], "accepted");
+            finish_send_reference_receipt(&mut state).await;
+            assert!(scope.scope(read(0)).await.unwrap()["delivery"].is_null());
+        }
+
+        let missing = "/send 请创建 @future-missing.txt ";
+        state.keyboard(missing.as_bytes(), Instant::now(), false);
+        state.keyboard(b"\r", Instant::now(), false);
+        assert!(state.conversation.force_task.is_some());
+        let delivery = scope.scope(read(5000)).await.unwrap()["delivery"].clone();
+        let expanded = delivery["text"].as_str().unwrap();
+        assert_eq!(
+            references::source(expanded),
+            missing.strip_prefix("/send ").unwrap()
+        );
+        assert_eq!(references::warnings(expanded).len(), 1);
+        assert!(!Path::new("future-missing.txt").exists());
+        scope
+            .scope(receiver::call(json!({
+                "op":"ack", "listener_id":id, "token":token,
+                "delivery_id":delivery["delivery_id"], "status":"accepted"
+            })))
+            .await
+            .unwrap();
+        finish_send_reference_receipt(&mut state).await;
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("future-missing.txt")
+        );
+        assert_eq!(
+            receiver::snapshot()["receipts"].as_array().unwrap().len(),
+            3
+        );
+
+        for group in [false, true] {
+            state.conversation.native_recipient =
+                (!group).then(|| "client:synthetic-native-recipient".into());
+            state.conversation.send_to_group = group;
+            for draft in ["/send @资料", "/send $ch"] {
+                state.conversation.composer.set_text(draft);
+                state.chat_refresh_completions();
+                assert!(!state.conversation.composer.reference_active());
+                assert!(!state.conversation.composer.completion_loading());
+                assert!(state.conversation.composer.suggestions().is_empty());
+                assert!(!state.chat_menu_visible());
+                assert_eq!(state.conversation.composer.text(), draft);
+                assert!(state.conversation.force_task.is_none());
+            }
+        }
+        // Selecting a group only changes /send. Ordinary Enter still targets
+        // the local request queue, so its skill picker remains available.
+        assert!(state.conversation.send_to_group);
+        assert!(state.conversation.native_recipient.is_none());
+        state.conversation.composer.set_text("$ch");
+        wait_for_send_reference_menu(&mut state).await;
+        assert!(state.conversation.composer.reference_active());
+        assert_eq!(
+            state
+                .conversation
+                .composer
+                .selected_suggestion()
+                .unwrap()
+                .name,
+            "$chosen"
+        );
+        assert_eq!(state.conversation.composer.text(), "$ch");
+        assert!(state.conversation.force_task.is_none());
+        assert!(scope.scope(read(0)).await.unwrap()["delivery"].is_null());
+        receiver::disconnect();
+        runtime.shutdown().await;
+    });
+}

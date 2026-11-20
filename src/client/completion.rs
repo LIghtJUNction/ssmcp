@@ -70,13 +70,21 @@ pub(crate) struct Listing {
 
 /// Same boundaries, quotes, escapes and backticks as reference expansion.
 pub(crate) fn query(text: &str, cursor: usize) -> Option<Query> {
-    if cursor > text.len()
-        || !text.is_char_boundary(cursor)
-        || matches!(text.trim_start().chars().next(), Some('/' | '!'))
-    {
+    if cursor > text.len() || !text.is_char_boundary(cursor) {
         return None;
     }
-    let mut at = 0;
+    let command = text.trim_start();
+    let mut at = match command.chars().next() {
+        Some('/') => {
+            // Only /send carries a reference-bearing body. Preserve the command,
+            // its separator and all other prose when replacing a suggestion.
+            let rest = command.strip_prefix("/send")?;
+            let separator = rest.chars().next().filter(|ch| ch.is_whitespace())?;
+            text.len() - rest.len() + separator.len_utf8()
+        }
+        Some('!') => return None,
+        _ => 0,
+    };
     let mut ticks = 0;
     while at < text.len() && at < cursor {
         let ch = text[at..].chars().next()?;
@@ -553,6 +561,60 @@ mod tests {
         assert!(query("!echo $HOME", 11).is_none());
         assert!(query("$100", 4).is_none());
     }
+    #[test]
+    fn send_body_completes_references_without_changing_the_command() {
+        for prefix in [
+            "/send ",
+            "  /send ",
+            "\t/send\t",
+            "/send\n    ",
+            "\u{3000}/send\u{2003}",
+        ] {
+            let text = format!(r#"{prefix}看 @"资料/草稿.md" 然后继续"#);
+            let cursor = text.find("草稿").unwrap();
+            let found = query(&text, cursor).unwrap();
+            assert_eq!(found.prefix, "资料/");
+            assert_eq!(&text[found.start..found.end], r#"@"资料/草稿.md""#);
+            let (updated, cursor) =
+                apply(&text, cursor, &found, r#"@"资料/说明.md" "#, 1024).unwrap();
+            assert_eq!(updated, format!(r#"{prefix}看 @"资料/说明.md"  然后继续"#));
+            assert!(updated.is_char_boundary(cursor));
+
+            let text = format!("{prefix}$review");
+            let found = query(&text, text.len()).unwrap();
+            assert!(found.skill);
+            assert_eq!(found.prefix, "review");
+            assert_eq!(found.start, prefix.len());
+        }
+    }
+
+    #[test]
+    fn send_completion_rejects_commands_shell_currency_and_code() {
+        for text in [
+            "/send",
+            "/sendx @file",
+            "/sender $skill",
+            "/help @file",
+            "/attach @file",
+            "/message $skill",
+            "!echo $HOME",
+            "/send $100",
+            r"/send \@escaped",
+            "/send \x60@code\x60",
+        ] {
+            assert!(query(text, text.len()).is_none(), "{text}");
+        }
+        // A /send body is literal message prose, including a leading '!'.
+        let prose = "/send !echo $HOME";
+        assert!(query(prose, prose.len()).is_some());
+        let text = "  /send @file";
+        for cursor in 0..=8 {
+            assert!(query(text, cursor).is_none(), "{cursor}");
+        }
+        assert_eq!(query("/send @", 7).unwrap().prefix, "");
+        assert!(query("/send $", 7).unwrap().skill);
+    }
+
     #[test]
     fn quoted_numeric_skills_remain_editable_without_matching_currency() {
         for text in [r#"$"007-helper""#, "$'007-helper'"] {
