@@ -1,0 +1,46 @@
+{
+  "status": "source_checkpoint_pending_final_validation",
+  "source_sha": "38459c062033392aae1921609847e78ab3d539d0",
+  "tested_snapshot_parent_sha": "11722b152c804f3ce63f2a30871fca095afab419",
+  "tested_manifest_sha256": "870634ca08f6c3f1ac65484187bddc6db70abce97762d2022a16004f7c923705",
+  "tested_elf": {
+    "bytes": 136354624,
+    "sha256": "a719bb9434888e2fe550f6c93b94660f05a1d08f6be551a39b1d42d15ab92c2c"
+  },
+  "tests": {
+    "links": [
+      "test result: ok. 13 passed; 0 failed; 1 ignored; 0 measured; 1519 filtered out; finished in 0.09s"
+    ],
+    "terminal": [
+      "test result: ok. 289 passed; 0 failed; 2 ignored; 0 measured; 1242 filtered out; finished in 7.28s"
+    ]
+  },
+  "counts_overlap": true,
+  "known_skipped_test": "local_frame_shows_connection_authorization_without_cloud_account_quota",
+  "skip_reason": "stale local-account language/layout assertion corrected by the separate language branch",
+  "pending": [
+    "verify whole-visible-text redaction across OSC boundaries",
+    "strict Clippy after while-let fix",
+    "build the VT decoder example",
+    "physical PTY input/opener acceptance",
+    "final combined application build"
+  ],
+  "resource_state": "new Cargo builds paused at root request; no install or reload",
+  "review_changes": {
+    "baseline": "gate-links-04",
+    "pending_verification": [
+      "Clippy while-let form",
+      "whole-visible-text redaction before OSC splitting"
+    ],
+    "before": {
+      "src/client/terminal/links.rs": "1f504f9667b67c53af62e3cc95edea9f5a22a0db69e93fc7687c3a61128a4190",
+      "src/client/terminal/markdown.rs": "21b49fd76cecd8869685be1000e658f1871a5a0f813a585bcec397b52cf27570",
+      "src/client/terminal/links/tests.rs": "9b7c2617b61155c026f9dee5421ed0778fe42d0cbe32b5c389b3c99cfec42ec9"
+    },
+    "after": {
+      "src/client/terminal/links.rs": "653eb8e486ec22297758ed0716b83204dc79f9e0d57a592c32ef4ccebd8219d1",
+      "src/client/terminal/markdown.rs": "fffb9a39049fc16eeba27107a287952c3c144d1acf25ca5c70a6b77998932bf3",
+      "src/client/terminal/links/tests.rs": "d5bbaa125fc02a4ff785ecbd498cd23f44637ddb4c2075f61e60348a1e0eb015"
+    }
+  }
+}

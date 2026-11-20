@@ -1,0 +1,45 @@
+{
+  "status": "verified_on_gate_links_04_snapshot",
+  "baseline_reproduced": true,
+  "baseline_exit_code": 101,
+  "baseline_source": {
+    "src/client/terminal/links.rs": "8d9f19e4113821c99123e4d5a08058ff6f76bfd210f34ab7aae57a2663777b21",
+    "src/client/terminal/links/tests.rs": "16bbaaa4d5036eeb228cb6d868e26641bef38fe2bc7fa3eee1984e485b071ba7",
+    "src/client/terminal/conversation.rs": "c37db32d177f5a195946e9e5fb14b302ee57f5b5df03f00cb2fb47749380ae66",
+    "src/client/terminal/markdown.rs": "869a17b26c6527df1e12262959aa0c348932af525046991a0d842537f540f372"
+  },
+  "candidate_test": "client::terminal::links::tests::links_grapheme_prefix_positions_and_wrap_boundaries",
+  "candidate_elf_sha256": "a719bb9434888e2fe550f6c93b94660f05a1d08f6be551a39b1d42d15ab92c2c",
+  "candidate_log_vectors": [
+    "grapheme=\"👨\\u{200d}👩\\u{200d}👧\\u{200d}👦\" actual_start=3 expected_start=3",
+    "grapheme=\"❤\\u{fe0f}\" actual_start=3 expected_start=3",
+    "grapheme=\"🇨🇳\" actual_start=3 expected_start=3",
+    "grapheme=\"🧑🏽\\u{200d}💻\" actual_start=3 expected_start=3"
+  ],
+  "cases": [
+    {
+      "prefix": "👨‍👩‍👧‍👦",
+      "baseline_start": 9,
+      "expected_start": 3,
+      "candidate_start": 3
+    },
+    {
+      "prefix": "❤️",
+      "baseline_start": 2,
+      "expected_start": 3,
+      "candidate_start": 3
+    },
+    {
+      "prefix": "🇨🇳",
+      "baseline_start": 3,
+      "expected_start": 3,
+      "candidate_start": 3
+    },
+    {
+      "prefix": "🧑🏽‍💻",
+      "baseline_start": 7,
+      "expected_start": 3,
+      "candidate_start": 3
+    }
+  ]
+}
