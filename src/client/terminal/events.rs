@@ -38,6 +38,7 @@ const MAX_DETAIL: usize = 128 * 1024;
 struct Event {
     id: u64,
     text: String,
+    command_source: Option<CommandSource>,
     summary: String,
     lines: usize,
     expanded: bool,
@@ -49,6 +50,22 @@ struct Event {
     meta: Meta,
     image: Option<images::Preview>,
     diagnostic: Option<(u64, u64)>,
+}
+
+/// Independently bounded display metadata never becomes native output or log text.
+struct CommandSource {
+    text: String,
+    truncated: bool,
+}
+
+impl CommandSource {
+    fn new(text: String) -> Self {
+        let (text, truncated) = retained_text_with_note(
+            text.as_bytes(),
+            "\n… command preview truncated; use /command JOB_ID for retained argv …\n",
+        );
+        Self { text, truncated }
+    }
 }
 
 /// Each command keeps its own viewport. None follows newly arriving output.
@@ -355,6 +372,14 @@ impl Event {
         rows.join("\n")
     }
 
+    fn command_detail_text(&self) -> String {
+        let Some(source) = &self.command_source else {
+            return self.text.trim_end().to_owned();
+        };
+        let (header, rest) = self.text.split_once('\n').unwrap_or((&self.text, ""));
+        format!("{header}\n{}{rest}", source.text)
+    }
+
     fn append(&mut self, text: String, truncated: bool) {
         if !text.is_empty() {
             self.text.push_str(&text);
@@ -367,7 +392,13 @@ impl Event {
     }
 
     fn retained_bytes(&self) -> usize {
-        self.text.len() + self.summary.len() + self.meta.bytes()
+        self.text.len()
+            + self.summary.len()
+            + self.meta.bytes()
+            + self
+                .command_source
+                .as_ref()
+                .map_or(0, |source| source.text.len())
     }
 
     fn matches(&self, query: &str, level: u8, scope: EventScope) -> bool {
@@ -787,18 +818,25 @@ impl EventView {
         } else if meta.command
             && let Some(source) = crate::client::render::interactive_command_source(event)
         {
-            // A concise renderer omits inline scripts. Keep an independently
-            // audited display copy so Enter can reveal it. Normal bounded
-            // event retention still applies; native argv stays unchanged.
-            let display = String::from_utf8_lossy(bytes);
-            let (header, rest) = display.split_once('\n').unwrap_or((&display, ""));
-            self.ingest_inner(format!("{header}\n{source}{rest}").as_bytes(), meta);
+            // Source is display metadata, not command output. Keep it separate
+            // so transcript bytes, summary parsing and lifecycle correlation
+            // retain their existing meaning.
+            self.ingest_inner_with_source(bytes, meta, Some(CommandSource::new(source)));
         } else {
             self.ingest_inner(bytes, meta);
         }
     }
 
-    fn ingest_inner(&mut self, bytes: &[u8], mut meta: Meta) {
+    fn ingest_inner(&mut self, bytes: &[u8], meta: Meta) {
+        self.ingest_inner_with_source(bytes, meta, None);
+    }
+
+    fn ingest_inner_with_source(
+        &mut self,
+        bytes: &[u8],
+        mut meta: Meta,
+        command_source: Option<CommandSource>,
+    ) {
         if meta.skip {
             return;
         }
@@ -901,12 +939,18 @@ impl EventView {
                     if self.events[index].panel.scroll.is_none() {
                         self.events[index].panel.scroll = previous.panel.scroll;
                     }
+                    if self.events[index].command_source.is_none() {
+                        self.events[index].command_source = previous.command_source;
+                    }
                     self.events[index].append(previous.text, previous.truncated);
                     self.events[index].meta.merge(previous.meta);
                 }
             }
             let event = &mut self.events[index];
             event.append(text, truncated);
+            if let Some(source) = command_source {
+                event.command_source = Some(source);
+            }
             event.meta.merge(meta);
             event.expanded |= expanded;
             event.cache = None;
@@ -929,6 +973,7 @@ impl EventView {
             self.events.push_back(Event {
                 id,
                 text,
+                command_source,
                 summary,
                 lines,
                 expanded,
@@ -1492,10 +1537,9 @@ impl EventView {
                     })
                 {
                     let body = if expanded {
-                        // This is the retained, already-redacted display text,
-                        // including full command/script details. Never read raw
-                        // event metadata to reconstruct the command.
-                        format!("Command\n{}", event.text.trim_end())
+                        // Add the already-redacted source only to this expanded
+                        // display copy. Logs and folded output retain event.text.
+                        format!("Command\n{}", event.command_detail_text().trim_end())
                     } else {
                         event.command_output()
                     };
@@ -1531,7 +1575,17 @@ impl EventView {
                         offset + event.panel.page,
                         content.len()
                     );
-                    let partial = if event.truncated { " · partial" } else { "" };
+                    let partial = if event.truncated
+                        || (expanded
+                            && event
+                                .command_source
+                                .as_ref()
+                                .is_some_and(|source| source.truncated))
+                    {
+                        " · partial"
+                    } else {
+                        ""
+                    };
                     let detail = if expanded && width >= 70 {
                         format!("{range} · wheel/PgUp/PgDn · Home command · Enter fold{partial}")
                     } else if expanded && width >= 48 {
@@ -2142,12 +2196,18 @@ fn unstyled(text: &str) -> String {
 }
 
 fn retained_text(bytes: &[u8]) -> (String, bool) {
+    retained_text_with_note(
+        bytes,
+        "\n… preview truncated; inspect the original output archive …\n",
+    )
+}
+
+fn retained_text_with_note(bytes: &[u8], note: &str) -> (String, bool) {
     let raw = String::from_utf8_lossy(bytes);
     let clean = sanitize(&raw, true);
     if clean.len() <= MAX_DETAIL {
         return (clean, false);
     }
-    let note = "\n… preview truncated; inspect the original output archive …\n";
     let budget = MAX_DETAIL - note.len();
     let mut head = budget / 2;
     while !clean.is_char_boundary(head) {
@@ -2735,7 +2795,6 @@ mod tests {
                     "command":["python3","-c","API_TOKEN=raw-metadata-secret"]}),
                 text.as_bytes(),
             );
-            let initial_text = view.events[0].text.clone();
             view.set_scope(EventScope::Conversation);
             view.render(100, 24, &plain_ui(), true);
             if manual_scroll {
@@ -2777,7 +2836,7 @@ mod tests {
             assert!(view.open());
             let reopened = view.render(48, 24, &plain_ui(), true).join("\n");
             assert!(reopened.contains("1 import pathlib") && reopened.contains("Home cmd"));
-            assert_eq!(view.events[0].text, format!("{initial_text}output-40\n"));
+            assert_eq!(view.events[0].text, format!("{text}output-40\n"));
         }
     }
 

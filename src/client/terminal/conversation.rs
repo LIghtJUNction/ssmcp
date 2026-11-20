@@ -3452,7 +3452,17 @@ mod tests {
         state.chat_character('\r');
         assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
         let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("cargo test --lib"), "{screen}");
+        for argument in [
+            "argv[0]: \"cargo\"",
+            "argv[1]: \"test\"",
+            "argv[2]: \"--lib\"",
+        ] {
+            assert!(screen.contains(argument), "{screen}");
+        }
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_job"]["command"],
+            json!(["cargo", "test", "--lib"])
+        );
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.tasks.snapshot()["detail"], false);
         assert!(state.conversation.content_focus);
@@ -4877,6 +4887,64 @@ mod tests {
         assert_eq!(state.conversation.snapshot()["draft"], before);
         assert_eq!(state.chat_data()["queue"], queue);
         assert!(state.conversation.input_task.is_none());
+    }
+
+    #[test]
+    fn alt_c_protocol_variants_survive_split_input_and_preserve_both_focus_modes() {
+        let sequences: &[&[u8]] = &[
+            b"\x1bc",
+            b"\x1bC",
+            b"\x1b[99;3u",
+            b"\x1b[67;3u",
+            b"\x1b[99;4u",
+            b"\x1b[67;4u",
+            b"\x1b[27;3;99~",
+            b"\x1b[27;3;67~",
+            b"\x1b[27;4;99~",
+            b"\x1b[27;4;67~",
+        ];
+        for sequence in sequences {
+            for split in 1..sequence.len() {
+                for content in [false, true] {
+                    let mut state = preview(24, 100);
+                    state.conversation.content_focus = content;
+                    state.conversation.composer.set_text("retained 界");
+                    state.conversation.composer.left();
+                    let draft = state.conversation.snapshot()["draft"].clone();
+                    let queue = state.chat_data()["queue"].clone();
+                    input(&mut state, &sequence[..split]);
+                    assert!(
+                        !state.selection,
+                        "partial key must wait: {sequence:?}/{split}"
+                    );
+                    input(&mut state, &sequence[split..]);
+                    assert!(state.selection, "{sequence:?}/{split}");
+                    assert!(!state.frame(Instant::now()).mouse_capture);
+                    input(&mut state, sequence);
+                    assert!(!state.selection);
+                    assert_eq!(state.conversation.content_focus, content);
+                    assert_eq!(state.conversation.snapshot()["draft"], draft);
+                    assert_eq!(state.chat_data()["queue"], queue);
+                    assert!(state.conversation.input_task.is_none());
+                    assert!(state.actions.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alt_c_bytes_inside_bracketed_paste_do_not_toggle_text_selection() {
+        for sequence in [b"\x1bc".as_slice(), b"\x1b[99;3u", b"\x1b[27;3;99~"] {
+            let mut state = preview(24, 100);
+            let queue = state.chat_data()["queue"].clone();
+            input(&mut state, b"\x1b[200~paste-marker ");
+            input(&mut state, sequence);
+            input(&mut state, b"\x1b[201~");
+            assert!(!state.selection);
+            assert!(state.conversation.composer.text().contains("paste-marker"));
+            assert_eq!(state.chat_data()["queue"], queue);
+            assert!(state.conversation.input_task.is_none());
+        }
     }
 
     #[test]
