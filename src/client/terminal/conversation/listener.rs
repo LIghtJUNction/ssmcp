@@ -1,6 +1,8 @@
 //! Explicit force-send UI; a receipt never claims that a model has run.
 use super::*;
+use crate::client::interface::history::HistoryId;
 use crate::client::interface::listener::{self as receiver, Receipt, Status};
+use crate::runtime::call_scope::DisplaySource;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 /// Strip the command and one separator, preserving the message's indentation.
@@ -16,6 +18,7 @@ pub(super) fn body(text: &str) -> Option<&str> {
 
 struct Completed {
     receipt: Receipt,
+    history: Option<HistoryId>,
     history_error: Option<String>,
     reference_warnings: Vec<String>,
 }
@@ -37,6 +40,7 @@ impl Task {
         // committing the delivery. A replacement listener cannot inherit it.
         let target = receiver::target(selected_thread)?;
         let conversation_id = target.conversation_id.clone();
+        let history = conversation_id.as_deref().and_then(HistoryId::parse);
         let (runtime, handle) = crate::client::interface::harness::local_runtime()?;
         let (sender, result) = oneshot::channel();
         let task_source = source.clone();
@@ -71,6 +75,7 @@ impl Task {
                 };
                 Ok(Completed {
                     receipt,
+                    history,
                     history_error,
                     reference_warnings,
                 })
@@ -184,6 +189,7 @@ impl State {
                         &completed.receipt.connection_id,
                         &completed.receipt.delivery_id,
                         source,
+                        completed.history.as_ref(),
                     );
                 }
                 let mut detail = completed.receipt.detail;
@@ -204,7 +210,13 @@ impl State {
         self.chat_listener_notice(&detail);
     }
 
-    fn chat_show_force_send_input(&mut self, connection: &str, delivery: &str, source: &str) {
+    fn chat_show_force_send_input(
+        &mut self,
+        connection: &str,
+        delivery: &str,
+        source: &str,
+        history: Option<&HistoryId>,
+    ) {
         if self
             .conversation
             .force_displayed
@@ -233,10 +245,7 @@ impl State {
             "type":"ssmcp.message", "role":"user", "text":source,
             "connection_id":connection, "delivery_id":delivery,
         });
-        // The fast result path holds the history guard and already selected its owner.
-        self.events.ingest_event("message", &event, record.as_bytes());
-        self.log_raw(record.as_bytes());
-        crate::session::attach::record_event("message", &event);
+        self.chat_project_listener_message("message", &event, record.as_bytes(), history);
     }
 
     /// Called inside the scoped publication guard, before the sender task may have
@@ -248,9 +257,34 @@ impl State {
         source: &str,
         event: &Value,
         bytes: &[u8],
+        history: Option<HistoryId>,
     ) {
-        self.chat_show_force_send_input(connection, delivery, source);
-        self.events.ingest_event("listener", event, bytes);
+        self.chat_show_force_send_input(connection, delivery, source, history.as_ref());
+        self.chat_project_listener_message("listener", event, bytes, history.as_ref());
+    }
+
+    fn chat_project_listener_message(
+        &mut self,
+        label: &str,
+        event: &Value,
+        bytes: &[u8],
+        history: Option<&HistoryId>,
+    ) {
+        // This can run inside the reply guard, so projection must not lock history.
+        crate::session::attach::record_event(label, event, history);
+        if let Some(history) = history {
+            self.events.ingest_scoped_event(
+                label,
+                event,
+                bytes,
+                DisplaySource {
+                    history: Some(history.clone()),
+                    call: None,
+                },
+            );
+        } else {
+            self.events.ingest_event(label, event, bytes);
+        }
         self.log_raw(bytes);
     }
 
@@ -304,6 +338,7 @@ mod tests {
                 }
                 .into(),
             },
+            history: None,
             history_error: None,
             reference_warnings: Vec::new(),
         })
@@ -464,6 +499,7 @@ mod tests {
                         "task_completion_approved":false,
                     }),
                     b"\n[LISTENER] local receiver\nFAST_RESULT\n\n",
+                    None,
                 );
                 assert_eq!(state.chat_saved_draft(), draft);
                 assert_listener_input_before_result(&mut state);

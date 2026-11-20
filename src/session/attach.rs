@@ -19,7 +19,11 @@ use tokio::{
 };
 
 use super::ipc;
-use crate::{Result, runtime::Runtime};
+use crate::{
+    Result,
+    client::interface::history::{self, HistoryId},
+    runtime::{Runtime, call_scope::DisplaySource},
+};
 
 const ENDPOINT: &str = "attach.json";
 const HISTORY_BYTES: usize = 2 * 1024 * 1024;
@@ -93,6 +97,15 @@ impl Capture {
         self.changed.notify_waiters();
     }
 
+    fn push_event(&self, label: &str, value: &Value, history: Option<&HistoryId>) {
+        let mut frame =
+            json!({"kind":"event","label":label,"value":crate::audit::event(value.clone())});
+        if let Some(history) = history {
+            frame["local_history_id"] = json!(history.as_str());
+        }
+        self.push(frame);
+    }
+
     fn open(&self, read_only: bool) -> Result<String> {
         let mut leases = self.leases.lock().unwrap_or_else(|e| e.into_inner());
         leases.retain(|_, value| value.seen.elapsed() < Duration::from_secs(LEASE_SECONDS));
@@ -144,7 +157,7 @@ impl Capture {
 
     async fn read(&self, cursor: u64) -> Result<Value> {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(1000);
-        loop {
+        let mut page = loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
@@ -169,12 +182,17 @@ impl Capture {
                         bytes += size;
                         next = sequence + 1;
                     }
-                    return Ok(json!({"generation":self.generation,"events":events,
-                        "next_cursor":next,"start_cursor":start,"truncated":cursor < start}));
+                    break json!({"generation":self.generation,"events":events,
+                        "next_cursor":next,"start_cursor":start,"truncated":cursor < start});
                 }
             }
             let _ = tokio::time::timeout_at(deadline, changed).await;
-        }
+        };
+        // The ring lock is released before observing history. Selection comes
+        // from the backend, independently of the owner of any replayed event.
+        page["active_history_id"] =
+            json!(history::current_owner().as_ref().map(|owner| owner.id()));
+        Ok(page)
     }
 }
 
@@ -189,10 +207,9 @@ fn capture() -> Option<Arc<Capture>> {
 
 /// Called in the renderer's serialized emission path. Native payloads remain
 /// unchanged; this private display replay contains the usual redacted copy.
-pub(crate) fn record_event(label: &str, value: &Value) {
+pub(crate) fn record_event(label: &str, value: &Value, history: Option<&HistoryId>) {
     if let Some(capture) = capture() {
-        capture
-            .push(json!({"kind":"event","label":label,"value":crate::audit::event(value.clone())}));
+        capture.push_event(label, value, history);
     }
 }
 
@@ -225,6 +242,23 @@ pub struct Handle {
     capture: Arc<Capture>,
 }
 impl Handle {
+    #[cfg(all(test, unix))]
+    pub(crate) fn capture_for_test() -> Self {
+        let capture = Arc::new(Capture::new().unwrap());
+        let mut slot = CAPTURE.get_or_init(Default::default).lock().unwrap();
+        assert!(slot.as_ref().and_then(Weak::upgrade).is_none());
+        *slot = Some(Arc::downgrade(&capture));
+        Self {
+            task: None,
+            capture,
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) async fn read_for_test(&self) -> Value {
+        self.capture.read(0).await.unwrap()
+    }
+
     pub fn bind_runtime(&self, runtime: Arc<Runtime>) -> Result<RuntimeBinding> {
         let mut slot = self
             .capture
@@ -533,6 +567,7 @@ async fn attached(
     let _local_input = crate::client::attachments::LocalInput::bind(spec.cwd.clone())?;
     let display =
         terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
+    terminal::follow_attach_history(None);
     let mut terminal_ids = Vec::new();
     sync_terminals(open, &mut terminal_ids);
     let mut selected = 0usize;
@@ -657,6 +692,7 @@ async fn attached(
                 page = pages.recv() => {
                     let page = page.ok_or("attach output stream ended")?.map_err(|error| format!("attach ended: {error}; the session may be reconnecting, stopped, or restarted"))?;
                     if page["truncated"] == true { render::status("attach","Warning","Earlier display history was evicted; showing the retained tail. Use session logs for older output."); }
+                    terminal::follow_attach_history(page["active_history_id"].as_str().and_then(HistoryId::parse));
                     for event in page["events"].as_array().ok_or("invalid attach events")? {
                         if event["kind"]=="backend" && event["sequence"].as_u64().unwrap_or(0)>=live_cursor {
                             let generation=event["backend_generation"].as_u64().ok_or("missing backend generation")?;
@@ -757,12 +793,26 @@ fn sync_terminals(snapshot: &Value, ids: &mut Vec<String>) {
     }
 }
 
+/// Decode display metadata only from the envelope of a checked local attach page.
+pub(crate) fn recorded_event(frame: &Value) -> (&str, &Value, DisplaySource) {
+    (
+        frame["label"].as_str().unwrap_or("session"),
+        &frame["value"],
+        DisplaySource {
+            history: frame["local_history_id"]
+                .as_str()
+                .and_then(HistoryId::parse),
+            call: None,
+        },
+    )
+}
+
 fn replay(event: &Value) -> Result<()> {
     match event["kind"].as_str() {
-        Some("event") => crate::client::render::event(
-            event["label"].as_str().unwrap_or("session"),
-            &event["value"],
-        ),
+        Some("event") => {
+            let (label, value, source) = recorded_event(event);
+            crate::client::render::replay_event(label, value, source);
+        }
         Some("finish") => {
             crate::client::render::finish(event["label"].as_str().unwrap_or("session"))
         }
@@ -916,6 +966,30 @@ mod tests {
         assert_eq!(second["next_cursor"], 130);
         assert_eq!(second["truncated"], false);
         assert!(capture.read(131).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_and_nested_provider_history_fields_do_not_acquire_a_replay_owner() {
+        let capture = Capture::new().unwrap();
+        let owner = HistoryId::parse("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let payload = json!({"type":"ssmcp.message","text":"fixture",
+            "local_history_id":owner.as_str(),"attribution":{"name":"display only"}});
+        capture.push_event("agent", &payload, None);
+        capture.push_event("agent", &payload, Some(&owner));
+        let page = capture.read(0).await.unwrap();
+        let legacy = &page["events"][0];
+        assert!(legacy.get("local_history_id").is_none());
+        let (_, value, source) = recorded_event(legacy);
+        assert_eq!(value["local_history_id"], owner.as_str());
+        assert!(source.history.is_none());
+        assert!(source.call.is_none());
+
+        let (_, _, source) = recorded_event(&page["events"][1]);
+        assert_eq!(source.history, Some(owner));
+        assert!(source.call.is_none());
+        let mut invalid = page["events"][1].clone();
+        invalid["local_history_id"] = json!("../foreign");
+        assert!(recorded_event(&invalid).2.history.is_none());
     }
 
     #[test]

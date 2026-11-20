@@ -552,7 +552,8 @@ impl Runtime {
         call_id: u64,
     ) -> Result<Value, String> {
         let started = std::time::Instant::now();
-        let caller = call_scope::current();
+        let source = call_scope::Source::capture();
+        let caller = source.call.clone();
         let harness_call = tool
             .provider
             .is_harness()
@@ -606,7 +607,7 @@ impl Runtime {
             Provider::Audit => self.audit.read(arguments).await.map(backend::result),
             Provider::Plugins => self.plugins.perform(&tool, arguments).await,
             provider if self.native.contains(provider) => {
-                let dispatch = self.native.call(&tool, arguments);
+                let dispatch = source.clone().scope(self.native.call(&tool, arguments));
                 if let Some(call) = &harness_call {
                     call.scope(dispatch).await
                 } else {
@@ -683,9 +684,10 @@ impl Runtime {
                 .cloned()
                 .collect();
             if !images.is_empty() {
+                let source = source.display();
                 let _ = tokio::task::spawn_blocking(move || {
                     for image in images {
-                        crate::client::terminal::image(&image);
+                        crate::client::terminal::image(&image, source.clone());
                     }
                 })
                 .await;

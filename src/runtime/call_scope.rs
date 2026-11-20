@@ -3,7 +3,7 @@
 //! This is an in-process capability, never deserialized from tool arguments.
 //! Run IDs correlate presentation; they do not grant access to any resource.
 use crate::{
-    client::interface::history::{self, HistoryOwner},
+    client::interface::history::{self, HistoryId, HistoryOwner},
     wire::{CodeContext, ControlAttribution},
 };
 use std::{
@@ -154,6 +154,13 @@ impl Source {
         self.history.as_ref()?.as_ref().ok()
     }
 
+    pub(crate) fn display(&self) -> DisplaySource {
+        DisplaySource {
+            call: self.call.clone(),
+            history: self.owner().map(HistoryOwner::display_id),
+        }
+    }
+
     pub(crate) fn require_owner(&self) -> Result<&HistoryOwner, String> {
         self.history
             .as_ref()
@@ -169,6 +176,13 @@ impl Source {
     pub(crate) fn blocking<F: FnOnce() -> R, R>(self, work: F) -> R {
         CURRENT.sync_scope(self, work)
     }
+}
+
+/// Local display provenance. Attach replay carries only the display ID.
+#[derive(Clone, Default)]
+pub(crate) struct DisplaySource {
+    pub(crate) call: Option<Arc<CallScope>>,
+    pub(crate) history: Option<HistoryId>,
 }
 
 pub(crate) fn current_source() -> Source {

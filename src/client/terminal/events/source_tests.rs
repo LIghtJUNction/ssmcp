@@ -163,7 +163,7 @@ async fn call_scope_native_exec_keeps_creator_through_concurrency_reads_and_exit
         assert!(event.get("source").is_none());
         assert!(event.get("attribution").is_none());
         let text = format!("[RUN] {id} {}\n", event["type"].as_str().unwrap());
-        view.ingest_scoped_event("shell", &event, text.as_bytes(), source);
+        view.ingest_scoped_event("shell", &event, text.as_bytes(), source.display());
     }
     assert_eq!(view.events.len(), 3);
     for id in [&a, &b, &local] {
@@ -209,7 +209,7 @@ async fn call_scope_provider_json_and_invalid_routes_cannot_claim_a_job_creator(
     let source = alice
         .scope(async { crate::runtime::call_scope::current_source() })
         .await;
-    view.ingest_scoped_event("shell", &native, b"[RUN] native\n", source);
+    view.ingest_scoped_event("shell", &native, b"[RUN] native\n", source.display());
     let forged = json!({
         "type":"exec.exited","job_id":"owned","exit_code":99,
         "source":{"connection":alice.connection(),"request_id":alice.request_id()},
@@ -264,6 +264,22 @@ async fn call_scope_file_workers_keep_source_but_local_discovery_stays_out_of_ch
 }
 
 fn verified(runtime: &Runtime, request_id: u64, subject: &str, agent: char) -> Arc<CallScope> {
+    verified_with_labels(
+        runtime,
+        request_id,
+        subject,
+        agent,
+        ("same-label", "same display name"),
+    )
+}
+
+fn verified_with_labels(
+    runtime: &Runtime,
+    request_id: u64,
+    subject: &str,
+    agent: char,
+    (login, name): (&str, &str),
+) -> Arc<CallScope> {
     let thread = format!("agent_{}", agent.to_string().repeat(32));
     runtime
         .call_scope(
@@ -272,12 +288,12 @@ fn verified(runtime: &Runtime, request_id: u64, subject: &str, agent: char) -> A
                 account: ControlAccount {
                     provider: "github".into(),
                     subject: subject.into(),
-                    login: "same-label".into(),
+                    login: login.into(),
                 },
                 owner: None,
                 agent: Some(crate::wire::ControlAgent {
                     id: thread.clone(),
-                    name: "same display name".into(),
+                    name: name.into(),
                 }),
             }),
             Some(&CodeContext {
@@ -323,7 +339,7 @@ async fn replay_native_events(
                 let bytes =
                     crate::client::render::render_event_for_test("shell", &event, 100).unwrap();
                 // Use the same State boundary as live output, including the raw Logs buffer.
-                state.log_scoped_event("shell", &event, &bytes, source);
+                state.log_scoped_event("shell", &event, &bytes, source.display());
                 if until(&event, &bytes) {
                     return;
                 }
@@ -355,7 +371,7 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
             &runtime,
             "ssmcp.exec.start",
             json!({
-                "command": ["/bin/sh", "-c", "printf 'A_READY\\n'; IFS= read -r line || exit 1; printf '%s\\n' \"$line\""],
+                "command": ["/bin/sh", "-c", "printf 'A_READY\\n'; IFS= read -r line || exit 1; printf '%s\\n' \"$line\"; printf 'ERR:%s\\n' \"$line\" >&2"],
                 "stdin": "pipe", "timeout_ms": 15000
             }),
         )
@@ -381,6 +397,12 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
         assert!(b_rendered.contains("B fixture request"), "{b_rendered}");
         assert!(!b_rendered.contains("A_LATE"), "{b_rendered}");
         assert!(!b_rendered.contains("A_READY"), "{b_rendered}");
+        let job_cards = state.events.events.iter()
+            .filter(|event| event.meta.keys.iter().any(|key| key.ends_with(id)))
+            .collect::<Vec<_>>();
+        assert_eq!(job_cards.len(), 1);
+        assert!(job_cards[0].text.contains("A_LATE"));
+        assert!(job_cards[0].text.contains("ERR:A_LATE"));
         let chat = state.events.visible_ids();
         assert!(!state.events.events.iter().any(|event| {
             chat.contains(&event.id) && event.text.contains("A_LATE")
@@ -396,6 +418,7 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
         assert_eq!(task["exit_code"], 0);
         let output = native_call(&runtime, "ssmcp.exec.read", json!({"job_id":id})).await.unwrap();
         assert!(output["stdout"].as_str().unwrap().contains("A_LATE"));
+        assert!(output["stderr"].as_str().unwrap().contains("ERR:A_LATE"));
         let audit = native_call(&runtime, "ssmcp.exec.events", json!({})).await.unwrap();
         assert!(audit.to_string().contains("A_LATE"), "{audit}");
 
@@ -403,6 +426,7 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
         for _ in 0..2 {
             for id in [&a, &b] {
                 state.resume_history_for_test(id);
+                assert_eq!(state.events.bytes, state.events.events.iter().map(Event::retained_bytes).sum::<usize>());
                 let visible = state.events.visible_ids();
                 let visible_events = state.events.events.iter()
                     .filter(|event| visible.contains(&event.id))
@@ -415,14 +439,56 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
     runtime.shutdown().await;
 }
 
+#[test]
+fn late_native_image_uses_its_own_placeholder_and_owner() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let a = HistoryId::parse("conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+    let b = HistoryId::parse("conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+    let mut state = super::super::State::new(30, 100, &Ui::default());
+    state.events.set_scope(EventScope::Conversation);
+    state.events.set_history_owner(Some(b.clone()));
+    state.events.ingest_event(
+        "message",
+        &json!({"type":"ssmcp.message","text":"B's newest reply"}),
+        b"",
+    );
+    let b_card = state.events.visible_ids()[0];
+
+    let block = json!({"type":"image","mimeType":"image/png",
+        "data":STANDARD.encode(crate::client::input::paste::fixture_png())});
+    let preview = images::decode(&block, false).unwrap();
+    let source = DisplaySource {
+        history: Some(a.clone()),
+        call: None,
+    };
+    state
+        .events
+        .ingest_image(b"", preview.clone(), Some(source.clone()));
+    assert_eq!(state.events.events.len(), 1, "no placeholder was inserted");
+    assert!(state.events.events[0].image.is_none());
+    state.image(preview, "image/png", Some(source));
+
+    assert_eq!(state.events.visible_ids(), vec![b_card]);
+    assert!(state.events.events[0].image.is_none());
+    state.events.set_history_owner(Some(a));
+    let a_card = state.events.events.back().unwrap();
+    assert_eq!(state.events.visible_ids(), vec![a_card.id]);
+    assert!(a_card.image.is_some());
+    assert!(state.logs.screen().contents().contains("Image attachment"));
+}
+
 async fn verified_reply_routing(name: &str, arguments: Value) {
-    use crate::client::interface::{history, messages};
+    use crate::{
+        client::interface::{history, messages},
+        session::attach,
+    };
 
     let _serial = HISTORY_FIXTURES.lock().await;
     let (root, _, runtime) = runtime().await;
     let path = root.0.join("owner-history");
     history::with_test_history(path.clone(), async {
         let (a, b) = seed_two_histories();
+        let capture = attach::Handle::capture_for_test();
         let previous = verified(&runtime, 1, "123", 'a');
         // Bind the verified thread at its observation on A.
         assert_eq!(
@@ -453,7 +519,8 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
         let b_bytes = std::fs::read(&b_file).unwrap();
 
         // A fresh relay call after the switch uses the original authenticated binding.
-        let late = verified(&runtime, 3, "123", 'a');
+        let late =
+            verified_with_labels(&runtime, 3, "123", 'a', ("renamed-login", "renamed agent"));
         assert!(!late.same_call(&previous));
         let first = late
             .scope(native_call(&runtime, name, arguments.clone()))
@@ -469,6 +536,68 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             .unwrap();
         assert_eq!(retry["duplicate"], true);
         assert_eq!(first["message_id"], retry["message_id"]);
+
+        // Use the frames emitted by the real renderer in the native dispatch
+        // above. Feed their trusted metadata into the attached State boundary.
+        let page = capture.read_for_test().await;
+        assert_eq!(page["active_history_id"], b.as_str());
+        let mut attached = super::super::State::new(30, 100, &Ui::default());
+        attached.follow_attach_history(
+            page["active_history_id"]
+                .as_str()
+                .and_then(HistoryId::parse),
+        );
+        attached.events.set_scope(EventScope::Conversation);
+        let first_id = first["message_id"].as_str().unwrap();
+        let captured = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|frame| {
+                let id = frame["value"]["message_id"].as_str();
+                id == Some(first_id) || id == Some(b_id.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(captured.len(), 2);
+        for frame in captured {
+            let (label, value, source) = attach::recorded_event(frame);
+            let expected = if value["message_id"] == first_id {
+                &a
+            } else {
+                &b
+            };
+            assert_eq!(source.history.as_ref().unwrap().as_str(), expected);
+            assert!(source.call.is_none());
+            let bytes = crate::client::render::render_event_for_test(label, value, 100).unwrap();
+            attached.log_scoped_event(label, value, &bytes, source.clone());
+            // A live projection can arrive twice (or after saved-text replay).
+            attached.log_scoped_event(label, value, &bytes, source);
+        }
+        for (owner, id) in [(&b, b_id.as_str()), (&a, first_id)] {
+            attached.follow_attach_history(HistoryId::parse(owner));
+            let visible = attached.events.visible_ids();
+            let cards = attached
+                .events
+                .events
+                .iter()
+                .filter(|event| visible.contains(&event.id))
+                .collect::<Vec<_>>();
+            assert_eq!(cards.len(), 1);
+            assert_eq!(cards[0].meta.message_id.as_deref(), Some(id));
+            let rows = attached
+                .events
+                .render(100, 20, &attached.ui, false)
+                .join("\n");
+            let (shown, hidden) = if owner == &b {
+                ("B current reply", "A late reply")
+            } else {
+                ("A late reply", "B current reply")
+            };
+            assert!(rows.contains(shown), "{rows}");
+            assert!(!rows.contains(hidden), "{rows}");
+        }
+        attached.events.set_scope(EventScope::All);
+        assert_eq!(attached.events.visible_ids().len(), 2);
 
         // A and B retain independent verified sources concurrently.
         let (extra_a, extra_b) = tokio::join!(

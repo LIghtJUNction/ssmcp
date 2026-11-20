@@ -9,7 +9,7 @@ pub(crate) use listener::{
 #[cfg(test)]
 pub(crate) use ownership::with_test_history;
 pub(crate) use ownership::{
-    HistoryOwner, capture, current_owner, record_owned_agent, remember_visible_reply,
+    HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

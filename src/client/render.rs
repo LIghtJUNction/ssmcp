@@ -201,7 +201,8 @@ pub(crate) fn agent_message(
         event["presentation"] =
             serde_json::to_value(document).expect("a typed presentation serializes");
     }
-    crate::session::attach::record_event("agent", &event);
+    let display_source = source.display();
+    crate::session::attach::record_event("agent", &event, display_source.history.as_ref());
     let width = terminal_width().min(1000) as u16;
     let (raw, mut ui) = {
         let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
@@ -241,7 +242,7 @@ pub(crate) fn agent_message(
         }
         let _ = writeln!(bytes);
     }
-    publish_event("agent", &event, &bytes, None, source);
+    publish_event("agent", &event, &bytes, None, display_source);
     Ok(super::interface::history::remember_visible_reply(
         &owner, text,
     ))
@@ -260,10 +261,7 @@ pub(super) fn diagnostic_text(value: &Value) -> Option<String> {
 }
 
 pub(crate) fn event(label: &str, value: &Value) {
-    if reserved_control_event(value) {
-        return;
-    }
-    emit_event(label, value, false, Default::default());
+    emit_event(label, value, EventOrigin::Native, Default::default());
 }
 
 pub(crate) fn reserved_control_event(value: &Value) -> bool {
@@ -273,27 +271,47 @@ pub(crate) fn reserved_control_event(value: &Value) -> bool {
 }
 
 pub(crate) fn trusted_event(label: &str, value: &Value) {
-    emit_event(label, value, true, Default::default());
+    emit_event(label, value, EventOrigin::Control, Default::default());
 }
 
 /// The metadata is supplied by native code, never recovered from event JSON.
 pub(crate) fn scoped_event(label: &str, value: &Value, source: crate::runtime::call_scope::Source) {
-    if !reserved_control_event(value) {
-        emit_event(label, value, false, source);
-    }
+    emit_event(label, value, EventOrigin::Native, source.display());
+}
+
+/// The attach reader supplies projection metadata from its private envelope.
+pub(crate) fn replay_event(
+    label: &str,
+    value: &Value,
+    source: crate::runtime::call_scope::DisplaySource,
+) {
+    emit_event(label, value, EventOrigin::Replay, source);
+}
+
+#[derive(Clone, Copy)]
+enum EventOrigin {
+    Native,
+    Control,
+    Replay,
 }
 
 fn emit_event(
     label: &str,
     value: &Value,
-    trusted_control: bool,
-    source: crate::runtime::call_scope::Source,
+    origin: EventOrigin,
+    source: crate::runtime::call_scope::DisplaySource,
 ) {
+    let trusted_control = matches!(origin, EventOrigin::Control);
+    if !trusted_control && reserved_control_event(value) {
+        return;
+    }
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
     }
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
-    crate::session::attach::record_event(label, value);
+    if !matches!(origin, EventOrigin::Replay) {
+        crate::session::attach::record_event(label, value, source.history.as_ref());
+    }
     let dashboard = super::terminal::active();
     let width = terminal_width();
     let mut bytes = Vec::new();
@@ -375,7 +393,7 @@ fn publish_event(
     value: &Value,
     bytes: &[u8],
     snapshot: Option<PanelSnapshot>,
-    source: crate::runtime::call_scope::Source,
+    source: crate::runtime::call_scope::DisplaySource,
 ) {
     if !super::terminal::log_event(label, value, bytes, source) && !bytes.is_empty() {
         let mut out = io::stderr().lock();

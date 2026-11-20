@@ -1,7 +1,10 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
 //! reread of tools or an unbounded replacement for their original output archive.
 use super::{super::ui::Ui, images};
-use crate::{client::interface::history::HistoryOwner, runtime::call_scope::Source};
+use crate::{
+    client::interface::history::{HistoryId, HistoryOwner},
+    runtime::call_scope::DisplaySource,
+};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -434,9 +437,8 @@ impl Event {
             + self.history_id.as_ref().map_or(0, String::len)
     }
 
-    fn owned_by(&self, owner: Option<&HistoryOwner>) -> bool {
-        !self.meta.global_only
-            && self.meta.owner.as_ref().map(HistoryOwner::id) == owner.map(HistoryOwner::id)
+    fn owned_by(&self, owner: Option<&HistoryId>) -> bool {
+        !self.meta.global_only && self.meta.owner.as_ref() == owner
     }
 
     fn matches(
@@ -444,7 +446,7 @@ impl Event {
         query: &str,
         level: u8,
         scope: EventScope,
-        owner: Option<&HistoryOwner>,
+        owner: Option<&HistoryId>,
     ) -> bool {
         (scope == EventScope::All || (self.meta.kind != Kind::Log && self.owned_by(owner)))
             && (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
@@ -520,7 +522,7 @@ pub(crate) struct EventView {
     query: String,
     level: u8,
     scope: EventScope,
-    history_owner: Option<HistoryOwner>,
+    history_owner: Option<HistoryId>,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
     read_expanded: Vec<u64>,
@@ -725,7 +727,7 @@ impl EventView {
         self.refresh_visibility();
     }
 
-    pub(super) fn set_history_owner(&mut self, owner: Option<HistoryOwner>) {
+    pub(super) fn set_history_owner(&mut self, owner: Option<HistoryId>) {
         if self.history_owner == owner {
             return;
         }
@@ -740,6 +742,7 @@ impl EventView {
         owner: HistoryOwner,
         messages: &[crate::client::interface::history::Message],
     ) {
+        let owner = owner.display_id();
         self.set_history_owner(Some(owner.clone()));
         self.events
             .retain(|event| !(event.meta.history_message && event.owned_by(Some(&owner))));
@@ -1010,12 +1013,10 @@ impl EventView {
         label: &str,
         event: &Value,
         bytes: &[u8],
-        source: Source,
+        source: DisplaySource,
     ) {
         let mut meta = Meta::from_event(label, event);
-        meta.owner = source.owner().cloned();
-        meta.global_only = meta.owner.is_none();
-        meta.scope = source.call;
+        meta.set_source(source);
         self.ingest_event_with_meta(label, event, bytes, meta);
     }
 
@@ -1286,6 +1287,29 @@ impl EventView {
 
     pub(crate) fn is_following(&self) -> bool {
         self.follow
+    }
+
+    pub(super) fn ingest_image(
+        &mut self,
+        bytes: &[u8],
+        preview: images::Preview,
+        source: Option<DisplaySource>,
+    ) {
+        self.read_boundary.interrupt();
+        let mut meta = Meta {
+            owner: self.history_owner.clone(),
+            ..Meta::default()
+        };
+        if let Some(source) = source {
+            meta.set_source(source);
+        }
+        // The placeholder and image are one update. A skipped insertion must
+        // never attach the preview to a previously selected or retained card.
+        let id = self.next_id;
+        self.ingest_inner(bytes, meta);
+        if self.events.back().is_some_and(|event| event.id == id) {
+            self.attach_image(preview);
+        }
     }
 
     /// Attach only a decoded image from the native result path. Text containing

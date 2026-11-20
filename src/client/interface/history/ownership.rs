@@ -9,6 +9,20 @@ use std::{
 const MAX_BINDINGS: usize = 1024;
 const RELEASED: &str = "history_owner_released: the original conversation is no longer writable";
 
+/// An identifier used by display projection. It conveys no writer lease or relay identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HistoryId(Arc<str>);
+
+impl HistoryId {
+    pub(crate) fn parse(id: &str) -> Option<Self> {
+        super::valid_id(id, "conversation").then(|| Self(Arc::from(id)))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A reserved or existing local conversation. Copies cannot change its destination.
 #[derive(Clone, Debug)]
 pub(crate) struct HistoryOwner {
@@ -20,6 +34,10 @@ pub(crate) struct HistoryOwner {
 impl HistoryOwner {
     pub(crate) fn id(&self) -> &str {
         &self.id
+    }
+
+    pub(crate) fn display_id(&self) -> HistoryId {
+        HistoryId(self.id.clone())
     }
 }
 
@@ -294,9 +312,14 @@ mod tests {
     }
 
     #[test]
-    fn capacity_failure_does_not_rebind_an_existing_thread() {
+    fn capacity_failure_and_closed_owner_never_rebind_a_thread_to_b() {
         let temp = super::super::tests::Temporary::new();
         let mut history = temp.history();
+        history.record_request("b", "Saved B").unwrap();
+        let b = history.current().unwrap().unwrap();
+        history.release_current();
+        history.record_request("a", "Saved A").unwrap();
+
         let identity = |index: usize| VerifiedThread {
             provider: "github".into(),
             subject: "123".into(),
@@ -307,17 +330,30 @@ mod tests {
         for index in 1..MAX_BINDINGS {
             history.bind_owner(identity(index)).unwrap();
         }
-        history.release_current();
-        let current = history.capture_owner().unwrap();
-        assert_ne!(current, first);
+        history.resume(&b.metadata.id).unwrap();
         let error = history.bind_owner(identity(MAX_BINDINGS)).unwrap_err();
         assert!(error.contains("history_owner_capacity"), "{error}");
-        assert_eq!(history.bind_owner(identity(0)).unwrap(), first);
-        assert!(
-            history
-                .record_owned(&first, "assistant", "Stale reply", None)
-                .is_err()
+        let late = history.bind_owner(identity(0)).unwrap();
+        assert_eq!(late, first);
+        history
+            .record_owned(&late, "assistant", "Late A", None)
+            .unwrap();
+        assert_eq!(
+            history.read(first.id()).unwrap().messages[1].content,
+            "Late A"
         );
-        assert!(history.sessions().unwrap().is_empty());
+        assert_eq!(history.current().unwrap().unwrap(), b);
+
+        // The thread survives as a tombstone, including across archive restore.
+        history.archive_change(Some(first.id()), true).unwrap();
+        history.archive_change(Some(first.id()), false).unwrap();
+        let old = history.bind_owner(identity(0)).unwrap();
+        assert_eq!(old, first);
+        let error = history
+            .record_owned(&old, "assistant", "Stale reply", None)
+            .unwrap_err();
+        assert!(error.contains("history_owner_released"), "{error}");
+        assert_eq!(history.read(first.id()).unwrap().messages.len(), 2);
+        assert_eq!(history.current().unwrap().unwrap(), b);
     }
 }

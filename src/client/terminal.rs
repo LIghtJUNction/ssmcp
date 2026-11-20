@@ -425,7 +425,7 @@ pub(super) fn log_event(
     label: &str,
     value: &serde_json::Value,
     bytes: &[u8],
-    source: crate::runtime::call_scope::Source,
+    source: crate::runtime::call_scope::DisplaySource,
 ) -> bool {
     let Some(shared) = shared() else {
         return false;
@@ -470,14 +470,15 @@ pub(crate) fn listener_result(
             if !shared.alive.load(Ordering::Acquire) {
                 return false;
             }
+            let history = super::interface::history::HistoryId::parse(&receipt.conversation_id);
             state.chat_log_listener_result(
                 &receipt.connection_id,
                 &receipt.delivery_id,
                 source,
                 &event,
                 &bytes,
+                history,
             );
-            crate::session::attach::record_event("listener", &event);
             super::interface::messages::remember_last(text);
             true
         })
@@ -520,7 +521,7 @@ pub(super) fn diagnostics(updates: &[super::render::DiagnosticUpdate]) {
 }
 
 /// Decode outside the State lock; preview failures do not alter native output.
-pub(crate) fn image(block: &serde_json::Value) {
+pub(crate) fn image(block: &serde_json::Value, source: crate::runtime::call_scope::DisplaySource) {
     let Some(shared) = shared() else {
         return;
     };
@@ -541,7 +542,12 @@ pub(crate) fn image(block: &serde_json::Value) {
         }
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.image(preview, block["mimeType"].as_str().unwrap_or("image"));
+    state.sync_history_owner();
+    state.image(
+        preview,
+        block["mimeType"].as_str().unwrap_or("image"),
+        Some(source),
+    );
 }
 
 /// Every PTY has its own parser, including terminals that are not on screen.
@@ -714,6 +720,16 @@ pub(crate) fn notice(message: &str) {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.notice = Some(panel::safe_text(message).chars().take(240).collect());
         state.dirty = true;
+    }
+}
+
+pub(crate) fn follow_attach_history(owner: Option<super::interface::history::HistoryId>) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.follow_attach_history(owner);
     }
 }
 
@@ -1373,6 +1389,8 @@ struct State {
     geometry: Geometry,
     logs: vt100::Parser,
     events: events::EventView,
+    // Attached frontends can have an unknown history before the first page or with a legacy peer.
+    attached_history: Option<Option<super::interface::history::HistoryId>>,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -1406,6 +1424,7 @@ impl State {
         let conversation = conversation::Conversation::default();
         let mut state = Self {
             events: events::EventView::new(),
+            attached_history: None,
             context_label: String::new(),
             server_origin: None,
             connection_versions: None,
@@ -1549,23 +1568,37 @@ impl State {
         }
         replies
     }
-    fn image(&mut self, preview: images::Preview, mime: &str) {
+    fn image(
+        &mut self,
+        preview: images::Preview,
+        mime: &str,
+        source: Option<crate::runtime::call_scope::DisplaySource>,
+    ) {
         let text = format!(
             "\n[IMAGE] {} × {} · {}\n  Image attachment\n\n",
             preview.width, preview.height, mime
         );
-        self.log(text.as_bytes());
-        self.events.attach_image(preview);
+        self.events.ingest_image(text.as_bytes(), preview, source);
+        self.log_raw(text.as_bytes());
     }
 
     fn log(&mut self, bytes: &[u8]) {
         self.events.ingest(bytes);
         self.log_raw(bytes);
     }
+    fn follow_attach_history(&mut self, owner: Option<super::interface::history::HistoryId>) {
+        if self.attached_history.as_ref() != Some(&owner) {
+            self.events.set_history_owner(owner.clone());
+            self.attached_history = Some(owner);
+            self.dirty = true;
+        }
+    }
+
     fn sync_history_owner(&mut self) {
-        if !self.preview {
+        if !self.preview && self.attached_history.is_none() {
+            let owner = super::interface::history::current_owner();
             self.events
-                .set_history_owner(super::interface::history::current_owner());
+                .set_history_owner(owner.map(|owner| owner.display_id()));
         }
     }
 
@@ -1582,9 +1615,10 @@ impl State {
         self.log_raw(bytes);
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
-        if !self.preview {
+        if !self.preview && self.attached_history.is_none() {
             let owner = super::interface::history::capture(None).ok();
-            self.events.set_history_owner(owner);
+            self.events
+                .set_history_owner(owner.map(|owner| owner.display_id()));
         }
         self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
@@ -1594,7 +1628,7 @@ impl State {
         label: &str,
         value: &serde_json::Value,
         bytes: &[u8],
-        source: crate::runtime::call_scope::Source,
+        source: crate::runtime::call_scope::DisplaySource,
     ) {
         self.sync_history_owner();
         self.events.ingest_scoped_event(label, value, bytes, source);
@@ -3137,7 +3171,7 @@ mod tests {
         );
         let rejected = images::decode(&block, state.graphics.prepare_native()).unwrap();
         let rejected_id = rejected.native.as_ref().unwrap().id();
-        state.image(rejected, "image/png");
+        state.image(rejected, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -3145,7 +3179,7 @@ mod tests {
             "explicitly expand the compact image preview"
         );
         let retained = images::decode(&block, state.graphics.prepare_native()).unwrap();
-        state.image(retained, "image/png");
+        state.image(retained, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -3185,7 +3219,7 @@ mod tests {
         let next = images::decode(&block, state.graphics.prepare_native()).unwrap();
         assert!(next.native.is_some());
         let next_id = next.native.as_ref().unwrap().id();
-        state.image(next, "image/png");
+        state.image(next, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
@@ -3330,7 +3364,7 @@ mod tests {
             "data":STANDARD.encode(bytes.into_inner()),
         });
         let image = images::decode(&block, state.graphics.prepare_native()).unwrap();
-        state.image(image, "image/png");
+        state.image(image, "image/png", None);
         state.events.set_scope(events::EventScope::Conversation);
         state.events.latest();
         assert!(
