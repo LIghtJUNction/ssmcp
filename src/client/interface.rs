@@ -516,6 +516,11 @@ pub(crate) async fn call(
         .await
         .map_err(|_| "message storage worker stopped".to_owned())?;
     }
+    if name == "ssmcp.ui.history_archive" {
+        return tokio::task::spawn_blocking(move || history::archive::call(arguments))
+            .await
+            .map_err(|_| "history archive worker stopped".to_owned())?;
+    }
     if name == "ssmcp.ui.history" {
         // Search may inspect retained files; it must not hold the display lock
         // or block the async runtime while doing disk I/O.
@@ -612,6 +617,7 @@ pub(crate) fn tools() -> Vec<Value> {
         json!({"name":"ssmcp.ui.action","description":"Perform one display action. reload validates and reloads appearance only (F5); use ssmcp.client.reload for a process restart. save persists current appearance. logs.clear clears visible history, leaving audit events intact.","inputSchema":{"type":"object","required":["action"],"additionalProperties":false,"properties":{"action":{"type":"string","enum":ACTIONS}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ].into_iter().chain(questions::tools())
     .chain(std::iter::once(history::tool()))
+    .chain(std::iter::once(history::archive::tool()))
     .chain(std::iter::once(harness::tool()))
     .chain(std::iter::once(super::presentation::tool())).collect()
 }
