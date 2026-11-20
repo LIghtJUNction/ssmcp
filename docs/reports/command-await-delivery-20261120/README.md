@@ -2,7 +2,15 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-20 22:16 UTC）
+## 当前状态（截至 2026-11-20 22:45 UTC）
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 的公开头为 [`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58)，仍为 draft、未合并。[Session service CI 44829555014](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014) 已于 22:36:52 UTC 完成，Linux、Windows、macOS 三个平台全部成功。独立完整日志复核确认了各自的精确 checkout 与实际测试结果；781 的 Linux 外层库批次为 2034 通过、0 失败、23 忽略，38.29 秒。下方 441 的 30.44 秒结果保留为历史，不迁移到新提交。
+
+开发机固定 441 的库和 release 编译均退出 0，随后在保留 release 产物时失败，尚未形成可验收的五份产物。相关修正正处理实际链接产物与保留副本的字节绑定。18 项定向检查已准备但未执行，实际 `--input none` 进程重执行、粘贴 A/B、最终 P1 和正式发布仍待完成。
+
+显式路径版[发布核验工具](https://github.com/LIghtJUNction/ssmcp/blob/90a83b0b74d7553d9c34470c96f5a3233d984b74/docs/reports/command-await-delivery-20261120/publication-verifier/README.md) 已有固定文档提交与经主审实际回读的 [Drive 副本](https://drive.google.com/file/d/1vqDINv8cGfEt2r3NzpE8jSIn3JT-S_If/view?usp=drivesdk)，当前证据仅覆盖语法及本地参数/路径边界。完整来源与范围见[结构化检查点](integration-checkpoint-2241.json)。以下旧时间点均按原状态保留。
+
+## 历史状态（截至 2026-11-20 22:16 UTC）
 
 固定源码 [`441814bf`](https://github.com/LIghtJUNction/ssmcp/commit/441814bf9945e0b49bb3dde170e57762abf8318e) 的 [Session service CI 44826521363](https://github.com/LIghtJUNction/ssmcp/actions/runs/44826521363) 已于 22:15:37 UTC 完成，Linux、Windows、macOS 三个 job 全部成功。Linux 该次库测试实际为 2034 通过、0 失败、23 忽略，30.44 秒；Windows/macOS 的 session、protocol、构建和 native lifecycle 步骤均成功。本结果只归属于这份源码和本次 CI，旧 c248 失败及其计数继续保留原归属。
 
@@ -394,3 +402,43 @@ Linux 三个失败分别是 Agents 列表头右键没有切到 Logs、48 列时�
 Linux 完整原日志的独立复核确认了精确 checkout 与上述外层计数，三个嵌套子进程的单项摘要没有重复相加。新增 `disabled_chat_keeps_the_outbox_and_advances_reload_without_queue_commands`，以及此前失败的滚动列表鼠标选择、实时钟行、统一页脚三个回归，均在 441 原日志中明确显示 `ok`。`--input none` 的这条回归证据因此已从源码审查推进到固定 441 的真实库测试通过；实际进程重执行、粘贴 A/B 和最终 P1 仍未完成。Windows/macOS 此处不沿用 c248 的旧测试数量。
 
 开发机另在 22:15:38 UTC 实读确认：目标构建锁已取得，源码、metadata 和依赖身份检查已完成，库 `--no-run` 编译自 22:14:50 UTC 起实际运行。尚无完整五份产物或开发机产品测试通过回执；因此本次 CI 成功与后续产物验收继续分开记录。
+
+## 22:45 检查点：781 CI 通过，开发机产物保留仍待修正
+
+### 781 的打包补充与实际 CI 结果
+
+[`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58) 的父提交为 441，tree 为 `6bf7beb143cfdce3878df856c27785164695430f`。完整补丁只在 `Cargo.toml` 的打包清单增加三行，纳入已有的 `docs/local-mode.md`、`scripts/e2e_local_socket.py` 和 `scripts/e2e_connection_context_reload.py`。
+
+[运行 44829555014](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014) 的三平台 fmt、严格 Clippy、构建和 native lifecycle 均成功；实际测试结果如下。Linux 的独立 session/protocol 步骤按平台分工跳过，Windows/macOS 的 Linux 工作区步骤跳过。
+
+| 平台与 job | 本次 Rust 测试结果 | native lifecycle PASS 记录 |
+| --- | --- | --- |
+| [Linux / 136610732045](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014/job/136610732045) | 外层库批次 2034 通过、0 失败、23 忽略、0 筛除，38.29 秒 | 42 |
+| [Windows / 136610731818](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014/job/136610731818) | session 52 通过，0.43 秒；protocol 10 通过，1.87 秒；均 0 失败、0 忽略 | 41 |
+| [macOS / 136610731721](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014/job/136610731721) | session 58 通过，0.29 秒；protocol 10 通过，4.80 秒；均 0 失败、0 忽略 | 40 |
+
+三份完整工具日志的独立复核确认了精确 checkout；Linux 三个嵌套单项摘要未加到外层计数，lifecycle 的 PASS 记录也不与 Rust 测试数相加。三份原始 artifact ZIP 均已实际下载并匹配 GitHub digest，报告为 passed、末项登录复用为 PASS。清理后计数均为 login start/poll 各 1、whoami 8、unexpected 0，connect 为 Linux 24、Windows 20、macOS 14；它们仍是清理后的最终文件，不是断言瞬间另存的快照。各 ZIP 身份见结构化记录。
+
+### 441 开发机构建的真实停止点
+
+主审实际读取的构建回执为 50,281 字节，SHA256 `5c3f2c3c971d7fbf908078997edb370a0345ca9cd850ee205226e665ffca9864`。库和 release 的 Cargo 编译均退出 0，失败阶段为 `preserve-build-release-bins`，原错误为 `expected one actual source-matched link compilation for ssmcp, got 0`。保留脚本只认可 release 根目录或 `release/deps`，实际链接输出位于 `release/build/ssmcp/<hash>/out`。
+
+当次只保留一份库测试产物，165,523,552 字节，SHA256 `26344a306712b6ff7db048d7f75cbaed95f15bee0b58ff48db48f4013418a7cd`；decoder 未构建，产品测试、基准及发布核验均未执行。回执记录了两把锁的释放时间。旧 r3 未供后续验收消费；r4 正补齐“实际链接输出 → 对外产物 → 保留副本”的字节绑定，不清缓存、不改全局 wrapper。22:34 的最后阶段观察中，781 开发机新基线尚未启动。18 项准备项为 6 + 11 + 1 项真实 none 重执行，仍待执行；6733 粘贴补丁尚未应用，未产生 A/B 结果。
+
+### 发布核验工具的路径修正
+
+[`90a83b0b` 中的工具](https://github.com/LIghtJUNction/ssmcp/blob/90a83b0b74d7553d9c34470c96f5a3233d984b74/docs/reports/command-await-delivery-20261120/publication-verifier/verify_published_candidate.py) 为 30,229 字节，SHA256 `27804d3605f2d0eecf8434100a193a89829dd7324b6150da5036cafc8bbd0755`；新增必填 `--checkout`、`--report-dir`，保留 candidate/run_id。公开[局部核验记录](https://github.com/LIghtJUNction/ssmcp/blob/90a83b0b74d7553d9c34470c96f5a3233d984b74/docs/reports/command-await-delivery-20261120/publication-verifier/path-argument-validation.json) 记载 12 个核心函数 AST 不变，main 中从报告构造起的发布核验后缀逐字不变；仍要求 tag push 对应的正式发布 run。
+
+[Drive 副本](https://drive.google.com/file/d/1vqDINv8cGfEt2r3NzpE8jSIn3JT-S_If/view?usp=drivesdk) 已由主审实际下载并确认字节数、SHA256 及逐字节相等。本次范围为语法和本地参数/路径检查，原完整 schema 套件未重跑，未执行网络发布核验，也不产生 v0.10.21 已发布结论。
+
+### 781 CI 证据归档
+
+三份工具日志、三份原始 ZIP 和三份提取报告均已保存。日志及 ZIP 的六份 Drive 副本均已实际下载，与各自原件逐字节相等；提取报告保留独立原件，也随对应 ZIP 完整保全。
+
+| 平台 | 工具日志（Drive） | 原始 ZIP（Drive） | 报告原件 |
+| --- | --- | --- | --- |
+| Linux | [887,092 B](https://drive.google.com/file/d/1FhSvSdXLCusjSy2wsQuspFCMLSHjdbnw/view?usp=drivesdk) | [1,423 B](https://drive.google.com/file/d/1wdd3yKdL-e7VyySUq-YyxHWhmGfB9OKa/view?usp=drivesdk) | [3,763 B](https://chatgpt.com/library?file_id=libfile_fde3_f-ee7a5b362f808191938eb546204e7409_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) |
+| Windows | [107,290 B](https://drive.google.com/file/d/1V9eF2Cq7QyLxqaKHRcmWz6jfYt7bgGw0/view?usp=drivesdk) | [1,475 B](https://drive.google.com/file/d/1aRT2J87bSpD1XBmULxNbS2IxI0GwFoWI/view?usp=drivesdk) | [3,770 B](https://chatgpt.com/library?file_id=libfile_fde3_f-59f9c339c4648191bcacee2f27c9a31c_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) |
+| macOS | [104,480 B](https://drive.google.com/file/d/1wyKVW6FUFk6AKMbsWyKE6fs9Ety7fZqD/view?usp=drivesdk) | [1,414 B](https://drive.google.com/file/d/1qLWyaOM0MHrxQ9l62-vm7cwjWDAtA_ov/view?usp=drivesdk) | [3,670 B](https://chatgpt.com/library?file_id=libfile_fde3_f-4c994b83bbb48191b116b26b65175926_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) |
+
+日志身份以 GitHub 工具返回的解码文本经 UTF-8 保存后的字节为准：三者均保留 BOM，Linux/macOS 保留 LF，Windows 保留 CRLF。ZIP 身份以实际下载字节为准。完整 SHA256、原保存标识、版本 0 及回读范围见[结构化检查点](integration-checkpoint-2241.json)。这些归档证明本次 CI 证据已保全，不扩展为开发机重执行、粘贴 A/B、P1 或正式发布结果。
