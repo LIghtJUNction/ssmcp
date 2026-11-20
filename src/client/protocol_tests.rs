@@ -2,12 +2,29 @@
 //! No backend, installed coding harness, network, credentials, or model is used.
 use super::*;
 use serde_json::Value;
-use std::{cell::Cell, fs, path::Path, process::Stdio};
+use std::{
+    cell::Cell,
+    fs,
+    io::{Read, Write},
+    path::Path,
+    process::Stdio,
+};
 
 const PEER: &str = r#"
-import json, os, pathlib, sys, time
-root = pathlib.Path(os.environ["SSMCP_PROTOCOL_FIXTURE"])
+import os, sys
+fixture = os.environ["SSMCP_PROTOCOL_FIXTURE"]
 scenario = os.environ["SSMCP_PROTOCOL_SCENARIO"]
+
+def trace(stage):
+    try:
+        with open(os.path.join(fixture, "startup.log"), "a", encoding="utf-8") as log:
+            log.write(f"{scenario}: {stage}\n")
+    except OSError:
+        pass
+
+trace(f"peer started ({sys.executable!r})")
+import json, pathlib, time
+root = pathlib.Path(fixture)
 # A reconnect cannot register while the previous rejected subprocess is alive.
 lease = open(root / "ssh-owner.lock", "a+b")
 if os.name == "nt":
@@ -19,14 +36,20 @@ if os.name == "nt":
 else:
     import fcntl
     fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+trace("lease acquired")
 
 hello = json.loads(sys.stdin.readline())
 assert hello["type"] == "hello"
+trace("Hello received")
 with open(root / "hellos.jsonl", "a", encoding="utf-8") as recorded:
     recorded.write(json.dumps(hello) + "\n")
 
+def respond(frame):
+    trace("response about to be sent")
+    print(frame, flush=True)
+
 def reject(message):
-    print(json.dumps({"type":"reject", "message":message}), flush=True)
+    respond(json.dumps({"type":"reject", "message":message}))
     # The client must terminate and reap this process before a later reconnect.
     time.sleep(60)
     raise SystemExit(2)
@@ -45,15 +68,16 @@ if scenario == "near-match":
 if scenario == "case-variant":
     reject("Unsupported ssmcp wire protocol")
 if scenario == "stderr-only":
+    trace("stderr about to be sent")
     print(unsupported, file=sys.stderr, flush=True)
     raise SystemExit(0)
 if scenario == "eof":
     raise SystemExit(0)
 if scenario == "malformed":
-    print('{"type":', flush=True)
+    respond('{"type":')
     raise SystemExit(0)
 if scenario == "wrong-frame":
-    print(json.dumps({"type":"reply", "id":1, "result":{"Err":unsupported}}), flush=True)
+    respond(json.dumps({"type":"reply", "id":1, "result":{"Err":unsupported}}))
     raise SystemExit(0)
 if scenario == "timeout":
     time.sleep(60)
@@ -91,9 +115,9 @@ elif scenario == "no-login":
     code, ttl = "", 600
 elif scenario == "no-expiry":
     code, ttl = "a" * 64, 0
-print(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
-                  "login_code":code, "login_expires_in":ttl, "client_id":"b"*64,
-                  **({"capabilities":capabilities} if capabilities else {})}), flush=True)
+respond(json.dumps({"type":"ready", "url":"https://fixture.invalid/mcp",
+                    "login_code":code, "login_expires_in":ttl, "client_id":"b"*64,
+                    **({"capabilities":capabilities} if capabilities else {})}))
 # Keep registration live until its test explicitly performs normal cleanup.
 sys.stdin.read()
 "#;
@@ -124,6 +148,13 @@ impl Fixture {
     }
 
     fn command(&self, scenario: &str) -> Command {
+        if let Ok(mut log) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.directory.join("startup.log"))
+        {
+            let _ = writeln!(log, "{scenario}: selected Python {:?}", self.python);
+        }
         let mut command = Command::new(&self.python);
         command
             .args(["-u", "-c", PEER])
@@ -166,7 +197,29 @@ impl Fixture {
             deadline,
         )
         .await;
+        self.report_registration(scenario, &result);
         (result, count.get())
+    }
+
+    fn report_registration(&self, scenario: &str, result: &crate::Result<Option<RegisteredSsh>>) {
+        let outcome = result.as_ref().map(|registration| {
+            if registration.is_some() {
+                "Ready"
+            } else {
+                "cancelled"
+            }
+        });
+        let mut trace = Vec::new();
+        let trace_read = fs::File::open(self.directory.join("startup.log"))
+            .and_then(|file| file.take(4096).read_to_end(&mut trace));
+        // The test harness includes this output on failure, even if a later assertion
+        // panics before inspecting the registration result.
+        eprintln!(
+            "protocol fixture {:?}, Python {:?}, scenario {scenario}: registration {outcome:?}\nstartup trace (up to 4096 bytes, read {trace_read:?}):\n{}",
+            self.directory,
+            self.python,
+            String::from_utf8_lossy(&trace),
+        );
     }
 
     fn hellos(&self) -> Vec<Value> {
@@ -435,8 +488,9 @@ async fn cancelled_registration_does_not_start_a_transport() {
         std::future::ready(()),
         READY_LIMIT,
     )
-    .await
-    .unwrap();
+    .await;
+    fixture.report_registration("current", &result);
+    let result = result.unwrap();
     assert!(result.is_none());
     assert_eq!(attempts.get(), 0);
     assert!(!registered);
@@ -467,6 +521,7 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
             READY_LIMIT,
         )
         .await;
+        fixture.report_registration(scenario, &result);
         assert_eq!(fixture.hellos().len(), 1);
         assert!(fixture.hellos()[0]["metadata"].get("allow").is_none());
         if valid {
@@ -498,9 +553,9 @@ async fn account_compat_accepts_only_self_owned_ready_and_reaps_rejected_peers()
                 std::future::pending(),
                 READY_LIMIT,
             )
-            .await
-            .unwrap()
-            .unwrap();
+            .await;
+            fixture.report_registration("compat-self", &registration);
+            let registration = registration.unwrap().unwrap();
             close(registration).await;
         }
     }
