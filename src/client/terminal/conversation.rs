@@ -10,6 +10,7 @@ mod history;
 mod listener;
 mod login;
 pub(super) mod logout;
+mod messaging;
 mod paste;
 mod questions;
 mod queue;
@@ -66,6 +67,7 @@ struct InputStamp {
     view: View,
     question: Option<String>,
     target: Option<String>,
+    native_recipient: Option<String>,
     editing: Option<String>,
     text: String,
     cursor: usize,
@@ -94,6 +96,14 @@ pub(super) struct Conversation {
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
+    native_recipient: Option<String>,
+    native_account: Option<(String, String)>,
+    native_pending: Option<messaging::Pending>,
+    native_retry: Option<messaging::Pending>,
+    native_last: Option<Value>,
+    native_refreshed: bool,
+    #[cfg(test)]
+    native_fixture: Option<Value>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
     recalling: Option<String>,
@@ -137,7 +147,7 @@ impl Conversation {
         json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
-            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
+            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
@@ -204,17 +214,19 @@ fn recipients(value: &Value, observed: &[crate::client::render::CallerGroup]) ->
 }
 
 fn agent_key(value: &Value) -> String {
-    if field(value, "kind") == "observed" {
-        format!("caller:{}", field(value, "key"))
-    } else {
-        format!("member:{}", field(value, "agent_id"))
+    match field(value, "kind") {
+        "observed" => format!("caller:{}", field(value, "key")),
+        "native" => format!("native:{}", field(value, "id")),
+        _ => format!("member:{}", field(value, "agent_id")),
     }
 }
 
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        recipients(data, &self.caller_tracker.groups(&observed, data))
+        let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        entries.extend(self.chat_native_entries());
+        entries
     }
 
     fn chat_saved_draft(&self) -> steering::SavedDraft {
@@ -222,6 +234,7 @@ impl State {
             text: self.conversation.composer.text().into(),
             cursor: self.conversation.composer.cursor(),
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
         }
     }
 
@@ -231,6 +244,8 @@ impl State {
             && self.conversation.composer.left()
         {}
         self.conversation.target = draft.target;
+        self.conversation.native_recipient = draft.native_recipient;
+        self.conversation.native_account = None;
     }
 
     pub(super) fn chat_data(&self) -> Value {
@@ -322,6 +337,8 @@ impl State {
             self.conversation.composer.set_text(&text);
         }
         self.conversation.target = target;
+        self.conversation.native_recipient = None;
+        self.conversation.native_account = None;
         self.conversation.editing = Some(id);
         self.conversation.content_focus = false;
         self.notice = Some("Editing · this request is held until you press Enter".into());
@@ -339,11 +356,13 @@ impl State {
                 text,
                 cursor,
                 target: context.target,
+                native_recipient: context.native_recipient,
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
             self.conversation.restored = true;
         }
+        self.chat_poll_native();
         if self.preview {
             return;
         }
@@ -426,6 +445,7 @@ impl State {
                 editing: self.conversation.editing.clone(),
                 target: self.conversation.target.clone(),
                 parked: self.conversation.parked.clone(),
+                native_recipient: self.conversation.native_recipient.clone(),
             });
         }
     }
@@ -456,14 +476,25 @@ impl State {
     }
 
     fn chat_select_target(&mut self) {
+        self.chat_native_refresh();
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
-        let target = self.conversation.target.as_deref().unwrap_or("next");
-        self.conversation.selected = entries
-            .iter()
-            .position(|entry| field(entry, "agent_id") == target)
-            .unwrap_or(0);
-        self.conversation.selected_agent = entries.get(self.conversation.selected).map(agent_key);
+        if let Some(id) = &self.conversation.native_recipient {
+            let key = format!("native:{id}");
+            self.conversation.selected = entries
+                .iter()
+                .position(|entry| agent_key(entry) == key)
+                .unwrap_or(0);
+            self.conversation.selected_agent = Some(key);
+        } else {
+            let target = self.conversation.target.as_deref().unwrap_or("next");
+            self.conversation.selected = entries
+                .iter()
+                .position(|entry| field(entry, "agent_id") == target)
+                .unwrap_or(0);
+            self.conversation.selected_agent =
+                entries.get(self.conversation.selected).map(agent_key);
+        }
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
@@ -501,6 +532,7 @@ impl State {
                 self.help = true;
                 self.conversation.content_focus = true;
             }
+            "/message" | "/recipients" => self.chat_native_picker(rest)?,
             "/paste" => {
                 if !rest.is_empty() {
                     return Err("Use /paste without arguments to read your local clipboard".into());
@@ -720,7 +752,9 @@ impl State {
             && !self.selection
             && !self.help
             && self.conversation.view != View::Questions
-            && !self.conversation.content_focus;
+            && !self.conversation.content_focus
+            && self.conversation.native_recipient.is_none()
+            && !self.chat_native_has_mention();
         self.conversation.composer.refresh_completions(enabled);
     }
 
@@ -788,7 +822,7 @@ impl State {
             self.dirty = true;
             return;
         }
-        if user_wait::arguments(&text).is_some() {
+        if self.conversation.native_recipient.is_none() && user_wait::arguments(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }
@@ -801,6 +835,9 @@ impl State {
             return;
         }
         if self.chat_wait_for_input() {
+            return;
+        }
+        if self.chat_native_pick_mention(&text) {
             return;
         }
         self.chat_refresh_completions();
@@ -843,14 +880,14 @@ impl State {
         if text.trim().is_empty() {
             return;
         }
-        if listener::body(&text).is_some() {
+        if self.conversation.native_recipient.is_none() && listener::body(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }
             // Force-send retains the exact draft until an accepted receipt.
             return;
         }
-        if self.conversation.editing.is_none() {
+        if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
                     if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
@@ -864,6 +901,10 @@ impl State {
                 }
                 Ok(false) => {}
             }
+        }
+        if self.conversation.native_recipient.is_some() {
+            self.chat_native_submit(&text);
+            return;
         }
         if self.preview {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
@@ -929,6 +970,12 @@ impl State {
                         }
                         return;
                     }
+                    if field(&agent, "kind") == "native" {
+                        self.chat_native_select(&agent);
+                        return;
+                    }
+                    self.conversation.native_recipient = None;
+                    self.conversation.native_account = None;
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
                     self.chat_change_view(View::Activity);
@@ -1789,6 +1836,7 @@ impl State {
                 None
             },
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
             editing: self.conversation.editing.clone(),
             text: editor.text().into(),
             cursor: editor.cursor(),
@@ -2225,6 +2273,9 @@ impl State {
                 ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
             ];
         };
+        if field(selected, "kind") == "native" {
+            return self.chat_native_details(selected);
+        }
         let observed = field(selected, "kind") == "observed";
         let next = field(selected, "agent_id") == "next";
         let mut details = vec![
@@ -2310,7 +2361,7 @@ impl State {
                     PanelTone::Normal,
                 ),
             ]);
-            if id == target {
+            if id == target && self.conversation.native_recipient.is_none() {
                 details.push(("● Current recipient".into(), PanelTone::Accent));
             }
             details.extend([
@@ -2376,10 +2427,20 @@ impl State {
             .filter(|entry| field(entry, "kind") == "observed")
             .count();
         let mut rows = vec![self.chat_line(
-            &format!(
-                "  Agents · {} members · {callers} callers",
-                items(data, "agents").len()
-            ),
+            &if entries.iter().any(|entry| field(entry, "kind") == "native") {
+                format!(
+                    "  Recipients · {} native inboxes / agents",
+                    entries
+                        .iter()
+                        .filter(|entry| field(entry, "kind") == "native")
+                        .count()
+                )
+            } else {
+                format!(
+                    "  Agents · {} members · {callers} callers",
+                    items(data, "agents").len()
+                )
+            },
             PanelTone::Heading,
             list_width,
         )];
@@ -2391,7 +2452,14 @@ impl State {
             } else {
                 " "
             };
-            let current = !observed && field(entry, "agent_id") == target;
+            let native = field(entry, "kind") == "native";
+            let current = if native {
+                self.conversation.native_recipient.as_deref() == Some(field(entry, "id"))
+            } else {
+                !observed
+                    && self.conversation.native_recipient.is_none()
+                    && field(entry, "agent_id") == target
+            };
             let symbol = if current {
                 "● "
             } else if observed {
@@ -2408,7 +2476,17 @@ impl State {
             } else {
                 format!(" {marker} {symbol}{}", field(entry, "name"))
             };
-            let subtitle = if observed {
+            let subtitle = if native {
+                format!(
+                    "     {} · {}",
+                    if field(entry, "native_kind") == "account_inbox" {
+                        "Inbox"
+                    } else {
+                        "Verified agent"
+                    },
+                    panel::safe_text(field(&entry["account"], "login"))
+                )
+            } else if observed {
                 format!("     {} calls · {}", entry["calls"], field(entry, "status"))
             } else if field(entry, "agent_id") == "next" {
                 "     Next eligible response".into()
@@ -2622,6 +2700,11 @@ impl State {
         {
             prompt.lines[0] =
                 self.chat_input_line(&format!("❯ {}", self.question_input_hint()), g.left);
+        } else if self.conversation.native_recipient.is_some()
+            && input.is_empty()
+            && !prompt.lines.is_empty()
+        {
+            prompt.lines[0] = self.chat_input_line("❯ Message text · Enter sends", g.left);
         }
         self.conversation.reference_stamp = Some(reference_stamp);
         self.conversation.reference_rows = std::mem::take(&mut prompt.references)
@@ -2644,6 +2727,9 @@ impl State {
                     .unwrap_or_else(|| "offline recipient".into())
             })
             .unwrap_or_else(|| "next caller".into());
+        if let Some(native_label) = self.chat_native_label() {
+            label = native_label;
+        }
         if self.conversation.view == View::Questions {
             label = self
                 .conversation
@@ -2660,10 +2746,12 @@ impl State {
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
+                let native_hint = self.chat_native_hint();
                 let priority_hint = self.notice.is_some()
                     || scroll_hint.is_some()
                     || wait_hint.is_some()
-                    || paste_hint.is_some();
+                    || paste_hint.is_some()
+                    || native_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2672,6 +2760,7 @@ impl State {
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
+                    if let Some(hint) = native_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
@@ -4075,6 +4164,7 @@ mod tests {
             text: "界x\\".into(),
             cursor: "界".len(),
             target: None,
+            native_recipient: None,
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界x\\");
@@ -4083,6 +4173,7 @@ mod tests {
             text: "界\\tail".into(),
             cursor: "界\\".len(),
             target: None,
+            native_recipient: None,
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界\ntail");
@@ -4166,6 +4257,7 @@ mod tests {
             text: "继续review".into(),
             cursor: "继续re".len(),
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.chat_restore_draft(original.clone());
         state.conversation.view = View::Queue;
@@ -4355,6 +4447,7 @@ mod tests {
             text: "原稿 A".into(),
             cursor: "原".len(),
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.conversation.parked = Some(parked.clone());
         state.conversation.editing = Some("request_b".into());
@@ -4645,6 +4738,7 @@ mod tests {
             text: "parked request".into(),
             cursor: 6,
             target: None,
+            native_recipient: None,
         });
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.composer.text(), "/re");
@@ -4790,6 +4884,7 @@ mod tests {
             text: "previous draft".into(),
             cursor: 4,
             target: Some("example-reviewer".into()),
+            native_recipient: None,
         };
         state.conversation.parked = Some(parked.clone());
         let queue = state.chat_data()["queue"].clone();
