@@ -63,6 +63,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.ui.listener",
     "ssmcp.ui.wait",
     "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.answer", "ssmcp.ui.finish", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.history", "ssmcp.ui.harness",
+    "ssmcp.ui.history_archive", "ssmcp.ui.history_update",
     "ssmcp.browser.discover",
     "ssmcp.browser.status",
     "ssmcp.browser.launch",
