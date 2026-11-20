@@ -1,5 +1,6 @@
 //! Re-execute the installed client entry point after an acknowledged reload.
 use crate::wire::Operation;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 #[cfg(unix)]
 use std::os::unix::{
@@ -43,6 +44,60 @@ pub(crate) fn acknowledgement(client_id: &str, github_auth: bool) -> Value {
         "background_jobs":"stopped",
         "next_step":"Call list again and select the new client ID by title, name and cwd."
     }))
+}
+
+/// The active conversation is a local history identity, never a server client
+/// or agent identity. The existing private outbox handoff owns this checkpoint.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SessionState {
+    conversation_id: Option<String>,
+    terminal: Option<super::terminal::ReloadState>,
+}
+
+impl SessionState {
+    pub(super) fn capture() -> Result<Self, String> {
+        let state = Self {
+            conversation_id: super::interface::history::current()?
+                .map(|conversation| conversation.metadata.id),
+            terminal: super::terminal::reload_snapshot(),
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self
+            .conversation_id
+            .as_ref()
+            .is_some_and(|id| id.len() > 128 || id.chars().any(char::is_control))
+        {
+            return Err("invalid reload conversation identity".into());
+        }
+        if let Some(terminal) = &self.terminal {
+            terminal.validate()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn restore(self) {
+        let (restored, notice) = match self.conversation_id.as_deref() {
+            Some(id) => match super::interface::history::resume(id) {
+                Ok(_) => (true, None),
+                Err(error) => (
+                    false,
+                    Some(format!(
+                        "Could not restore conversation: {error} · use /resume to choose history"
+                    )),
+                ),
+            },
+            None => (false, None),
+        };
+        if let Some(notice) = &notice {
+            super::render::status("shell", "Warning", notice);
+        }
+        super::terminal::restore_reload(self.terminal, restored, notice);
+    }
 }
 
 pub(crate) struct Restart {
@@ -110,6 +165,7 @@ impl Restart {
         command.args(&self.arguments).current_dir(&self.cwd);
         let _resume = output.prepare_reload(&mut command)?;
         let _steering = super::steering::prepare_reload(&mut command)?;
+        super::interface::history::release_current()?;
         #[cfg(windows)]
         {
             // Windows has no exec. All old backends have already stopped; keep

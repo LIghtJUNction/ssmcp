@@ -392,6 +392,34 @@ impl Event {
     }
 }
 
+/// Row offsets survive text rehydration; transient event IDs and call scopes do not.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReloadPosition {
+    scroll: usize,
+    follow: bool,
+}
+
+impl ReloadPosition {
+    pub(super) fn position(&self) -> EventPosition {
+        EventPosition {
+            scroll: self.scroll,
+            follow: self.follow,
+            reveal: false,
+            ..EventPosition::default()
+        }
+    }
+}
+
+impl EventPosition {
+    pub(super) fn for_reload(&self) -> ReloadPosition {
+        ReloadPosition {
+            scroll: self.scroll,
+            follow: self.follow,
+        }
+    }
+}
+
 /// A canvas column keeps only its reading position, never another event store.
 #[derive(Clone, Debug)]
 pub(super) struct EventPosition {

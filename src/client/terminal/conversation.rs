@@ -16,6 +16,7 @@ mod paste;
 mod questions;
 mod queue;
 mod receipts;
+pub(super) mod reload_state;
 mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
@@ -25,7 +26,7 @@ mod user_wait;
 const EXIT_CONFIRMATION: &str =
     "Press Ctrl+C again to exit · any other key keeps this session open";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(super) enum View {
     #[default]
     Activity,
@@ -130,6 +131,7 @@ pub(super) struct Conversation {
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
+    reload_input_history: Option<crate::client::composer::InputHistory>,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
     finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
@@ -383,6 +385,7 @@ impl State {
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
+            self.chat_restore_reload_input();
             self.conversation.restored = true;
             self.chat_restore_interrupted_force_send();
         }

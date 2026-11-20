@@ -929,6 +929,21 @@ pub(crate) fn remember_delivered_request(
 pub(crate) fn current() -> Result<Option<Conversation>, String> {
     with(|history| history.current())
 }
+
+impl History {
+    fn release_current(&mut self) {
+        self.active = None;
+    }
+}
+
+/// Release the parent process lease before its replacement resumes this file.
+/// This is also needed when the platform spawns and waits instead of exec.
+pub(crate) fn release_current() -> Result<(), String> {
+    with(|history| {
+        history.release_current();
+        Ok(())
+    })
+}
 pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
     with(|history| history.sessions())
 }
@@ -1707,6 +1722,30 @@ mod tests {
         assert_eq!(current.messages[0].content, "Current context");
         assert_eq!(history.sessions().unwrap().len(), 2);
         assert_eq!(history.current().unwrap().unwrap(), current);
+    }
+
+    #[test]
+    fn reload_releases_the_live_parent_lease_and_continues_without_replaying_records() {
+        let temp = Temporary::new();
+        let mut parent = temp.history();
+        parent.record("user", "Retained request 界").unwrap();
+        parent.record("assistant", "Retained reply").unwrap();
+        let saved = parent.current().unwrap().unwrap();
+        let mut replacement = temp.history();
+        assert!(replacement.resume(&saved.metadata.id).is_err());
+        parent.release_current();
+        assert!(parent.current().unwrap().is_none());
+        assert_eq!(replacement.resume(&saved.metadata.id).unwrap(), saved);
+        assert_eq!(replacement.current().unwrap().unwrap(), saved);
+        replacement.record("user", "Continue after reload").unwrap();
+        let continued = replacement.current().unwrap().unwrap();
+        assert_eq!(continued.metadata.id, saved.metadata.id);
+        assert_eq!(&continued.messages[..2], &saved.messages);
+        assert_eq!(continued.messages.len(), 3);
+        assert_eq!(replacement.sessions().unwrap().len(), 1);
+        // Keep the parent object alive: spawn-and-wait platforms must not depend
+        // on process exit or dropping the old History object to unlock the file.
+        assert!(parent.current().unwrap().is_none());
     }
 
     #[test]
