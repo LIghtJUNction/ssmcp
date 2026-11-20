@@ -3,9 +3,10 @@ mod delivery;
 mod requests;
 mod workflow;
 pub(crate) use delivery::attach as attach_answers;
+#[cfg(test)]
+pub(crate) use requests::{AgentActor, FinishDecision, FinishView};
 pub(crate) use requests::{
-    AgentActor, AnswerDelivery, DecisionActor, FinishChoice, FinishDecision, FinishStatus,
-    FinishView, QuestionKind, QuestionView,
+    AnswerDelivery, DecisionActor, FinishChoice, FinishStatus, QuestionKind, QuestionView,
 };
 use requests::{RequestScope, Routing};
 use serde::{Deserialize, Serialize};
@@ -586,13 +587,6 @@ pub(crate) fn get(id: &str) -> Option<Question> {
         .iter()
         .find(|record| record.question.id == id)
         .map(|record| record.question.clone())
-}
-
-pub(crate) fn pending_views() -> Vec<QuestionView> {
-    retained_views()
-        .into_iter()
-        .filter(|view| view.question.state == QuestionState::Pending)
-        .collect()
 }
 
 /// Local UI projection; native reads apply the verified caller filter separately.
