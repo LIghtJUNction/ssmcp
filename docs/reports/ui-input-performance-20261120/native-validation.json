@@ -4,7 +4,7 @@
   "source_commit": "67d546e7f9c4cfccdefbd15ba0aeb4a7fbbb3567",
   "runner_commit": "e7b78845e2778cf884cd344ee482d2ca95334f9b",
   "runner_commit_changes_production_source": false,
-  "status": "targeted_tests_passed_physical_latency_pending",
+  "status": "targeted_tests_and_patch_pty_passed_final_integration_pending",
   "passed": 19,
   "failed": 0,
   "source_clean_before_and_after": true,
@@ -180,7 +180,21 @@
     "note": "Single observation of the existing primary client; not a before/after comparison. No latency cause or RSS improvement is inferred."
   },
   "pending": [
-    "Physical PTY send/takeback/click latency on the final frozen candidate",
-    "Integrated release acceptance and installation"
-  ]
+    "Final integrated candidate acceptance and release",
+    "Production installation"
+  ],
+  "physical_acceptance": {
+    "binary_source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "harness_source": "0d32db070eb349710339cb94d0e8914a71136c94",
+    "checks": 69,
+    "timing_samples": 8,
+    "all_within_diagnostic_budgets": true,
+    "report": "pty-report.json",
+    "provenance": "validation-provenance.json"
+  },
+  "post_test_formatting": {
+    "source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "source_change": "four exact rustfmt line-wrap replacements in two files",
+    "checks_passed": true
+  }
 }

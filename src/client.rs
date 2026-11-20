@@ -2505,7 +2505,13 @@ async fn connect_inner(
                             })
                         }).await;
                         if let Err(error) = &result {
-                            call_scope.scope(async { render::status("ssmcp", "Error", error); }).await;
+                            call_scope.scope(async {
+                                render::scoped_event(
+                                    "ssmcp",
+                                    &serde_json::json!({"type":"ssmcp.status","level":"Error","message":error}),
+                                    crate::runtime::call_scope::Source::capture(),
+                                );
+                            }).await;
                         }
                         timeout(Duration::from_secs(10),async {
                             let mut writer = writer.lock().await;
