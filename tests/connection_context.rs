@@ -342,10 +342,13 @@ fn context_account_credentials_stay_scoped_to_the_concrete_origin() {
     let home = Home::new();
     home.contexts();
     let foreign = "https://other.example:8443";
-    let file = home
-        .0
-        .join("auth")
-        .join(format!("{:x}.json", Sha256::digest(foreign.as_bytes())));
+    let file = home.0.join("auth").join(format!(
+        "{}.json",
+        Sha256::digest(foreign.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ));
     let credential = json!({"server":foreign,"token":"f".repeat(64),"principal":"alice@github","subject":"123","expires_at":1});
     fs::write(&file, serde_json::to_vec(&credential).unwrap()).unwrap();
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
