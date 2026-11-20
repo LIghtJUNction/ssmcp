@@ -273,7 +273,17 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
                    "listing does not count as work or repeat an already delivered reminder")
         messages_before = self.history_messages()
         first = self.update(group, FIRST)
-        self.frames_for(front, "first-folded", FIRST, 11)
+        self.frames_for(front, "first-folded", FIRST, first["call_count"])
+        # The tool viewport holds twelve rows. Create real overflow before
+        # requiring a wheel gesture to move its internal scroll position.
+        overflow = self.calls(2)
+        self.check(not self.reminders(overflow),
+                   "two calls after the first summary remain below the next reminder threshold")
+        _, overflow_group = self.group(group_id)
+        self.check(overflow_group["call_count"] == first["call_count"] + 2
+                   and overflow_group["covered_call_count"] == first["covered_call_count"]
+                   and overflow_group["call_count"] > 12,
+                   "additional native calls overflow the twelve-row tool viewport")
         self.mouse(front, FIRST, 0)
         self.wait_group(front, group_id, lambda item: item["expanded"], "expand the actual tool group")
         self.mouse(front, FIRST, 65)
@@ -282,7 +292,7 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
             "scroll inside the bounded tool group")
         self.check(self.ui("/display/conversation")["draft"] == self.saved_draft,
                    "expansion and internal scrolling retain the unsent draft and its cursor")
-        second = self.update(first, SECOND)
+        second = self.update(overflow_group, SECOND)
         events_after, visible_after = self.wait_group(
             front, group_id, lambda item: item["summary"] == SECOND,
             "replace the existing visible group summary")
@@ -292,7 +302,7 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         self.check(events_after["retained_events"] == events_before["retained_events"]
                    and self.history_messages() == messages_before,
                    "two summary updates replace metadata without appending chat messages or tool records")
-        self.frames_for(front, "updated-expanded", SECOND, 11)
+        self.frames_for(front, "updated-expanded", SECOND, second["call_count"])
 
         self.native_summary({
             "action": "set", "group_id": group_id, "summary": "stale overwrite",
@@ -316,15 +326,18 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
             })
         _, preserved = self.group(group_id)
         self.check(preserved["summary"] == SECOND and preserved["revision"] == second["revision"]
-                   and preserved["call_count"] == 11 and preserved["covered_call_count"] == 11,
+                   and preserved["call_count"] == second["call_count"]
+                   and preserved["covered_call_count"] == second["covered_call_count"],
                    "stale revisions and a different authenticated agent cannot alter the owner group")
 
         ten_more = self.calls(10)
         self.check(not self.reminders(ten_more), "ten calls after an update remain below the next reminder threshold")
         eleven_more = self.calls(1)
-        self.assert_reminder(eleven_more, second, 22)
+        next_reminder_count = second["call_count"] + 11
+        self.assert_reminder(eleven_more, second, next_reminder_count)
         _, final = self.group(group_id)
-        self.check(final["call_count"] == 22 and final["covered_call_count"] == 11,
+        self.check(final["call_count"] == next_reminder_count
+                   and final["covered_call_count"] == second["covered_call_count"],
                    "only real work advances the group count across both reminder periods")
         renewed = self.update(final, SECOND)
         proactive = self.proactive_update(renewed)
@@ -339,14 +352,15 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         self.check(not self.reminders(forged),
                    "JavaScript return data cannot manufacture a host summary reminder")
         failed = self.failed_calls()
-        self.assert_reminder(failed, proactive, 44)
+        failed_reminder_count = proactive["call_count"] + 11
+        self.assert_reminder(failed, proactive, failed_reminder_count)
         _, after_failures = self.group(group_id)
-        self.check(after_failures["call_count"] == 44,
+        self.check(after_failures["call_count"] == failed_reminder_count,
                    "native errors remain in the same logical group instead of being reset by diagnostics")
         final = self.update(after_failures, "Checked file lookup results")
         self.mouse(front, final["summary"], 0)
         self.wait_group(front, group_id, lambda item: not item["expanded"], "collapse the updated tool group")
-        self.frames_for(front, "final-folded", final["summary"], 44)
+        self.frames_for(front, "final-folded", final["summary"], final["call_count"])
         self.check(self.history_messages() == messages_before,
                    "the summary lifecycle adds no user or assistant chat body")
         return {
