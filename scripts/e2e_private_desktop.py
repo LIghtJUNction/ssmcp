@@ -5,21 +5,24 @@ import argparse
 import json
 import os
 from pathlib import Path
-import selectors
 import shutil
 import subprocess
 import tempfile
 import time
 from e2e import wait_for
 from e2e_computer_use import ComputerUse
+from private_xvfb import PrivateXvfb
 
 class PrivateDesktop(ComputerUse):
     def __init__(self, directory, binary_dir, evidence_dir):
         super().__init__(directory, binary_dir, evidence_dir, False, "")
         self.host_env = None
+        self.host_server = None
 
     def client_environment(self, label, **kwargs):
         env = super().client_environment(label, **kwargs)
+        for variable in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "HYPRLAND_INSTANCE_SIGNATURE"):
+            env.pop(variable, None)
         bindir = Path(env["PATH"])
         for name in ("Xvfb", "dbus-run-session", "dbus-daemon", "wish"):
             source = shutil.which(name)
@@ -35,15 +38,11 @@ class PrivateDesktop(ComputerUse):
 
     def run(self):
         self.prepare()
-        server = self.spawn("host-fixture", [shutil.which("Xvfb"), "-displayfd", "1",
-            "-screen", "0", "640x480x24", "-nolisten", "tcp"], stdout=subprocess.PIPE)
-        with selectors.DefaultSelector() as selector:
-            selector.register(server.stdout, selectors.EVENT_READ)
-            if not selector.select(timeout=10):
-                raise AssertionError("test host display startup timed out")
-        number = server.stdout.readline().decode().strip()
-        self.check(number.isdigit(), "test host display is privately allocated")
-        self.host_env = {**os.environ, "DISPLAY":":"+number}
+        self.host_server = PrivateXvfb(self.directory / "private-host-display")
+        self.host_server.start()
+        number = str(self.host_server.number)
+        self.check(30000 <= int(number) < 50000, "test host display is privately allocated in the high range")
+        self.host_env = self.host_server.environment
         self.spawn("host-sentinel", [shutil.which("xmessage"), "-title",
             "ssmcp host sentinel", "-geometry", "200x120+0+0", "host input sentinel"], env=self.host_env)
         sentinel = wait_for(lambda: subprocess.run([shutil.which("xdotool"),
@@ -57,7 +56,7 @@ class PrivateDesktop(ComputerUse):
         workspace.mkdir()
         self.client, credentials = self.start_client(label="private-desktop",
             name="private-desktop-fixture",cwd=workspace,
-            extra_env={"DISPLAY":":"+number,"WAYLAND_DISPLAY":"","XDG_SESSION_TYPE":"x11"})
+            extra_env={key: self.host_env[key] for key in ("DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE")})
         self.oauth_login(credentials)
         self.client_id = credentials["client_id"]
         self.check(self.computer("desktop_status")["running"] is False,
@@ -125,6 +124,13 @@ class PrivateDesktop(ComputerUse):
         self.check(self.host_state()==baseline,"host pointer and focus remain unchanged after shutdown")
         self.metrics.update({"input_before":baseline,"input_after":self.host_state(),
             "display_scope":"two private displays; no input sent to the operator's desktop"})
+
+    def cleanup(self):
+        try:
+            super().cleanup()
+        finally:
+            if self.host_server is not None:
+                self.host_server.close()
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

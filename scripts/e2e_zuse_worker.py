@@ -12,6 +12,8 @@ from pathlib import Path
 import selectors
 import shutil
 import subprocess
+import sys
+from private_xvfb import PrivateXvfb
 import tempfile
 import time
 
@@ -31,6 +33,7 @@ class Harness:
         self.root, self.binary, self.evidence = root, binary.resolve(), evidence
         self.processes, self.checks = [], []
         self.displays = []
+        self.xservers = []
 
     def check(self, condition, description):
         assert condition, description
@@ -42,16 +45,12 @@ class Harness:
         return process
 
     def display(self, name):
-        process = self.spawn(shutil.which("Xvfb"), "-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp", stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            assert selector.select(timeout=10), "private display startup"
-        number = process.stdout.readline().decode().strip()
-        assert number.isdigit()
-        env = dict(os.environ, DISPLAY=":"+number, ZUSE_BACKEND="x11", WAYLAND_DISPLAY="", HYPRLAND_INSTANCE_SIGNATURE="")
-        self.displays.append(number)
         directory = self.root / name
-        directory.mkdir()
+        server = PrivateXvfb(directory)
+        self.xservers.append(server)
+        server.start()
+        env = server.environment
+        self.displays.append(server.number)
         fixture = directory / "fixture.tcl"
         fixture.write_text(
             f"wm title . {{{name}}}\nwm geometry . 400x220+0+0\n"
@@ -102,6 +101,17 @@ class Harness:
 
     @staticmethod
     def x11_state(env):
+        # libX11 reads XAUTHORITY from its process environment. Each read-only
+        # probe therefore receives the fixed private environment in a child.
+        output = subprocess.check_output(
+            [sys.executable, str(Path(__file__).resolve()), "--x11-state-probe"],
+            env=env, timeout=3,
+        )
+        assert len(output) < 16384
+        return json.loads(output)
+
+    @staticmethod
+    def x11_state_native(env):
         lib=ctypes.CDLL("libX11.so.6")
         lib.XOpenDisplay.argtypes=[ctypes.c_char_p]
         lib.XOpenDisplay.restype=ctypes.c_void_p
@@ -184,12 +194,23 @@ class Harness:
         self.check(all(process.poll() is not None for process in self.processes if process.args[-1]=="--internal-zuse-worker"),"all operation workers have exited")
 
     def cleanup(self):
+        errors = []
         for process in reversed(self.processes):
-            if process.poll() is None:
-                process.terminate()
-                try: process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill();process.wait(timeout=5)
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try: process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill();process.wait(timeout=5)
+            except Exception as error:
+                errors.append(str(error))
+        for server in reversed(self.xservers):
+            try:
+                server.close()
+            except Exception as error:
+                errors.append(str(error))
+        if errors:
+            raise RuntimeError("private fixture cleanup failed: " + "; ".join(errors))
 
 
 def main():
@@ -214,4 +235,8 @@ def main():
         print("Passed",len(harness.checks),"zuse native worker checks")
 
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    if sys.argv[1:] == ["--x11-state-probe"]:
+        print(json.dumps(Harness.x11_state_native(os.environ)))
+    else:
+        main()

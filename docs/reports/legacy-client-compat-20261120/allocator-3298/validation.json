@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "product_git_sha": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+  "results": [
+    {
+      "product_git_sha": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+      "case": "legacy",
+      "started_at": "2026-11-20T01:23:06.321020+00:00",
+      "source_hashes": {
+        "scripts/e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+        "scripts/e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "scripts/e2e.py": "87c9b086f4089a38e183c7082d0c21b1b05fd371dc5d7a172409c00ac5b6980b",
+        "scripts/e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+        "src/http/relay_composer_fixture.rs": "cdb76261649e24f4b849dc118e7b7e14f5c5bcb0a92b4d9f698d336a3603e797"
+      },
+      "frozen_sha256": {
+        "libtest": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+        "cli": "485401319f5459d030011244bde61eefbdf373f1b4b8f2fe36dd3becffc364f6"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 15.496,
+      "finished_at": "2026-11-20T01:23:21.816575+00:00",
+      "status": "passed",
+      "checks": 41
+    },
+    {
+      "product_git_sha": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+      "case": "modern",
+      "started_at": "2026-11-20T01:23:06.321167+00:00",
+      "source_hashes": {
+        "scripts/e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+        "scripts/e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "scripts/e2e.py": "87c9b086f4089a38e183c7082d0c21b1b05fd371dc5d7a172409c00ac5b6980b",
+        "scripts/e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+        "src/http/relay_composer_fixture.rs": "cdb76261649e24f4b849dc118e7b7e14f5c5bcb0a92b4d9f698d336a3603e797"
+      },
+      "frozen_sha256": {
+        "libtest": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+        "cli": "485401319f5459d030011244bde61eefbdf373f1b4b8f2fe36dd3becffc364f6"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 17.649,
+      "finished_at": "2026-11-20T01:23:23.970247+00:00",
+      "status": "passed",
+      "checks": 47
+    }
+  ],
+  "frozen_sha256_before": {
+    "libtest": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+    "cli": "485401319f5459d030011244bde61eefbdf373f1b4b8f2fe36dd3becffc364f6"
+  },
+  "frozen_sha256_after": {
+    "libtest": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+    "cli": "485401319f5459d030011244bde61eefbdf373f1b4b8f2fe36dd3becffc364f6"
+  },
+  "old_sha256_before": {
+    "official_v13": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "observed_v12": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3"
+  },
+  "old_sha256_after": {
+    "official_v13": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "observed_v12": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3"
+  },
+  "inputs_unchanged": true,
+  "status": "passed",
+  "scope": "real legacy client handshake, native execution and cross-identity isolation plus modern account regression",
+  "source_checkpoint": "ae09cf30bdbe8490fe59c2f68fc0e042ca19c034",
+  "fixture_sources_equal_to": [
+    "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+    "3298bfb98497e5d47661d94bcfec2ea39f006dbb"
+  ],
+  "reports": {
+    "legacy": {
+      "report": "legacy.json",
+      "log": "legacy-checks.txt",
+      "checks": 41
+    },
+    "modern": {
+      "report": "modern-account.json",
+      "log": "modern-checks.txt",
+      "checks": 47
+    }
+  },
+  "retained_work_boundary": "No existing clients or services were restarted. Handshake compatibility does not assert native job survival across deployment.",
+  "artifact_sha256": {
+    "legacy.json": "1ad730a75fbc8406bb63aac1d9d4e448f1e453b034dc0c71aaa6b425b9587c88",
+    "legacy-checks.txt": "5b05d1f96d695d9c4a8e2119203485c28f83b137a60a55be57db1020c70a970a",
+    "modern-account.json": "2a3ebc5535f0482e61cd1134fc648a25b17b720deaaf2b7d1cb042baa5207783",
+    "modern-checks.txt": "fa309682b13821bd08105a99363fe40b467b10de605a7eec50be339ab9138d61"
+  },
+  "redactions": [
+    "ephemeral loopback ports"
+  ]
+}
