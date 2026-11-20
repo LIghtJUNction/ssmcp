@@ -196,23 +196,23 @@ ztuio = { version = "=0.1.0", path = "crates/ztuio" }
 zharness = { version = "=0.6.0", path = "crates/zharness", default-features = false, features = ["std"] }
 zplugin = { version = "=0.3.1", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
-base64 = "0.22"
+base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 qrcodegen = "1.8.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 png = "0.18"
-getrandom = "0.3"
+getrandom = { version = "0.4.3", default-features = false }
 libc = "0.2"
 miniz_oxide = "0.9.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "form", "query", "rustls-no-provider"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 serde_urlencoded = "0.7"
-sha2 = "0.10"
+sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 subtle = "2.6"
-toml = "0.8"
-toml_edit = "0.22"
+toml = { version = "1.2.1", default-features = false, features = ["std", "serde", "parse", "display"] }
+toml_edit = { version = "0.25.19", default-features = false, features = ["parse", "display"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["ring", "std"] }
 webpki-roots = "1"
