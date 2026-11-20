@@ -895,7 +895,7 @@ impl State {
         if text.trim().is_empty() {
             return;
         }
-        if self.conversation.native_recipient.is_none() && listener::body(&text).is_some() {
+        if listener::body(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }

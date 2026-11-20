@@ -101,6 +101,12 @@ impl State {
         if text.trim().is_empty() {
             return Err("用法：/send <正文>；强制发送给当前会话监听程序".into());
         }
+        if self.conversation.native_recipient.is_some() {
+            return Err(
+                "发送失败：此收件人不支持 /send；请明确选择 Next caller 或已登记的线程，草稿和收件人已保留"
+                    .into(),
+            );
+        }
         if self.preview {
             return Err("预览不会发送消息".into());
         }
@@ -248,6 +254,47 @@ mod tests {
                 .starts_with("用法：/send")
         );
         assert_eq!(state.conversation.composer.text(), "/send   ");
+    }
+
+    #[test]
+    fn force_listener_submit_rejects_a_native_recipient_without_sending_or_rerouting() {
+        let original = "/send 保留此收件人\n    @missing.txt $missing-skill\n";
+        let mut state = preview(original);
+        let recipient = format!("client:{}", "a".repeat(64));
+        state.conversation.native_recipient = Some(recipient.clone());
+        state.conversation.native_account = Some(("github".into(), "fixture-account".into()));
+        state.conversation.target = Some("previous-thread".into());
+        let stamp = state.chat_input_stamp().unwrap();
+        let saved = state.chat_saved_draft();
+
+        state.chat_submit();
+
+        assert!(state.notice.as_deref().is_some_and(|notice| {
+            notice.starts_with("发送失败：此收件人不支持 /send")
+                && notice.contains("Next caller 或已登记的线程")
+        }));
+        assert_eq!(state.conversation.composer.text(), original);
+        assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+        assert_eq!(state.chat_saved_draft(), saved);
+        assert_eq!(
+            state.conversation.native_recipient.as_deref(),
+            Some(recipient.as_str())
+        );
+        assert_eq!(
+            state.conversation.native_account,
+            Some(("github".into(), "fixture-account".into()))
+        );
+        assert!(state.conversation.native_pending.is_none());
+        assert!(state.conversation.native_retry.is_none());
+        assert!(state.conversation.force_task.is_none());
+        assert!(state.conversation.submitting.is_none());
+        assert!(state.actions.is_empty());
+        assert!(
+            state.events.snapshot()["events"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
