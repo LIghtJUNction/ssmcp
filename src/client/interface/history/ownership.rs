@@ -1,5 +1,7 @@
 //! Process-local capabilities for writing to an explicitly captured history.
-use super::{Committed, HISTORY, History, HistoryStore, random_id, with};
+#[cfg(test)]
+use super::HistoryStore;
+use super::{Committed, HISTORY, History, random_id, with};
 use crate::runtime::call_scope::CallScope;
 use std::{
     collections::HashMap,
