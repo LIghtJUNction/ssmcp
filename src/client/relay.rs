@@ -83,6 +83,14 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
     command
 }
 
+/// Old self-only account connections must not negotiate delegation authority.
+pub(super) fn restrict_to_self(command: &mut Command) {
+    command.env(
+        "SSMCP_RELAY_CAPABILITIES",
+        crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
+    );
+}
+
 fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
     let offer = parent_offer.filter(|offer| offer.len() <= 256)?;
     let capabilities: Vec<_> = offer.split(',').map(str::trim).collect();
