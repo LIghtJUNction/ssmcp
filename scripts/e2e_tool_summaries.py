@@ -156,7 +156,21 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         return response
 
     def visible_group(self, group_id):
-        events = self.ui("/display/events")
+        path = "/display/events/tool_groups"
+        projection = self.observe("ssmcp.ui.get", {"path": path, "limit": 32})
+        groups = projection.get("value")
+        if (projection.get("schema_version") != 1
+                or projection.get("path") != path
+                or not isinstance(groups, list)
+                or projection.get("next_offset") is not None
+                or projection.get("total") != len(groups)):
+            raise AssertionError(
+                "the bounded fixture must read every visible tool group")
+        events = {
+            "tool_groups": groups,
+            "scroll": self.ui("/display/events/scroll"),
+            "retained_events": self.ui("/display/events/retained_events"),
+        }
         matches = [item for item in events["tool_groups"] if item.get("group_id") == group_id]
         if len(matches) != 1:
             raise AssertionError("the real terminal must expose the same opaque group ID")
@@ -223,16 +237,51 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
 
     def assert_reminder(self, response, group, count):
         reminders = self.reminders(response)
-        matches = [item for item in reminders if item.get("group_id") == group["group_id"]]
-        self.check(len(matches) == 1 and matches[0]["client_id"] == self.client_id
-                   and matches[0]["call_count"] == count
-                   and matches[0]["covered_call_count"] == group["covered_call_count"]
-                   and matches[0]["revision"] == group["revision"]
-                   and matches[0]["threshold"] == 10 and matches[0]["tool"] == TOOL,
-                   "the outer code_mode response identifies the exact overdue group after eleven new calls")
-        self.check(any("TOOL SUMMARY REMINDER" in block.get("text", "")
-                       for block in response.get("content", []) if block.get("type") == "text"),
-                   "the model-facing response also contains the explicit summary reminder text block")
+        matches = [
+            item for item in reminders
+            if item.get("group_id") == group["group_id"]
+        ]
+        expected = {
+            "client_id": self.client_id,
+            "group_id": group["group_id"],
+            "call_count": count,
+            "covered_call_count": group["covered_call_count"],
+            "revision": group["revision"],
+            "threshold": 10,
+            "tool": TOOL,
+        }
+        valid = len(matches) == 1 and all(
+            matches[0].get(key) == value
+            for key, value in expected.items()
+        )
+        description = (
+            "the outer code_mode response identifies the exact overdue "
+            "group after eleven new calls"
+        )
+        if not valid:
+            diagnostic = {
+                "expected": expected,
+                "actual_reminders": reminders,
+            }
+            try:
+                diagnostic["groups_after_failure"] = self.groups()[1]
+            except Exception as error:
+                diagnostic["list_error"] = (
+                    f"{type(error).__name__}: {error}"
+                )
+            description += "\n" + json.dumps(
+                diagnostic, ensure_ascii=False, sort_keys=True
+            )
+        self.check(valid, description)
+        self.check(
+            any(
+                "TOOL SUMMARY REMINDER" in block.get("text", "")
+                for block in response.get("content", [])
+                if block.get("type") == "text"
+            ),
+            "the model-facing response also contains the explicit "
+            "summary reminder text block",
+        )
 
     def run(self):
         self.prepare()
