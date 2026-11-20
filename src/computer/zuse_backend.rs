@@ -988,12 +988,14 @@ impl CaptureDirectory {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let path = std::env::temp_dir().join(format!("ssmcp-zuse-{}-{suffix}", std::process::id()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder.create(&path).map_err(|error| error.to_string())?;
         Ok(Self(path))
     }
