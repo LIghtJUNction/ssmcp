@@ -877,6 +877,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
         "versions":state.connection_versions,
+        "timing":state.chat_timing_snapshot(),
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
@@ -914,6 +915,7 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
         description: "Example task · custom frontend".into(),
         cwd: Some("~/project".into()),
         started: Instant::now(),
+        deadline: None,
     });
     state.panel.progress.push(panel::ProgressView {
         source: "Example".into(),

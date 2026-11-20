@@ -88,7 +88,9 @@ impl State {
                     elapsed_ms: wire.elapsed_ms.saturating_add(millis(
                         now.saturating_duration_since(observation.received),
                     )),
-                    remaining_ms: Some(millis(observation.deadline.saturating_duration_since(now))),
+                    remaining_ms: Some(super::remaining_millis(observation.deadline, now)),
+                    deadline_unix_ms: None,
+                    finished_age_ms: None,
                     cancellable: false,
                     episode: Some(wire.episode),
                     attribution: Some(wire.attribution.clone()),

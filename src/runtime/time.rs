@@ -1,5 +1,7 @@
 //! Connection-local timers and passive native-wait presentation.
-//! Deadlines use Instant; SystemTime is sampled only by the time.now readout.
+//! Deadlines use Instant; civil inputs are converted once when a timer starts.
+mod civil;
+mod execution;
 mod relay;
 use super::{
     call_scope::{Source, ThreadScope},
@@ -10,12 +12,13 @@ use crate::{
     registry::Provider,
     wire::ControlAttribution,
 };
+pub(crate) use execution::ExecutionTiming;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, OnceLock, Weak},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::watch;
 
@@ -28,6 +31,14 @@ const RETENTION: Duration = Duration::from_secs(300);
 
 fn millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn remaining_millis(deadline: Instant, now: Instant) -> u64 {
+    deadline
+        .saturating_duration_since(now)
+        .as_nanos()
+        .div_ceil(1_000_000)
+        .min(u128::from(u64::MAX)) as u64
 }
 
 fn changed() {
@@ -83,6 +94,10 @@ pub(crate) struct Entry {
     pub status: Status,
     pub elapsed_ms: u64,
     pub remaining_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline_unix_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_age_ms: Option<u64>,
     pub cancellable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub episode: Option<u64>,
@@ -102,6 +117,7 @@ struct Timer {
     label: String,
     started: Instant,
     deadline: Option<Instant>,
+    deadline_unix_ms: Option<i64>,
     ended: Option<Instant>,
     status: Status,
     changed: watch::Sender<Status>,
@@ -142,7 +158,11 @@ impl Timer {
             elapsed_ms: millis(through.saturating_duration_since(self.started)),
             remaining_ms: self
                 .deadline
-                .map(|deadline| millis(deadline.saturating_duration_since(through))),
+                .map(|deadline| remaining_millis(deadline, through)),
+            deadline_unix_ms: self.deadline_unix_ms,
+            finished_age_ms: self
+                .ended
+                .map(|ended| millis(now.saturating_duration_since(ended))),
             cancellable: self.status == Status::Running,
             episode: None,
             attribution: None,
@@ -170,7 +190,9 @@ impl Observation {
             elapsed_ms: millis(now.saturating_duration_since(self.started)),
             remaining_ms: self
                 .deadline
-                .map(|deadline| millis(deadline.saturating_duration_since(now))),
+                .map(|deadline| remaining_millis(deadline, now)),
+            deadline_unix_ms: None,
+            finished_age_ms: None,
             cancellable: self.cancellable,
             episode: None,
             attribution: None,
@@ -270,15 +292,25 @@ impl Clock {
             .unwrap_or_else(|error| error.into_inner()) = Arc::downgrade(self);
     }
 
-    fn now(&self, arguments: Value) -> Result<Value, String> {
-        if !arguments.as_object().is_some_and(|args| args.is_empty()) {
-            return Err("ssmcp.time.now takes no arguments".into());
+    fn now(&self, mut arguments: Value) -> Result<Value, String> {
+        if let Some(object) = arguments.as_object_mut()
+            && let Some(op) = object.remove("op")
+        {
+            match op.as_str() {
+                // Keep the existing tool name: old relays classify now/wait
+                // by exact name when negotiating time_observation_v1.
+                Some("interval") => return civil::interval(arguments, civil::now_ms()?),
+                Some("now") => {}
+                _ => return Err("time.now op must be now or interval".into()),
+            }
         }
-        let unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| "system clock precedes the Unix epoch")?;
+        if !arguments.as_object().is_some_and(|args| args.is_empty()) {
+            return Err("time.now takes no time points unless op is interval".into());
+        }
+        let unix = civil::now_ms()?;
         Ok(
-            json!({"schema_version":1,"unix_ms":millis(unix),"unix_seconds":unix.as_secs(),
+            json!({"schema_version":1,"unix_ms":unix,"unix_seconds":unix.div_euclid(1000),
+            "utc_rfc3339":civil::format(unix)?,
             "wall_clock":"UTC Unix epoch","monotonic_ms":millis(self.started.elapsed()),
             "monotonic_scope":format!("clock_{}",self.id),"deadline_clock":"monotonic"}),
         )
@@ -288,6 +320,30 @@ impl Clock {
         &self,
         owner: Owner,
         duration_ms: Option<u64>,
+        label: Option<String>,
+        now: Instant,
+    ) -> Result<String, String> {
+        self.start_inner(owner, duration_ms, None, label, now)
+    }
+
+    fn start_absolute(
+        &self,
+        owner: Owner,
+        deadline_unix_ms: i64,
+        label: Option<String>,
+        now: Instant,
+        wall_now_ms: i64,
+    ) -> Result<String, String> {
+        civil::format(deadline_unix_ms)?;
+        let duration_ms = deadline_unix_ms.saturating_sub(wall_now_ms).max(0) as u64;
+        self.start_inner(owner, Some(duration_ms), Some(deadline_unix_ms), label, now)
+    }
+
+    fn start_inner(
+        &self,
+        owner: Owner,
+        duration_ms: Option<u64>,
+        deadline_unix_ms: Option<i64>,
         label: Option<String>,
         now: Instant,
     ) -> Result<String, String> {
@@ -338,6 +394,7 @@ impl Clock {
             label,
             started: now,
             deadline,
+            deadline_unix_ms,
             ended: None,
             status: Status::Running,
             changed,
@@ -345,6 +402,36 @@ impl Clock {
         timer.tick(now);
         state.timers.insert(id.clone(), timer);
         Ok(id)
+    }
+
+    fn list(&self, owner: &Owner, now: Instant) -> Result<Value, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.tick(now);
+        if state.closed {
+            return Err("time connection is closed".into());
+        }
+        let mut timers = state
+            .timers
+            .values()
+            .filter(|timer| &timer.owner == owner)
+            .collect::<Vec<_>>();
+        timers.sort_by_key(|timer| {
+            (
+                timer.status != Status::Running,
+                std::cmp::Reverse(timer.started),
+            )
+        });
+        let entries = |running| {
+            timers
+                .iter()
+                .filter(|timer| (timer.status == Status::Running) == running)
+                .map(|timer| receipt(timer.entry(now), false))
+                .collect::<Vec<_>>()
+        };
+        Ok(
+            json!({"schema_version":1,"active":entries(true),"recent":entries(false),
+            "deadline_clock":"monotonic","retention_ms":millis(RETENTION),"completion_permission":false}),
+        )
     }
 
     fn read(
@@ -389,16 +476,33 @@ impl Clock {
             object.entry("op").or_insert_with(|| json!("start"));
         }
         let request: Request = serde_json::from_value(arguments)
-            .map_err(|_| "time.wait expects start(duration_ms?, label?, wait_ms?), status(timer_id, wait_ms?), or cancel(timer_id)")?;
+            .map_err(|_| "time.wait expects start(duration_ms? or deadline_unix_ms?, label?, wait_ms?), status(timer_id, wait_ms?), cancel(timer_id), or list()")?;
         let owner = Owner::from_source(&Source::capture());
         let (id, wait_ms) = match request {
             Request::Start {
                 duration_ms,
+                deadline_unix_ms,
                 label,
                 wait_ms,
             } => {
                 validate_wait(wait_ms)?;
-                let id = self.start(owner.clone(), duration_ms, label, Instant::now())?;
+                if duration_ms.is_some() && deadline_unix_ms.is_some() {
+                    return Err("use duration_ms or deadline_unix_ms, never both".into());
+                }
+                let id = if let Some(deadline) = deadline_unix_ms {
+                    // Sample wall time once, then keep only the monotonic
+                    // deadline for elapsed/remaining and waiting behavior.
+                    let wall_now_ms = civil::now_ms()?;
+                    self.start_absolute(
+                        owner.clone(),
+                        deadline,
+                        label,
+                        Instant::now(),
+                        wall_now_ms,
+                    )?
+                } else {
+                    self.start(owner.clone(), duration_ms, label, Instant::now())?
+                };
                 changed();
                 (id, wait_ms)
             }
@@ -413,6 +517,7 @@ impl Clock {
                 changed();
                 return Ok(receipt(entry, false));
             }
+            Request::List {} => return self.list(&owner, Instant::now()),
         };
         let (entry, mut receiver, deadline) = self.read(&owner, &id, Instant::now())?;
         if entry.status != Status::Running || wait_ms == 0 {
@@ -496,7 +601,7 @@ impl Clock {
         // Relay observations have explicit account/agent labels and are global
         // display only. They never borrow the selected conversation's owner.
         snapshot.active.extend(state.relay.entries(now));
-        snapshot.recent.reverse();
+        snapshot.recent.sort_by_key(|entry| entry.finished_age_ms);
         snapshot.recent.truncate(4);
         snapshot
     }
@@ -556,6 +661,7 @@ impl Clock {
 fn receipt(entry: Entry, timed_out: bool) -> Value {
     json!({"schema_version":1,"timer_id":entry.id,"status":entry.status,"label":entry.label,
         "elapsed_ms":entry.elapsed_ms,"remaining_ms":entry.remaining_ms,"deadline_clock":"monotonic",
+        "deadline_unix_ms":entry.deadline_unix_ms,
         "wait_timed_out":timed_out,"completion_permission":false})
 }
 
@@ -614,6 +720,7 @@ fn clean_label(label: Option<String>) -> Result<Option<String>, String> {
 enum Request {
     Start {
         duration_ms: Option<u64>,
+        deadline_unix_ms: Option<i64>,
         label: Option<String>,
         #[serde(default)]
         wait_ms: u64,
@@ -626,6 +733,7 @@ enum Request {
     Cancel {
         timer_id: String,
     },
+    List {},
 }
 
 struct ObservationSpec {
@@ -693,13 +801,21 @@ impl Drop for ObservationGuard {
 }
 
 pub(crate) fn snapshot() -> Snapshot {
+    snapshot_at(Instant::now())
+}
+
+pub(crate) fn snapshot_at(now: Instant) -> Snapshot {
     let clock = display_clock()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .upgrade();
     clock.map_or_else(Snapshot::default, |clock| {
-        clock.snapshot(&history::current_owner(), Instant::now())
+        clock.snapshot(&history::current_owner(), now)
     })
+}
+
+pub(crate) fn utc_now() -> Result<String, String> {
+    civil::format(civil::now_ms()?)
 }
 
 pub(crate) fn cancel_local(id: &str) -> Result<(), String> {
@@ -715,16 +831,22 @@ pub(crate) fn cancel_local(id: &str) -> Result<(), String> {
 
 pub(super) fn tools() -> Vec<Value> {
     vec![
-        json!({"name":"ssmcp.time.now","description":"Available in the same-process private local host. Account connections require a parent offer and server Ready echo of time_observation_v1, never a version-string guess. Read UTC Unix milliseconds and a separate connection-local monotonic elapsed counter. Wall-clock time is a readout, never a timer deadline. No input is read or acknowledged and no finish approval is created.",
-            "inputSchema":{"type":"object","additionalProperties":false,"properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
-        json!({"name":"ssmcp.time.wait","description":"Available in the same-process private local host; account connections require both endpoints to negotiate time_observation_v1. Older relays do not advertise these tools; hard-coded unsupported calls remain subject to their legacy delivery policy. Create, observe or cancel a connection-local timer without reading user messages, acknowledging answers, invoking a model, or approving task completion. start returns a timer_id immediately by default; duration_ms creates a monotonic countdown (0..86400000), omission creates an elapsed timer with a 24-hour lifetime. status with the same timer_id observes it for wait_ms (0..25000); a wait timeout leaves the timer running. cancel stops only that timer. IDs are scoped to the original connection, account, participant and conversation. A client disconnect/reload clears timers; they are never replayed. At most 32 running timers; 128 recent records for up to five minutes. Local /wait shows timers and can cancel an exact ID. The separate public await tool still requires an authenticated account context.",
+        json!({"name":"ssmcp.time.now","description":"Read time without consuming input or acknowledging answers. Account connections require a parent offer and server Ready echo of time_observation_v1; same-process private local hosts enable it directly. Default op=now returns UTC RFC3339, Unix milliseconds, and a separate connection-local monotonic counter. op=interval takes start and optional end; each point is exactly {unix_ms: integer} or {rfc3339: string}. End defaults to a single current wall-clock sample. Returns signed end-minus-start interval_ms, absolute_ms and days/hours/minutes/seconds/milliseconds. RFC3339 requires Z or a numeric offset and exact millisecond precision; leap seconds and nonzero sub-millisecond digits are rejected. Each duration day is exactly 86400000 ms, not a calendar month or local daylight-saving day. UTC years 0000..9999 are supported. Wall-clock intervals do not set or advance monotonic timers.",
             "inputSchema":{"type":"object","additionalProperties":false,"properties":{
-                "op":{"enum":["start","status","cancel"],"default":"start"},"duration_ms":{"type":"integer","minimum":0,"maximum":MAX_DURATION_MS},
+                "op":{"enum":["now","interval"],"default":"now"},"start":civil::point_schema(),"end":civil::point_schema()},
+                "oneOf":[{"properties":{"op":{"const":"now"}},"not":{"anyOf":[{"required":["start"]},{"required":["end"]}]}},
+                    {"required":["op","start"],"properties":{"op":{"const":"interval"}}}]},
+            "annotations":{"readOnlyHint":true,"destructiveHint":false}}),
+        json!({"name":"ssmcp.time.wait","description":"Create, list, observe or cancel connection-local timers without consuming user messages, acknowledging answers or invoking a model. Account connections require time_observation_v1 at both endpoints; unnegotiated calls remain unavailable. start returns timer_id immediately unless wait_ms is supplied. Use duration_ms (0..86400000) OR deadline_unix_ms: absolute deadlines are converted once to a monotonic deadline, at most 24 hours ahead; a past deadline elapses immediately. Omit both for an elapsed timer with a 24-hour lifetime. list returns only this exact caller's active/recent timers. status(timer_id, wait_ms=0..25000) observes the existing timer; a wait timeout leaves it running. cancel stops only that timer, never an exec job. IDs are scoped to the original connection, account, participant and conversation. Disconnect/reload clears them. At most 32 running timers and 128 recent records retained for up to five minutes. Local /wait shows current time, timers and running work. Timer expiry does not mean an exec job has completed.",
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{
+                "op":{"enum":["start","status","cancel","list"],"default":"start"},"duration_ms":{"type":"integer","minimum":0,"maximum":MAX_DURATION_MS},
+                "deadline_unix_ms":{"type":"integer","minimum":civil::MIN_UNIX_MS,"maximum":civil::MAX_UNIX_MS},
                 "label":{"type":"string","minLength":1,"maxLength":80},"timer_id":{"type":"string","minLength":1,"maxLength":128},
                 "wait_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT_MS,"default":0}},
-                "oneOf":[{"not":{"required":["timer_id"]},"properties":{"op":{"const":"start"}}},
-                    {"required":["op","timer_id"],"properties":{"op":{"const":"status"}},"not":{"anyOf":[{"required":["duration_ms"]},{"required":["label"]}]}},
-                    {"required":["op","timer_id"],"properties":{"op":{"const":"cancel"}},"not":{"anyOf":[{"required":["duration_ms"]},{"required":["label"]},{"required":["wait_ms"]}]}}]},
+                "oneOf":[{"not":{"anyOf":[{"required":["timer_id"]},{"required":["duration_ms","deadline_unix_ms"]}]},"properties":{"op":{"const":"start"}}},
+                    {"required":["op","timer_id"],"properties":{"op":{"const":"status"}},"not":{"anyOf":[{"required":["duration_ms"]},{"required":["deadline_unix_ms"]},{"required":["label"]}]}},
+                    {"required":["op","timer_id"],"properties":{"op":{"const":"cancel"}},"not":{"anyOf":[{"required":["duration_ms"]},{"required":["deadline_unix_ms"]},{"required":["label"]},{"required":["wait_ms"]}]}},
+                    {"required":["op"],"properties":{"op":{"const":"list"}},"not":{"anyOf":[{"required":["timer_id"]},{"required":["duration_ms"]},{"required":["deadline_unix_ms"]},{"required":["label"]},{"required":["wait_ms"]}]}}]},
             "annotations":{"readOnlyHint":false,"destructiveHint":false}}),
     ]
 }
