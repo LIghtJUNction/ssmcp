@@ -393,11 +393,13 @@ fn command_and_diff_group_frame_respects_split_and_single_layout() {
             b"[RUN] git diff --stat\n",
         );
         state.log_event(
-            "preview", &json!({"type":"exec.stdout","job_id":"group-diff-command"}),
+            "preview",
+            &json!({"type":"exec.stdout","job_id":"group-diff-command"}),
             b"1 file changed\n",
         );
         state.log_event(
-            "preview", &json!({"type":"exec.exited","job_id":"group-diff-command","exit_code":0}),
+            "preview",
+            &json!({"type":"exec.exited","job_id":"group-diff-command","exit_code":0}),
             b"[OK] exit=0\n",
         );
         state.log_event(
@@ -417,8 +419,16 @@ fn command_and_diff_group_frame_respects_split_and_single_layout() {
         assert_eq!(snapshot["tool_groups"][0]["expanded"], true);
         let members = snapshot["tool_groups"][0]["members"].clone();
         let bytes = snapshot["retained_bytes"].clone();
-        let y = initial.lines().position(|row| row.contains("src/group_diff.rs")).unwrap() as u16;
-        state.chat_key(Key::Mouse { button: 0, x: 8, y, release: false });
+        let y = initial
+            .lines()
+            .position(|row| row.contains("src/group_diff.rs"))
+            .unwrap() as u16;
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y,
+            release: false,
+        });
         let opened = display(&mut state).screen().contents();
         assert!(opened.contains("@@ -1 +1 @@"), "{opened}");
         let selected = state.events.snapshot()["selected"].clone();
@@ -426,14 +436,28 @@ fn command_and_diff_group_frame_respects_split_and_single_layout() {
         for mode in ["single", "split", "single"] {
             state.chat_command(&format!("/diff {mode}")).unwrap();
             let screen = display(&mut state).screen().contents();
-            let side_by_side = screen.lines().any(|row| row.contains("Old") && row.contains("New") && row.contains('│'));
+            let side_by_side = screen
+                .lines()
+                .any(|row| row.contains("Old") && row.contains("New") && row.contains('│'));
             assert_eq!(side_by_side, mode == "split" && cols == 120, "{screen}");
             assert!(screen.contains("@@ -1 +1 @@"), "{screen}");
-            assert!(screen.contains("let expanded = true;") && screen.contains("let expanded = false;"), "{screen}");
-            let paired_change = screen.lines().any(|row| row.contains("let expanded = true;") && row.contains("let expanded = false;"));
+            assert!(
+                screen.contains("let expanded = true;") && screen.contains("let expanded = false;"),
+                "{screen}"
+            );
+            let paired_change = screen.lines().any(|row| {
+                row.contains("let expanded = true;") && row.contains("let expanded = false;")
+            });
             assert_eq!(paired_change, mode == "split" && cols == 120, "{screen}");
-            assert!(screen.contains("Ran git diff --stat") && screen.contains("Keep diff draft"), "{screen}");
-            assert!(screen.lines().all(|line| unicode_width::UnicodeWidthStr::width(line) <= usize::from(cols)));
+            assert!(
+                screen.contains("Ran git diff --stat") && screen.contains("Keep diff draft"),
+                "{screen}"
+            );
+            assert!(
+                screen
+                    .lines()
+                    .all(|line| unicode_width::UnicodeWidthStr::width(line) <= usize::from(cols))
+            );
             let snapshot = state.events.snapshot();
             assert_eq!(snapshot["diff_mode"], mode);
             assert_eq!(snapshot["selected"], selected);

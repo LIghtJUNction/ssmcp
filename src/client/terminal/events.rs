@@ -1486,10 +1486,7 @@ impl EventView {
                 break;
             };
             if let Some(successor) = successor
-                && let Some(next) = self
-                    .events
-                    .iter_mut()
-                    .find(|next| next.id == successor)
+                && let Some(next) = self.events.iter_mut().find(|next| next.id == successor)
             {
                 next.group_expanded = event.group_expanded;
                 next.group_automatic = event.group_automatic;

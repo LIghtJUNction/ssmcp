@@ -541,7 +541,11 @@ async fn inactive_canvas_keeps_group_choice_after_every_saved_command_is_evicted
             command_call(&mut view, &fixture.runtime, request).await;
         }
         assert_eq!(view.events.len(), MAX_EVENTS);
-        assert!(view.events.iter().all(|event| !saved_ids.contains(&event.id)));
+        assert!(
+            view.events
+                .iter()
+                .all(|event| !saved_ids.contains(&event.id))
+        );
         assert_eq!(view.tool_groups().len(), 1);
         assert_eq!(group_id(&view, &first), id);
         assert_eq!(

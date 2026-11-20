@@ -1,8 +1,8 @@
 //! A bounded viewport over adjacent retained tool events; no output is copied
 //! into a second history and individual event identities remain selectable.
 use super::{
-    DiffMode, Event, Ui, clip_plain, conversation_body, correlation::Kind, diff, paint, semantic_text,
-    styled_rows,
+    DiffMode, Event, Ui, clip_plain, conversation_body, correlation::Kind, diff, paint,
+    semantic_text, styled_rows,
 };
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
