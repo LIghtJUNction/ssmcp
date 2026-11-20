@@ -294,4 +294,83 @@ async fn real_aliases_and_unrelated_endpoints_are_never_adopted() {
     drop(files);
     assert!(!path.exists());
     drop(reservation);
+
+    // Force a real bind conflict only against our own high abstract endpoint.
+    // Explicit :N plus -displayfd must exit here, never search down from :0;
+    // -nopn must also reject a successful filesystem-only partial bind.
+    let reservation = Reservation::acquire_from(number).await.unwrap();
+    let number = reservation.number();
+    let path = socket_path(number);
+    let address = SocketAddr::from_abstract_name(path.as_os_str().as_bytes()).unwrap();
+    let occupied = UnixListener::bind_addr(&address).unwrap();
+    let directory = private_directory();
+    let authority = directory.0.join("Xauthority");
+    let mut cookie = [0u8; 16];
+    crate::platform::random_bytes(&mut cookie).unwrap();
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&authority)
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        &super::super::authority_record(&number.to_string(), &cookie),
+    )
+    .unwrap();
+    drop(file);
+    let mut command = tokio::process::Command::new(crate::program::executable("Xvfb").unwrap());
+    command
+        .arg(format!(":{number}"))
+        .args([
+            "-displayfd",
+            "1",
+            "-nopn",
+            "-screen",
+            "0",
+            "320x240x24",
+            "-nolisten",
+            "tcp",
+            "-noreset",
+            "-auth",
+        ])
+        .arg(&authority)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut conflict = Managed::spawn(&mut command).unwrap();
+    let attempt = tokio::time::timeout(Duration::from_secs(5), async {
+        use tokio::io::AsyncReadExt;
+        let stdout = conflict.child.stdout.take().unwrap();
+        let mut announcement = Vec::new();
+        stdout.take(64).read_to_end(&mut announcement).await?;
+        let status = conflict.wait().await?;
+        Ok::<_, io::Error>((status, announcement))
+    })
+    .await;
+    conflict.shutdown().await;
+    let (status, announcement) = attempt
+        .expect("explicit conflict must terminate within five seconds")
+        .unwrap();
+    assert!(
+        !status.success(),
+        "an occupied explicit display must reject startup"
+    );
+    assert!(
+        announcement.is_empty(),
+        "a conflict must not announce any fallback display: {announcement:?}"
+    );
+    let peer = connect_peer(&path, true).unwrap();
+    assert_eq!(
+        peer.credentials.pid as u32,
+        std::process::id(),
+        "the original abstract endpoint must still belong to this fixture"
+    );
+    assert!(
+        !path_reserved(&path).unwrap(),
+        "failed Xvfb startup must clean its partial filesystem endpoint"
+    );
+    drop(peer);
+    drop(occupied);
+    drop(reservation);
 }
