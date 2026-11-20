@@ -2143,6 +2143,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zcall"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0305d70ee61611091b725c7e8e0571d580ed251d908c644e24ca60fb97b4b18"
+dependencies = [
+ "zconv",
+]
+
+[[package]]
 name = "zclap"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2235,10 +2244,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zguard"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "641d20929078aba7e9eb6ae9c33ae89d9b23d3a0f12f0eebb8fd05dacc93eb40"
+
+[[package]]
 name = "zharness"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
- "zcall",
+ "zcall 0.4.0",
+ "zguard",
  "zplugin",
 ]
 
@@ -2254,7 +2270,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1530747e76256c89865b521c407c520766fc93badae9c8b573e5a4e0c4e820ad"
 dependencies = [
- "zcall",
+ "zcall 0.3.0",
 ]
 
 [[package]]
