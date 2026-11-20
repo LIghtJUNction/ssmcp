@@ -177,8 +177,11 @@ class Questions(Composer):
         again = self.ask("Which output format?\n\nDETAIL_OPTIONS_FIRST",
                          title="Output format", options=["Markdown", "HTML"],
                          idempotency_key="question_fixture_first")
+        # Authenticated ask receipts omit the global count. Inspect only this
+        # caller's visible pending questions after retrying the same request.
+        after_retry = self.observe("ssmcp.ui.questions", {"state": "pending"})
         self.check(again["id"] == first["id"] and again["created"] is False
-                   and again["pending_count"] == 3,
+                   and after_retry["pending_count"] == 3,
                    "retrying an idempotent ask does not add another queued question")
         self.check(self.composition(self.ui("/display/conversation")) == original,
                    "background questions do not steal or replace the normal draft")
