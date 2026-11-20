@@ -163,7 +163,7 @@ The server binds the wait to the authenticated owner and live client connection.
 
 The helper's `ready` status reserves input but does not deliver its body. Inspect the outer response: only a `structuredContent.user_wait` array entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. The final response rechecks authorization and the reserved revisions before attaching those messages. Cancellation, timeout, disconnection, revoked access, invalid binding, and superseded input have distinct receipts and do not confirm delivery. Read the actual user messages before continuing; receipt metadata cannot substitute for their contents.
 
-Use `intent: "finish"` when asking for permission to end. The continuation prompt is also injected after an accepted, nonduplicate native `ssmcp.ui.message` or `ssmcp.ui.present` call with `kind: "answer"`. A plain JavaScript result, a failed or duplicate native reply, or an agent-authored consent field does not establish user approval. The hook observes these explicit signals; it cannot intercept arbitrary final messages produced outside this server. `user_consent_to_end` remains null. See [user waiting](user-wait.md) for native status and local cancellation details.
+Use `intent: "finish"` only to wait for continued user guidance. Completion approval comes from `request_finish` or registered native `ssmcp.ui.finish` with a verified participant binding and the local user's explicit Yes. The continuation prompt is also injected after an accepted, nonduplicate native `ssmcp.ui.message` or `ssmcp.ui.present` call with `kind: "answer"`. A plain JavaScript result, a failed or duplicate native reply, or an agent-authored consent field does not establish user approval. The hook observes these explicit signals; it cannot intercept arbitrary final messages produced outside this server. `user_consent_to_end` remains null. See [user waiting](user-wait.md) for native status and local cancellation details.
 
 ### Requirements and context
 
@@ -182,9 +182,9 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录新增 `request_finish` 和 `messages`；连同 `list`、`code_mode`、`collab` 共五项。`request_finish` 是独立 Rust 等待入口，必须给出理由，并使用当前账户和已验证的 `collab` 成员凭据。等待超时保留原申请，`decision: null` 不构成批准；只有本机用户或同一客户端、同一账户的另一已验证 agent 能批准。批准仅供请求者的一次显式 `kind: "answer"` 使用。外部聊天应用自己的最终发言不经过此门禁。
+公共工具目录包含 `list`、`code_mode`、`collab`、`request_finish`、`await` 和 `messages` 六项。`request_finish` 是独立 Rust 等待入口，必须给出理由，并使用当前账户和已验证的 `collab` 成员凭据。等待超时保留原申请，`decision: null` 不构成批准；只有本机用户明确的 Yes 能批准；所有 agent 的 Yes 都会被拒绝。连接器未暴露公共入口时，可绑定真实参与者后调用原生 `ssmcp.ui.finish`，它与公共工具共用状态机。批准仅供请求者的一次显式 `kind: "answer"` 使用。外部聊天应用自己的最终发言不经过此门禁。
 
-`ssmcp.ui.ask` 仍立即返回。终端 Shift+Up 打开问题队列；同一账户的其他可信 agent 可调用 `ssmcp.ui.answer`，分别提交普通 `answer` 或结束申请的 `decision` 和可选 `comment`。已验证提问线程的答案通过 `question_answers` 交付，保留 human/agent 来源。未绑定线程的提问只提供同账户手动读取，不改投 next caller。显式 `ssmcp.ui.questions` 读取不消费答案。
+`ssmcp.ui.ask` 仍立即返回。终端 Shift+Up 打开问题队列；同一账户的其他可信 agent 可调用 `ssmcp.ui.answer`，提交普通 `answer`，或保留真实来源的结束申请 No 与可选 `comment`；不能代用户批准结束。已验证提问线程的答案通过 `question_answers` 交付，保留 human/agent 来源。未绑定线程的提问只提供同账户手动读取，不改投 next caller。显式 `ssmcp.ui.questions` 读取不消费答案。
 
 `messages.list/send/broadcast/inbox/ack/status` 提供原生消息 helper，对应公共 `messages` 工具。先列出并明确选择完整收件人 ID；设备账户收件箱与已验证 agent 收件箱分别标识，显示名称不用于证明身份。消息返回在独立 `native_messages`，agent 消息不是新的用户指令。`@name` 在消息正文中保持普通文本，不自动读取文件。
 
@@ -197,3 +197,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 重试必须保留同一 `request_id`、完整收件人集合和正文；调整集合顺序可以，修改集合或正文会被拒绝。已接收的目标复用原消息回执，先前失败的目标重新尝试。若原回执已经离开消息保留窗口，返回明确错误且不再次发送。每个发送者最多保留 128 个广播请求标识，全服务最多 4096 个；当前连接仍存活时不静默淘汰这些标识，达到容量后已有请求仍可重试。来源连接结束后释放该连接的广播记录。
 
 广播复用现有消息授权、队列和来源标记，不增加线协议能力；agent 来源消息作为协作消息交付。
+
+### 通用异步等待
+
+公共 `await` 与 `waitFor(clientId,{targets,mode,timeout_ms})` 支持执行 job、relay job、agent 状态或收件箱、用户输入与原结束申请。公共入口不占 JavaScript 名额；helper 仍占外层 code_mode 名额。超时使用服务端返回的同一 `wait_id` 恢复，取消只停止观察，不终止任务、不确认消息、不修改审批。`any` 与 `all` 返回逐目标类型和原始结果，任务完成不会变成用户批准。完整参数、身份、状态、恢复与旧版本边界见[通用等待](await.md)。

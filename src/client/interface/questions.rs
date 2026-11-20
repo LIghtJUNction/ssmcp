@@ -1,9 +1,9 @@
 //! Bounded questions, authenticated answers, and explicit finish decisions.
 mod delivery;
-mod requests;
-mod workflow;
 #[cfg(test)]
 mod human_finish_tests;
+mod requests;
+mod workflow;
 pub(crate) use delivery::attach as attach_answers;
 #[cfg(test)]
 pub(crate) use requests::{AgentActor, FinishDecision, FinishView};
@@ -864,7 +864,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.questions",
-            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. The local user or another verified agent in the same client/account can answer; actor origin is retained. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
+            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. Ordinary questions may be answered by the local user or another verified agent in the same client/account; actor origin is retained. Only the local user can approve a finish request. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,
                 "properties":{

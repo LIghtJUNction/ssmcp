@@ -180,6 +180,7 @@ pub(super) async fn execute(
     access_token: String,
     arguments: Arguments,
 ) -> Result<Value, String> {
+    let expected_request_id = arguments.request_id.clone();
     let authorization = broker
         .authenticate(&user, &access_token)
         .await
@@ -286,15 +287,7 @@ pub(super) async fn execute(
     if native["isError"] == true {
         return Ok(native);
     }
-    let data = native
-        .get("structuredContent")
-        .filter(|data| {
-            data["request_id"].is_string()
-                && data["default_decision"] == "no"
-                && data["request"]["requester"]["thread_id"] == binding.agent_id
-        })
-        .ok_or("finish_response_invalid: no approval accepted")?
-        .clone();
+    let data = accepted_native_data(&native, &binding.agent_id, expected_request_id.as_deref())?;
     run.capture_question_answers(&session, Some(&binding.agent_id), &native);
     collect_question_answers(&report).await;
     let eligible = eligible_user_response(&report)
@@ -305,6 +298,42 @@ pub(super) async fn execute(
     let response = commit_user_response(&report, tool_result(Ok(data)), eligible);
     guard.armed = false;
     Ok(response)
+}
+
+pub(super) fn accepted_native_data(
+    native: &Value,
+    agent_id: &str,
+    expected_id: Option<&str>,
+) -> Result<Value, String> {
+    let data = native
+        .get("structuredContent")
+        .ok_or("finish_response_invalid: no approval accepted")?;
+    let id = data["request_id"]
+        .as_str()
+        .filter(|id| identifier(id))
+        .ok_or("finish_response_invalid: missing request ID")?;
+    if expected_id.is_some_and(|expected| expected != id)
+        || data["default_decision"] != "no"
+        || data["request"]["id"] != id
+        || data["request"]["kind"] != "finish"
+        || data["request"]["requester"]["thread_id"] != agent_id
+    {
+        return Err(
+            "finish_response_invalid: request does not match the verified thread and resumed ID"
+                .into(),
+        );
+    }
+    let finish = &data["request"]["finish"];
+    let human_approved = finish["status"] == "approved"
+        && finish["decision"]["choice"] == "yes"
+        && finish["decision"]["actor"]["origin"] == "human";
+    if data["approved"].as_bool() != Some(human_approved)
+        || finish["approved"].as_bool() != Some(human_approved)
+        || data["decision"] != finish["decision"]
+    {
+        return Err("finish_human_approval_required: native approval must contain the local user's recorded Yes; upgrade an older client".into());
+    }
+    Ok(data.clone())
 }
 
 pub(super) fn tool() -> Value {
@@ -344,5 +373,52 @@ mod tests {
         both["request_id"] = json!("old");
         both["idempotency_key"] = json!("new");
         assert!(Arguments::parse(both).is_err());
+    }
+
+    fn native_decision(actor: Value, choice: &str) -> Value {
+        let decision =
+            json!({"choice":choice,"actor":actor,"comment":null,"revision":1,"decided_at_ms":1});
+        json!({"structuredContent":{"request_id":"request_one","default_decision":"no","approved":true,"decision":decision,
+            "request":{"id":"request_one","kind":"finish","requester":{"thread_id":"requester"},
+                "finish":{"status":"approved","approved":true,"decision":decision}}}})
+    }
+
+    #[test]
+    fn public_finish_accepts_only_matching_human_approval_from_native_clients() {
+        let human = native_decision(json!({"origin":"human"}), "yes");
+        assert!(accepted_native_data(&human, "requester", Some("request_one")).is_ok());
+        assert!(accepted_native_data(&human, "other_thread", Some("request_one")).is_err());
+        assert!(accepted_native_data(&human, "requester", Some("request_two")).is_err());
+        for invalid in [
+            native_decision(
+                json!({"origin":"agent","agent":{"thread_id":"reviewer"}}),
+                "yes",
+            ),
+            native_decision(json!({"origin":"human"}), "no"),
+            native_decision(Value::Null, "yes"),
+        ] {
+            assert!(
+                accepted_native_data(&invalid, "requester", None)
+                    .unwrap_err()
+                    .contains("human_approval_required")
+            );
+        }
+        let mut inconsistent = human;
+        inconsistent["structuredContent"]["decision"]["actor"] = json!({"origin":"agent"});
+        assert!(accepted_native_data(&inconsistent, "requester", None).is_err());
+    }
+
+    #[test]
+    fn public_finish_preserves_pending_timeout_without_inventing_a_decision() {
+        let mut native = native_decision(json!({"origin":"human"}), "yes");
+        let data = &mut native["structuredContent"];
+        data["approved"] = json!(false);
+        data["decision"] = Value::Null;
+        data["timed_out"] = json!(true);
+        data["request"]["finish"] = json!({"status":"pending","approved":false,"decision":null});
+        let accepted = accepted_native_data(&native, "requester", Some("request_one")).unwrap();
+        assert_eq!(accepted["approved"], false);
+        assert_eq!(accepted["timed_out"], true);
+        assert!(accepted["decision"].is_null());
     }
 }

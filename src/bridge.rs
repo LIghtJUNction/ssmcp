@@ -190,6 +190,18 @@ impl Task {
 }
 
 impl Bridges {
+    /// Passive, account-scoped observation. Dropping this future never sends
+    /// the managed operation's cancellation signal or starts cleanup.
+    pub(crate) async fn observe_job(
+        &self,
+        owner: &str,
+        id: &str,
+        wait_ms: u64,
+    ) -> Result<Value, String> {
+        let task = self.get(owner, "sync", id)?;
+        Ok(task.wait(Duration::from_millis(wait_ms)).await)
+    }
+
     fn insert(
         &self,
         owner: String,

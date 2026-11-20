@@ -97,7 +97,13 @@ async fn wait_for_decision(
 }
 
 fn cancel(id: &str, scope: &RequestScope) -> Result<QuestionView, String> {
-    let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    let view = cancel_in(state(), id, scope)?;
+    changed();
+    Ok(view)
+}
+
+fn cancel_in(queue: &Mutex<Queue>, id: &str, scope: &RequestScope) -> Result<QuestionView, String> {
+    let mut queue = queue.lock().unwrap_or_else(|error| error.into_inner());
     finish_view(&queue, id, scope)?;
     let record = queue
         .records
@@ -117,23 +123,22 @@ fn cancel(id: &str, scope: &RequestScope) -> Result<QuestionView, String> {
         queue.revision = queue.revision.saturating_add(1);
     }
     let view = finish_view(&queue, id, scope)?;
-    drop(queue);
-    changed();
     Ok(view)
 }
 
-struct WaitGuard {
+struct WaitGuard<'a> {
+    queue: &'a Mutex<Queue>,
     id: String,
     scope: RequestScope,
     finished: bool,
     cancel_on_drop: bool,
 }
-impl Drop for WaitGuard {
+impl Drop for WaitGuard<'_> {
     fn drop(&mut self) {
         if !self.finished && self.cancel_on_drop {
-            let _ = cancel(&self.id, &self.scope);
+            let _ = cancel_in(self.queue, &self.id, &self.scope);
         }
-        let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
+        let mut queue = self.queue.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(count) = queue.finish_waiting.get_mut(&self.id) {
             *count = count.saturating_sub(1);
             if *count == 0 {
@@ -170,6 +175,7 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
         // A passive observer must never cancel the approval transaction on drop.
         // The original request/cancel API retains its explicit cancellation semantics.
         let _guard = WaitGuard {
+            queue: state(),
             id: request_id.clone(),
             scope: scope.clone(),
             finished: false,
@@ -270,6 +276,7 @@ pub(super) async fn finish(arguments: Value) -> Result<Value, String> {
         changed();
     }
     let mut guard = WaitGuard {
+        queue: state(),
         id: id.clone(),
         scope: scope.clone(),
         finished: false,
@@ -377,9 +384,12 @@ pub(super) fn tools() -> Vec<Value> {
             "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
                 "op":{"enum":["request","wait","cancel"]},"reason":{"type":"string","minLength":1,"maxLength":MAX_QUESTION_BYTES},
                 "request_id":id,"idempotency_key":id,"timeout_ms":{"type":"integer","minimum":1,"maximum":25000,"default":20000}},
-                "oneOf":[{"properties":{"op":{"const":"request"}},"required":["reason"]},
+                "oneOf":[{"properties":{"op":{"const":"request"}},"required":["reason"],"not":{"required":["request_id","idempotency_key"]}},
                     {"properties":{"op":{"const":"wait"}},"required":["request_id"],"not":{"anyOf":[{"required":["reason"]},{"required":["idempotency_key"]}]}},
-                    {"properties":{"op":{"const":"cancel"}},"required":["request_id"],"not":{"anyOf":[{"required":["reason"]},{"required":["idempotency_key"]},{"required":["timeout_ms"]}]}}]},
+                    {"properties":{"op":{"const":"cancel"}},
+                        "oneOf":[{"required":["request_id"],"not":{"required":["idempotency_key"]}},
+                            {"required":["idempotency_key"],"not":{"required":["request_id"]}}],
+                        "not":{"anyOf":[{"required":["reason"]},{"required":["timeout_ms"]}]}}]},
             "annotations":{"readOnlyHint":false,"destructiveHint":false}
         }),
     ]
@@ -489,5 +499,75 @@ mod tests {
             decision.comment.as_deref(),
             Some("Please finish the remaining check")
         );
+    }
+
+    #[test]
+    fn dropping_a_passive_observer_preserves_pending_and_approved_requests() {
+        for approved in [false, true] {
+            let (queue, scope, id) = fixture();
+            if approved {
+                queue
+                    .lock()
+                    .unwrap()
+                    .decide_finish_for(&id, FinishChoice::Yes, None, None)
+                    .unwrap();
+            }
+            queue.lock().unwrap().finish_waiting.insert(id.clone(), 1);
+            let revision = queue.lock().unwrap().revision;
+            drop(WaitGuard {
+                queue: &queue,
+                id: id.clone(),
+                scope: scope.clone(),
+                finished: false,
+                cancel_on_drop: false,
+            });
+            let mut queue = queue.lock().unwrap();
+            assert_eq!(queue.revision, revision);
+            assert!(!queue.finish_waiting.contains_key(&id));
+            let view = finish_view(&queue, &id, &scope).unwrap();
+            assert_eq!(
+                view.finish.unwrap().status,
+                if approved {
+                    FinishStatus::Approved
+                } else {
+                    FinishStatus::Pending
+                }
+            );
+            assert_eq!(queue.consume_finish(&scope).is_ok(), approved);
+        }
+    }
+
+    #[test]
+    fn dropping_a_request_or_explicit_cancel_invalidates_its_permission() {
+        for explicit in [false, true] {
+            let (queue, scope, id) = fixture();
+            queue
+                .lock()
+                .unwrap()
+                .decide_finish_for(&id, FinishChoice::Yes, None, None)
+                .unwrap();
+            if explicit {
+                cancel_in(&queue, &id, &scope).unwrap();
+            } else {
+                queue.lock().unwrap().finish_waiting.insert(id.clone(), 1);
+                drop(WaitGuard {
+                    queue: &queue,
+                    id: id.clone(),
+                    scope: scope.clone(),
+                    finished: false,
+                    cancel_on_drop: true,
+                });
+            }
+            let mut queue = queue.lock().unwrap();
+            assert_eq!(
+                finish_view(&queue, &id, &scope)
+                    .unwrap()
+                    .finish
+                    .unwrap()
+                    .status,
+                FinishStatus::Cancelled
+            );
+            assert!(queue.consume_finish(&scope).is_err());
+        }
     }
 }
