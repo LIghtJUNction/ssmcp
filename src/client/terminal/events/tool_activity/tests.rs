@@ -8,7 +8,11 @@ fn ui() -> Ui {
         ..Ui::default()
     }
 }
-
+fn view() -> EventView {
+    let mut view = EventView::new();
+    view.set_scope(EventScope::Conversation);
+    view
+}
 fn command(view: &mut EventView, id: &str, output: usize) -> u64 {
     view.ingest_event(
         "shell",
@@ -28,15 +32,81 @@ fn command(view: &mut EventView, id: &str, output: usize) -> u64 {
     }
     event_id
 }
-
-fn view() -> EventView {
-    let mut view = EventView::new();
-    view.set_scope(EventScope::Conversation);
-    view
+fn open_group(view: &mut EventView) {
+    let group = view.tool_groups().last().unwrap().clone();
+    view.selected = Some(group.head);
+    view.selected_group = Some(group.head);
+    assert!(view.open());
+}
+fn image_preview() -> super::super::images::Preview {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(2, 2));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    super::super::images::decode(
+        &json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(png.into_inner())}),
+        false,
+    )
+    .unwrap()
 }
 
 #[test]
-fn adjacent_tool_windows_respect_prose_hidden_logs_and_diff_boundaries() {
+fn adjacent_tool_groups_default_to_summary_and_count_logical_calls_once() {
+    for width in [120, 48] {
+        let mut view = view();
+        command(&mut view, "running", 20);
+        command(&mut view, "passed", 20);
+        command(&mut view, "failed", 20);
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"passed","exit_code":0}),
+            b"[OK] shell passed exit=0\n",
+        );
+        view.ingest_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"failed","exit_code":1}),
+            b"[ERR] shell failed exit=1\n",
+        );
+        view.ingest_event(
+            "workspace",
+            &json!({"type":"ssmcp.file.read","path":"a.rs"}),
+            b"[READ] workspace a.rs\n",
+        );
+        for _ in 0..5 {
+            view.ingest_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"running"}),
+                b"more output\n",
+            );
+        }
+        let text = view.render(width, 24, &ui(), true).join("\n");
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot["tool_groups"][0]["count"], 4);
+        assert_eq!(
+            snapshot["tool_groups"][0]["stats"],
+            json!({"running":1,"done":1,"failed":1,"unknown":1})
+        );
+        assert_eq!(snapshot["tool_groups"][0]["expanded"], false);
+        assert!(
+            text.contains("Tools · 4 calls") && text.contains("unknown 1"),
+            "{text}"
+        );
+        assert!(!text.contains("more output") && !text.contains("running-19"));
+        assert!(view.total_rows <= 2);
+        assert_eq!(view.visible_ids().len(), 1);
+        assert!(view.open());
+        view.render(width, 24, &ui(), true);
+        assert!(view.total_rows > 2);
+        assert!(view.mouse_select(0));
+        assert!(view.toggle());
+        view.render(width, 24, &ui(), true);
+        assert!(view.total_rows <= 2);
+        assert_eq!(view.events.len(), 4);
+    }
+}
+
+#[test]
+fn adjacent_tool_windows_respect_conversation_image_and_diagnostic_boundaries() {
     let mut view = view();
     command(&mut view, "a", 0);
     command(&mut view, "b", 0);
@@ -47,51 +117,46 @@ fn adjacent_tool_windows_respect_prose_hidden_logs_and_diff_boundaries() {
     command(&mut view, "e", 0);
     command(&mut view, "f", 0);
     assert_eq!(view.tool_groups().len(), 3);
-    assert!(
-        view.tool_groups()
-            .iter()
-            .all(|group| group.end - group.start == 2)
-    );
-    let text = view.render(120, 40, &ui(), false).join("\n");
-    assert_eq!(text.matches("Tools · 2 calls").count(), 3);
-    assert!(!text.contains("diagnostic boundary"));
-
-    view.events[1].meta.diff = true;
+    view.events[1].image = Some(image_preview());
     assert_eq!(view.tool_groups().len(), 2);
+    view.events[3].meta.diff = true;
+    assert_eq!(view.tool_groups().len(), 2, "diffs are logical tool calls");
     view.filter("cargo", 0);
     assert!(
         view.tool_groups().is_empty(),
-        "filtered rows must retain their original identities"
+        "search must show exact matching records"
     );
     view.filter("", 1);
     assert!(view.tool_groups().is_empty());
     view.filter("", 0);
     view.set_scope(EventScope::All);
-    assert!(view.tool_groups().is_empty(), "raw logs are never grouped");
+    assert!(view.tool_groups().is_empty(), "raw logs are not grouped");
 }
 
 #[test]
-fn adjacent_tool_windows_keep_existing_read_groups_separate() {
+fn adjacent_tool_windows_count_read_groups_and_ignore_bookkeeping() {
     let mut view = view();
     command(&mut view, "before-a", 0);
-    command(&mut view, "before-b", 0);
     for name in ["one", "two", "three"] {
         view.ingest_event(
             "workspace",
             &json!({"type":"ssmcp.file.read","path":format!("skills/{name}/SKILL.md")}),
-            b"[READ] workspace skill\nretained detail\n",
+            b"[READ] workspace skill\n",
         );
+        view.ingest_event("audit",&json!({"type":"ssmcp.skill.discovered","tool":"ssmcp.skills.list","path":name,"invoked":false}),b"[SKIL] discovered\n");
     }
     command(&mut view, "after-a", 0);
-    command(&mut view, "after-b", 0);
     assert_eq!(view.read_groups().len(), 1);
-    let groups = view.tool_groups();
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0].end, 2);
-    assert_eq!(groups[1].start, 5);
-    let text = view.render(120, 40, &ui(), false).join("\n");
-    assert!(text.contains("Read 3 items"), "{text}");
-    assert_eq!(text.matches("Tools · 2 calls").count(), 2);
+    assert_eq!(view.tool_groups().len(), 1);
+    let snapshot = view.snapshot();
+    assert_eq!(snapshot["tool_groups"][0]["count"], 5);
+    assert_eq!(snapshot["tool_groups"][0]["stats"]["unknown"], 3);
+    assert_eq!(snapshot["retained_events"], 8);
+    let text = view.render(120, 24, &ui(), true).join("\n");
+    assert!(
+        text.contains("Tools · 5 calls") && !text.contains("discovered"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -106,24 +171,38 @@ fn adjacent_tool_window_scroll_and_selection_keep_exact_event_targets() {
             .iter()
             .map(|event| event.text.clone())
             .collect::<Vec<_>>();
+        open_group(&mut view);
+        view.render(width, 24, &ui(), true);
+        assert!(view.scroll_selected_panel(isize::MAX));
         let rows = view.render(width, 24, &ui(), true);
-        assert!(view.total_rows <= 14);
+        assert!(view.total_rows <= 15);
         assert!(
             rows.iter()
                 .all(|row| UnicodeWidthStr::width(unstyled(row).as_str()) <= usize::from(width))
         );
-        assert_eq!(view.events[0].group_panel.page, 12);
         assert!(view.events[0].group_panel.offset() > 0);
         let panel_offsets = view
             .events
             .iter()
             .map(|event| event.panel.offset())
             .collect::<Vec<_>>();
-        let outer_scroll = view.scroll;
+        let outer = view.scroll;
         assert!(view.scroll_panel_at(0, isize::MIN + 1));
-        let rows = view.render(width, 24, &ui(), true);
+        view.render(width, 24, &ui(), true);
         assert_eq!(view.events[0].group_panel.offset(), 0);
-        assert_eq!(view.scroll, outer_scroll);
+        assert_eq!(view.scroll, outer);
+        let first = view
+            .hit_rows
+            .iter()
+            .enumerate()
+            .position(|(row, id)| *id == Some(ids[0]) && view.group_header_hit_rows[row].is_none())
+            .unwrap();
+        assert!(view.mouse_select(first as u16));
+        assert_eq!(view.selected, Some(ids[0]));
+        assert!(view.selected_group.is_none());
+        assert!(view.scroll_selected_panel(3));
+        view.render(width, 24, &ui(), true);
+        assert_eq!(view.events[0].group_panel.offset(), 3);
         assert_eq!(
             view.events
                 .iter()
@@ -131,14 +210,6 @@ fn adjacent_tool_window_scroll_and_selection_keep_exact_event_targets() {
                 .collect::<Vec<_>>(),
             panel_offsets
         );
-        assert_eq!(view.hit_rows[1], Some(ids[0]));
-        assert!(view.mouse_select(1));
-        assert_eq!(view.selected, Some(ids[0]));
-        assert!(view.scroll_selected_panel(3));
-        view.render(width, 24, &ui(), true);
-        assert_eq!(view.events[0].group_panel.offset(), 3);
-        assert_eq!(view.events[0].panel.offset(), panel_offsets[0]);
-        // Selecting a previously hidden member reveals its own title, not the head.
         view.select(7);
         view.render(width, 24, &ui(), true);
         assert_eq!(view.selected, Some(ids[7]));
@@ -150,52 +221,49 @@ fn adjacent_tool_window_scroll_and_selection_keep_exact_event_targets() {
                 .collect::<Vec<_>>(),
             original
         );
-        assert_eq!(rows.len(), 24);
     }
 }
 
 #[test]
-fn adjacent_tool_windows_preserve_inner_scroll_and_canvas_positions() {
+fn adjacent_tool_windows_preserve_fold_inner_scroll_and_canvas_positions() {
     let mut view = view();
     let ids = (0..6)
         .map(|n| command(&mut view, &format!("job{n}"), 40))
         .collect::<Vec<_>>();
-    view.render(120, 24, &ui(), true);
-    view.selected = Some(ids[2]);
-    view.follow = false;
-    view.reveal = true;
+    open_group(&mut view);
+    view.select(3);
+    assert_eq!(view.selected, Some(ids[2]));
     assert!(view.open());
     view.render(120, 24, &ui(), true);
-    let group_offset = view.events[0].group_panel.offset();
+    let offset = view.events[0].group_panel.offset();
     assert!(view.scroll_selected_panel(3));
     view.render(120, 24, &ui(), true);
     assert_eq!(view.events[2].panel.offset(), 3);
-    assert_eq!(view.events[0].group_panel.offset(), group_offset);
+    assert_eq!(view.events[0].group_panel.offset(), offset);
     let row = view
         .panel_hit_rows
         .iter()
         .position(|id| *id == Some(ids[2]))
         .unwrap();
     assert!(view.scroll_panel_at(row as u16, 3));
-    assert_eq!(view.events[2].panel.offset(), 6);
-    assert_eq!(view.events[0].group_panel.offset(), group_offset);
-    let saved = view.position();
-    assert!(view.scroll_tool_group(ids[2], isize::MAX));
-    view.events[2].panel.scroll = Some(0);
-    view.restore_position(&saved);
+    let expanded = view.position();
+    assert!(view.mouse_select(0));
+    assert!(view.back());
+    let folded = view.position();
     view.render(120, 24, &ui(), true);
-    assert_eq!(view.events[0].group_panel.offset(), group_offset);
+    assert_eq!(view.snapshot()["tool_groups"][0]["expanded"], false);
+    view.restore_position(&expanded);
+    view.render(120, 24, &ui(), true);
+    assert_eq!(view.events[0].group_panel.offset(), offset);
     assert_eq!(view.events[2].panel.offset(), 6);
+    assert_eq!(view.selected, Some(ids[2]));
     assert!(view.toggle());
     view.render(120, 24, &ui(), true);
-    assert_eq!(
-        view.events[2].panel.offset(),
-        37,
-        "folding restores the previous output tail"
-    );
-    view.latest();
+    assert_eq!(view.events[2].panel.offset(), 37);
+    view.restore_position(&folded);
     view.render(120, 24, &ui(), true);
-    assert!(view.events[0].group_panel.scroll.is_none());
+    assert_eq!(view.selected_group, Some(ids[0]));
+    assert_eq!(view.snapshot()["tool_groups"][0]["expanded"], false);
 }
 
 #[test]
@@ -214,7 +282,8 @@ fn adjacent_tool_details_reveal_long_redacted_source_tail_at_all_widths() {
             crate::client::render::render_event_for_test("shell", &event, usize::from(width))
                 .unwrap();
         view.ingest_event("shell", &event, &transcript);
-        view.render(width, 24, &ui(), true);
+        open_group(&mut view);
+        view.select(2);
         assert!(view.open());
         let head = view.render(width, 24, &ui(), true).join("\n");
         assert!(head.contains("head-marker"), "{head}");
@@ -242,11 +311,12 @@ fn adjacent_tool_window_state_is_bounded_by_retained_events() {
     assert_eq!(view.events.len(), MAX_EVENTS);
     assert_eq!(view.dropped, 30);
     assert_eq!(view.position().panel_scroll.len(), MAX_EVENTS);
-    let group = &view.snapshot()["tool_groups"][0];
-    assert_eq!(group["count"], MAX_EVENTS);
-    assert_eq!(group["members"].as_array().unwrap().len(), MAX_EVENTS);
-    assert_eq!(group["visible_rows"], 12);
-    assert_eq!(view.total_rows, 14);
+    assert_eq!(view.snapshot()["tool_groups"][0]["count"], MAX_EVENTS);
+    assert!(view.total_rows <= 2);
+    open_group(&mut view);
+    view.render(48, 20, &ui(), true);
+    assert_eq!(view.snapshot()["tool_groups"][0]["visible_rows"], 12);
+    assert!(view.total_rows <= 15);
     view.clear();
     assert!(view.tool_groups().is_empty() && view.group_hit_rows.is_empty());
 }

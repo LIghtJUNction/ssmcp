@@ -278,6 +278,42 @@ mod tests {
         );
     }
 
+    fn expand_read_items(view: &mut EventView) {
+        let ids = view
+            .events
+            .iter()
+            .filter(|event| event.meta.read.is_some())
+            .map(|event| event.id)
+            .collect::<Vec<_>>();
+        for id in ids {
+            view.selected = Some(id);
+            view.selected_group = None;
+            view.open();
+        }
+        let group = view.tool_groups()[0].clone();
+        view.selected = Some(group.head);
+        view.selected_group = Some(group.head);
+        view.reveal = false;
+    }
+
+    fn all_window_rows(view: &mut EventView, width: u16) -> Vec<String> {
+        let head = view.tool_groups()[0].head;
+        view.render(width, 40, &ui(), true);
+        view.scroll_tool_group(head, isize::MIN + 1);
+        let mut result = Vec::new();
+        loop {
+            result.extend(view.render(width, 40, &ui(), true));
+            let group = view.tool_groups()[0].clone();
+            let panel = &view.events[group.start].group_panel;
+            if panel.offset() == panel.rows.saturating_sub(panel.page) {
+                break;
+            }
+            let page = panel.page.max(1) as isize;
+            view.scroll_tool_group(head, page);
+        }
+        result
+    }
+
     #[tokio::test]
     async fn read_activity_native_scan_and_interleaved_discovery_keep_audit_records() {
         let (reads, listed) = crate::context::read_activity_tests::native_scan().await;
@@ -323,10 +359,11 @@ mod tests {
             assert_eq!(snapshot["read_groups"][0]["count"], 3);
             assert_eq!(snapshot["read_groups"][0]["members"], json!(ids));
             let collapsed = view.render(120, 30, &ui(), true).join("\n");
-            assert!(collapsed.contains("Read 3 items · workspace"));
+            assert!(collapsed.contains("Tools · 3 calls"));
             assert!(!collapsed.contains("discovered"));
             assert!(view.open());
-            let expanded = view.render(120, 30, &ui(), true).join("\n");
+            expand_read_items(&mut view);
+            let expanded = all_window_rows(&mut view, 120).join("\n");
             for event in &reads {
                 assert!(
                     expanded.contains(event["path"].as_str().unwrap()),
@@ -382,8 +419,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(view.snapshot()["visible_cards"], 1);
         assert!(view.open());
+        expand_read_items(&mut view);
         for width in [120, 48] {
-            let rows = view.render(width, 400, &ui(), true);
+            let rows = all_window_rows(&mut view, width);
             assert!(
                 rows.iter()
                     .all(|row| UnicodeWidthStr::width(unstyled(row).as_str()) <= width as usize)
@@ -395,7 +433,7 @@ mod tests {
             assert!(compact.contains("中文-tail/SKILL.md"));
             assert!(!compact.contains(secret));
         }
-        let expanded = view.render(120, 400, &ui(), true).join("\n");
+        let expanded = all_window_rows(&mut view, 120).join("\n");
         assert!(expanded.contains("retained-read-detail"));
         assert_eq!(
             view.events
@@ -573,7 +611,7 @@ mod tests {
             b"[RUN] shell next true\n",
         );
         let command = view.events.back().unwrap().id;
-        assert_eq!(view.visible_ids(), vec![ids[0], command]);
+        assert_eq!(view.visible_ids(), vec![ids[0]]);
         view.select(-1);
         assert_eq!(view.selected, Some(ids[0]));
         assert!(view.open());
@@ -586,6 +624,7 @@ mod tests {
         assert!(view.mouse_select(row as u16));
         assert_eq!(view.selected, Some(ids[2]));
         let expanded_column = view.position();
+        view.select(-isize::MAX);
         assert!(view.back());
         assert_eq!(view.selected, Some(ids[0]));
         assert!(
@@ -597,12 +636,13 @@ mod tests {
         assert_eq!(view.selected, Some(ids[2]));
         assert_eq!(view.scroll, expanded_column.scroll);
         assert_eq!(view.follow, expanded_column.follow);
-        assert!(view.read_groups()[0].expanded);
+        assert!(view.tool_groups()[0].expanded);
         view.select(1);
         assert_eq!(view.selected, Some(ids[3]));
         view.restore_position(&folded_column);
-        assert!(!view.read_groups()[0].expanded);
-        view.select(1);
+        assert!(!view.tool_groups()[0].expanded);
+        assert!(view.open());
+        view.select(5);
         assert_eq!(view.selected, Some(command));
         for _ in 0..super::super::MAX_EVENTS {
             view.ingest(b"[INFO] later background event\n");
@@ -617,19 +657,20 @@ mod tests {
         let mut view = view();
         read(&mut view, "skills/first/SKILL.md");
         let second = read(&mut view, "skills/second/SKILL.md");
-        view.select(0);
-        view.render(48, 3, &ui(), true);
+        assert!(view.open());
+        view.select(2);
+        view.render(48, 2, &ui(), true);
         assert_eq!(view.selected, Some(second));
         read(&mut view, "skills/third/SKILL.md");
         assert_eq!(view.selected, Some(second));
-        assert!(view.read_groups()[0].expanded);
+        assert!(view.tool_groups()[0].expanded);
         let mut position = view.position();
         position.scroll = 1;
         position.follow = false;
         position.reveal = false;
         view.restore_position(&EventPosition::default());
         view.restore_position(&position);
-        view.render(48, 3, &ui(), true);
+        view.render(48, 2, &ui(), true);
         assert_eq!(view.selected, Some(second));
         assert_eq!(view.scroll, 1);
         assert!(!view.follow);
@@ -669,8 +710,9 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         for width in [120, 48] {
             for expanded in [false, true] {
-                let group = view.read_groups()[0].clone();
-                view.set_read_expanded(&group, expanded);
+                let group = view.tool_groups()[0].clone();
+                view.set_tool_expanded(&group, expanded);
+                view.selected_group = Some(group.head);
                 view.selected = Some(group.head);
                 view.follow = false;
                 view.scroll = 0;
