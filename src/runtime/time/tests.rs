@@ -399,7 +399,7 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
         seed.id
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let backend = crate::backend::Backend::start_with_tty("/bin/sh", None)
+    let backend = crate::backend::Backend::start_with_tty(std::path::Path::new("/bin/sh"), None)
         .await
         .unwrap();
     let runtime = crate::runtime::Runtime::new(backend, root.clone()).unwrap();
