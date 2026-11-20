@@ -28,6 +28,12 @@
         "deploy_server": "skipped"
       },
       "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44710769033"
+    },
+    "coordinator_latest_readback": {
+      "method": "authorized GitHub connector",
+      "release_id": 452506742,
+      "tag": "v0.10.20",
+      "published_at": "2026-11-20T09:43:48Z"
     }
   },
   "assets": {
@@ -141,7 +147,8 @@
     "user_state_existing_files_hashed": 7,
     "user_state_hashes_unchanged": true,
     "cargo_records_byte_identical": true,
-    "path_unchanged": true
+    "path_unchanged": true,
+    "sample_scope": "initial native-path checkpoint before Cargo target authorization"
   },
   "continuity": {
     "processes_sampled": 33,
@@ -151,12 +158,109 @@
     "active_units_sampled": 5,
     "task_sent_process_signals": 0,
     "task_service_mutations": 0,
-    "identity_read_limitations": 0
+    "identity_read_limitations": 0,
+    "sample_scope": "initial native-path checkpoint before Cargo target authorization"
   },
   "acceptance": {
-    "zero_argument_probe": "not_launched_destination_blocked",
-    "legacy_self_fallback": "source_review_only",
-    "native_printf": "pending",
-    "production_server_inspection": "not_performed"
+    "zero_argument_probe": "connected_live_private_pty",
+    "legacy_self_fallback": "terminal_notice_observed",
+    "relay_listing_exact_workspace_match": true,
+    "terminal_connected_marker_observed": false,
+    "native_printf": "pending_coordinator_receipt",
+    "probe_cleanup": "pending_coordinator_receipt"
+  },
+  "cargo_path_install": {
+    "destination": "$HOME/.cargo/bin/ssmcp",
+    "before": {
+      "version": "0.10.15",
+      "sha256": "2c511ec9363d106e91173bbeda0213e7cb107d70484ccf025362094dc823f7c2"
+    },
+    "after": {
+      "version": "0.10.20",
+      "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+      "source": "official GitHub release archive",
+      "mode": "0755"
+    },
+    "atomic_rename": true,
+    "destination_directory_synced": true,
+    "private_backup_verified": true,
+    "cargo_last_install": {
+      "recorded_version": "0.10.15",
+      "record_source": "local_path",
+      "other_package_records_per_file": 37,
+      "both_record_files_byte_identical": true
+    },
+    "path_resolution": {
+      "before": {
+        "login_interactive_zsh": {
+          "path": "$HOME/.cargo/bin/ssmcp",
+          "version": "0.10.15"
+        },
+        "native_execution": {
+          "path": "$HOME/.local/bin/ssmcp",
+          "version": "0.10.10"
+        },
+        "systemd_user_manager_path": {
+          "path": "$HOME/.local/share/mise/shims/ssmcp",
+          "version": "0.10.10"
+        }
+      },
+      "after": {
+        "login_interactive_zsh": {
+          "path": "$HOME/.cargo/bin/ssmcp",
+          "version": "0.10.20"
+        },
+        "native_execution": {
+          "path": "$HOME/.local/bin/ssmcp",
+          "version": "0.10.10"
+        },
+        "systemd_user_manager_path": {
+          "path": "$HOME/.local/share/mise/shims/ssmcp",
+          "version": "0.10.10"
+        }
+      }
+    },
+    "sample": {
+      "sample_before_at": "2026-11-20T09:58:17.969169+00:00",
+      "sample_after_at": "2026-11-20T10:00:17.042059+00:00",
+      "process_counts_by_class": {
+        "loaded_service_main": {
+          "retained": 5
+        },
+        "persistent_candidate": {
+          "retained": 26,
+          "same_retired_inode": 19
+        }
+      },
+      "service_properties_unchanged": true,
+      "native_path_unchanged": true,
+      "systemd_path_unchanged": true,
+      "sampled_user_state_hashes_unchanged": true,
+      "cargo_records_byte_identical": true,
+      "other_sampled_executables_unchanged": true,
+      "zsh_snapshot_files_unchanged": true,
+      "zsh_startup_path_identical": true,
+      "histfile_selection_identical": true,
+      "configured_history_file_exists": true,
+      "configured_history_mtime_predates_measurements": true,
+      "read_limitations_count": 0
+    },
+    "signals_sent_to_existing_processes": 0,
+    "existing_service_mutations": 0
+  },
+  "production_readonly": {
+    "outcome": "blocked_active_sessions",
+    "inspection_exit": 3,
+    "version": "0.10.13",
+    "same_process_during_inspection": true,
+    "matches_previously_recorded_pid": true,
+    "matches_previously_recorded_start_timestamp": true,
+    "matches_previously_recorded_version": true,
+    "matches_previously_recorded_executable_sha256": true,
+    "restarts": 0,
+    "historical_start_ticks_match": null,
+    "admission_fence_verified": false,
+    "switch_permitted": false,
+    "reason": "The current daemon has no verified atomic admission fence or drain lease."
   }
 }
