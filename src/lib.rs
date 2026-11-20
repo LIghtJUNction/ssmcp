@@ -22,6 +22,7 @@ pub(crate) mod local_socket;
 #[cfg(target_os = "linux")]
 pub mod management;
 pub(crate) mod memory;
+#[cfg(target_os = "linux")]
 pub(crate) mod messaging;
 #[cfg(target_os = "linux")]
 pub mod oauth;

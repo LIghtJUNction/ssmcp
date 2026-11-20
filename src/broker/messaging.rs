@@ -97,6 +97,15 @@ impl Broker {
             && authorization.permits(source)
     }
 
+    fn message_recipient_live(&self, target: &Session, recipient: &Recipient) -> bool {
+        let identity = Identity {
+            provider: recipient.account.provider.clone(),
+            subject: recipient.account.subject.clone(),
+            login: recipient.account.login.clone(),
+        };
+        self.message_authorized(target, &Authorization::Identity(identity))
+    }
+
     fn message_proof_live(&self, target: &Session, proof: &Proof, recipient: &Recipient) -> bool {
         let Some(source) = proof.connection.upgrade() else {
             return false;
@@ -105,6 +114,7 @@ impl Broker {
         if target.client_id() != recipient.client_id
             || !self.message_authorized(&source, &authorization)
             || !self.message_authorized(target, &authorization)
+            || !self.message_recipient_live(target, recipient)
         {
             return false;
         }
@@ -195,6 +205,9 @@ impl Broker {
         let source = self.client(user, &authorization, &client_id).await?;
         let owner = crate::bridge::owner(user, &authorization)?;
         let run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
+        if let Some(run) = &run {
+            run.record_connection(&source)?;
+        }
         let bound = run.as_ref().and_then(|run| run.binding(&client_id));
         let binding = match (supplied_id, supplied_token) {
             (None, None) => bound,
@@ -300,7 +313,11 @@ impl Broker {
         command: Command,
         admission: Admission<'_>,
     ) -> Result<Reply, String> {
-        let sessions = self.clients(IDENTITY_RESOURCE, &authorization).await?;
+        let resource = match &admission {
+            Admission::OAuth { user, .. } => *user,
+            Admission::Device(_) => IDENTITY_RESOURCE,
+        };
+        let sessions = self.clients(resource, &authorization).await?;
         // Complete all awaited admission checks before any mailbox mutation.
         let authorization = match admission {
             Admission::OAuth { user, token } => self
@@ -330,6 +347,9 @@ impl Broker {
                         continue;
                     }
                     for recipient in session.message_recipients() {
+                        if !self.message_recipient_live(&session, &recipient) {
+                            continue;
+                        }
                         if reply.recipients.len() == messages::MAX_RECIPIENTS {
                             reply.more_recipients = true;
                             break;
@@ -357,6 +377,9 @@ impl Broker {
                     .filter(|session| self.message_authorized(session, &authorization))
                     .ok_or("recipient client is unavailable or no longer authorized")?;
                 let recipient = target.message_recipient(&recipient_id)?;
+                if !self.message_recipient_live(target, &recipient) {
+                    return Err("recipient account is unavailable or no longer authorized".into());
+                }
                 reply.receipts.push(self.native_messages.enqueue(
                     Proof {
                         connection: Arc::downgrade(source),
