@@ -331,12 +331,34 @@ class ReleaseTests(unittest.TestCase):
             (output / name).write_text(name)
         return output
 
+    def stub_verified_crate(self, archive=None):
+        source = {
+            "commit": self.git("rev-parse", "HEAD"),
+            "dependency_graph": {"cargo_lock_sha256": release.digest(self.root / "Cargo.lock"), "packages": []},
+        }
+        receipt = {"source": source}
+        if archive is not None:
+            receipt["sha256"] = release.digest(archive)
+        for name, value in (("verified_crate_receipt", receipt), ("release_source", source)):
+            patcher = mock.patch.object(release, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def same_dry_run_bytes(self, args, **kwargs):
+        if "--dry-run" in args:
+            archive = release.crate_archive(self.root)
+            temporary = release.crate_archive(self.root, Path(args[args.index("--target-dir") + 1]))
+            temporary.parent.mkdir(parents=True)
+            temporary.write_bytes(archive.read_bytes())
+
     def test_checksums_require_every_platform_and_match_manifest(self):
         output = self.fixtures()
+        self.stub_verified_crate()
         release.checksums(self.root)
         manifest = json.loads((output / "release-manifest.json").read_text())
         self.assertEqual(len(manifest["artifacts"]), 8)
         self.assertEqual(manifest["commit"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(manifest["dependency_graph"]["cargo_lock_sha256"], release.digest(self.root / "Cargo.lock"))
         self.assertEqual(len((output / "SHA256SUMS").read_text().splitlines()), 8)
         next(output.glob("*.zip")).unlink()
         with self.assertRaisesRegex(ValueError, "archive set"):
@@ -414,6 +436,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_release_creates_or_resumes_draft_and_retries_without_duplicate_uploads(self):
         output = self.fixtures()
+        self.stub_verified_crate()
         real_run = subprocess.run
         endpoint = "repos/example/ssmcp/releases"
 
@@ -528,9 +551,10 @@ class ReleaseTests(unittest.TestCase):
         member.parent.mkdir(parents=True)
         member.write_text('[package]\nname = "ztuio"\nversion = "0.1.0"\n[lib]\nname = "ztuio"\n')
         with (self.root / "Cargo.toml").open("a") as stream:
-            stream.write('\n[dependencies]\nztuio = { version = "=0.1.0", path = "crates/ztuio" }\n')
+            stream.write('\n[dependencies]\nztuio = { version = "=0.1.0", git = "https://github.com/LIghtJUNction/ztuio.git" }\n')
         with (self.root / "Cargo.lock").open("a") as stream:
-            stream.write('\n[[package]]\nname = "ztuio"\nversion = "0.1.0"\n')
+            stream.write('\n[[package]]\nname = "ztuio"\nversion = "0.1.0"\n'
+                         f'source = "git+{release.project_z_url("ztuio")}#{"1"*40}"\n')
         output = self.root / "target/package"
         output.mkdir(parents=True, exist_ok=True)
         (output / "ssmcp-0.5.0.crate").write_bytes(b"application crate")
@@ -544,10 +568,10 @@ class ReleaseTests(unittest.TestCase):
         manifest = self.root / "Cargo.toml"
         original = manifest.read_text()
         for changed in (original.replace('version = "=0.1.0"', 'version = "0.1.0"'),
-                        original.replace('path = "crates/ztuio"', 'path = "other/ztuio"')):
+                        original.replace('git = "https://github.com/LIghtJUNction/ztuio.git"', 'path = "other/ztuio"')):
             with self.subTest(manifest=changed):
                 manifest.write_text(changed)
-                with self.assertRaisesRegex(ValueError, "pin"):
+                with self.assertRaises(ValueError):
                     release.registry_dependencies(self.root)
         manifest.write_text(original)
         member.write_text(member.read_text().replace('name = "ztuio"', 'name = "different"', 1))
@@ -576,6 +600,110 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('version = "=0.1.0"', (self.root / "Cargo.toml").read_text())
         self.assertEqual(release.validate_package("v0.6.0", self.root), "0.6.0")
 
+    def test_project_z_git_requires_canonical_url_and_default_branch(self):
+        self.add_ztuio_dependency()
+        manifest = self.root / "Cargo.toml"
+        original = manifest.read_text()
+        canonical = 'git = "https://github.com/LIghtJUNction/ztuio.git"'
+        for replacement in (
+            canonical.replace(".git", ""),
+            canonical.replace("LIghtJUNction", "other"),
+            canonical + ', rev = "' + "1" * 40 + '"',
+            canonical + ', tag = "v0.1.0"',
+            canonical + ', branch = "main"',
+            'path = "crates/ztuio"',
+            'registry = "other"',
+            'default-features = true',
+        ):
+            with self.subTest(replacement=replacement):
+                manifest.write_text(original.replace(canonical, replacement))
+                with self.assertRaisesRegex(ValueError, "canonical default-branch Git source"):
+                    release.registry_dependencies(self.root)
+
+    def test_lock_rejects_registry_fallback_and_split_git_sources(self):
+        self.add_ztuio_dependency()
+        lock = self.root / "Cargo.lock"
+        original = lock.read_text()
+        canonical = f'git+{release.project_z_url("ztuio")}#{"1"*40}'
+        for text in (
+            original.replace(canonical, release.CRATES_IO),
+            original.replace(canonical, canonical.replace(".git#", ".git?branch=main#")),
+            original + f'\n[[package]]\nname = "ztuio"\nversion = "0.2.0"\nsource = "{canonical}"\n',
+        ):
+            with self.subTest(lock=text):
+                lock.write_text(text)
+                with self.assertRaisesRegex(ValueError, "locked canonical|duplicate or split"):
+                    release.validate_package("v0.5.0", self.root)
+
+    def test_full_metadata_must_match_lock_and_actual_gitlink_tree(self):
+        member = self.add_ztuio_dependency()
+        revision, tree = "1" * 40, "2" * 40
+        metadata = {
+            "workspace_root": str(self.root), "packages": [
+                {"id": "root", "name": "ssmcp", "version": "0.5.0", "source": None,
+                 "manifest_path": str(self.root / "Cargo.toml")},
+                {"id": "core", "name": "ztuio", "version": "0.1.0",
+                 "source": f'git+{release.project_z_url("ztuio")}#{revision}', "manifest_path": str(member)},
+            ],
+            "resolve": {"root": "root", "nodes": [
+                {"id": "root", "features": [], "deps": [{"name": "ztuio", "pkg": "core", "dep_kinds": []}]},
+                {"id": "core", "features": [], "deps": []},
+            ]},
+        }
+        real_command = release.command
+
+        def command(*args, **options):
+            if args[:1] == ("cargo",):
+                self.assertEqual(args, ("cargo", "metadata", "--locked", "--format-version", "1"))
+                return json.dumps(metadata)
+            return real_command(*args, **options)
+
+        with mock.patch.object(release, "command", side_effect=command), \
+             mock.patch.object(release, "source_submodules", return_value=[
+                 {"path": "crates/ztuio", "commit": revision, "tree": tree}]), \
+             mock.patch.object(release, "cargo_git_checkout", return_value=(member.parent, tree)) as checkout:
+            graph = release.dependency_graph(self.root)
+            self.assertEqual(graph["packages"][1]["commit"], revision)
+            checkout.assert_called_once_with(member, revision)
+            checkout.return_value = (member.parent, "3" * 40)
+            with self.assertRaisesRegex(ValueError, "differs from the ztuio source gitlink"):
+                release.dependency_graph(self.root)
+            metadata["packages"][1]["source"] = metadata["packages"][1]["source"].replace(revision, "4" * 40)
+            with self.assertRaisesRegex(ValueError, "identities differ from Cargo.lock"):
+                release.dependency_graph(self.root)
+
+    def test_actual_cargo_checkout_requires_unmodified_locked_content(self):
+        cargo_home = self.root / "cargo-home"
+        checkout = cargo_home / "git/checkouts/ztuio-fixture/1234567"
+        checkout.mkdir(parents=True)
+        member = checkout / "Cargo.toml"
+        member.write_text('[package]\nname = "ztuio"\nversion = "0.1.0"\n')
+        for args in (("init", "--quiet", "--template="), ("add", "Cargo.toml")):
+            release.command("git", *args, cwd=checkout)
+        release.command("git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "commit", "--quiet", "-m", "source", cwd=checkout)
+        revision = release.command("git", "rev-parse", "HEAD", cwd=checkout)
+        (checkout / ".cargo-ok").touch()
+        with mock.patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}):
+            self.assertEqual(release.cargo_git_checkout(member, revision)[0], checkout)
+            with self.assertRaisesRegex(ValueError, "differs from locked Git source"):
+                release.cargo_git_checkout(member, "0" * 40)
+            member.write_text(member.read_text() + "# modified")
+            with self.assertRaisesRegex(ValueError, "uncommitted source"):
+                release.cargo_git_checkout(member, revision)
+
+    def test_shared_zplugin_requires_both_actual_graph_edges(self):
+        packages = {"app": {"name": "ssmcp"}, "harness": {"name": "zharness"}, "plugin": {"name": "zplugin"}}
+        nodes = {"app": {"deps": [{"pkg": "plugin"}]}, "harness": {"deps": [{"pkg": "plugin"}]}}
+        release.require_shared_zplugin("app", packages, nodes)
+        nodes["harness"]["deps"].clear()
+        with self.assertRaisesRegex(ValueError, "same single zplugin"):
+            release.require_shared_zplugin("app", packages, nodes)
+        nodes["harness"]["deps"].append({"pkg": "split"})
+        packages["split"] = {"name": "zplugin"}
+        with self.assertRaisesRegex(ValueError, "same single zplugin"):
+            release.require_shared_zplugin("app", packages, nodes)
+
     def test_bad_ztuio_lock_prevents_every_bump_write(self):
         member = self.add_ztuio_dependency()
         lock = self.root / "Cargo.lock"
@@ -588,7 +716,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_application_publication_never_uploads_ztuio(self):
         self.add_ztuio_dependency()
-        application = release.digest(self.root / "target/package/ssmcp-0.5.0.crate")
+        archive = release.crate_archive(self.root)
+        application = release.digest(archive)
+        self.stub_verified_crate(archive)
         uploaded = []
 
         def registry(version, package):
@@ -599,9 +729,12 @@ class ReleaseTests(unittest.TestCase):
             return application if uploaded else None
 
         def upload(args, **kwargs):
-            self.assertEqual(args, ["cargo", "publish", "--locked", "--no-verify",
-                                    "--registry", "crates-io", "--package", "ssmcp"])
-            uploaded.append(args[-1])
+            self.assertEqual(args[:9], ["cargo", "publish", "--locked", "--no-verify",
+                                        "--registry", "crates-io", "--package", "ssmcp", "--target-dir"])
+            if "--dry-run" in args:
+                self.same_dry_run_bytes(args)
+            else:
+                uploaded.append(args[7])
 
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token",
                                          "CARGO_REGISTRY_DEFAULT": "unrelated-fixture"}, clear=True), \
@@ -621,6 +754,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_application_collision_stops_after_independent_dependency_check(self):
         self.add_ztuio_dependency()
+        self.stub_verified_crate(release.crate_archive(self.root))
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", "different"]), \
              mock.patch.object(release.subprocess, "run") as upload, \
@@ -630,7 +764,9 @@ class ReleaseTests(unittest.TestCase):
 
     def test_published_application_and_ztuio_retry_without_upload_credentials(self):
         self.add_ztuio_dependency()
-        application = release.digest(self.root / "target/package/ssmcp-0.5.0.crate")
+        archive = release.crate_archive(self.root)
+        self.stub_verified_crate(archive)
+        application = release.digest(archive)
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", application]), \
              mock.patch.object(release.subprocess, "run") as upload:
@@ -639,14 +775,23 @@ class ReleaseTests(unittest.TestCase):
 
     def test_failed_application_upload_never_uploads_the_independent_dependency(self):
         self.add_ztuio_dependency()
+        self.stub_verified_crate(release.crate_archive(self.root))
+
+        def upload(args, **kwargs):
+            if "--dry-run" in args:
+                self.same_dry_run_bytes(args)
+            else:
+                raise subprocess.CalledProcessError(1, "cargo")
+
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=["upstream-checksum", None]), \
-             mock.patch.object(release.subprocess, "run",
-                               side_effect=subprocess.CalledProcessError(1, "cargo")) as upload, \
+             mock.patch.object(release.subprocess, "run", side_effect=upload) as invoked, \
              self.assertRaises(subprocess.CalledProcessError):
             release.publish(self.root)
-        self.assertEqual(upload.call_count, 1)
-        self.assertEqual(upload.call_args.args[0][-1], "ssmcp")
+        self.assertEqual(invoked.call_count, 2)
+        self.assertTrue(all(call.args[0][7] == "ssmcp" for call in invoked.call_args_list))
+        self.assertIn("--dry-run", invoked.call_args_list[0].args[0])
+        self.assertNotIn("--dry-run", invoked.call_args_list[1].args[0])
 
     def test_registry_only_treats_404_as_unpublished(self):
         for status in (404, 403, 500):
@@ -668,16 +813,96 @@ class ReleaseTests(unittest.TestCase):
         path = self.root / "target/package/ssmcp-0.5.0.crate"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"crate")
+        self.stub_verified_crate(path)
         with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
              mock.patch.object(release, "registry_checksum", side_effect=[None, "different"]), \
-             mock.patch.object(release.subprocess, "run"), \
+             mock.patch.object(release.subprocess, "run", side_effect=self.same_dry_run_bytes), \
              self.assertRaisesRegex(ValueError, "published crate checksum differs"):
             release.publish(self.root)
+
+    def test_fresh_dry_run_bytes_must_match_before_upload(self):
+        path = release.crate_archive(self.root)
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"verified application crate")
+        self.stub_verified_crate(path)
+
+        def drift(args, **kwargs):
+            self.assertIn("--dry-run", args)
+            self.same_dry_run_bytes(args)
+            fresh = release.crate_archive(self.root, Path(args[args.index("--target-dir") + 1]))
+            fresh.write_bytes(b"different fresh crate")
+
+        with mock.patch.dict(os.environ, {"CARGO_REGISTRY_TOKEN": "fixture-token"}, clear=True), \
+             mock.patch.object(release, "registry_checksum", return_value=None), \
+             mock.patch.object(release.subprocess, "run", side_effect=drift) as invoke, \
+             self.assertRaisesRegex(ValueError, "fresh package bytes"):
+            release.publish(self.root)
+        invoke.assert_called_once()
+        self.assertEqual(path.read_bytes(), b"verified application crate")
+
+    def test_normalized_crate_must_match_original_source_and_registry_contract(self):
+        self.add_ztuio_dependency()
+        commit = self.git("rev-parse", "HEAD")
+        src = self.root / "src/lib.rs"
+        src.parent.mkdir()
+        src.write_bytes(b"pub const FIXTURE: bool = true;\n")
+        manifest = (self.root / "Cargo.toml").read_bytes()
+        normalized = manifest.replace(b', git = "https://github.com/LIghtJUNction/ztuio.git"', b'')
+        lock = ('version = 4\n[[package]]\nname = "ssmcp"\nversion = "0.5.0"\n'
+                f'[[package]]\nname = "ztuio"\nversion = "0.1.0"\nsource = "{release.CRATES_IO}"\n'
+                f'checksum = "{"2"*64}"\n').encode()
+        vcs = json.dumps({"git": {"sha1": commit}, "path_in_vcs": ""}).encode()
+        files = {"Cargo.toml": normalized, "Cargo.toml.orig": manifest, "Cargo.lock": lock,
+                 ".cargo_vcs_info.json": vcs, "src/lib.rs": src.read_bytes()}
+
+        def archive(**changes):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode="w:gz") as output:
+                for name, body in (files | changes).items():
+                    member = tarfile.TarInfo(f"ssmcp-0.5.0/{name}")
+                    member.size = len(body)
+                    output.addfile(member, io.BytesIO(body))
+            return data.getvalue()
+
+        report, _ = release.normalized_crate(self.root, archive(), commit)
+        self.assertEqual(report["packages"][1]["source"], release.CRATES_IO)
+        for changes, error in (
+            ({"Cargo.toml": manifest}, "not a crates.io version"),
+            ({"Cargo.toml": normalized.replace(b"=0.1.0", b"=0.1.1")}, "changed its package"),
+            ({"Cargo.lock": lock.replace(release.CRATES_IO.encode(), b"git+https://example.org/pkg")}, "unexpected source"),
+            ({".cargo_vcs_info.json": vcs.replace(commit.encode(), b"0" * 40)}, "source identity differs"),
+            ({"src/lib.rs": b"// different source"}, "member differs"),
+            ({"src\\outside.rs": b"// ambiguous archive path"}, "unsafe normalized package member"),
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, error):
+                    release.normalized_crate(self.root, archive(**changes), commit)
+
+        crate = release.crate_archive(self.root)
+        crate.write_bytes(archive())
+        source = {"commit": commit}
+        graph = [
+            {"name": "ssmcp", "version": "0.5.0", "source": None, "dependencies": [
+                {"package": ["ztuio", "0.1.0", release.CRATES_IO]},
+            ]},
+            {"name": "ztuio", "version": "0.1.0", "source": release.CRATES_IO, "dependencies": []},
+        ]
+        receipt = {"source": source, "name": crate.name, "sha256": release.digest(crate),
+                   "bytes": crate.stat().st_size, "normalized": report, "registry_graph": graph}
+        path = crate.parent / release.VERIFIED_CRATE
+        with mock.patch.object(release, "release_source", return_value=source):
+            path.write_text(json.dumps(receipt))
+            self.assertEqual(release.verified_crate_receipt(self.root), receipt)
+            graph[0]["dependencies"].clear()
+            path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "missing direct Project Z dependency edges"):
+                release.verified_crate_receipt(self.root)
 
     def test_published_identical_package_is_idempotent_without_secret(self):
         path = self.root / "target/package/ssmcp-0.5.0.crate"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"crate")
+        self.stub_verified_crate(path)
         with mock.patch.dict(os.environ, {}, clear=True), \
              mock.patch.object(release, "registry_checksum", return_value=release.digest(path)), \
              mock.patch.object(release.subprocess, "run") as publish:
@@ -688,6 +913,7 @@ class ReleaseTests(unittest.TestCase):
         path = self.root / "target/package/ssmcp-0.5.0.crate"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"crate")
+        self.stub_verified_crate(path)
         for remote, message in (("different", "different bytes"), (None, "CARGO_REGISTRY_TOKEN")):
             with mock.patch.dict(os.environ, {}, clear=True), \
                  mock.patch.object(release, "registry_checksum", return_value=remote), \
@@ -701,9 +927,9 @@ class ReleaseTests(unittest.TestCase):
     def add_registry_dependencies(self):
         with (self.root / "Cargo.toml").open("a") as stream:
             stream.write('\n[dependencies]\n'
-                         'zharness = { path = "crates/zharness", version = "=0.5.0" }\n'
-                         'zplugin = { path = "crates/zplugin", version = "=0.3.0" }\n'
-                         '\n[patch.crates-io]\nzplugin = { path = "crates/zplugin" }\n')
+                         'zharness = { git = "https://github.com/LIghtJUNction/zharness.git", version = "=0.5.0" }\n'
+                         'zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", version = "=0.3.0" }\n'
+                         '\n[patch.crates-io]\nzplugin = { git = "https://github.com/LIghtJUNction/zplugin.git" }\n')
         for name, version in (("zharness", "0.5.0"), ("zplugin", "0.3.0")):
             path = self.root / "crates" / name / "Cargo.toml"
             path.parent.mkdir(parents=True)
@@ -711,7 +937,8 @@ class ReleaseTests(unittest.TestCase):
                             + ('\n[dependencies]\nzplugin = { version = "=0.3.0" }\n'
                                if name == "zharness" else ""))
             with (self.root / "Cargo.lock").open("a") as stream:
-                stream.write(f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n')
+                stream.write(f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+                             f'source = "git+{release.project_z_url(name)}#{"1"*40}"\n')
 
     def test_registry_dependency_uses_its_own_inherited_workspace_version(self):
         self.add_registry_dependencies()
@@ -728,7 +955,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_zuse_alias_requires_initialized_source_and_exact_registry_package(self):
         manifest = self.root / "Cargo.toml"
-        original = manifest.read_text() + '\n[dependencies]\nzuse = { package = "zuse-computer", path = "crates/zuse", version = "=0.1.0" }\n'
+        original = manifest.read_text() + '\n[dependencies]\nzuse = { package = "zuse-computer", git = "https://github.com/LIghtJUNction/zuse.git", version = "=0.1.0" }\n'
         manifest.write_text(original)
         with self.assertRaisesRegex(ValueError, "source is missing"):
             release.registry_dependencies(self.root)
@@ -837,7 +1064,7 @@ class ReleaseTests(unittest.TestCase):
         manifest = self.root / "Cargo.toml"
         original = manifest.read_text()
         mutations = (original.replace('version = "=0.3.0"', 'version = "0.3.0"'),
-                     original.replace('[patch.crates-io]\nzplugin = { path = "crates/zplugin" }',
+                     original.replace('[patch.crates-io]\nzplugin = { git = "https://github.com/LIghtJUNction/zplugin.git" }',
                                       '[patch.crates-io]\nzplugin = { path = "other/zplugin" }'),
                      original.replace('version = "=0.5.0"', 'version = "=0.5.1"'))
         for text in mutations:
@@ -868,6 +1095,7 @@ class ReleaseTests(unittest.TestCase):
         output.mkdir(parents=True)
         archive = output / "ssmcp-0.5.0.crate"
         archive.write_bytes(b"verified application fixture")
+        self.stub_verified_crate(archive)
         checksum = release.digest(archive)
         with mock.patch.object(release, "registry_checksum", side_effect=["plugin-digest", "harness-digest", checksum]) as registry, \
              mock.patch.object(release.subprocess, "run") as upload:
@@ -884,6 +1112,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(row["commit"], git(folder, "rev-parse", "HEAD"))
             self.assertEqual(row["tree"], git(folder, "rev-parse", "HEAD^{tree}"))
         self.fixtures()
+        self.stub_verified_crate()
         release.checksums(self.root)
         manifest = json.loads((self.root / "dist/release-manifest.json").read_text())
         self.assertEqual(manifest["submodules"], modules)

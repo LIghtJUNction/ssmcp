@@ -126,6 +126,8 @@ jobs:
         with:
           toolchain: 1.100.0
           components: rustfmt
+      - name: Verify the full locked dependency graph and Git checkouts
+        run: python scripts/release.py dependency-graph
       - run: cargo fmt --all -- --check
 
   checks:
@@ -310,17 +312,19 @@ jobs:
           else
             python scripts/release.py validate --build-only
           fi
-      - name: Require every verified target archive
+      - name: Verify the application source package and normalized registry graph
+        run: python scripts/release.py verify-crate
+      - name: Require every verified target archive and record the release manifest
         run: |
           cp scripts/install.sh scripts/install.ps1 dist/
           python scripts/release.py checksums
-      - name: Verify the application source package
-        run: cargo package --locked --package ssmcp
       - name: Retain the verified application crate for publishing
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-crates
-          path: target/package/*.crate
+          path: |
+            target/package/*.crate
+            target/package/ssmcp-verified-crate.json
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
@@ -379,6 +383,9 @@ jobs:
           submodules: recursive
           fetch-depth: 0
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: 1.100.0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
@@ -387,6 +394,10 @@ jobs:
           pattern: ssmcp-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-crates
+          path: target/package
       - name: Recheck tag identity and every target archive
         run: |
           python scripts/release.py validate --tag "$RELEASE_TAG"
