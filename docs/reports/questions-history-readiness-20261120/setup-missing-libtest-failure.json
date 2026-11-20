@@ -1,0 +1,22 @@
+{
+  "status": "failed",
+  "platform": "Linux",
+  "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+  "scope": "nonblocking questions, local answers, independent drafts, Markdown display; no models",
+  "binaries": {
+    "ssmcp": "0f41062eec88ba35b4468b9a50ee6591790c5b651cb676ca90a6532e4f1ac4aa",
+    "ssmcpd": "d58e088bddb0e8d4b21d3a2db84485c3dbab05a2d78e0c2f7fbd7735762dedd9",
+    "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f"
+  },
+  "sources": {
+    "e2e_questions.py": "5fb581598245e3a8afcca1983c66a9bae0a41103a3ca986a1568dc6137749060",
+    "e2e.py": "5778b6a583e370aa2a50e88fed7a010e5fab457aa88d72ec31a7d372549e6ab3",
+    "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+    "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+    "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1"
+  },
+  "error": "RuntimeError: set SSMCP_E2E_FIXTURE_BINARY to the already-built library test executable containing http::relay_composer_fixture::relay_composer_server_fixture; this fixture never invokes cargo",
+  "checks": [],
+  "metrics": {},
+  "duration_seconds": 0.125
+}

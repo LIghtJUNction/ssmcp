@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-11-20T16:21:20.103866+00:00",
+  "task": "Exact local-recipient readiness and explicit History picker keyboard focus",
+  "status": "passed_for_the_recorded_sources_and_suites",
+  "repository": "https://github.com/LIghtJUNction/ssmcp",
+  "product_pull_request": "https://github.com/LIghtJUNction/ssmcp/pull/146",
+  "product_merge_revision": "3431054facad9809748567a13b292c8cc7773b67",
+  "documentation_base_revision": "4d15c3a2f2846adaaf7ddf7c1166e5a014afcbbd",
+  "originating_preflight": {
+    "id": 44762565095,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44762565095",
+    "source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+    "linux_failed_jobs": [
+      136378949646,
+      136378949813
+    ],
+    "failure": "Both jobs completed Canvas 69 and Composer 87, then Questions stopped after OAuth setup with 17 checks and StopIteration."
+  },
+  "changes": [
+    "Both Questions and InputHistory wait for exactly one matching local steering member, select by exact member identity, and assert local target plus no native_recipient.",
+    "Successful explicit history picker opening sets content_focus=true even in an already active History column. Ordinary canvas focus memory and returning to input after restore are unchanged.",
+    "The new task-local unit regression uses the real character-to-submit path for /resume, /archived, and /resume in the same canvas. The PTY retains Home + Enter and strengthens picker focus and empty-command checks."
+  ],
+  "source_boundaries": {
+    "questions_product": "c7086f9545602f45399e7a237995a48440e7d8aa",
+    "questions_fixture": "8e768415e4b4b98df6787de5a9b7a67f569a8f6a",
+    "input_history_product": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+    "input_history_product_tree": "32e9e4fb9afe73a8aecce553a310240e02d83e3e",
+    "input_history_fixture": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+    "input_history_fixture_tree": "d1886ee750ee431f01dd074ea3399b2a25ac9d07",
+    "library_fixture_source": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+    "source_equivalence": "None: the only difference is inside the cfg(test) archive_tests module.",
+    "evidence_collection_base_is_not_a_tested_product": "4d15c3a2f2846adaaf7ddf7c1166e5a014afcbbd",
+    "counts": "Each count belongs to its reported run. Repeated setup assertions are retained as emitted by the harness; counts are not added across suites, attempts, platforms or revisions."
+  },
+  "environment": {
+    "platform": "Linux",
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "build_environment": {
+      "CARGO_HOME": "/var/tmp/ssmcp-convergence-verification-20261120/release17-fixed/cargo-home",
+      "CARGO_TARGET_DIR": "/var/tmp/ssmcp-questions-roster-20261120/target",
+      "CARGO_BUILD_JOBS": "1",
+      "RUSTC_WRAPPER": "/home/lightjunction/.cargo/rustc-serial",
+      "RUSTUP_TOOLCHAIN": "1.100.0",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0"
+    },
+    "cache": "Independent COW copy of the completed account-logout target; no hardlinks or writes to the source cache.",
+    "library_fixture_binary": "/var/tmp/ssmcp-questions-roster-20261120/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+    "library_fixture_binary_sha256": "731f9a165e417616ee7b41c88964dab93136e8446208048e8abf66b80cbc68dd"
+  },
+  "build_and_binary_provenance": {
+    "product_build": {
+      "name": "build",
+      "argv": [
+        "cargo",
+        "build",
+        "--offline",
+        "--locked",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "--jobs",
+        "1",
+        "--message-format=json"
+      ],
+      "status": "passed",
+      "pid": 3948243,
+      "exit_code": 0,
+      "seconds": 203.893,
+      "log": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-attempt-3/build.log",
+      "log_sha256": "17f4083af7b05f4f36ca4ee58ae712d2e36cbe36c872c9033c19d9638f67ab2f"
+    },
+    "product_build_source": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+    "format": {
+      "name": "format",
+      "argv": [
+        "cargo",
+        "fmt",
+        "--check",
+        "--all"
+      ],
+      "status": "passed",
+      "pid": 4081825,
+      "exit_code": 0,
+      "seconds": 4.675,
+      "log": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/format.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "product_binaries_sha256": {
+      "ssmcp": "5a572f7d883ccf32b928b85645b001ca816921c8b2d183661ac9c76d7d33c079",
+      "ssmcpd": "15fedfafffc4096580be47d09271fc9fe3555b48348e89f149857055c822d448",
+      "ssmcp-frontend": "ba4f98f8fc15f32550ef16fd195058263792bcabcfd9f7097f5aefddba7290cd",
+      "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f"
+    },
+    "questions_invocation": {
+      "source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "fixture_revision": "8e768415e4b4b98df6787de5a9b7a67f569a8f6a",
+      "script": "scripts/e2e_questions.py",
+      "script_sha256": "28668eb039847aeb6afd891aa10d9824f233cdeb787ca7caed88205ef3176e42",
+      "binaries_sha256_before": {
+        "ssmcp": "0f41062eec88ba35b4468b9a50ee6591790c5b651cb676ca90a6532e4f1ac4aa",
+        "ssmcpd": "d58e088bddb0e8d4b21d3a2db84485c3dbab05a2d78e0c2f7fbd7735762dedd9",
+        "ssmcp-frontend": "6ed3b845c30f34690f5ce5ff08b619d8c59845bcf6fcd0e926c53df51398438c",
+        "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f",
+        "fixture": "1880f260ccec152c5e4c50a4ff941231a1e039c73d75764a5639de2cf2dd4b28"
+      },
+      "argv": [
+        "/usr/bin/python3",
+        "/home/lightjunction/Documents/GITHUB/ssmcp-questions-roster-20261120/scripts/e2e_questions.py",
+        "--bin-dir",
+        "/var/tmp/ssmcp-questions-roster-20261120/target/debug",
+        "--out",
+        "/var/tmp/ssmcp-questions-roster-20261120/native-c7086f9-attempt-2/questions-patched",
+        "--report",
+        "/var/tmp/ssmcp-questions-roster-20261120/native-c7086f9-attempt-2/questions-patched.json"
+      ],
+      "exit_code": 0,
+      "binaries_sha256_after": {
+        "ssmcp": "0f41062eec88ba35b4468b9a50ee6591790c5b651cb676ca90a6532e4f1ac4aa",
+        "ssmcpd": "d58e088bddb0e8d4b21d3a2db84485c3dbab05a2d78e0c2f7fbd7735762dedd9",
+        "ssmcp-frontend": "6ed3b845c30f34690f5ce5ff08b619d8c59845bcf6fcd0e926c53df51398438c",
+        "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f",
+        "fixture": "1880f260ccec152c5e4c50a4ff941231a1e039c73d75764a5639de2cf2dd4b28"
+      },
+      "report": "/var/tmp/ssmcp-questions-roster-20261120/native-c7086f9-attempt-2/questions-patched.json",
+      "report_sha256": "1b54ae8d6bdd90d74997809a461624406bfe60785e3bdacd95726ccac5bef385",
+      "status": "passed",
+      "checks": 43,
+      "error": null
+    },
+    "input_history_invocation": {
+      "source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "fixture_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+      "script": "scripts/e2e_input_history.py",
+      "script_sha256": "b0558d1ff4d2984b4bafd95162c88731cade0f6960e0b7593c236fcde5a1b4e2",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/lightjunction/Documents/GITHUB/ssmcp-questions-roster-20261120/scripts/e2e_input_history.py",
+        "--bin-dir",
+        "/var/tmp/ssmcp-questions-roster-20261120/target/debug",
+        "--out",
+        "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/input-history",
+        "--report",
+        "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/input-history.json"
+      ],
+      "exit_code": 0,
+      "binaries_sha256_before": {
+        "ssmcp": "5a572f7d883ccf32b928b85645b001ca816921c8b2d183661ac9c76d7d33c079",
+        "ssmcpd": "15fedfafffc4096580be47d09271fc9fe3555b48348e89f149857055c822d448",
+        "ssmcp-frontend": "ba4f98f8fc15f32550ef16fd195058263792bcabcfd9f7097f5aefddba7290cd",
+        "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f",
+        "fixture": "731f9a165e417616ee7b41c88964dab93136e8446208048e8abf66b80cbc68dd"
+      },
+      "binaries_sha256_after": {
+        "ssmcp": "5a572f7d883ccf32b928b85645b001ca816921c8b2d183661ac9c76d7d33c079",
+        "ssmcpd": "15fedfafffc4096580be47d09271fc9fe3555b48348e89f149857055c822d448",
+        "ssmcp-frontend": "ba4f98f8fc15f32550ef16fd195058263792bcabcfd9f7097f5aefddba7290cd",
+        "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f",
+        "fixture": "731f9a165e417616ee7b41c88964dab93136e8446208048e8abf66b80cbc68dd"
+      },
+      "report": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/input-history.json",
+      "report_sha256": "b83ad9e14f94569b93fe83e75d4f09b343af0f0ce5a072b74cd255680b8ea906",
+      "status": "passed",
+      "checks": 150,
+      "error": null
+    },
+    "product_hashes_unchanged_during_library_compile_and_pty": true,
+    "native_checkout_clean_after_pty": true
+  },
+  "attempts": [
+    {
+      "name": "missing library fixture executable",
+      "classification": "driver_environment_failure",
+      "status": "failed",
+      "product_source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "fixture_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "checks_completed": 0,
+      "report_duration_seconds": 0.125,
+      "process_duration_seconds": 0.315,
+      "report": "setup-missing-libtest-failure.json",
+      "report_sha256": "cefb30a7b1c1cb13222439f40ba07c604ac28a9c94fdb697e94d6ea16ca63f22",
+      "error": "RuntimeError: set SSMCP_E2E_FIXTURE_BINARY to the already-built library test executable containing http::relay_composer_fixture::relay_composer_server_fixture; this fixture never invokes cargo"
+    },
+    {
+      "name": "original Questions",
+      "classification": "reproduced_roster_readiness_failure",
+      "status": "failed",
+      "product_source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "fixture_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "checks_completed": 17,
+      "report_duration_seconds": 2.408,
+      "process_duration_seconds": 2.621,
+      "report": "questions-original-c708-failure.json",
+      "report_sha256": "41f4e86d52896cf22ee7b78584ebdf1217de61010c76ded7398097f52728ab4c",
+      "error": "StopIteration: "
+    },
+    {
+      "name": "Questions with exact local recipient readiness",
+      "classification": "complete_fixture_pass",
+      "status": "passed",
+      "product_source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "fixture_revision": "8e768415e4b4b98df6787de5a9b7a67f569a8f6a",
+      "checks_completed": 43,
+      "report_duration_seconds": 12.885,
+      "process_duration_seconds": 12.993,
+      "report": "questions-c708-fixture8e.json",
+      "report_sha256": "1b54ae8d6bdd90d74997809a461624406bfe60785e3bdacd95726ccac5bef385",
+      "error": null
+    },
+    {
+      "name": "InputHistory before picker focus fix",
+      "classification": "reproduced_product_focus_failure",
+      "status": "failed",
+      "product_source_revision": "c7086f9545602f45399e7a237995a48440e7d8aa",
+      "fixture_revision": "8e768415e4b4b98df6787de5a9b7a67f569a8f6a",
+      "checks_completed": 140,
+      "report_duration_seconds": 37.79,
+      "process_duration_seconds": 37.992,
+      "report": "input-history-c708-fixture8e-failure.json",
+      "report_sha256": "cf0ca0facd903b457def4ad88f94a80688da2eaa11927f35aec02b48cdadf962",
+      "error": "AssertionError: timed out waiting for Enter restoring and resuming the archived conversation\nclient pid=3800924 returncode=None stdout_bytes=0 pty_bytes=22606\nOwned terminal snapshot:\n  ssmcp  /  workspace                                                                       history  6/8\n  Archived conversations · ↑↓ select · Enter restore and resume · Esc back\n› REFERENCE_REQUEST 界 @\"资料/说明 界.txt\" $input-fixture\n  12 messages · conversation_d6737e9f5b184eaaa9cec4f948ac1cc8 · archived\n  Edit───────────────────────────────────────────────────────Local relayfixture · Max 1 GB · Reset 12-01\n❯ Message the agent\n Alt+C select/copy · ↑ edit queued · Alt+↑/↓ input height · @ files    connected · http://127.0.0.1:44325\nOwned terminal tail:\n                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  Browse─────────────────────────────────────────────────────Local relayfixture · Max 1 GB · Reset 12-01   ↑↓ select · Enter resume · Esc back                                   connected · http://127.0.0.1:44325   Archived conversations · ↑↓ select · Enter restore and resume · Esc back                                › REFERENCE_REQUEST 界 @\"资料/说明 界.txt\" $input-fixture                                                   12 messages · conversation_d6737e9f5b184eaaa9cec4f948ac1cc8 · archived                                    Edit───────────────────────────────────────────────────────Local relayfixture · Max 1 GB · Reset 12-01   Alt+C select/copy · ↑ edit queued · Alt+↑/↓ input height · @ files    connected · http://127.0.0.1:44325 "
+    },
+    {
+      "name": "new archive regression compilation",
+      "classification": "new_test_compile_error",
+      "status": "compile_failed",
+      "product_source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "fixture_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "tests_run": 0,
+      "pty_started": false,
+      "report": "archive-tests-ae8-compile-failure.json",
+      "report_sha256": "945dbb5975a082a2becebaa8f3dcec3ccaf8273f32d784a332224a50d7937bf6"
+    },
+    {
+      "name": "archive unit regressions",
+      "classification": "targeted_regression_pass",
+      "status": "passed",
+      "test_source_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+      "tests_passed": 4,
+      "tests_failed": 0,
+      "tests_ignored": 0,
+      "tests_filtered_out": 1836,
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1836 filtered out; finished in 0.00s",
+      "step": {
+        "name": "history-regressions",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "client::terminal::conversation::history::archive_tests",
+          "--jobs",
+          "1",
+          "--message-format=json",
+          "--",
+          "--nocapture"
+        ],
+        "status": "passed",
+        "pid": 4083241,
+        "exit_code": 0,
+        "seconds": 82.196,
+        "log": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/history-regressions.log",
+        "log_sha256": "04f6ced17fc5980f70d34403167514fcbcd76221fc1ef925af9f9bb3906f3752"
+      }
+    },
+    {
+      "name": "complete InputHistory after picker focus fix",
+      "classification": "complete_fixture_pass",
+      "status": "passed",
+      "product_source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "fixture_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+      "checks_completed": 150,
+      "report_duration_seconds": 32.451,
+      "process_duration_seconds": 32.629,
+      "report": "input-history-ae8-fixture4221.json",
+      "report_sha256": "b83ad9e14f94569b93fe83e75d4f09b343af0f0ce5a072b74cd255680b8ea906",
+      "error": null
+    }
+  ],
+  "native_receipts": [
+    {
+      "path": "/var/tmp/ssmcp-questions-roster-20261120/native-c7086f9-attempt-1/checks.json",
+      "sha256": "4fe2a44c66d4ac89ef587543bf375b87ee3e139f8f8f2a745589e688a273ec6b",
+      "status": "failed"
+    },
+    {
+      "path": "/var/tmp/ssmcp-questions-roster-20261120/native-c7086f9-attempt-2/checks.json",
+      "sha256": "f75acd0a45b3738d5e2e0f5e6a90eb6ccb5cf4a6af733c5b31021d5e677f326e",
+      "status": "failed"
+    },
+    {
+      "path": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-attempt-3/checks.json",
+      "sha256": "e91c3dfa5afa15fa6227f933917de3266b7a5d95106a9585c4c45eeaa220acf5",
+      "status": "failed"
+    },
+    {
+      "path": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/checks.json",
+      "sha256": "d253b4dc8214c44566cd1ab0a056a4ee8b525905f5b0b0c99c9006c4c86023d2",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "archive-restored-48.png",
+      "sha256": "8f7374b219cbcb60cba1f1b9ba8ff89c4ffb1cf0e78b560ec3a4b76b40d15bbf",
+      "vt_size_rows_columns": [
+        58,
+        48
+      ],
+      "image_size_pixels": [
+        576,
+        1672
+      ],
+      "native_vt_snapshot": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/input-history/input-history-archive-restored-48.json",
+      "vt_snapshot_sha256": "83c70ebde6df2b2237c64646e98d052605662621214574ef12c2e11f7e362e89",
+      "product_source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "fixture_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+      "caption": "Restored original history plus the explicit new ARCHIVE_RESTORED_CONTINUATION message and the returned input composer. Synthetic archive-restoration evidence only."
+    },
+    {
+      "file": "archive-restored-120.png",
+      "sha256": "c36230c33f5ac53abd59f2f4da04c07ba377c4a335cf1bf12d3168d6c728743e",
+      "vt_size_rows_columns": [
+        58,
+        120
+      ],
+      "image_size_pixels": [
+        1368,
+        1672
+      ],
+      "native_vt_snapshot": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-fixture4221-attempt-4/input-history/input-history-archive-restored-120.json",
+      "vt_snapshot_sha256": "c1fe5a2622d165f8300fb6c1bddab0a522e4449183c79d63b31eef219d75f4ee",
+      "product_source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+      "fixture_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+      "caption": "Restored original history plus the explicit new ARCHIVE_RESTORED_CONTINUATION message and the returned input composer. Synthetic archive-restoration evidence only."
+    }
+  ],
+  "renderer": {
+    "path": "scripts/render_ui_snapshot.py",
+    "source_revision": "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7",
+    "sha256": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8",
+    "primary_font": "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "fallback_font": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "fallback_font_index": 2
+  },
+  "visual_review": {
+    "implementer": "Opened both actual 48/120-column renders; original history, the explicit restored continuation, Chinese text and input composer are visible.",
+    "independent_root": "Opened both images independently and verified the final native checks.json SHA256 d253b4dc8214c44566cd1ab0a056a4ee8b525905f5b0b0c99c9006c4c86023d2.",
+    "privacy": "Only synthetic local fixtures. The user's reference screenshot is not included."
+  },
+  "cleanup": {
+    "owned_processes_active": [],
+    "owned_input_history_temp_directories": [],
+    "owned_history_picker_temp_directories": [],
+    "scope": "Read-only check of this target and its own TMPDIR; no process was signalled."
+  },
+  "claim_evidence": [
+    {
+      "claim": "The local-roster readiness failure is reproducible and the corrected Questions fixture completes.",
+      "evidence": [
+        "questions-original-c708-failure.json",
+        "questions-c708-fixture8e.json"
+      ],
+      "status": "supported"
+    },
+    {
+      "claim": "Explicit history picker commands restore content focus on the existing canvas without an extra Tab.",
+      "evidence": [
+        "archive unit regressions",
+        "input-history-ae8-fixture4221.json"
+      ],
+      "status": "supported"
+    },
+    {
+      "claim": "Restore preserves original JSONL, does not replay old requests or tools, and an explicit new request appends once.",
+      "evidence": [
+        "input-history-ae8-fixture4221.json"
+      ],
+      "status": "supported"
+    }
+  ],
+  "scope_limits": [
+    "Questions 43 is the c708 product with 8e fixture result, not a later-source rerun.",
+    "Archive regressions 4 and InputHistory 150 are separate counts. The latter uses ae8 product executables and the 4221 fixture/library server; only cfg(test) code differs between those commits.",
+    "The two screenshots validate archive restoration for ae8 + 4221. They are not final UI acceptance for 407084c or later unified Tools-group integration.",
+    "The initial 0-check setup error and E0616 test compilation error are not product/PTY results. The 17-check roster failure and 140-check focus failure remain separately preserved.",
+    "No new formal CI, tag, release, merge, deployment, production restart, production account change or model invocation was performed by this validation task. Private fixture OAuth and owned clients only.",
+    "This Linux validation does not claim Windows, ARM, macOS or a final merged release candidate has passed. Integration and release verification remain separate."
+  ]
+}
