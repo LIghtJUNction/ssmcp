@@ -368,6 +368,164 @@ async fn observer_cancel_after_ready_wins_before_user_input_commit() {
 }
 
 #[tokio::test]
+async fn same_run_rejected_user_wait_does_not_release_ready_reservation_or_own_its_cancel() {
+    for cancel_original in [false, true] {
+        let fixture = Fixture::new().await;
+        fixture.publish("reserved-original");
+        let run = code_mode::AuditRun::new("two waitFor calls in one run", None).unwrap();
+        let args = json!({"targets":[{"type":"user_input","notify":false}]});
+        let first = fixture
+            .raw(run.clone(), &fixture.member, args.clone())
+            .await;
+        assert_eq!(first["status"], "ready");
+        let original_id = first["wait_id"].as_str().unwrap();
+        let receipt = run.user_wait_receipt(fixture.session.client_id());
+        assert_eq!(receipt["status"], "ready");
+
+        let rejected = fixture.raw(run.clone(), &fixture.member, args).await;
+        assert_eq!(rejected["status"], "unavailable");
+        assert!(
+            rejected["results"][0]["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("one user wait per client")
+        );
+        assert_ne!(rejected["wait_id"], first["wait_id"]);
+        assert_eq!(run.user_wait_receipt(fixture.session.client_id()), receipt);
+        assert!(fixture.record(original_id).awaiting_delivery());
+
+        // Cancel the rejected observer in the SAME run. It never acquired the
+        // first observer's input reservation or its final-delivery record.
+        let cancelled = fixture
+            .raw(
+                run.clone(),
+                &fixture.member,
+                json!({"op":"cancel","wait_id":rejected["wait_id"]}),
+            )
+            .await;
+        assert_eq!(cancelled["status"], "cancelled");
+        assert_eq!(run.user_wait_receipt(fixture.session.client_id()), receipt);
+        assert!(!*fixture.record(original_id).cancelled.borrow());
+
+        let report = fixture.report(run.clone());
+        let eligible = eligible_user_response(&report).await.unwrap();
+        if cancel_original {
+            let cancelled = fixture
+                .raw(
+                    run.clone(),
+                    &fixture.member,
+                    json!({"op":"cancel","wait_id":original_id}),
+                )
+                .await;
+            assert_eq!(cancelled["status"], "cancelled");
+        }
+        let response = commit_user_response(
+            &report,
+            tool_result(Ok(json!({"first":first,"second":rejected}))),
+            eligible,
+        );
+        if cancel_original {
+            assert!(response["structuredContent"].get("user_messages").is_none());
+            assert_eq!(fixture.state("reserved-original"), SteeringState::Queued);
+            assert_eq!(
+                run.user_wait_receipt(fixture.session.client_id())["status"],
+                "cancelled"
+            );
+        } else {
+            assert_eq!(
+                response["structuredContent"]["user_messages"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                response["structuredContent"]["user_messages"][0]["message_id"],
+                "reserved-original"
+            );
+            assert_eq!(fixture.state("reserved-original"), SteeringState::Delivered);
+            assert_eq!(
+                run.user_wait_receipt(fixture.session.client_id())["status"],
+                "received"
+            );
+            let repeated = commit_user_response(
+                &report,
+                tool_result(Ok(json!({}))),
+                eligible_user_response(&report).await.unwrap(),
+            );
+            assert!(repeated["structuredContent"].get("user_messages").is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn concurrent_same_run_user_waits_commit_only_the_admitted_observers_input() {
+    let fixture = Fixture::new().await;
+    fixture.publish("concurrent-original");
+    let run = code_mode::AuditRun::new("Promise.all waitFor input", None).unwrap();
+    let start = tokio::sync::Barrier::new(2);
+    let observe = || async {
+        start.wait().await;
+        fixture
+            .raw(
+                run.clone(),
+                &fixture.member,
+                json!({"targets":[{"type":"user_input","notify":false}]}),
+            )
+            .await
+    };
+    let (one, two) = tokio::join!(observe(), observe());
+    let (ready, rejected) = if one["status"] == "ready" {
+        (one, two)
+    } else {
+        (two, one)
+    };
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(rejected["status"], "unavailable");
+    assert!(
+        rejected["results"][0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("one user wait per client")
+    );
+    assert_eq!(
+        run.user_wait_receipt(fixture.session.client_id())["status"],
+        "ready"
+    );
+    let original = fixture.record(ready["wait_id"].as_str().unwrap());
+    assert!(original.awaiting_delivery());
+    assert!(
+        !fixture
+            .record(rejected["wait_id"].as_str().unwrap())
+            .awaiting_delivery()
+    );
+    let report = fixture.report(run.clone());
+    let eligible = eligible_user_response(&report).await.unwrap();
+    let response =
+        commit_user_response(&report, tool_result(Ok(json!([ready, rejected]))), eligible);
+    assert_eq!(
+        response["structuredContent"]["user_messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        response["structuredContent"]["user_messages"][0]["message_id"],
+        "concurrent-original"
+    );
+    assert_eq!(
+        fixture.state("concurrent-original"),
+        SteeringState::Delivered
+    );
+    assert!(!original.awaiting_delivery());
+    assert_eq!(
+        run.user_wait_receipt(fixture.session.client_id())["status"],
+        "received"
+    );
+}
+
+#[tokio::test]
 async fn unknown_objects_and_revoked_membership_have_distinct_typed_outcomes() {
     let fixture = Fixture::new().await;
     let unknown = fixture
