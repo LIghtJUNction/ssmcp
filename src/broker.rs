@@ -1682,13 +1682,7 @@ fn accessible_sessions<'a>(
 }
 
 pub fn valid_username(user: &str) -> bool {
-    !user.is_empty()
-        && user.len() <= 64
-        && !matches!(user, "healthz" | "." | "..")
-        && user.as_bytes()[0] != b'-'
-        && user
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    crate::username::valid_resource_name(user)
 }
 
 fn username(uid: u32) -> io::Result<String> {

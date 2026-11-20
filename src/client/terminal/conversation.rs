@@ -4270,8 +4270,14 @@ mod tests {
             y: body_top(state.geometry.rows),
             release: false,
         });
-        assert_eq!(state.conversation.view, View::Logs);
-        assert!(state.conversation.logs_open);
+        assert_eq!(state.conversation.view, view);
+        assert!(!state.conversation.logs_open);
+        assert!(state.conversation.scoped_history.is_none());
+        assert_eq!(
+            state.conversation.selected,
+            start + 1,
+            "right-clicking the header is not a thread-history target"
+        );
         state.chat_key(Key::Mouse {
             button: 2,
             x: 1,
@@ -4284,6 +4290,7 @@ mod tests {
             "prompt border is not an entry"
         );
         assert!(!state.conversation.logs_open);
+        assert!(state.conversation.scoped_history.is_none());
         assert_eq!(state.conversation.view, view);
     }
 

@@ -3284,7 +3284,8 @@ mod tests {
             ..Ui::default()
         };
         let mut state = preview_state(30, 120, &ui);
-        state.preview = false;
+        // Render this account fixture without observing process-wide waits or
+        // projecting the preview's example task as a live native execution.
         state.guide = None;
         state.account = AccountStatus::Local;
         state.server_origin = footer::Origin::parse_local("http://127.0.0.1:43123/alice");
@@ -4417,27 +4418,42 @@ mod tests {
 
     #[test]
     fn connection_footer_uses_the_same_last_row_in_every_layout() {
-        for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
-            let ui = Ui {
-                layout,
-                color: false,
-                sidebar: false,
-                ..Ui::default()
-            };
-            let mut state = preview_state(12, 100, &ui);
-            let before = state.geometry;
-            state.notice = Some("/exit must be used without arguments".into());
-            let frame = state.frame(Instant::now());
-            assert_eq!(state.geometry, before);
-            assert_eq!(frame.rows.len(), 12);
-            let bottom = frame.rows.last().unwrap();
-            assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
-            assert!(
-                bottom.contains("https://ssmcp.lmm.best"),
-                "{layout:?}: {bottom}"
-            );
-            assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
-            assert_eq!(bottom.width(), 100, "{layout:?}: {bottom:?}");
+        for columns in [100, 120] {
+            for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
+                let ui = Ui {
+                    layout,
+                    color: false,
+                    sidebar: false,
+                    ..Ui::default()
+                };
+                let mut state = preview_state(12, columns, &ui);
+                let before = state.geometry;
+                state.notice = Some("/exit must be used without arguments".into());
+                let frame = state.frame(Instant::now());
+                assert_eq!(state.geometry, before);
+                assert_eq!(frame.rows.len(), 12);
+                let bottom = frame.rows.last().unwrap();
+                assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
+                assert!(bottom.contains("ssmcp.lmm.best"), "{layout:?}: {bottom}");
+                // A narrow row may use only the authority to preserve the
+                // complete notice and computer-control status. A wider row
+                // must retain the full origin when it fits.
+                if columns == 120 {
+                    assert!(
+                        bottom.contains("https://ssmcp.lmm.best"),
+                        "{layout:?}: {bottom}"
+                    );
+                }
+                assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
+                if layout != Layout::Chat {
+                    assert!(bottom.contains("电脑控制：未确认"), "{layout:?}: {bottom}");
+                }
+                assert_eq!(
+                    bottom.width(),
+                    usize::from(columns),
+                    "{layout:?}: {bottom:?}"
+                );
+            }
         }
     }
 }

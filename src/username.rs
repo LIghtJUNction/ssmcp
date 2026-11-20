@@ -1,4 +1,4 @@
-//! Canonical server-local account names shared by the CLI and portal.
+//! Account-name validation shared by relay paths, the CLI, and the portal.
 const RESERVED: &[&str] = &[
     "admin",
     "administrator",
@@ -33,6 +33,18 @@ const RESERVED: &[&str] = &[
     "users",
     "www",
 ];
+
+/// Relay resource paths also accept legacy system account names.
+/// Registration names use the stricter `normalize` rules below.
+pub(crate) fn valid_resource_name(user: &str) -> bool {
+    !user.is_empty()
+        && user.len() <= 64
+        && !matches!(user, "healthz" | "." | "..")
+        && user.as_bytes()[0] != b'-'
+        && user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+}
 
 /// Names are case-insensitive ASCII; reject whitespace instead of silently changing input.
 pub(crate) fn normalize(raw: &str) -> Result<String, String> {
