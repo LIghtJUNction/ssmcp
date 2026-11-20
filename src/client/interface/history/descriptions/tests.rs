@@ -149,6 +149,10 @@ fn descriptions_validate_exact_ids_utf8_bytes_and_redact_before_storage() {
         json!({"id":id,"title":"bad\u{001b}[2J"}),
         json!({"id":id,"summary":"bad\u{0000}"}),
         json!({"id":id,"summary":"bad\nnewline"}),
+        json!({"id":id,"title":"   "}),
+        json!({"id":id,"summary":"   "}),
+        json!({"id":id,"title":"\u{00a0}\u{2003} "}),
+        json!({"id":id,"summary":" \u{2003}\u{3000}"}),
         json!({"id":id,"title":"界".repeat(86)}),
         json!({"id":id,"summary":"界".repeat(683)}),
     ] {
@@ -159,8 +163,8 @@ fn descriptions_validate_exact_ids_utf8_bytes_and_redact_before_storage() {
     }
     let sidecar = history.directory.path.join(name(&id).unwrap());
     assert!(!sidecar.exists());
-    let title = format!("{}a", "界".repeat(85));
-    let summary = format!("{}ab", "界".repeat(682));
+    let title = format!("  {}  ", "界".repeat(84));
+    let summary = format!(" {} ", "界".repeat(682));
     update(
         &mut history,
         json!({"id":id,"title":title,"summary":summary}),
@@ -193,6 +197,20 @@ fn descriptions_validate_exact_ids_utf8_bytes_and_redact_before_storage() {
     assert!(reopened["summary"]["title"].as_str().unwrap().len() <= MAX_TITLE_BYTES);
     assert_eq!(update(&mut history, edit).unwrap()["changed"], false);
     assert_eq!(fs::read_to_string(&sidecar).unwrap(), bytes);
+
+    // A sidecar from the previous implementation may have one blank field.
+    let mut legacy: Value = serde_json::from_str(&bytes).unwrap();
+    legacy["title"] = json!(" \u{2003} ");
+    history
+        .directory
+        .write_atomic(&name(&id).unwrap(), &serde_json::to_vec(&legacy).unwrap())
+        .unwrap();
+    let reopened = directory.history().metadata(&id).unwrap();
+    assert_eq!(reopened["summary"]["title"], "Original");
+    assert_eq!(reopened["summary"]["summary"], "API_TOKEN=[redacted]");
+    let corrected = update(&mut history, json!({"id":id,"title":"Corrected"})).unwrap();
+    assert_eq!(corrected["summary"]["title"], "Corrected");
+    assert_eq!(corrected["summary"]["summary"], "API_TOKEN=[redacted]");
 }
 
 #[test]

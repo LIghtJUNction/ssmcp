@@ -52,12 +52,22 @@ fn name(id: &str) -> Result<String, String> {
 }
 
 fn normalize(value: &str, label: &str, limit: usize) -> Result<Option<String>, String> {
+    let text = stored_text(value, label, limit)?;
+    if text.is_none() && !value.is_empty() {
+        return Err(format!(
+            "{label} must contain visible text. Use an empty string to clear it."
+        ));
+    }
+    Ok(text)
+}
+
+fn stored_text(value: &str, label: &str, limit: usize) -> Result<Option<String>, String> {
     if value.len() > limit || value.chars().any(char::is_control) {
         return Err(format!(
             "{label} must contain no control characters and fit {limit} UTF-8 bytes"
         ));
     }
-    if value.is_empty() {
+    if value.trim().is_empty() {
         return Ok(None);
     }
     let mut redacted = safe_text(value);
@@ -100,12 +110,12 @@ impl History {
         }
         description.title = description
             .title
-            .map(|value| normalize(&value, "title", MAX_TITLE_BYTES))
+            .map(|value| stored_text(&value, "title", MAX_TITLE_BYTES))
             .transpose()?
             .flatten();
         description.summary = description
             .summary
-            .map(|value| normalize(&value, "summary", MAX_SUMMARY_BYTES))
+            .map(|value| stored_text(&value, "summary", MAX_SUMMARY_BYTES))
             .transpose()?
             .flatten();
         Ok(Some(description))
