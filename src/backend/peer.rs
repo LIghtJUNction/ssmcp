@@ -157,7 +157,7 @@ fn endpoint_url(raw: &str) -> Result<Url, String> {
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || !crate::broker::valid_username(user)
+        || !crate::username::valid_resource_name(user)
     {
         return Err("peer endpoint must be the exact HTTPS or literal-loopback HTTP MCP URL ending in /USER, without credentials, query or fragment".into());
     }
@@ -193,14 +193,16 @@ impl Peer {
         let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| "peer OAuth bearer is not a valid header")?;
         authorization.set_sensitive(true);
-        let mut builder = crate::http_client::builder()
+        let builder = crate::http_client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5));
         #[cfg(unix)]
-        if let Some(path) = &settings.socket {
-            builder = builder.unix_socket(path.as_path());
-        }
+        let builder = if let Some(path) = &settings.socket {
+            builder.unix_socket(path.as_path())
+        } else {
+            builder
+        };
         let client = builder
             .build()
             .map_err(|_| "could not construct peer HTTP client")?;
@@ -729,6 +731,59 @@ mod tests {
         assert_eq!(settings.token_env, "PEER_TOKEN");
     }
 
+    #[test]
+    fn peer_account_endpoints_preserve_legacy_relay_names() {
+        let max_length = "a".repeat(64);
+        for account in [
+            "a",
+            "0",
+            "_service",
+            ".legacy",
+            "Legacy.User",
+            "root",
+            "gh-123",
+            "alice-",
+            &max_length,
+        ] {
+            let endpoint = format!("https://relay.example/{account}");
+            let settings = Settings::parse(
+                &["--endpoint", &endpoint, "--token-env", "PEER_TOKEN"].map(OsString::from),
+            )
+            .unwrap_or_else(|error| panic!("{account:?}: {error}"));
+            assert_eq!(settings.endpoint.path(), format!("/{account}"));
+        }
+    }
+
+    #[test]
+    fn peer_account_endpoints_reject_reserved_and_invalid_resource_paths() {
+        let too_long = "a".repeat(65);
+        for account in [
+            "",
+            ".",
+            "..",
+            "-alice",
+            "healthz",
+            "alice/bob",
+            "alice/",
+            "alice%2Fbob",
+            "alice%5Cbob",
+            "%61lice",
+            "ali ce",
+            "alice\n",
+            "管理员",
+            &too_long,
+        ] {
+            let endpoint = format!("https://relay.example/{account}");
+            assert!(
+                Settings::parse(
+                    &["--endpoint", &endpoint, "--token-env", "PEER_TOKEN"].map(OsString::from),
+                )
+                .is_err(),
+                "{account:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn peer_real_http_handshake_pages_and_calls_preserve_native_results_and_errors() {
         let server = Server::start("healthy").await;
@@ -849,8 +904,10 @@ mod tests {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let mut random = [0u8; 8];
         crate::platform::random_bytes(&mut random).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("ssmcp-peer-test-{}", crate::hex::encode(random)));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("ssmcp-peer-test-{}", crate::hex::encode(random)));
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&directory)
