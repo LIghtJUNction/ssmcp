@@ -1,8 +1,8 @@
 //! Observational startup checks and explicit, checksum-verified self-update.
 mod notice;
 mod startup;
-pub(super) use notice::{ConnectionVersions, claim_connection_notice, report_connection};
-pub(super) use startup::{available_notice, mark_notice_shown};
+pub(super) use notice::{ConnectionVersions, report_connection};
+pub(super) use startup::available_notice;
 use std::{
     cmp::Ordering,
     ffi::OsString,

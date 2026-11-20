@@ -2690,7 +2690,7 @@ impl State {
         }
     }
 
-    fn chat_update_notice(&self) -> Option<&str> {
+    fn chat_update_notice(&self) -> Option<update_notice::Notice> {
         if self.help
             || self.selection
             || self.conversation.logs_open
@@ -2702,10 +2702,11 @@ impl State {
         {
             return None;
         }
-        self.update_notice.as_deref()
+        self.update_notice.clone()
     }
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
+        self.rendered_update_notice = None;
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
         self.chat_updates();
@@ -2832,7 +2833,7 @@ impl State {
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_hint = self.chat_native_hint();
-                let update_hint = self.chat_update_notice().map(str::to_owned);
+                let update_hint = self.chat_update_notice();
                 let priority_hint = self.notice.is_some()
                     || scroll_hint.is_some()
                     || wait_hint.is_some()
@@ -2848,7 +2849,11 @@ impl State {
                     if let Some(hint) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }
-                    if let Some(hint) = update_hint { return hint; }
+                    if let Some(hint) = update_hint {
+                        let message = hint.text();
+                        self.rendered_update_notice = Some(hint);
+                        return message;
+                    }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }

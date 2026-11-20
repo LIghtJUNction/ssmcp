@@ -326,14 +326,9 @@ pub(super) fn set_connection_versions(versions: super::update::ConnectionVersion
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let notice = versions
-            .update_message()
-            .unwrap_or_else(|| versions.summary());
-        // Reconnecting keeps fresh metadata without repeatedly taking the footer.
-        // Errors and local recovery retain the higher-priority notice slot.
-        if super::update::claim_connection_notice(&versions) {
-            state.update_notice = Some(notice);
-        }
+        // Fresh metadata is always retained. Only an actually presented notice
+        // is deduplicated, and a connection summary cannot hide a release offer.
+        update_notice::connection(&mut state, &versions);
         state.connection_versions = Some(versions);
         state.dirty = true;
     }
@@ -1424,7 +1419,8 @@ struct State {
     filter_offset: usize,
     preview: bool,
     notice: Option<String>,
-    update_notice: Option<String>,
+    update_notice: Option<update_notice::Notice>,
+    rendered_update_notice: Option<update_notice::Notice>,
     actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
@@ -1480,6 +1476,7 @@ impl State {
             preview: false,
             notice: None,
             update_notice: None,
+            rendered_update_notice: None,
             actions: Vec::new(),
             previous_cr: false,
             dirty: true,
@@ -2096,8 +2093,12 @@ impl State {
     }
 
     fn frame(&mut self, now: Instant) -> Frame {
+        self.rendered_update_notice = None;
         let mut frame = self.base_frame(now);
         self.sleep_overlay(&mut frame);
+        if self.sleep.visible {
+            self.rendered_update_notice = None;
+        }
         if !self.preview {
             // This frame owns visibility, including transitions away from Chat.
             // The manager hint is safe while the terminal State lock is held.
@@ -2183,7 +2184,11 @@ impl State {
                         self.log_query
                     )
                 } else if idle_update {
-                    self.update_notice.clone().unwrap_or_default()
+                    self.rendered_update_notice = self.update_notice.clone();
+                    self.update_notice
+                        .as_ref()
+                        .map(update_notice::Notice::text)
+                        .unwrap_or_default()
                 } else if g.cols < 100 {
                     " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
                 } else {
@@ -2651,6 +2656,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut offset = 0;
     let mut previous = None;
     let mut previous_cell = None;
+    let mut pending_update_notice = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
         if offset >= pending.len() {
@@ -2669,14 +2675,19 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
                     let media = std::mem::take(&mut state.media);
                     state.dirty = false;
                     previous_cell = cell;
-                    Some((frame, media))
+                    let notice = state
+                        .rendered_update_notice
+                        .take()
+                        .filter(|_| !state.preview);
+                    Some((frame, media, notice))
                 } else {
                     None
                 };
                 (refresh, state.graphics.take_requests())
             };
             pending = requests;
-            if let Some((frame, media)) = refresh {
+            if let Some((frame, media, notice)) = refresh {
+                pending_update_notice = notice;
                 let (before, after) = output.media.update(media, frame.cursor, frame.hidden);
                 append_frame(&mut pending, &frame, previous.as_ref(), &before, &after);
                 previous = Some(frame);
@@ -2687,6 +2698,7 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
             Ok(()) => {}
             Err(_) => break,
         }
+        update_notice::complete(&mut pending_update_notice, offset >= pending.len());
         std::thread::sleep(FRAME_INTERVAL);
     }
     // RestoringOutput restores alternate-screen/input state and marks the
