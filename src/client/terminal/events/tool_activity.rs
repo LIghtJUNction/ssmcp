@@ -51,6 +51,8 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         let event = &events[index];
         owned(event)
             && event.meta.kind == Kind::Tool
+            // Commands stay visible as individual cards with their actual argv.
+            && (!event.meta.command || event.meta.diff)
             && event.image.is_none()
             && !event.reload_boundary
     };
