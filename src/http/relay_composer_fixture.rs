@@ -340,6 +340,13 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
                 login: "fixture".into(),
             })?;
             store.claim_handle("123", "relayfixture")?;
+            // A second isolated account makes cross-identity client checks real.
+            store.login(&Identity {
+                provider: "github".into(),
+                subject: "124".into(),
+                login: "otherfixture".into(),
+            })?;
+            store.claim_handle("124", "otherrelayfixture")?;
             Ok(())
         })
         .await
@@ -349,6 +356,11 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         .client_storage(|credentials| credentials.login("123".into()))
         .await
         .map_err(|_| "could not issue the isolated account credential")?;
+    let (other_account_token, other_expires_in) = broker
+        .portal
+        .client_storage(|credentials| credentials.login("124".into()))
+        .await
+        .map_err(|_| "could not issue the second isolated account credential")?;
     broker.configure_user_policies(8 * 1024 * 1024).await?;
     let broker = Arc::new(broker);
     let routes = super::router(broker.clone());
@@ -366,6 +378,12 @@ async fn run(directory: PathBuf) -> crate::Result<()> {
         },
         "account_token":account_token,
         "account_expires_at":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + expires_in,
+        "other_identity":{
+            "provider":"github","subject":"124","login":"otherfixture",
+            "principal":"otherfixture@github","username":"otherrelayfixture"
+        },
+        "other_account_token":other_account_token,
+        "other_account_expires_at":SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + other_expires_in,
         "github_test_origin":github_test_origin
     });
     let temporary = directory.join("ready.tmp");

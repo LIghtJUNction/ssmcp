@@ -1,0 +1,35 @@
+{
+  "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "command": [
+    "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "broker::",
+    "--test-threads=2"
+  ],
+  "exit_code": 0,
+  "duration_seconds": 0.703,
+  "log": {
+    "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/legacy-broker-suite.log",
+    "sha256": "8d3344b827e9009cf23b8dd06fc416e5b61eb0d5699135b1746ffbf21b48d1d3"
+  },
+  "libtest": {
+    "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+    "sha256": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+    "bytes": 282671696
+  },
+  "status": "passed",
+  "results": {
+    "passed": 57,
+    "failed": 0,
+    "ignored": 0,
+    "measured": 0,
+    "filtered_out": 1463
+  },
+  "new_legacy_cases": [
+    "broker::allow::tests::legacy_account_self_cannot_bypass_logout_or_ban_between_upgrade_and_hello",
+    "broker::allow::tests::legacy_account_self_rejects_foreign_ambiguous_noncanonical_and_anonymous_policies",
+    "broker::allow::tests::legacy_account_self_still_validates_other_hello_metadata",
+    "broker::allow::tests::legacy_account_self_default_preserves_subject_and_negotiated_wire_shape"
+  ],
+  "all_frozen_artifacts_unchanged": true
+}

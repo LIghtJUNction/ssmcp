@@ -1,0 +1,87 @@
+{
+  "product_git_sha": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "results": [
+    {
+      "product_git_sha": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+      "case": "legacy",
+      "started_at": "2026-11-20T00:13:25.965137+00:00",
+      "source_hashes": {
+        "scripts/e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+        "scripts/e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "scripts/e2e.py": "87c9b086f4089a38e183c7082d0c21b1b05fd371dc5d7a172409c00ac5b6980b",
+        "scripts/e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+        "src/http/relay_composer_fixture.rs": "cdb76261649e24f4b849dc118e7b7e14f5c5bcb0a92b4d9f698d336a3603e797"
+      },
+      "frozen_sha256": {
+        "libtest": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+        "cli": "9b7fdb2c4f9c5b385047d34c880af7082b1ba785e55c6e06dc4ad1714fb66c69"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 16.933,
+      "finished_at": "2026-11-20T00:13:42.897716+00:00",
+      "status": "passed",
+      "checks": 41
+    },
+    {
+      "product_git_sha": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+      "case": "modern",
+      "started_at": "2026-11-20T00:13:25.965484+00:00",
+      "source_hashes": {
+        "scripts/e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+        "scripts/e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+        "scripts/e2e.py": "87c9b086f4089a38e183c7082d0c21b1b05fd371dc5d7a172409c00ac5b6980b",
+        "scripts/e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+        "src/http/relay_composer_fixture.rs": "cdb76261649e24f4b849dc118e7b7e14f5c5bcb0a92b4d9f698d336a3603e797"
+      },
+      "frozen_sha256": {
+        "libtest": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+        "cli": "9b7fdb2c4f9c5b385047d34c880af7082b1ba785e55c6e06dc4ad1714fb66c69"
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 18.661,
+      "finished_at": "2026-11-20T00:13:44.626717+00:00",
+      "status": "passed",
+      "checks": 47
+    }
+  ],
+  "frozen_sha256_before": {
+    "libtest": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+    "cli": "9b7fdb2c4f9c5b385047d34c880af7082b1ba785e55c6e06dc4ad1714fb66c69"
+  },
+  "frozen_sha256_after": {
+    "libtest": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+    "cli": "9b7fdb2c4f9c5b385047d34c880af7082b1ba785e55c6e06dc4ad1714fb66c69"
+  },
+  "inputs_unchanged": true,
+  "schema_version": 1,
+  "status": "passed",
+  "scope": "real legacy client handshake, native execution and cross-identity isolation plus modern account regression",
+  "source_checkpoint": "ae09cf30bdbe8490fe59c2f68fc0e042ca19c034",
+  "reports": {
+    "legacy": {
+      "report": "legacy.json",
+      "log": "legacy-checks.txt",
+      "checks": 41
+    },
+    "modern": {
+      "report": "modern-account.json",
+      "log": "modern-checks.txt",
+      "checks": 47
+    }
+  },
+  "observed_live_version_counts": {
+    "ordinary_v0.10.12": 14,
+    "independent_recovery_v0.10.13": 1
+  },
+  "retained_work_boundary": "No existing clients or services were restarted. Handshake compatibility does not assert native job survival across deployment.",
+  "redactions": [
+    "ephemeral loopback ports",
+    "owned temporary fixture paths"
+  ],
+  "artifact_sha256": {
+    "legacy.json": "e11cac1ba571fd3cdcd36d8158119afa285850898dc5bf7dedbcaf253a7cb64e",
+    "legacy-checks.txt": "a23636fd9a13410cc82bc0c535f72c50f42b6ce325958a2b844a9be535e7033a",
+    "modern-account.json": "1315f8bb8a0783920d2b6337edcf8f7e5273aa5063e66e3abb4f7358ed65c56a",
+    "modern-checks.txt": "95ad1a12fe816f066181be7d677d69ee4c6ad9d0486ecb397807265474a46067"
+  }
+}
