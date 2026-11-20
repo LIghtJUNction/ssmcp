@@ -33,6 +33,32 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def connection_line(process, label, timeout_seconds=12, max_bytes=16384):
+    """Read one bounded Ready line; readable partial output must not disable timeout."""
+    descriptor = process.stdout.fileno()
+    os.set_blocking(descriptor, False)
+    received = bytearray()
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(descriptor, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise AssertionError(label + ": no complete connection record before deadline")
+                chunk = os.read(descriptor, min(4096, max_bytes + 1 - len(received)))
+                if not chunk:
+                    raise AssertionError(label + ": client ended before its complete Ready record")
+                received.extend(chunk)
+                if len(received) > max_bytes:
+                    raise AssertionError(label + ": oversized connection record")
+                newline = received.find(b"\n")
+                if newline >= 0:
+                    return bytes(received[:newline + 1])
+    finally:
+        os.set_blocking(descriptor, True)
+
+
 def private_directory(path):
     path.mkdir(mode=0o700)
     return path
@@ -113,13 +139,7 @@ class LegacyHarness(Harness):
             stdout=subprocess.PIPE, cwd=workspace, env=environment,
         )
         # The production client emits its Ready record on redirected stdout.
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            if not selector.select(timeout=12):
-                raise AssertionError(label + ": no connection record")
-        line = process.stdout.readline()
-        if not line:
-            raise AssertionError(label + ": client ended before Ready")
+        line = connection_line(process, label)
         credentials = self.validate_connection_record(json.loads(line))
         client_id = credentials["client_id"]
         self.check(credentials.get("allow") == [self.identity["principal"]],
