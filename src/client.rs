@@ -2453,12 +2453,12 @@ async fn connect_inner(
     let _link_metrics = display_session
         .as_ref()
         .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
-    if let Some(agent) = &options.agent {
-        if let Err(error) = agent.check_target(Some(&url)) {
-            let _ = ssh.kill().await;
-            incoming.stop().await;
-            return Err(error.into());
-        }
+    if let Some(agent) = &options.agent
+        && let Err(error) = agent.check_target(Some(&url))
+    {
+        let _ = ssh.kill().await;
+        incoming.stop().await;
+        return Err(error.into());
     }
     render::status(
         "shell",

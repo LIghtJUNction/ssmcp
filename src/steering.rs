@@ -386,14 +386,13 @@ impl Queue {
         max_bytes: usize,
     ) -> Vec<Value> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let claimed = state.claim(
+        state.claim(
             response.client_id,
             response.run_id,
             response.agent_id,
             max_messages,
             max_bytes,
-        );
-        claimed
+        )
     }
 
     #[cfg(test)]

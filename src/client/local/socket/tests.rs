@@ -8,7 +8,7 @@ impl Directory {
     fn new() -> Self {
         let mut random = [0_u8; 12];
         crate::platform::random_bytes(&mut random).unwrap();
-        let name = format!("ssmcp-mcp-socket-{}", crate::hex::encode(&random));
+        let name = format!("ssmcp-mcp-socket-{}", crate::hex::encode(random));
         let path = PathBuf::from("/tmp").join(name);
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self(path)

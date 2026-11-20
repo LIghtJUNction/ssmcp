@@ -145,13 +145,20 @@ impl State {
 
     fn chat_timing_snapshot_at(&self, now: Instant) -> Snapshot {
         #[cfg(test)]
-        let fixture = self.conversation.timing_fixture.clone();
+        let mut snapshot = {
+            let fixture = self.conversation.timing_fixture.clone();
+            if self.preview && fixture.is_none() {
+                return Snapshot::default();
+            }
+            fixture.unwrap_or_else(|| crate::runtime::time::snapshot_at(now))
+        };
         #[cfg(not(test))]
-        let fixture: Option<Snapshot> = None;
-        if self.preview && fixture.is_none() {
-            return Snapshot::default();
-        }
-        let mut snapshot = fixture.unwrap_or_else(|| crate::runtime::time::snapshot_at(now));
+        let mut snapshot = {
+            if self.preview {
+                return Snapshot::default();
+            }
+            crate::runtime::time::snapshot_at(now)
+        };
         // This is the existing task-panel state, already holding the native
         // job's exact Instant projection. Never acquire the renderer mutex
         // from a frame: emission publishes renderer -> compositor.
