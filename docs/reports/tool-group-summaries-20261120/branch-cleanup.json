@@ -1,0 +1,192 @@
+{
+  "remote": [
+    {
+      "branch": "coord/shared-cohort-20261120",
+      "sha": "ecc450f17012f8120d7d49470ce9599ada65456f"
+    },
+    {
+      "branch": "feat/chat-image-thumbnails-20261119",
+      "sha": "3e847266d40bed8f20b21fe8152fcbd181c1a5f6"
+    },
+    {
+      "branch": "feat/composer-mode-20261119",
+      "sha": "f1c474aeca54b13f5b082c77b640f900e778e451"
+    },
+    {
+      "branch": "feat/exec-readable-title",
+      "sha": "07edc32868cf431e46b0b87b65f926838e2c26bf"
+    },
+    {
+      "branch": "feat/link-metrics-20261119",
+      "sha": "c833ad6d2696f0e139d1608a2d56e71267b9af67"
+    },
+    {
+      "branch": "feat/queue-receipts-20261119",
+      "sha": "0cfc4f47a96a43071e3207950a1f1830ed7d93fd"
+    },
+    {
+      "branch": "feat/quota-progress-20261119",
+      "sha": "8077ad2ef4b54c4fa1ae41c8048797255417b1ef"
+    },
+    {
+      "branch": "feat/tool-groups-20261119",
+      "sha": "246c214737a1ecb0969ec600273be8342506167d"
+    },
+    {
+      "branch": "feat/zuse-integration-20261120",
+      "sha": "00f7c116d1025674ee52de9bf011f567b78d7c14"
+    },
+    {
+      "branch": "fix/account-fixture-saved-connection",
+      "sha": "dfcd97fd889a1b31097a6426558fd7e00d05608a"
+    },
+    {
+      "branch": "fix/allow-release-gates-20261120",
+      "sha": "725239906dd3a079b02376eb70b2016f9ac5004f"
+    },
+    {
+      "branch": "fix/chat-follow-20261119",
+      "sha": "d066c4ef74eff62d3eeb24477b7681493c0acb7e"
+    },
+    {
+      "branch": "fix/composer-recipient-fixture-20261119",
+      "sha": "809ef13de79b6f66ffdf99b6fa2bece97b03eea7"
+    },
+    {
+      "branch": "fix/context-memory-account-reload-20261119",
+      "sha": "d4f316c588dac3ac42edb37852acf6b434a78f43"
+    },
+    {
+      "branch": "fix/daemon-tool-contract-20261119",
+      "sha": "d8834d5db06c9f59c74b519dd6c34266e5e848fc"
+    },
+    {
+      "branch": "fix/deferred-server-deployment-20261120",
+      "sha": "d4ae9785fa78a68697b3e82de5cbdc8436393fe6"
+    },
+    {
+      "branch": "fix/legacy-account-release-20261120",
+      "sha": "979973595a3172b6489c18f662fab4ef6e5b80f1"
+    },
+    {
+      "branch": "fix/portable-gateway-failure-observation",
+      "sha": "0c9f81b14a11744589d576db979dd98cf6027bee"
+    },
+    {
+      "branch": "fix/private-display-release-20261120",
+      "sha": "bd950c1d7da92e23246ad87fe0fc5e9e835a09ea"
+    },
+    {
+      "branch": "fix/skill-picker-20261119",
+      "sha": "63a22fb8d866369d265eb31350ad2acca9fdb83f"
+    },
+    {
+      "branch": "perf/release-folded-event-cache-20261119",
+      "sha": "7438e615e2a5f4d777a499adffbda275ac09067b"
+    },
+    {
+      "branch": "release/0.10.16-portable-recovery-20261120",
+      "sha": "07928a32ae35795bc256d7ea1d873a55a7a40b22"
+    },
+    {
+      "branch": "test/account-wss-shared-fixture",
+      "sha": "38b19fc6c6a4cc52c73bd9d8c43485f9345da3f2"
+    }
+  ],
+  "local": [
+    {
+      "branch": "feat/007-recovery",
+      "sha": "bccb59b1ac88d613ab8c1a8459e64023ab665718"
+    },
+    {
+      "branch": "feat/chat-image-thumbnails-20261119",
+      "sha": "3e847266d40bed8f20b21fe8152fcbd181c1a5f6"
+    },
+    {
+      "branch": "feat/composer-mode-20261119",
+      "sha": "f1c474aeca54b13f5b082c77b640f900e778e451"
+    },
+    {
+      "branch": "feat/cua-parallel-terminals",
+      "sha": "967f6c4b12bbef1c97ab81582269080b0d40404a"
+    },
+    {
+      "branch": "feat/link-metrics-20261119",
+      "sha": "c833ad6d2696f0e139d1608a2d56e71267b9af67"
+    },
+    {
+      "branch": "feat/queue-receipts-20261119",
+      "sha": "0cfc4f47a96a43071e3207950a1f1830ed7d93fd"
+    },
+    {
+      "branch": "feat/quota-progress-20261119",
+      "sha": "8077ad2ef4b54c4fa1ae41c8048797255417b1ef"
+    },
+    {
+      "branch": "feat/terminal-panels-20261119",
+      "sha": "1c1fbf55f88b07ee5f0f3031f0b34804208da3e1"
+    },
+    {
+      "branch": "feat/tool-groups-20261119",
+      "sha": "246c214737a1ecb0969ec600273be8342506167d"
+    },
+    {
+      "branch": "feat/unified-harness-runtime",
+      "sha": "0c0dcee90b183e94d26492e062ee6ffa111c26de"
+    },
+    {
+      "branch": "feat/zuse-integration-20261120",
+      "sha": "00f7c116d1025674ee52de9bf011f567b78d7c14"
+    },
+    {
+      "branch": "fix/allow-release-gates-20261120",
+      "sha": "725239906dd3a079b02376eb70b2016f9ac5004f"
+    },
+    {
+      "branch": "fix/chat-follow-20261119",
+      "sha": "d066c4ef74eff62d3eeb24477b7681493c0acb7e"
+    },
+    {
+      "branch": "fix/deferred-server-deployment-20261120",
+      "sha": "d4ae9785fa78a68697b3e82de5cbdc8436393fe6"
+    },
+    {
+      "branch": "fix/legacy-account-release-20261120",
+      "sha": "979973595a3172b6489c18f662fab4ef6e5b80f1"
+    },
+    {
+      "branch": "fix/private-display-release-20261120",
+      "sha": "bd950c1d7da92e23246ad87fe0fc5e9e835a09ea"
+    },
+    {
+      "branch": "fix/readable-command-logs-20261117",
+      "sha": "1e14d8d9f8c7964a293ee47e55103ee1a3d0a2ea"
+    },
+    {
+      "branch": "fix/runtime-contracts-20261118",
+      "sha": "9d09f0d824a39659098e097eb598e6dacedc8e17"
+    },
+    {
+      "branch": "fix/skill-picker-20261119",
+      "sha": "63a22fb8d866369d265eb31350ad2acca9fdb83f"
+    },
+    {
+      "branch": "release/0.10.16-portable-recovery-20261120",
+      "sha": "07928a32ae35795bc256d7ea1d873a55a7a40b22"
+    },
+    {
+      "branch": "verify/message-release-convergence-20261120",
+      "sha": "34b636615a867a5826e738495662925324567c73"
+    }
+  ],
+  "skipped": [
+    {
+      "branch": "coord/v0.10.15-private-environment-20261120",
+      "reason": "remote already absent or changed"
+    }
+  ],
+  "main": "4ae22ea828ee2647b44c275f79679963ba7e88a9",
+  "utc": "2026-11-20T12:20:34.404512+00:00",
+  "remote_readback_ok": true,
+  "source_tree": "fb44a0945c7d350be995744c3bb513c918be8b4d"
+}
