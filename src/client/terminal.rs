@@ -719,6 +719,21 @@ pub(crate) fn take_tool_summary_reminder(
     state.events.take_tool_summary_reminder(source)
 }
 
+/// A frame rejected before sending can relinquish its own reminder reservation.
+pub(crate) fn restore_tool_summary_reminder(
+    source: &crate::runtime::call_scope::Source,
+    reminder: &serde_json::Value,
+) {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.restore_tool_summary_reminder(source, reminder);
+}
+
 pub(crate) fn filter_logs(text: Option<&str>, level: Option<&str>) -> Result<(), String> {
     if text.is_some_and(|text| text.len() > 256 || text.chars().any(char::is_control)) {
         return Err("log filter must contain at most 256 bytes of plain text".into());

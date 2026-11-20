@@ -41,6 +41,33 @@ impl Reminder {
     }
 }
 
+/// Only a well-formed reply from the exact native primitive proves capability.
+/// A legacy unknown-tool response wrapped in Ok must not promote reserved metadata.
+pub(crate) fn valid_native_receipt(native: &Value) -> bool {
+    if native["isError"] == true {
+        return false;
+    }
+    let body = &native["structuredContent"];
+    if body["schema_version"] != 1 {
+        return false;
+    }
+    if body["accepted"] == true {
+        return body["needs_summary"] == false
+            && ObservedGroup::parse("", None, body).is_some_and(|group| {
+                group.call_count > 0 && group.covered_call_count == group.call_count
+            });
+    }
+    if body.get("accepted").is_some() || body["threshold"] != 10 {
+        return false;
+    }
+    body["groups"].as_array().is_some_and(|groups| {
+        groups.len() <= MAX_REMINDERS
+            && groups.iter().all(|group| {
+                ObservedGroup::parse("", None, group).is_some_and(|group| group.call_count > 0)
+            })
+    })
+}
+
 #[derive(Clone)]
 struct Captured {
     client_id: String,
@@ -130,13 +157,10 @@ impl Capture {
     /// Only an exact, successful native tool_summary reply reaches this method.
     /// JavaScript results and other native tool bodies cannot retire a notice.
     pub(crate) fn reconcile(&mut self, client_id: &str, agent_id: Option<&str>, native: &Value) {
-        if native["isError"] == true {
+        if !valid_native_receipt(native) {
             return;
         }
         let body = &native["structuredContent"];
-        if body["schema_version"] != 1 {
-            return;
-        }
         if body["accepted"] == true {
             let Some(state) = ObservedGroup::parse(client_id, agent_id, body) else {
                 return;
