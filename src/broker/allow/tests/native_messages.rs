@@ -387,7 +387,7 @@ async fn native_revoked_sender_acl_expires_pending_text_without_delivery() {
     let (mut sender, _) = connected(&fixture, Some("42"), true, vec![]).await;
     let (mut receiver, target) =
         connected(&fixture, Some("7"), true, names(&["alice", "colleague"])).await;
-    local(
+    let sent = local(
         &mut sender,
         1,
         Command::Send {
@@ -415,15 +415,25 @@ async fn native_revoked_sender_acl_expires_pending_text_without_delivery() {
     else {
         panic!("owner ACL removal required");
     };
-    let received = local(&mut receiver, 11, Command::Inbox {}).await.unwrap();
-    assert!(received.messages.is_empty());
+    // The receiver never polls its inbox after revoking access. The sender's
+    // own lifecycle query must resolve the pending receipt by itself.
     let outgoing = local(&mut sender, 2, Command::List {}).await.unwrap();
     assert_eq!(outgoing.receipts.len(), 1);
     assert_eq!(outgoing.receipts[0].status, Status::Expired);
+    let status = local(
+        &mut sender,
+        3,
+        Command::Status {
+            message_id: sent.receipts[0].message_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(status.receipts[0].status, Status::Expired);
     assert!(
         local(
             &mut sender,
-            3,
+            4,
             Command::Send {
                 recipient_id: destination(&target),
                 text: "still denied".into(),
@@ -444,6 +454,10 @@ async fn native_scoped_oauth_never_expands_into_all_account_resources() {
     let (target_socket, target) =
         connected(&fixture, Some("7"), true, names(&["alice", "colleague"])).await;
     assert_ne!(source.ssh_user, target.ssh_user);
+    let wide = oauth(&fixture, IDENTITY_RESOURCE, "42");
+    let earlier = remote(&fixture,&source,IDENTITY_RESOURCE,&wide,json!({"action":"send",
+        "recipient_id":destination(&target),"text":"authorized before narrow query","request_id":"wide_first"}))
+        .await.unwrap();
     let token = oauth(&fixture, &source.ssh_user, "42");
     let listed = remote(
         &fixture,
@@ -466,9 +480,375 @@ async fn native_scoped_oauth_never_expands_into_all_account_resources() {
             .iter()
             .any(|r| r.client_id == target.client_id())
     );
+    assert_eq!(
+        listed.receipts[0].status,
+        Status::Queued,
+        "a narrower observer token does not revoke the original message authority"
+    );
+    assert!(
+        remote(
+            &fixture,
+            &source,
+            &source.ssh_user,
+            &token,
+            json!({"action":"status",
+        "message_id":earlier.receipts[0].message_id})
+        )
+        .await
+        .is_err()
+    );
+    let still_pending = remote(
+        &fixture,
+        &source,
+        IDENTITY_RESOURCE,
+        &wide,
+        json!({"action":"status",
+        "message_id":earlier.receipts[0].message_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(still_pending.receipts[0].status, Status::Queued);
     assert!(remote(&fixture,&source,&source.ssh_user,&token,json!({"action":"send",
         "recipient_id":destination(&target),"text":"outside resource","request_id":"resource-bound"}))
         .await.is_err());
     close(source_socket).await;
+    close(target_socket).await;
+}
+
+#[tokio::test]
+async fn disconnected_recipient_expires_sender_receipts_without_an_inbox_poll() {
+    let fixture = Fixture::new().await;
+    let (mut sender, _) = connected(&fixture, Some("42"), true, vec![]).await;
+    let (mut receiver, target) = connected(&fixture, Some("42"), true, vec![]).await;
+    let mut ids = Vec::new();
+    for index in 0..3_u64 {
+        let sent = local(
+            &mut sender,
+            index + 1,
+            Command::Send {
+                recipient_id: destination(&target),
+                text: format!("message {index}"),
+                request_id: format!("disconnect_{index}"),
+            },
+        )
+        .await
+        .unwrap();
+        ids.push(sent.receipts[0].message_id.clone());
+        if index < 2 {
+            let got = local(&mut receiver, index * 2 + 1, Command::Inbox {})
+                .await
+                .unwrap();
+            assert_eq!(got.messages.len(), 1);
+        }
+        if index == 0 {
+            local(
+                &mut receiver,
+                2,
+                Command::Ack {
+                    message_id: ids[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    }
+    close(receiver).await;
+    timeout(Duration::from_secs(3), async {
+        while target.is_alive() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let outgoing = local(&mut sender, 4, Command::List {}).await.unwrap();
+    let state = |id: &str| {
+        outgoing
+            .receipts
+            .iter()
+            .find(|receipt| receipt.message_id == id)
+            .unwrap()
+            .status
+    };
+    assert_eq!(state(&ids[0]), Status::Acknowledged);
+    assert_eq!(state(&ids[1]), Status::Expired);
+    assert_eq!(state(&ids[2]), Status::Expired);
+    for (index, id) in ids.into_iter().enumerate() {
+        let reply = local(
+            &mut sender,
+            5 + index as u64,
+            Command::Status { message_id: id },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            reply.receipts[0].status,
+            if index == 0 {
+                Status::Acknowledged
+            } else {
+                Status::Expired
+            }
+        );
+    }
+    close(sender).await;
+}
+
+#[tokio::test]
+async fn departed_recipient_releases_mailbox_capacity_from_sender_only_queries() {
+    let fixture = Fixture::new().await;
+    let (mut sender, _) = connected(&fixture, Some("42"), true, vec![]).await;
+    let (target_socket, target) = connected(&fixture, Some("42"), true, vec![]).await;
+    let authorization = Authorization::Identity(identity("42", "octocat"));
+    let owner = crate::bridge::owner(IDENTITY_RESOURCE, &authorization).unwrap();
+    let member = target
+        .collaboration
+        .dispatch(&owner, "join", json!({"name":"leaving worker"}))
+        .await
+        .unwrap();
+    let recipient_id = format!(
+        "agent:{}:{}",
+        target.client_id(),
+        member["agent_id"].as_str().unwrap()
+    );
+    for index in 0..messages::MAX_MESSAGES {
+        local(
+            &mut sender,
+            index as u64 + 1,
+            Command::Send {
+                recipient_id: recipient_id.clone(),
+                text: "\\\"\n".repeat(256),
+                request_id: format!("capacity_{index}"),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let next_id = messages::MAX_MESSAGES as u64 + 1;
+    assert!(
+        local(
+            &mut sender,
+            next_id,
+            Command::Send {
+                recipient_id: recipient_id.clone(),
+                text: "still full".into(),
+                request_id: "capacity_full".into()
+            }
+        )
+        .await
+        .is_err()
+    );
+    let token = oauth(&fixture, IDENTITY_RESOURCE, "42");
+    crate::bridge::dispatch(
+        fixture.broker.clone(),
+        IDENTITY_RESOURCE.into(),
+        token,
+        "collab.leave".into(),
+        json!({"client_id":target.client_id(),
+            "agent_id":member["agent_id"],"token":member["token"]}),
+    )
+    .await
+    .unwrap();
+    let outgoing = local(&mut sender, next_id + 1, Command::List {})
+        .await
+        .unwrap();
+    assert_eq!(outgoing.receipts.len(), messages::MAX_MESSAGES);
+    assert!(
+        outgoing
+            .receipts
+            .iter()
+            .all(|receipt| receipt.status == Status::Expired)
+    );
+    assert!(
+        local(
+            &mut sender,
+            next_id + 2,
+            Command::Send {
+                recipient_id,
+                text: "must not reroute".into(),
+                request_id: "after_leave_old_agent".into()
+            }
+        )
+        .await
+        .is_err()
+    );
+    let accepted = local(
+        &mut sender,
+        next_id + 3,
+        Command::Send {
+            recipient_id: destination(&target),
+            text: "new explicit account destination".into(),
+            request_id: "capacity_recovered".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(accepted.receipts[0].status, Status::Queued);
+    close(sender).await;
+    close(target_socket).await;
+}
+
+#[tokio::test]
+async fn sender_membership_end_reclaims_orphans_without_sender_or_recipient_polling() {
+    for end in ["leave", "lease"] {
+        let fixture = Fixture::new().await;
+        let (source_socket, source) = connected(&fixture, Some("42"), true, vec![]).await;
+        let (target_socket, target) = connected(&fixture, Some("42"), true, vec![]).await;
+        let authorization = Authorization::Identity(identity("42", "octocat"));
+        let owner = crate::bridge::owner(IDENTITY_RESOURCE, &authorization).unwrap();
+        let member = source
+            .collaboration
+            .dispatch(&owner, "join", json!({"name":"departing source"}))
+            .await
+            .unwrap();
+        let agent_id = member["agent_id"].as_str().unwrap();
+        let token = oauth(&fixture, IDENTITY_RESOURCE, "42");
+        let sent = remote(
+            &fixture,
+            &source,
+            IDENTITY_RESOURCE,
+            &token,
+            json!({
+            "action":"send","recipient_id":destination(&target),"text":"orphan body",
+            "request_id":"source_ends","agent_id":agent_id,"agent_token":member["token"]}),
+        )
+        .await
+        .unwrap();
+        let sender = messages::Sender {
+            kind: Origin::Agent,
+            client_id: source.client_id().into(),
+            account: wire::ControlAccount {
+                provider: "github".into(),
+                subject: "42".into(),
+                login: "octocat".into(),
+            },
+            agent: Some(wire::ControlAgent {
+                id: agent_id.into(),
+                name: "departing source".into(),
+            }),
+        };
+        let message_id = &sent.receipts[0].message_id;
+        if end == "leave" {
+            crate::bridge::dispatch(
+                fixture.broker.clone(),
+                IDENTITY_RESOURCE.into(),
+                token,
+                "collab.leave".into(),
+                json!({"client_id":source.client_id(),"agent_id":agent_id,
+                    "token":member["token"]}),
+            )
+            .await
+            .unwrap();
+        } else {
+            source.collaboration.expire_lease_for_test(&owner, agent_id);
+        }
+        timeout(Duration::from_secs(4), async {
+            loop {
+                // An observation-only validator cannot cause expiry. The real
+                // leave hook / existing connection heartbeat must do that.
+                let receipt = fixture
+                    .broker
+                    .native_messages
+                    .status(&sender, message_id, |_, _| true)
+                    .unwrap();
+                if receipt.status == Status::Expired {
+                    break;
+                }
+                assert_eq!(receipt.status, Status::Queued);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("membership end should retire an orphan without mailbox polling");
+        assert!(source.is_alive() && target.is_alive());
+        close(source_socket).await;
+        close(target_socket).await;
+    }
+}
+
+#[tokio::test]
+async fn a_replacement_arc_cannot_receive_or_retire_the_original_connections_mail() {
+    let fixture = Fixture::new().await;
+    let (mut sender, source) = connected(&fixture, Some("42"), true, vec![]).await;
+    let (target_socket, target) = connected(&fixture, Some("42"), true, vec![]).await;
+    let sent = local(
+        &mut sender,
+        1,
+        Command::Send {
+            recipient_id: destination(&target),
+            text: "original connection only".into(),
+            request_id: "old_arc".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let authorization = Authorization::Identity(identity("42", "octocat"));
+    // Model a future same-ID reconnect with otherwise equivalent current
+    // account/descriptor state. The real websocket above supplied the message.
+    let separate = Broker::new("https://ssmcp.test".into());
+    let mut replacement = separate
+        .test_register_identity("replacement", identity("42", "octocat"))
+        .await;
+    separate.sessions.write().await.clear();
+    let new = Arc::get_mut(&mut replacement).unwrap();
+    new.info = target.info();
+    new.owner_identity = target.owner_identity.clone();
+    new.owner_subject = target.owner_subject.clone();
+    new.locally_owned_peer = true;
+    assert!(
+        fixture
+            .broker
+            .include_native_messages(&replacement, &authorization, None, 32, 100_000)
+            .is_empty()
+    );
+    let expired = local(
+        &mut sender,
+        2,
+        Command::Status {
+            message_id: sent.receipts[0].message_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(expired.receipts[0].status, Status::Expired);
+    let recipient = local(&mut sender, 3, Command::List {})
+        .await
+        .unwrap()
+        .recipients
+        .into_iter()
+        .find(|recipient| recipient.id == destination(&target))
+        .unwrap();
+    let next = fixture
+        .broker
+        .native_messages
+        .enqueue(
+            crate::messaging::Proof {
+                connection: Arc::downgrade(&source),
+                destination: Arc::downgrade(&replacement),
+                identity: identity("42", "octocat"),
+                sender: messages::Sender {
+                    kind: Origin::LocalUser,
+                    client_id: source.client_id().into(),
+                    account: wire::ControlAccount {
+                        provider: "github".into(),
+                        subject: "42".into(),
+                        login: "octocat".into(),
+                    },
+                    agent: None,
+                },
+            },
+            recipient,
+            "replacement generation".into(),
+            "new_arc".into(),
+        )
+        .unwrap();
+    // Simulate late teardown of the former Arc. It cannot touch the explicitly
+    // pinned replacement record, despite their deliberately equal public IDs.
+    fixture.broker.native_messages.close_connection(&target);
+    let delivered =
+        fixture
+            .broker
+            .include_native_messages(&replacement, &authorization, None, 32, 100_000);
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0]["receipt"]["message_id"], next.message_id);
+    close(sender).await;
     close(target_socket).await;
 }
