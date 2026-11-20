@@ -23,10 +23,18 @@ impl Environment {
             .env("QT_QPA_PLATFORM", "xcb")
             .env("SDL_VIDEODRIVER", "x11")
             .env("MOZ_ENABLE_WAYLAND", "0")
+            // This private session has no user-systemd activation bus.
+            .env("ATSPI_DBUS_IMPLEMENTATION", "dbus-daemon")
+            // Preserve GVfs APIs without leaving a FUSE mount in owned state.
+            .env("GVFS_DISABLE_FUSE", "1")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("WAYLAND_SOCKET")
             .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            // libatspi must discover the accessibility bus on our private X11
+            // root, never an inherited bus address or a different display.
+            .env_remove("AT_SPI_BUS_ADDRESS")
+            .env_remove("AT_SPI_DISPLAY")
             .env_remove("DESKTOP_STARTUP_ID")
             .env_remove("XDG_ACTIVATION_TOKEN")
             .env_remove("VSCODE_IPC_HOOK_CLI")
@@ -672,12 +680,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn private_command_removes_inherited_wayland_socket_without_changing_parent() {
+    fn private_command_removes_session_overrides_without_changing_parent() {
         use std::ffi::OsStr;
-        let before: Vec<_> = ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY"]
-            .into_iter()
-            .map(|name| (name, std::env::var_os(name)))
-            .collect();
+        let before: Vec<_> = [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "WAYLAND_SOCKET",
+            "XAUTHORITY",
+            "AT_SPI_BUS_ADDRESS",
+            "AT_SPI_DISPLAY",
+            "ATSPI_DBUS_IMPLEMENTATION",
+            "GVFS_DISABLE_FUSE",
+            "GIO_USE_VFS",
+        ]
+        .into_iter()
+        .map(|name| (name, std::env::var_os(name)))
+        .collect();
         let environment = Environment {
             display: ":10000".into(),
             authority: PathBuf::from("private-cookie"),
@@ -686,7 +704,15 @@ mod tests {
         let mut command = std::process::Command::new("not-executed");
         command
             .env("WAYLAND_DISPLAY", "fixture-wayland")
-            .env("WAYLAND_SOCKET", "91");
+            .env("WAYLAND_SOCKET", "91")
+            .env(
+                "AT_SPI_BUS_ADDRESS",
+                "unix:path=/unused-host-accessibility-bus",
+            )
+            .env("AT_SPI_DISPLAY", ":1")
+            .env("ATSPI_DBUS_IMPLEMENTATION", "dbus-broker")
+            .env("GVFS_DISABLE_FUSE", "")
+            .env("GIO_USE_VFS", "gvfs");
         environment.apply(&mut command);
         let overrides: std::collections::HashMap<_, _> = command.get_envs().collect();
         assert_eq!(
@@ -699,6 +725,20 @@ mod tests {
         );
         assert_eq!(overrides.get(OsStr::new("WAYLAND_DISPLAY")), Some(&None));
         assert_eq!(overrides.get(OsStr::new("WAYLAND_SOCKET")), Some(&None));
+        assert_eq!(overrides.get(OsStr::new("AT_SPI_BUS_ADDRESS")), Some(&None));
+        assert_eq!(overrides.get(OsStr::new("AT_SPI_DISPLAY")), Some(&None));
+        assert_eq!(
+            overrides.get(OsStr::new("ATSPI_DBUS_IMPLEMENTATION")),
+            Some(&Some(OsStr::new("dbus-daemon")))
+        );
+        assert_eq!(
+            overrides.get(OsStr::new("GVFS_DISABLE_FUSE")),
+            Some(&Some(OsStr::new("1")))
+        );
+        assert_eq!(
+            overrides.get(OsStr::new("GIO_USE_VFS")),
+            Some(&Some(OsStr::new("gvfs")))
+        );
         for (name, expected) in before {
             assert_eq!(std::env::var_os(name), expected, "{name}");
         }

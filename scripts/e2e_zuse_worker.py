@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the linked zuse library on two private X servers, with real input."""
+"""Exercise native pointer/capture and confirmed GTK text on owned X servers."""
 from __future__ import annotations
 
 import argparse
@@ -152,10 +152,10 @@ class Harness:
         baseline=self.x11_state(host)
         window=self.windows(private,"zuse native fixture")
         self.call(private,"focus",{"window_id":window["window_id"]})
-        literal="literal $() ; 中文"
+        literal="literal $() ; ASCII"
         self.call(private,"type",{"text":literal})
-        wait_for(lambda: (directory/"typed").exists() and (directory/"typed").read_text()==literal,"literal Unicode keyboard input")
-        self.check(True,"native zuse typing preserves literal shell punctuation and Unicode")
+        wait_for(lambda: (directory/"typed").exists() and (directory/"typed").read_text()==literal,"literal ASCII keyboard input")
+        self.check(True,"native zuse typing preserves literal shell punctuation")
         self.call(private,"click",{"point":{"x":40,"y":80},"button":"left","count":1})
         wait_for(lambda: (directory/"clicked").exists(),"native click")
         self.check(True,"native zuse button input reaches the application")
@@ -170,19 +170,17 @@ class Harness:
         reply=json.loads(output)
         self.check(reply["error"]=="zuse operation cancelled" and reply["cleanup_ok"],"cancelled drag reports cancellation and successful release")
         self.check(time.monotonic()-started<2 and not self.x11_state(private)["mask"] & 0x100,"cancellation wakes a sleeping drag and releases the physical button")
-        self.call(private,"click",{"point":{"x":40,"y":20},"button":"left","count":1})
-        before=self.x11_state(private)
-        typed_before=(directory/"typed").read_text()
-        process=self.start_request(private,"type",{"text":"界"*4000})
-        wait_for(lambda: len((directory/"typed").read_text())>len(typed_before),"Unicode input starts before cancellation")
-        process.stdin.close()
-        process.stdin=None
-        output,error=process.communicate(timeout=3)
-        reply=json.loads(output)
-        self.check(process.returncode==0 and reply["error"]=="zuse operation cancelled" and reply["cleanup_ok"],"cancelled Unicode typing exits with an explicit cancellation and cleanup receipt")
         after=self.x11_state(private)
-        self.check(before["keymap_sha256"]==after["keymap_sha256"],"cancellation restores the native X11 Unicode keyboard mapping")
+        self.check(before["keymap_sha256"]==after["keymap_sha256"],"native drag cancellation preserves the X11 keyboard mapping")
         self.check(not after["mask"] & 0x1f00,"no pointer button remains held after cancellation")
+        self.evidence.mkdir(parents=True,exist_ok=True)
+        text_report=self.evidence/"whole-text.json"
+        subprocess.run([sys.executable,str(Path(__file__).with_name("e2e_x11_text.py")),
+            "--binary",str(self.binary),"--helpers-dir",str(Path(__file__).resolve().parent),
+            "--evidence-dir",str((self.evidence/"whole-text").resolve()),
+            "--report",str(text_report.resolve())],check=True,timeout=120)
+        self.text_results=json.loads(text_report.read_text())
+        self.check(self.text_results["status"]=="passed","real GTK whole-string, selection and cancellation checks pass")
         capture=self.call(private,"capture",{"desktop":{"x":0,"y":0,"width":640,"height":480},"region":{"x":0,"y":0,"width":640,"height":480},"max_width":640,"quality":70,"cursor_requested":False})
         image=base64.b64decode(capture["data"],validate=True)
         metadata=capture["metadata"]
@@ -226,10 +224,13 @@ def main():
         harness=Harness(Path(temporary),args.binary,args.evidence_dir)
         try: harness.run()
         finally: harness.cleanup()
-        report={"schema":"ssmcp.zuse.e2e.v1","status":"passed","checks":harness.checks,
+        text_report=args.evidence_dir/"whole-text.json"
+        text_results=harness.text_results
+        report={"schema":"ssmcp.zuse.e2e.v2","status":"passed","checks":harness.checks,
+                "text_cases":text_results["cases"],"whole_text_report":str(text_report),
                 "duration_seconds":round(time.monotonic()-start,3),
-                "environment":"two private Xvfb displays; no operator desktop input",
-                "binary_sha256":hashlib.sha256(args.binary.read_bytes()).hexdigest()}
+                "environment":"private Xvfb displays and private accessibility bus; no operator desktop input",
+                "binary_sha256":text_results["binary_sha256"]}
         args.report.parent.mkdir(parents=True,exist_ok=True)
         args.report.write_text(json.dumps(report,ensure_ascii=False,indent=2)+"\n")
         print("Passed",len(harness.checks),"zuse native worker checks")
