@@ -315,6 +315,10 @@ impl Hub {
     fn reset_for(&self, connection_id: Option<&str>, generation: u64) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.lost("connection_ended", "发送失败：连接已结束，消息未投递");
+        // The old sender keeps its final receipt through its watch receiver.
+        // Snapshot/ACK history belongs only to the active connection; carrying
+        // it forward would expose old rejection details after a reconnect.
+        state.receipts.clear();
         state.lease = None;
         state.open_keys.clear();
         state.cursor = 0;
