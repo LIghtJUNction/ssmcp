@@ -51,8 +51,10 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
         let event = &events[index];
         owned(event)
             && event.meta.kind == Kind::Tool
-            // Commands stay visible as individual cards with their actual argv.
-            && (!event.meta.command || event.meta.diff)
+            // Authenticated groups first collect every logical member. Their
+            // display policy is applied to the whole group after summary lookup;
+            // skipping a command here would split one stable ID into fragments.
+            && (!event.meta.command || event.meta.diff || event.tool_group_id.is_some())
             && event.image.is_none()
             && !event.reload_boundary
     };
@@ -243,12 +245,18 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
             format!(
                 "{}{}",
                 paint(&prefix, tone, ui, selected && focused),
-                paint(
-                    &clip_plain(&event.chat_title(), detail_width),
-                    tone,
-                    ui,
-                    selected && focused,
-                ),
+                if command {
+                    // The same redacted argv heading used by standalone cards
+                    // stays readable without opening each command's details.
+                    event.command_heading_row(detail_width, ui)
+                } else {
+                    paint(
+                        &clip_plain(&event.chat_title(), detail_width),
+                        tone,
+                        ui,
+                        selected && focused,
+                    )
+                },
             ),
         ));
 
