@@ -174,6 +174,18 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Resume saved local conversation history",
     },
     SlashCommand {
+        name: "/archive",
+        description: "Archive the current or named conversation without deleting messages",
+    },
+    SlashCommand {
+        name: "/archived",
+        description: "Browse archived conversations; Enter restores and resumes",
+    },
+    SlashCommand {
+        name: "/unarchive",
+        description: "Restore a named archived conversation without replaying it",
+    },
+    SlashCommand {
         name: "/pi",
         description: "Inspect or call the installed Pi harness",
     },

@@ -137,6 +137,7 @@ pub(super) struct Conversation {
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
+    history_archived: bool,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
     pub(super) history_width: u16,
@@ -148,7 +149,7 @@ impl Conversation {
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
-            "force_pending":self.force_task.is_some(),
+            "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
@@ -603,6 +604,9 @@ impl State {
                     return Err("Use /resume to choose a saved conversation".into());
                 }
                 self.chat_resume();
+            }
+            "/archive" | "/archived" | "/unarchive" => {
+                self.chat_archive_command(command, rest)?;
             }
             "/pi" | "/cc" | "/codex" => {
                 if self.preview {

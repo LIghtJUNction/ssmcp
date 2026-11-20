@@ -1,4 +1,5 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
+pub(crate) mod archive;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -61,6 +62,7 @@ pub(crate) struct SessionSummary {
     pub message_count: usize,
     pub truncated_messages: u64,
     pub current: bool,
+    pub archived: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -461,6 +463,7 @@ impl History {
                 }),
             message_count: conversation.messages.len(),
             truncated_messages: conversation.metadata.truncated_messages,
+            archived: false,
             current: self
                 .active
                 .as_ref()
@@ -469,6 +472,7 @@ impl History {
     }
 
     fn histories(&self) -> Result<Vec<(SessionSummary, usize)>, String> {
+        let archived = self.archive_index()?;
         let mut output = Vec::new();
         for name in self.directory.names()? {
             let Some(id) = name
@@ -488,7 +492,9 @@ impl History {
                     .len(),
             )
             .map_err(|_| "conversation file size is unsupported")?;
-            output.push((self.summary(&conversation), bytes));
+            let mut summary = self.summary(&conversation);
+            summary.archived = archived.contains(id);
+            output.push((summary, bytes));
         }
         output.sort_by(|left, right| {
             right
@@ -517,7 +523,7 @@ impl History {
             if count <= MAX_SESSIONS && total <= MAX_TOTAL_BYTES {
                 break;
             }
-            if history.id == id {
+            if history.id == id || history.archived {
                 continue;
             }
             if let Ok(lease) = self.lease(&history.id) {
@@ -527,7 +533,7 @@ impl History {
             }
         }
         if count > MAX_SESSIONS || total > MAX_TOTAL_BYTES {
-            return Err("conversation retention is full of active sessions; close an older client and retry".into());
+            return Err("conversation retention is full of active or archived sessions; restore an archive or close an older client and retry".into());
         }
         for (id, _lease) in reclaim {
             self.directory.remove(&session_name(&id)?)?;
@@ -609,6 +615,9 @@ impl History {
         let _lock = self.directory.lock()?;
         let mut new_active = None;
         let mut conversation = if let Some(active) = &self.active {
+            if self.archive_index()?.contains(&active.metadata.id) {
+                return Err("current conversation is archived; restore it before appending".into());
+            }
             self.load(&active.metadata.id)?
         } else {
             let metadata = SessionMetadata {
@@ -696,12 +705,18 @@ impl History {
     }
 
     fn sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        self.sessions_filtered(archive::Filter::Active)
+    }
+
+    fn sessions_filtered(&self, filter: archive::Filter) -> Result<Vec<SessionSummary>, String> {
         let _lock = self.directory.lock()?;
         Ok(self
             .histories()?
             .into_iter()
             .map(|(summary, _)| summary)
-            .filter(|summary| summary.workspace == self.workspace)
+            .filter(|summary| {
+                summary.workspace == self.workspace && filter.includes(summary.archived)
+            })
             .collect())
     }
 
@@ -722,10 +737,14 @@ impl History {
     }
 
     fn metadata(&self, id: &str) -> Result<Value, String> {
-        let conversation = self.read(id)?;
-        Ok(
-            json!({"schema_version":1,"metadata":conversation.metadata,"summary":self.summary(&conversation)}),
-        )
+        let _lock = self.directory.lock()?;
+        let conversation = self.load(id)?;
+        if conversation.metadata.workspace != self.workspace {
+            return Err("conversation belongs to a different workspace".into());
+        }
+        let mut summary = self.summary(&conversation);
+        summary.archived = self.archive_index()?.contains(id);
+        Ok(json!({"schema_version":1,"metadata":conversation.metadata,"summary":summary}))
     }
 
     fn search(&self, filter: &SearchFilter) -> Result<SearchResult, String> {
@@ -826,6 +845,9 @@ impl History {
         let conversation = self.load(id)?;
         if conversation.metadata.workspace != self.workspace {
             return Err("conversation belongs to a different workspace".into());
+        }
+        if self.archive_index()?.contains(id) {
+            return Err("conversation is archived; restore it before resuming".into());
         }
         if self
             .active
@@ -1206,6 +1228,8 @@ impl SafeDirectory {
 enum Request {
     List {
         #[serde(default)]
+        state: archive::Filter,
+        #[serde(default)]
         offset: Option<usize>,
         #[serde(default)]
         limit: Option<usize>,
@@ -1282,7 +1306,7 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
     let request: Request = serde_json::from_value(arguments)
         .map_err(|_| "expected a history list, metadata, read or search action")?;
     let (offset, limit) = match &request {
-        Request::List { offset, limit }
+        Request::List { offset, limit, .. }
         | Request::Read { offset, limit, .. }
         | Request::Search { offset, limit, .. } => (offset.unwrap_or(0), limit.unwrap_or(16)),
         Request::Metadata { .. } => (0, 1),
@@ -1307,8 +1331,8 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
             };
             with(|history| search_page(history, &filter, offset, limit))
         }
-        Request::List { .. } => {
-            let sessions = sessions()?;
+        Request::List { state, .. } => {
+            let sessions = archive::sessions(state)?;
             let total = sessions.len();
             if offset > total {
                 return Err("history page offset exceeds session count".into());
@@ -1327,7 +1351,7 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
             }
             let next = offset + page.len();
             Ok(
-                json!({"schema_version":1,"schema":SCHEMA,"sessions":page,"total":total,"offset":offset,
+                json!({"schema_version":1,"schema":SCHEMA,"state":state,"sessions":page,"total":total,"offset":offset,
                 "next_offset":(next < total).then_some(next)}),
             )
         }
@@ -1366,10 +1390,10 @@ pub(super) fn tool() -> Value {
     let offset = json!({"type":"integer","minimum":0,"default":0});
     json!({
         "name":"ssmcp.ui.history",
-        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries; metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
+        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible changes. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
         "inputSchema":{"type":"object","oneOf":[
             {"type":"object","required":["action"],"additionalProperties":false,"properties":{
-                "action":{"const":"list"},"offset":offset,"limit":page
+                "action":{"const":"list"},"state":{"type":"string","enum":["active","archived","all"],"default":"active"},"offset":offset,"limit":page
             }},
             {"type":"object","required":["action","id"],"additionalProperties":false,"properties":{
                 "action":{"const":"read"},

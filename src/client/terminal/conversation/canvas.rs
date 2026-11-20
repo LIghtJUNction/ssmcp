@@ -30,6 +30,7 @@ struct Position {
     detail_scroll: usize,
     question_id: Option<String>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
+    history_archived: bool,
     audit: crate::client::audit_view::AuditPosition,
     events: events::EventPosition,
     logs: Option<LogPosition>,
@@ -128,6 +129,7 @@ impl State {
             detail_scroll: self.conversation.detail_scroll,
             question_id: self.conversation.question_id.clone(),
             history: self.conversation.history.clone(),
+            history_archived: self.conversation.history_archived,
             audit: self.audit.position(),
             events: self.events.position(),
             logs: (self.conversation.view == View::Logs).then(|| LogPosition {
@@ -176,6 +178,7 @@ impl State {
             self.conversation.detail_scroll = position.detail_scroll;
             self.conversation.question_id = position.question_id;
             self.conversation.history = position.history;
+            self.conversation.history_archived = position.history_archived;
             self.audit.restore_position(&position.audit);
             self.events.restore_position(&position.events);
             if let Some(logs) = position.logs {
@@ -199,7 +202,10 @@ impl State {
                     .events
                     .restore_position(&events::EventPosition::default()),
                 View::Audit => self.audit.restore_position(&Default::default()),
-                View::History => self.conversation.history = None,
+                View::History => {
+                    self.conversation.history = None;
+                    self.conversation.history_archived = false;
+                }
                 View::Queue => {
                     self.conversation.selected = 0;
                     self.conversation.detail = false;
@@ -227,7 +233,12 @@ impl State {
         self.help = false;
         self.notice = None;
         if view == View::History && !self.preview {
-            match crate::client::interface::history::sessions() {
+            let filter = if self.conversation.history_archived {
+                crate::client::interface::history::archive::Filter::Archived
+            } else {
+                crate::client::interface::history::archive::Filter::Active
+            };
+            match crate::client::interface::history::archive::sessions(filter) {
                 Ok(sessions) => self.conversation.sessions = sessions,
                 Err(error) => self.notice = Some(format!("Could not read history: {error}")),
             }
@@ -529,6 +540,7 @@ mod tests {
                 message_count: 1,
                 truncated_messages: 0,
                 current: true,
+                archived: false,
             });
         let sessions = state.conversation.sessions.clone();
         state.events.ingest_event(
@@ -715,6 +727,7 @@ mod tests {
                 message_count: 1,
                 truncated_messages: 0,
                 current: false,
+                archived: false,
             });
         state.canvas_focus(View::History);
         assert_eq!(state.conversation.sessions[0].id, "first");
