@@ -359,6 +359,9 @@ jobs:
   publish_release:
     needs: [validate, finalize]
     if: needs.validate.outputs.publish == 'true'
+    concurrency:
+      group: github-release-publication
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
