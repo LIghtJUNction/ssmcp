@@ -1,0 +1,144 @@
+{
+  "schema": "ssmcp.v15.zuse-attempt.v1",
+  "source_commit": "e30a14997d92adc5d19ec21de934dcc5a1eba562",
+  "version": "0.10.15",
+  "status": "not_accepted",
+  "build": [
+    {
+      "stage": "fmt",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "stage": "clippy",
+      "exit_code": 0,
+      "log_sha256": "c795a8c2c69338c7459e9b0df69ec5b23fde82f82078dbc1ea9eadb2e57cb4ef"
+    },
+    {
+      "stage": "libtest",
+      "exit_code": 0,
+      "log_sha256": "76f28c356b6a029ccfa9bfeb1972ae1aba76a0f6fbdf489237ca81634c02542d"
+    },
+    {
+      "stage": "binaries",
+      "exit_code": 0,
+      "log_sha256": "40caa694b99e59e569c06877a789e34b8c1a1015308b42ccd1aa47d795841514"
+    }
+  ],
+  "workspace": {
+    "command": [
+      "cargo",
+      "test",
+      "--workspace",
+      "--locked",
+      "--",
+      "--test-threads=2"
+    ],
+    "exit_code": 101,
+    "started_at": "2026-11-20T03:11:12.119462+00:00",
+    "finished_at": "2026-11-20T03:13:46.468026+00:00",
+    "seconds": 154.348,
+    "library_suite": [
+      {
+        "heading": "Running unittests src/lib.rs (target/debug/build/ssmcp/bf711f9c8a9515d9/out/ssmcp-bf711f9c8a9515d9)",
+        "line": 7276,
+        "result": "FAILED",
+        "passed": 1584,
+        "failed": 2,
+        "ignored": 22,
+        "measured": 0,
+        "filtered_out": 0,
+        "seconds": 153.81
+      }
+    ],
+    "source_unchanged": true,
+    "all_frozen_artifacts_unchanged": true,
+    "log_sha256": "6ef731b06fce27b4fe3fbcea09f72985d4b9d3e047625c7605b3e65606a8acc9"
+  },
+  "default_integration_suites": "not reached because Cargo stopped after library failures",
+  "library_failures": [
+    {
+      "test": "client::interface::questions::tests::tools_do_not_offer_a_way_to_impersonate_the_users_answer",
+      "observed": 7,
+      "old_expected": 3,
+      "supplied_test_fix": "57b2d8b1b9cd4634117f3f8508912570b15b7758"
+    },
+    {
+      "test": "client::terminal::sleep::tests::sleep_dismissal_follows_episode_and_connection_with_bounded_memory",
+      "observed_fixture_episodes": 40,
+      "actual_capacity": 64,
+      "supplied_test_fix": "f7bd559a2af643d44aa202d3d3305259c9bbb494"
+    }
+  ],
+  "frozen_manifest_sha256": "08d3c60ca089faa0bb314964878eb6d63d645c2ad8606a09f8e232d5a5dfd2a5",
+  "artifacts": {
+    "ssmcp": "ae5d4ec80111f47f0c07dc1d239ef2bbe3679aee7dd6e8f8828bfb28f6c267b8",
+    "ssmcpd": "f402a6acc01288a1d8efdd9e5d9d2a473c20d422880086f999eb9a13e8c55fa2",
+    "ssmcp-frontend": "e100a25eb4085ebe439cc23b686f8ca3c59f1be9fcff5eb9cd29110941e338bb",
+    "libtest": "98589e3c41709229bdc6ee6f10102d803fc9a9bcadf5d050a04be8d051319792",
+    "native_plugin_fixture": "26760d18256c7941e88a1323b1238e3dc88cf357581beaa6b9563fb733bf1858",
+    "vt_snapshot": "0f2bf085e8daff77350126f7fbbf0e0b9c75f4e3d45f38d96fe6ccd21ec97e98"
+  },
+  "desktop": [
+    {
+      "stage": "isolated-native",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.766,
+      "log_sha256": "1dfdf1f8d1ab3acb93256b672985a56348873b11653045a23014f0540656b811"
+    },
+    {
+      "stage": "isolated-lifecycle",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.115,
+      "log_sha256": "2be0e39279a96deb1a07eb73f494bd62d35433f2672cde2c5fac999f0789ff52"
+    },
+    {
+      "stage": "display-concurrent",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.164,
+      "log_sha256": "337cc066edd467530958e691fc01e06b9ec57ef313bc191dde75c6a8055991a8"
+    },
+    {
+      "stage": "display-reservations",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.064,
+      "log_sha256": "19fc990d421025e339e61f1c3a8b2d1213184b8bec2e0b4e75d22f2535a3ca59"
+    },
+    {
+      "stage": "embedded-entry",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 0.115,
+      "log_sha256": "cd5c3cc4056684ff58854b2febb648550f0d8ca513fd7c754a34616fdfeb69bf"
+    },
+    {
+      "stage": "private-desktop-mcp",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_seconds": 3.822,
+      "log_sha256": "19098d510705683dcf224974b9623b3e733214c21337f37f83584c6d155a5619"
+    },
+    {
+      "stage": "native-worker-cli",
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_seconds": 0.365,
+      "log_sha256": "0a66f7feb2ed3d232330da37ffd8b5f03a33317cc2be47d34e38993928b628d1"
+    }
+  ],
+  "desktop_interpretation": {
+    "private_mcp_checks": 34,
+    "worker_cli_failure": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+    "worker_cleanup_ok": true,
+    "worker_daemon": "not run after CLI fixture failure",
+    "next_source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc adds private AT-SPI environment isolation and real GTK receivers; new binaries and acceptance are still required"
+  },
+  "other_scoped_evidence": {
+    "core_compat": "../v0.10.15-core-compat-20261120/README.md",
+    "note": "Passing scoped checks do not turn this failed workspace attempt into a full pass. External cohort binaries are not substituted."
+  }
+}
