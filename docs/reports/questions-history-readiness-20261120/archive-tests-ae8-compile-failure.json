@@ -1,0 +1,36 @@
+{
+  "kind": "new_test_compile_error",
+  "status": "compile_failed",
+  "source_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+  "fixture_revision": "ae8ede2a53b802899d57edcfccac933a9909eea3",
+  "step": {
+    "name": "history-regressions",
+    "argv": [
+      "cargo",
+      "test",
+      "--offline",
+      "--locked",
+      "--lib",
+      "client::terminal::conversation::history::archive_tests",
+      "--jobs",
+      "1",
+      "--message-format=json",
+      "--",
+      "--nocapture"
+    ],
+    "status": "failed",
+    "pid": 4002446,
+    "exit_code": 101,
+    "seconds": 44.008,
+    "log": "/var/tmp/ssmcp-questions-roster-20261120/native-ae8ede2-attempt-3/history-regressions.log",
+    "log_sha256": "8665ab9ffab8a9b174acce0a50aa98981a399c0f4638355b57cce7a34717f0fe"
+  },
+  "diagnostics": [
+    "error[E0616]: field `active` of struct `Canvas` is private\n   --> src/client/terminal/conversation/history.rs:382:52\n    |\n382 |             let column = state.conversation.canvas.active;\n    |                                                    ^^^^^^ private field\n\n",
+    "error[E0616]: field `active` of struct `Canvas` is private\n   --> src/client/terminal/conversation/history.rs:393:54\n    |\n393 |                 assert_eq!(state.conversation.canvas.active, column);\n    |                                                      ^^^^^^ private field\n\n",
+    "For more information about this error, try `rustc --explain E0616`.\n"
+  ],
+  "tests_run": 0,
+  "pty_started": false,
+  "resolution": "Use the existing Canvas snapshot instead of private Canvas.active. The correction is confined to cfg(test) code at 4221d559."
+}
