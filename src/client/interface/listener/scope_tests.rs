@@ -290,6 +290,8 @@ async fn listener_reconnect_discards_completed_receipts_for_new_and_reused_conne
         assert!(!status.to_string().contains(&id));
         // The local UI projection must not carry old receipts either.
         assert_eq!(hub.snapshot()["receipts"], json!([]));
+        // Completed rejections are not replayed into the local terminal.
+        assert!(hub.take_interrupted_sender().is_none());
     }
 }
 
@@ -328,5 +330,10 @@ async fn listener_disconnect_keeps_sender_outcome_outside_new_connection_history
         );
         assert_eq!(hub.snapshot()["receipts"], json!([]));
         assert!(hub.snapshot()["pending"].is_null());
+        // The original sender gets one local-only handoff even when the
+        // replacement terminal starts after another connection reset.
+        assert_eq!(hub.take_interrupted_sender(), Some(receipt));
+        assert!(hub.take_interrupted_sender().is_none());
+        assert_eq!(hub.snapshot()["receipts"], json!([]));
     }
 }

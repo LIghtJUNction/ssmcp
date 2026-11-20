@@ -372,6 +372,7 @@ impl State {
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
             self.conversation.restored = true;
+            self.chat_restore_interrupted_force_send();
         }
         self.chat_poll_native();
         if self.preview {
