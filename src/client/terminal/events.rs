@@ -1772,10 +1772,11 @@ impl EventView {
 
     pub(crate) fn snapshot(&self) -> Value {
         let groups = self.read_groups();
+        let tool_groups = self.tool_groups();
         json!({
             "schema_version":1, "events":self.events.iter().enumerate().map(|(index,event)| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
-                "bytes":event.text.len(),"expanded":if self.tool_groups().iter().any(|group| group.contains(index)) { event.expanded(self.scope) } else { groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded) },"truncated":event.truncated,
+                "bytes":event.text.len(),"expanded":if tool_groups.iter().any(|group| group.contains(index)) { event.expanded(self.scope) } else { groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded) },"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
@@ -1791,7 +1792,7 @@ impl EventView {
                 "id":group.head,"count":group.members.len(),"expanded":group.expanded,
                 "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
-            "tool_groups":self.tool_groups().iter().map(|group| {
+            "tool_groups":tool_groups.iter().map(|group| {
                 let panel = &self.events[group.start].group_panel;
                 json!({
                     "id":group.head,"count":group.members.len(),"expanded":group.expanded,

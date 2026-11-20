@@ -32,7 +32,13 @@ const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SCAN_ENTRIES: usize = 4096;
 const MAX_PAGE_BYTES: usize = 64 * 1024;
 
-static HISTORY: OnceLock<Mutex<Option<History>>> = OnceLock::new();
+#[derive(Default)]
+struct HistoryStore {
+    state: Mutex<Option<History>>,
+    current: ownership::CurrentOwner,
+}
+
+static HISTORY: OnceLock<HistoryStore> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -335,15 +341,15 @@ pub(crate) fn workspace() -> Result<String, String> {
 fn with<T>(operation: impl FnOnce(&mut History) -> Result<T, String>) -> Result<T, String> {
     #[cfg(test)]
     if let Ok(store) = ownership::TEST_HISTORY.try_with(std::sync::Arc::clone) {
-        let mut state = store.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = store.state.lock().unwrap_or_else(|error| error.into_inner());
         return operation(state.as_mut().expect("fixture history was initialized"));
     }
-    let mut state = HISTORY
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let store = HISTORY.get_or_init(HistoryStore::default);
+    let mut state = store.state.lock().unwrap_or_else(|error| error.into_inner());
     if state.is_none() {
-        *state = Some(History::at(default_directory()?)?);
+        let mut history = History::at(default_directory()?)?;
+        history.ownership.current = store.current.clone();
+        *state = Some(history);
     }
     operation(state.as_mut().expect("history was initialized"))
 }
@@ -686,7 +692,7 @@ impl History {
         validate_content(text)?;
         let _lock = self.directory.lock()?;
         let pending = self.ownership.pending(owner)?;
-        let current = self.ownership.current.as_ref() == Some(owner);
+        let current = self.ownership.current.get().as_ref() == Some(owner);
         let id = owner.id();
         if self.archive_index()?.contains(id) {
             return Err("history_owner_archived: the original conversation is archived".into());
