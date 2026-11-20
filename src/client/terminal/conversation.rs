@@ -1,4 +1,7 @@
 //! Conversation-style local controls. No input is ever forwarded to a hidden PTY.
+#[cfg(test)]
+mod update_notice_tests;
+
 use super::*;
 use crate::client::{attachments, composer::Composer, references, steering};
 use serde_json::{Value, json};
@@ -2687,6 +2690,21 @@ impl State {
         }
     }
 
+    fn chat_update_notice(&self) -> Option<&str> {
+        if self.help
+            || self.selection
+            || self.conversation.logs_open
+            || self.conversation.view != View::Activity
+            || self.conversation.content_focus
+            || !self.conversation.composer.is_empty()
+            || self.chat_menu_visible()
+            || self.conversation.composer.completion_loading()
+        {
+            return None;
+        }
+        self.update_notice.as_deref()
+    }
+
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
@@ -2814,11 +2832,13 @@ impl State {
                 let wait_hint = self.chat_user_wait_hint();
                 let paste_hint = self.chat_paste_recovery_hint();
                 let native_hint = self.chat_native_hint();
+                let update_hint = self.chat_update_notice().map(str::to_owned);
                 let priority_hint = self.notice.is_some()
                     || scroll_hint.is_some()
                     || wait_hint.is_some()
                     || paste_hint.is_some()
-                    || native_hint.is_some();
+                    || native_hint.is_some()
+                    || update_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2828,6 +2848,7 @@ impl State {
                     if let Some(hint) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }
+                    if let Some(hint) = update_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
