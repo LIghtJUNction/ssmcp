@@ -1,5 +1,7 @@
 //! Linux foreground MCP host using the same broker, wire and native runtime as
 //! account connections. The Unix transport is private to this effective UID.
+mod socket;
+
 use crate::broker::Broker;
 use std::{
     fs,
@@ -26,8 +28,12 @@ Run this Linux session without a remote server or GitHub login. Keep the
 terminal open. The displayed MCP URL uses one-time connection-code OAuth.
 
   --listen IP:PORT       Loopback listener (default 127.0.0.1:0, automatic port)
+  --socket [PATH]        Also serve HTTP/MCP on a private Unix socket
+                         Default: $XDG_RUNTIME_DIR/ssmcp/mcp.sock, or
+                         /tmp/ssmcp-<euid>/mcp.sock when XDG_RUNTIME_DIR is unset
+                         Custom PATH: absolute, with an existing 0700 parent
   --public-url URL       HTTPS NAME.local origin of an existing local TLS proxy;
-                         requires --listen with a fixed, nonzero port
+                         requires a fixed nonzero --listen port; excludes --socket
   --name NAME            Device name
   --title TEXT           Session title
   --context-root PATH    Additional local context directory
@@ -35,6 +41,11 @@ terminal open. The displayed MCP URL uses one-time connection-code OAuth.
 
 Normal foreground display, shell and context flags also apply. Background
 sessions, --server, --username and --allow are unavailable in local mode.
+Socket clients use the displayed HTTP origin and the same OAuth/token checks:
+  curl --unix-socket PATH http://127.0.0.1:PORT/healthz
+Replace PORT with the displayed port. The loopback listener remains available.
+Only this OS user can connect; socket paths must fit within 107 bytes.
+
 NAME.local requires working name resolution and a trusted TLS reverse proxy;
 this command does not configure mDNS, certificates, hosts or firewall rules.
 "#;
@@ -42,6 +53,7 @@ this command does not configure mDNS, certificates, hosts or firewall rules.
 pub(super) struct Settings {
     pub listen: SocketAddr,
     pub public_url: Option<String>,
+    socket: Option<socket::Endpoint>,
 }
 
 impl Default for Settings {
@@ -49,16 +61,29 @@ impl Default for Settings {
         Self {
             listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             public_url: None,
+            socket: None,
         }
     }
 }
 
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
+        if self.socket.is_some() && self.public_url.is_some() {
+            return Err("--socket cannot be combined with --public-url; Unix socket requests use the loopback HTTP origin".into());
+        }
         if self.public_url.is_some() && self.listen.port() == 0 {
             return Err("--public-url requires --listen with a fixed nonzero loopback port for the existing TLS reverse proxy".into());
         }
         Ok(())
+    }
+
+    pub fn set_socket(&mut self, path: Option<PathBuf>) -> Result<(), String> {
+        self.socket = Some(socket::Endpoint::new(path).map_err(|error| error.to_string())?);
+        Ok(())
+    }
+
+    pub fn socket_path(&self) -> Option<&Path> {
+        self.socket.as_ref().map(|endpoint| endpoint.path.as_path())
     }
 
     pub fn set_listen(&mut self, value: &str) -> Result<(), String> {
@@ -224,6 +249,7 @@ fn same_user(stream: &UnixStream) -> io::Result<()> {
 
 pub(super) struct Host {
     pub origin: String,
+    pub socket: Option<PathBuf>,
     directory: SocketDirectory,
     stop: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
@@ -235,6 +261,10 @@ impl Host {
         if !settings.listen.ip().is_loopback() {
             return Err("local mode only binds loopback addresses".into());
         }
+        let socket_listener = match &settings.socket {
+            Some(endpoint) => Some(endpoint.bind().await?),
+            None => None,
+        };
         let tcp = TcpListener::bind(settings.listen).await?;
         let origin = settings
             .public_url
@@ -251,6 +281,7 @@ impl Host {
         let (stop, stopped) = watch::channel(false);
         let mut http_stop = stopped.clone();
         let router = crate::http::local_router(broker.clone());
+        let socket_router = router.clone();
         let http = tokio::spawn(async move {
             let _ = axum::serve(tcp, router)
                 .with_graceful_shutdown(async move {
@@ -259,11 +290,23 @@ impl Host {
                 .await;
         });
         let relay = tokio::spawn(accept_local(unix, broker, stopped));
+        let mut tasks = vec![relay, http];
+        if let Some(listener) = socket_listener {
+            let mut socket_stop = stop.subscribe();
+            tasks.push(tokio::spawn(async move {
+                let _ = axum::serve(listener, socket_router)
+                    .with_graceful_shutdown(async move {
+                        let _ = socket_stop.changed().await;
+                    })
+                    .await;
+            }));
+        }
         Ok(Self {
             origin,
+            socket: settings.socket_path().map(Path::to_path_buf),
             directory,
             stop,
-            tasks: vec![relay, http],
+            tasks,
         })
     }
 
@@ -423,6 +466,15 @@ mod tests {
         assert!(settings.validate().is_err());
         settings.set_listen("127.0.0.1:8765").unwrap();
         settings.validate().unwrap();
+        settings
+            .set_socket(Some("/tmp/private/mcp.sock".into()))
+            .unwrap();
+        assert!(
+            settings
+                .validate()
+                .unwrap_err()
+                .contains("cannot be combined")
+        );
     }
 
     #[tokio::test]
