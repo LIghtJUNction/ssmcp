@@ -29,6 +29,10 @@ pub(crate) enum Source {
 #[derive(Debug)]
 pub(crate) enum Loaded {
     Text(String),
+    RetainedText {
+        text: String,
+        error: String,
+    },
     Reference {
         reference: String,
         description: String,
@@ -264,7 +268,9 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
             .await
             .map(|()| Loaded::Copied),
         Source::Clipboard => match super::clipboard::read().await? {
-            super::clipboard::Content::Text(text) if text.len() > 8 * 1024 => {
+            super::clipboard::Content::Text(text)
+                if super::references::paste::should_store(&text) =>
+            {
                 store_text(workspace.root().to_path_buf(), text).await
             }
             #[cfg(all(not(target_os = "macos"), not(windows)))]
@@ -310,14 +316,27 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
 }
 
 async fn store_text(root: PathBuf, text: String) -> Result<Loaded, String> {
-    tokio::task::spawn_blocking(move || {
-        super::references::paste::store_at(&root, &text).map(|reference| Loaded::Reference {
+    if text.len() > super::references::paste::MAX_PASTE_BYTES {
+        return Err("Paste exceeds 4 MiB of UTF-8 text; save it as a file and use @path".into());
+    }
+    // The UI must retain the original even when the file operation or worker fails.
+    let retained = Arc::new(text);
+    let input = Arc::clone(&retained);
+    let result =
+        tokio::task::spawn_blocking(move || super::references::paste::store_at(&root, &input))
+            .await
+            .map_err(|error| format!("Text storage failed: {error}"))
+            .and_then(|result| result);
+    Ok(match result {
+        Ok(reference) => Loaded::Reference {
+            description: format!("Saved {} UTF-8 bytes · {reference}", retained.len()),
             reference,
-            description: format!("Saved long text · {} UTF-8 bytes", text.len()),
-        })
+        },
+        Err(error) => Loaded::RetainedText {
+            text: Arc::unwrap_or_clone(retained),
+            error,
+        },
     })
-    .await
-    .map_err(|error| format!("Text storage failed: {error}"))?
 }
 
 async fn load_files(root: PathBuf, paths: Vec<PathBuf>) -> Result<Loaded, String> {
@@ -828,6 +847,43 @@ mod tests {
         assert!(Task::start(Source::Image(bytes)).is_err());
         assert!(super::super::interface::harness::local_runtime().is_err());
         drop(held_workspace);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_text_storage_retains_exact_bytes_for_a_later_safe_retry() {
+        let temp = FileFixture::new();
+        let blocked = temp.0.join(".ssmcp");
+        std::fs::write(&blocked, b"existing workspace file").unwrap();
+        let original = "中文\r\nline\rkept\n".repeat(400);
+        let Loaded::RetainedText { text, error } =
+            store_text(temp.0.clone(), original.clone()).await.unwrap()
+        else {
+            panic!("failed private storage must return the original text");
+        };
+        assert_eq!(text.as_bytes(), original.as_bytes());
+        assert!(error.contains("Could not save"));
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"existing workspace file");
+
+        std::fs::remove_file(&blocked).unwrap();
+        let Loaded::Reference {
+            reference,
+            description,
+        } = store_text(temp.0.clone(), text).await.unwrap()
+        else {
+            panic!("retry must create the same private reference");
+        };
+        let path = reference
+            .strip_prefix("@\"")
+            .unwrap()
+            .strip_suffix('"')
+            .unwrap();
+        assert_eq!(
+            std::fs::read(temp.0.join(path)).unwrap(),
+            original.as_bytes()
+        );
+        assert!(description.contains(&reference));
+        assert!(description.contains(&original.len().to_string()));
     }
 
     #[cfg(unix)]
