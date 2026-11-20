@@ -111,7 +111,7 @@ def column(shot):
     # Read the final exact page tuple, independently of the project title.
     header = shot["rows"][0].split("│", 1)[0]
     matches = list(re.finditer(
-        r"\b(agents|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
+        r"\b(agents|sessions|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
         header, re.IGNORECASE,
     ))
     if matches:
