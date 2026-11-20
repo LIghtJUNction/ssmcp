@@ -928,10 +928,11 @@ pub(super) async fn wait(
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(scope.run.context.run_id.clone());
     }
-    record.terminal.store(
-        !matches!(status, Status::TimedOut | Status::Busy),
-        Ordering::Release,
-    );
+    // A retryable observation must not overwrite a concurrent cancel's terminal
+    // transition. Final user-delivery retries are settled under the registry lock.
+    if !matches!(status, Status::TimedOut | Status::Busy) {
+        record.terminal.store(true, Ordering::Release);
+    }
     Ok(envelope(Some(&record.id), record.mode, status, results))
 }
 
