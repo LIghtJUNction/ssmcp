@@ -23,6 +23,17 @@ import time
 from e2e_dashboard import Decoder
 
 
+TOOL_GROUP = "Tools · 2 calls · done 2"
+TOOL_COMMAND = "Ran cargo test --lib"
+TOOL_DIFF = "src/client/terminal/events.rs"
+COMMAND_SOURCE = "[RUN] #17  cargo test --lib"
+COMMAND_CWD = "cwd  ~/project/ssmcp"
+COMMAND_RESULTS = ("test client::ui::custom_colors ... ok", "test client::audit_view::browse ... ok")
+DIFF_OLD = "- let expanded = true;"
+DIFF_NEW = "+ let expanded = false;"
+DIFF_HUNK = "@@ -1 +1 @@"
+
+
 class Preview:
     def __init__(self, binary, decoder, config, rows=30, cols=120):
         self.decoder = Decoder(decoder)
@@ -157,6 +168,32 @@ def body_text(shot):
     return "\n".join(left_rows(shot)[1:start]) if start is not None else ""
 
 
+def compact_tool_command(shot):
+    body = body_text(shot)
+    return (f"• {TOOL_COMMAND}" in body and "Command completed successfully." in body
+            and "Source retained in the code audit." in body
+            and re.search(r"\+(?:[1-9][0-9]* lines? ·)? Show details · Enter", body)
+            and all(line not in body for line in (COMMAND_SOURCE, COMMAND_CWD, *COMMAND_RESULTS)))
+
+
+def compact_tool_diff(shot):
+    body = body_text(shot)
+    return (f"▸ {TOOL_DIFF}" in body and DIFF_OLD in body and DIFF_NEW in body
+            and DIFF_HUNK not in body)
+
+
+def click_tool(preview, shot, marker, title):
+    rows = [i for i, line in enumerate(left_rows(shot)[:prompt_start(shot)])
+            if f"{marker} {title}" in line]
+    assert len(rows) == 1, f"expected one visible {marker} {title} row, found {rows}"
+    y = rows[0]
+    cells = [x for x, cell in enumerate(shot["cells"][y][:len(left_rows(shot)[y])])
+             if cell["text"] == marker and not cell["continuation"]]
+    assert len(cells) == 1, f"expected one {marker} on row {y}, found {cells}"
+    sgr = f"\x1b[<0;{cells[0] + 1};{y + 1}"
+    preview.send(f"{sgr}M{sgr}m".encode())
+
+
 def empty_composer_ready(shot):
     return (shot["alternate_screen"] and column(shot) == ("conversation", 2, 8)
             and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"])
@@ -224,26 +261,30 @@ def main():
                 shot = vt.request(op="snapshot", cells=True)
             finally:
                 vt.close()
+            save_shot(args.out, name, shot)
             check(column(shot) == ("conversation", 2, 8) and "❯" in prompt_text(shot)
                   and "done" in body_text(shot),
                   f"{name} layout shows the conversation column and its bottom composer")
             check("A quieter workspace" not in body_text(shot),
                   f"{name} conversation excludes background diagnostics")
             if rows >= 30:
-                check("cargo test --lib" in text(shot), f"{name} layout retains the command and result")
+                check(f"▾ {TOOL_GROUP}" in body_text(shot) and compact_tool_command(shot)
+                      and compact_tool_diff(shot),
+                      f"{name} layout shows an open command group and compact children")
             check(not shot["hide_cursor"] and shot["cursor"][0] >= rows - 4,
                   f"{name} cursor belongs to the bottom composer")
             expected_background = [255, 255, 255] if theme == "light" else [24, 24, 22]
             check(shot["cells"][0][0]["background"] == expected_background,
                   f"{name} theme supplies the actual terminal background")
-            save_shot(args.out, name, shot)
 
         preview = Preview(binary, decoder, config)
         try:
             initial = preview.until(lambda s: column(s) == ("conversation", 2, 8)
-                                    and "cargo test --lib" in text(s)
+                                    and f"▾ {TOOL_GROUP}" in body_text(s)
                                     and "Message the agent" in prompt_text(s),
                                     "default conversation column and composer")
+            check(compact_tool_command(initial) and compact_tool_diff(initial),
+                  "the default command group is open with both children compact")
             check(not initial["hide_cursor"] and initial["bracketed_paste"]
                   and not initial["application_cursor"] and not initial["application_keypad"],
                   "default keyboard modes belong to the visible composer")
@@ -261,76 +302,79 @@ def main():
                   and "Message the agent" in prompt_text(initial),
                   "F3 exposes both sample agents while preserving the current page and composer")
 
-            check("cargo test --lib · done" in body_text(initial)
-                  and "Command completed successfully" in body_text(initial)
-                  and "4–6/6" in body_text(initial)
-                  and "test client::ui::custom_colors" not in body_text(initial),
-                  "completed commands show the latest lines in a bounded panel")
-            check("src/client/terminal/events.rs" in body_text(initial)
-                  and "expanded = true" in body_text(initial)
-                  and "expanded = false" in body_text(initial)
-                  and "@@ -1 +1 @@" not in body_text(initial),
-                  "collapsed diff cards preview changes without showing the full hunk")
-            command_row = next(index for index, row in enumerate(initial["rows"])
-                               if "▸" in row and "cargo test --lib" in row)
-            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
-            expanded = preview.until(lambda s: "▾ cargo test --lib" in body_text(s)
-                                     and "test client::ui::custom_colors" in body_text(s),
-                                     "click-expanded command output beyond its two-line preview")
-            check("done" in body_text(expanded)
-                  and "test client::ui::custom_colors" in body_text(expanded)
-                  and "test client::audit_view::browse" in body_text(expanded),
-                  "expanded commands retain their completed status and original results")
+            click_tool(preview, initial, "▾", TOOL_GROUP)
+            folded = preview.until(lambda s: f"▸ {TOOL_GROUP}" in body_text(s)
+                                   and TOOL_COMMAND not in body_text(s) and TOOL_DIFF not in body_text(s),
+                                   "folded outer group hiding both children")
+            save_shot(args.out, "group-folded", folded)
+            click_tool(preview, folded, "▸", TOOL_GROUP)
+            initial = preview.until(lambda s: f"▾ {TOOL_GROUP}" in body_text(s)
+                                    and compact_tool_command(s) and compact_tool_diff(s),
+                                    "reopened group retaining both compact children")
+            check(True, "outer folding and reopening preserve bounded command output and the compact diff")
+            save_shot(args.out, "group-reopened", initial)
+            click_tool(preview, initial, "•", TOOL_COMMAND)
+            expanded = preview.until(lambda s: COMMAND_SOURCE in body_text(s)
+                                     and all(line in body_text(s) for line in COMMAND_RESULTS),
+                                     "click-expanded command with its full results")
+            check(f"• {TOOL_COMMAND}" in body_text(expanded)
+                  and f"▾ {TOOL_GROUP}" in body_text(expanded)
+                  and COMMAND_CWD in body_text(expanded) and "[OK] #17  exit=0" in body_text(expanded),
+                  "expanded command retains its title, original working directory, results and exit status")
             check(sum(bool(line.strip()) for line in body_text(expanded).splitlines())
                   > sum(bool(line.strip()) for line in body_text(initial).splitlines()),
                   "explicit expansion reveals more content than the compact preview")
             save_shot(args.out, "command-expanded", expanded)
-            command_row = next(index for index, row in enumerate(expanded["rows"])
-                               if "▾" in row and "cargo test --lib" in row)
-            preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
+            preview.send(b"\x1b[6~")
+            command_tail = preview.until(lambda s: COMMAND_SOURCE not in body_text(s)
+                                         and "Source retained in the code audit." in body_text(s)
+                                         and f"• {TOOL_COMMAND}" in body_text(s),
+                                         "scrolling the expanded command to its retained tail")
+            save_shot(args.out, "command-tail", command_tail)
+            preview.send(b"\x1b[5~")
+            command_head = preview.until(lambda s: COMMAND_SOURCE in body_text(s)
+                                         and COMMAND_CWD in body_text(s),
+                                         "scrolling the command back to its source")
+            check(f"▾ {TOOL_GROUP}" in body_text(command_head),
+                  "command details scroll independently inside the open group")
+            click_tool(preview, command_head, "•", TOOL_COMMAND)
             collapsed = preview.until(lambda s: view(s, "conversation")
-                                      and "▸ cargo test --lib" in body_text(s)
-                                      and "4–6/6" in body_text(s),
+                                      and compact_tool_command(s) and compact_tool_diff(s),
                                       "click-collapsed command output returning to its result preview")
-            diff_row = next(index for index, row in enumerate(collapsed["rows"])
-                            if "▸" in row and "src/client/terminal/events.rs" in row)
-            preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
+            click_tool(preview, collapsed, "▸", TOOL_DIFF)
             diff = preview.until(lambda s: view(s, "conversation")
-                                 and "expanded = true" in body_text(s)
-                                 and "expanded = false" in body_text(s)
-                                 and "@@ -1 +1 @@" in body_text(s),
+                                 and f"▾ {TOOL_DIFF}" in body_text(s)
+                                 and all(line in body_text(s) for line in (DIFF_OLD, DIFF_NEW, DIFF_HUNK)),
                                  "click-expanded diff with both source versions")
-            check("▸ cargo test --lib" in body_text(diff)
-                  and "4–6/6" in body_text(diff),
+            check(compact_tool_command(diff),
                   "expanding a diff keeps the neighboring command at its compact preview")
             save_shot(args.out, "diff-expanded", diff)
-            diff_row = next(index for index, row in enumerate(diff["rows"])
-                            if "▾" in row and "src/client/terminal/events.rs" in row)
-            preview.send(f"\x1b[<0;3;{diff_row + 1}M".encode())
-            preview.until(lambda s: view(s, "conversation")
-                          and "src/client/terminal/events.rs" in body_text(s)
-                          and "expanded = false" in body_text(s)
-                          and "@@ -1 +1 @@" not in body_text(s),
-                          "click-collapsed diff card")
             preview.send(b"\x1b")
-            preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
+            preview.until(lambda s: not s["hide_cursor"], "input focus after tool navigation")
             slash(preview, "/raw")
             raw = preview.until(lambda s: column(s) == ("logs", 7, 8)
                                 and "test client::ui::custom_colors" in body_text(s)
                                 and "A quieter workspace" in body_text(s),
                                 "original output and diagnostics in the Logs column")
             save_shot(args.out, "logs", raw)
+            check(all(line in body_text(raw) for line in (
+                "cargo test --lib", COMMAND_CWD, "exit=0", *COMMAND_RESULTS,
+                TOOL_DIFF, DIFF_HUNK, DIFF_OLD, DIFF_NEW,
+            )), "raw Logs retain the full command, results and diff")
             slash(preview, "/raw")
-            preview.until(lambda s: column(s) == ("conversation", 2, 8)
-                          and "done" in body_text(s)
-                          and "A quieter workspace" not in body_text(s)
-                          and "▸ cargo test --lib" in body_text(s)
-                          and "4–6/6" in body_text(s)
-                          and "expanded = false" in body_text(s)
-                          and "@@ -1 +1 @@" not in body_text(s),
-                          "raw toggle restoring the conversation and collapsed cards")
-            check(True, "/raw opens Logs and restores the source column without expanding its cards")
-
+            returned = preview.until(lambda s: column(s) == ("conversation", 2, 8)
+                                     and f"▾ {TOOL_GROUP}" in body_text(s) and compact_tool_command(s)
+                                     and f"▾ {TOOL_DIFF}" in body_text(s)
+                                     and all(line in body_text(s) for line in (DIFF_OLD, DIFF_NEW, DIFF_HUNK)),
+                                     "raw toggle restoring the open group and mixed child states")
+            check("A quieter workspace" not in body_text(returned),
+                  "/raw restores the open group and diff with the neighboring command compact")
+            save_shot(args.out, "raw-restored", returned)
+            click_tool(preview, returned, "▾", TOOL_DIFF)
+            preview.until(lambda s: view(s, "conversation") and compact_tool_command(s)
+                          and compact_tool_diff(s), "click-collapsed diff card")
+            preview.send(b"\x1b")
+            preview.until(lambda s: not s["hide_cursor"], "input focus after compact navigation")
 
             preview.send(b"q")
             typed = preview.until(lambda s: "❯ q" in prompt_text(s), "q as draft text")
