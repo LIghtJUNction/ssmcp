@@ -355,11 +355,42 @@ mod tests {
             sleep.visible,
             "another connection owns another visual episode"
         );
-        for episode in 0..40 {
+        assert!(
+            sleep.dismissed.is_empty(),
+            "a new connection clears old dismissals"
+        );
+        let episodes = DISMISSED_LIMIT + 2;
+        for episode in 0..episodes {
             sleep.refresh(&Snapshot::from(&snapshot("b", episode, episode)));
+            assert!(sleep.visible, "each new episode can wake the overlay");
             sleep.dismiss();
+            assert!(sleep.dismissed.len() <= DISMISSED_LIMIT);
         }
         assert_eq!(sleep.dismissed.len(), DISMISSED_LIMIT);
+        let oldest_retained = episodes - DISMISSED_LIMIT;
+        assert_eq!(
+            sleep.dismissed,
+            (oldest_retained..episodes)
+                .map(|episode| format!("{episode:064x}"))
+                .collect::<VecDeque<_>>(),
+            "the most recent episode identities are retained in order"
+        );
+        sleep.refresh(&Snapshot::from(&snapshot("b", oldest_retained, episodes)));
+        assert!(
+            !sleep.visible,
+            "a retained episode stays dismissed with a new wait ID"
+        );
+        for episode in 0..oldest_retained {
+            sleep.refresh(&Snapshot::from(&snapshot(
+                "b",
+                episode,
+                episodes + episode + 1,
+            )));
+            assert!(
+                sleep.visible,
+                "an evicted old episode can show the overlay again"
+            );
+        }
         sleep.refresh(&Snapshot::from(&user_wait::Snapshot::default()));
         assert!(!sleep.visible);
         assert!(sleep.dismissed.is_empty());
