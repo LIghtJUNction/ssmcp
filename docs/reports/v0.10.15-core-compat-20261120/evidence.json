@@ -1,0 +1,297 @@
+{
+  "schema": "ssmcp.core-compat-validation.v1",
+  "source_commit": "e30a14997d92adc5d19ec21de934dcc5a1eba562",
+  "source_tree": "515684dffd1afadbb7d9352c6758abb486527cc4",
+  "application_version": "0.10.15",
+  "interval": {
+    "started_at": "2026-11-20T03:16:19.690536+00:00",
+    "finished_at": "2026-11-20T03:16:51.772835+00:00"
+  },
+  "results": [
+    {
+      "name": "native-plugin",
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "checks": 1,
+      "wall_seconds": 6.226
+    },
+    {
+      "name": "legacy-client-compat",
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "checks": 41,
+      "wall_seconds": 10.888
+    },
+    {
+      "name": "modern-account",
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "checks": 47,
+      "wall_seconds": 14.645
+    }
+  ],
+  "frozen_inputs": [
+    {
+      "label": "frozen_libtest",
+      "sha256": "98589e3c41709229bdc6ee6f10102d803fc9a9bcadf5d050a04be8d051319792",
+      "unchanged_after": true
+    },
+    {
+      "label": "frozen_cli",
+      "sha256": "ae5d4ec80111f47f0c07dc1d239ef2bbe3679aee7dd6e8f8828bfb28f6c267b8",
+      "unchanged_after": true
+    },
+    {
+      "label": "frozen_native_fixture",
+      "sha256": "26760d18256c7941e88a1323b1238e3dc88cf357581beaa6b9563fb733bf1858",
+      "unchanged_after": true
+    },
+    {
+      "label": "official_v0.10.13_cli",
+      "sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+      "unchanged_after": true
+    },
+    {
+      "label": "observed_v0.10.12_cli",
+      "sha256": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3",
+      "unchanged_after": true
+    }
+  ],
+  "scripts": {
+    "sha256": {
+      "scripts/e2e_legacy_client_compat.py": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c",
+      "scripts/e2e_account_relay.py": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+      "scripts/e2e.py": "2f3b1fbf7124932e4830b2b6117e601913e19b6af19df5e74d236d2a32fe4ad4",
+      "scripts/e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a"
+    },
+    "byte_matched_source_commit": true,
+    "unchanged_after": true
+  },
+  "legacy": {
+    "status": "passed",
+    "checks": 41,
+    "clients": [
+      {
+        "label": "official-v13",
+        "version": "ssmcp 0.10.13",
+        "sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+        "provenance": "verified official v0.10.13 release ELF; invoked only as a normal client"
+      },
+      {
+        "label": "observed-v12",
+        "version": "ssmcp 0.10.12",
+        "sha256": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3",
+        "provenance": "observed running v0.10.12 ELF; official release provenance not asserted"
+      }
+    ],
+    "cases": [
+      {
+        "client": "official-v13",
+        "mode": "default-self",
+        "status": "passed"
+      },
+      {
+        "client": "official-v13",
+        "mode": "explicit-self",
+        "status": "passed"
+      },
+      {
+        "client": "observed-v12",
+        "mode": "default-self",
+        "status": "passed"
+      },
+      {
+        "client": "observed-v12",
+        "mode": "explicit-self",
+        "status": "passed"
+      }
+    ],
+    "transport": "real production Broker/router, account HTTP and WebSocket",
+    "upstream_provider": "synthetic GitHub fixture",
+    "scope": "legacy self handshake, real native call, cross-identity denial and stable connection",
+    "not_claimed": "preserving native jobs across a server deployment or testing server rejection with CLI-prevalidated foreign allow lists",
+    "passed_checks": [
+      "the owned account router keeps its credentials in a private ready record",
+      "the isolated account has the expected stable provider identity and handle",
+      "the real production account router is healthy",
+      "the real router fixture has two independently registered identities",
+      "the second credential authenticates as a different real fixture account",
+      "official-v13-default-self: actual legacy client publishes its single provider-style self principal",
+      "official-v13-default-self: owner lists the real connected legacy client",
+      "official-v13-default-self: another verified account cannot list the owner's client",
+      "official-v13-default-self: another verified account cannot call the owner's native tools",
+      "official-v13-default-self: Ready is followed by a real native terminal response",
+      "official-v13-default-self: authenticated relay executes a real owned shell command",
+      "official-v13-default-self: the same connection remains live after the retry interval",
+      "official-v13-default-self: no abnormal watchdog retry occurred",
+      "official-v13-default-self: only the owned test connection is removed during cleanup",
+      "official-v13-explicit-self: actual legacy client publishes its single provider-style self principal",
+      "official-v13-explicit-self: owner lists the real connected legacy client",
+      "official-v13-explicit-self: another verified account cannot list the owner's client",
+      "official-v13-explicit-self: another verified account cannot call the owner's native tools",
+      "official-v13-explicit-self: Ready is followed by a real native terminal response",
+      "official-v13-explicit-self: authenticated relay executes a real owned shell command",
+      "official-v13-explicit-self: the same connection remains live after the retry interval",
+      "official-v13-explicit-self: no abnormal watchdog retry occurred",
+      "official-v13-explicit-self: only the owned test connection is removed during cleanup",
+      "observed-v12-default-self: actual legacy client publishes its single provider-style self principal",
+      "observed-v12-default-self: owner lists the real connected legacy client",
+      "observed-v12-default-self: another verified account cannot list the owner's client",
+      "observed-v12-default-self: another verified account cannot call the owner's native tools",
+      "observed-v12-default-self: Ready is followed by a real native terminal response",
+      "observed-v12-default-self: authenticated relay executes a real owned shell command",
+      "observed-v12-default-self: the same connection remains live after the retry interval",
+      "observed-v12-default-self: no abnormal watchdog retry occurred",
+      "observed-v12-default-self: only the owned test connection is removed during cleanup",
+      "observed-v12-explicit-self: actual legacy client publishes its single provider-style self principal",
+      "observed-v12-explicit-self: owner lists the real connected legacy client",
+      "observed-v12-explicit-self: another verified account cannot list the owner's client",
+      "observed-v12-explicit-self: another verified account cannot call the owner's native tools",
+      "observed-v12-explicit-self: Ready is followed by a real native terminal response",
+      "observed-v12-explicit-self: authenticated relay executes a real owned shell command",
+      "observed-v12-explicit-self: the same connection remains live after the retry interval",
+      "observed-v12-explicit-self: no abnormal watchdog retry occurred",
+      "observed-v12-explicit-self: only the owned test connection is removed during cleanup"
+    ]
+  },
+  "modern": {
+    "status": "passed",
+    "checks": 47,
+    "transport": "real frozen CLI and synthetic Python loopback HTTP/WebSocket gateway",
+    "upstream_provider": "synthetic GitHub provider",
+    "outer_environment_isolation": "private HOME and XDG_CONFIG/STATE/DATA/CACHE/TMPDIR; whitelisted child environment with no inherited SSMCP variables",
+    "scope": "same-origin account authorization, native shell round trip, revocation, reconnect, logout; not a production Rust-server end-to-end proof",
+    "passed_checks": [
+      "A --ssh exits as expected",
+      "legacy SSH stops before any transport starts",
+      "A invite exits as expected",
+      "retired invite cannot enter a nonexistent invitation flow",
+      "A join exits as expected",
+      "retired join cannot enter a nonexistent invitation flow",
+      "retired commands never contact the relay",
+      "A login exits as expected",
+      "device login stores the verified identity and registered server username",
+      "login output excludes account and polling credentials",
+      "account credentials have owner-only file permissions",
+      "A whoami exits as expected",
+      "whoami verifies identity without exposing the login token",
+      "B --server exits as expected",
+      "an allow target from another relay is rejected before network access",
+      "B --server exits as expected",
+      "provider-style allow labels cannot replace a same-origin account target",
+      "A whoami exits as expected",
+      "selecting another origin never borrows the saved account credential",
+      "A whoami exits as expected",
+      "account API redirects never forward credentials to another origin",
+      "A --no-watchdog exits as expected",
+      "a changed stable identity cannot connect or replace the saved credential",
+      "A other@http://127.0.0.1:<ephemeral-port> exits as expected",
+      "a requested username must match the account registered on this relay",
+      "signed-in A binds its own username and origin with its saved account token",
+      "controlled session exits cleanly",
+      "unsigned B uses explicit same-origin allow and a supported WebSocket protocol",
+      "unsigned B never saves or receives A's account credential",
+      "A list exits as expected",
+      "A lists its currently controllable unsigned B session",
+      "B exposes a real terminal through the relay",
+      "real shell round-trip succeeds without relay credentials reaching native tools",
+      "watchdog reconnects the unsigned device without acquiring a credential",
+      "server access revocation terminates B with an error",
+      "revoked active sessions stop watchdog retries",
+      "revocation immediately after Ready also stops startup retries",
+      "HTTP 401 policy failures stop default watchdog retries",
+      "HTTP 403 policy failures stop default watchdog retries",
+      "controlled session exits cleanly",
+      "Ctrl-C cleans up an unsigned session without leaving credentials on B",
+      "the current lifecycle never depends on invitation or enrollment endpoints",
+      "A logout exits as expected",
+      "logout revokes its live session and declined authorization cannot reconnect it",
+      "a foreground account session offers at most one fresh authorization after revocation",
+      "logout revokes and removes the selected origin's account credential",
+      "gateways observed no malformed client protocol frames"
+    ]
+  },
+  "default_ws": {
+    "source": "existing workspace-default-suite/workspace.log; read only, not rerun",
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "cases": [
+      "broker::allow::tests::native_messages::a_replacement_arc_cannot_receive_or_retire_the_original_connections_mail",
+      "broker::allow::tests::native_messages::departed_recipient_releases_mailbox_capacity_from_sender_only_queries",
+      "broker::allow::tests::native_messages::disconnected_recipient_expires_sender_receipts_without_an_inbox_poll",
+      "broker::allow::tests::native_messages::native_agent_mailbox_needs_exact_live_credentials_even_with_same_name",
+      "broker::allow::tests::native_messages::native_device_negotiation_exact_recipient_and_receipts_use_real_websockets",
+      "broker::allow::tests::native_messages::native_remote_origin_and_idempotency_cannot_be_forged_by_labels",
+      "broker::allow::tests::native_messages::native_revoked_sender_acl_expires_pending_text_without_delivery",
+      "broker::allow::tests::native_messages::native_scoped_oauth_never_expands_into_all_account_resources",
+      "broker::allow::tests::native_messages::sender_membership_end_reclaims_orphans_without_sender_or_recipient_polling",
+      "http::question_delivery_tests::explicit_question_readback_keeps_the_answer_until_a_bound_next_response",
+      "http::question_delivery_tests::finalizer_validates_the_envelope_and_budget_before_claiming_exact_typed_batches",
+      "http::question_delivery_tests::native_errors_still_deliver_verified_answers_without_rewriting_the_error",
+      "http::question_delivery_tests::question_finalization_rechecks_oauth_policy_binding_and_connection_after_eligibility"
+    ],
+    "scope": "authenticated WebSocket and HTTP fixtures; native answer retention is modeled in question-finalizer tests; terminal interaction acceptance is separate"
+  },
+  "overall_workspace_gate": {
+    "status": "failed",
+    "library": {
+      "passed": 1584,
+      "failed": 2,
+      "ignored": 22,
+      "wall_seconds": 153.81
+    },
+    "integration_reached": false,
+    "not_superseded_by_this_report": true
+  },
+  "catalog_test_fix": {
+    "source_commit": "57b2d8b1b9cd4634117f3f8508912570b15b7758",
+    "only_cfg_test": true,
+    "rustfmt": "passed",
+    "git_diff_check": "passed",
+    "compiled_or_executed_in_this_report": false
+  },
+  "raw_evidence": {
+    "relative_to_builder_worktree": "target/zuse-validation/e30a14997d92adc5d19ec21de934dcc5a1eba562",
+    "files": [
+      {
+        "path": "core-compat/execution.json",
+        "sha256": "c6590cf721f0c01f286e1c34d68238dba0838f648ebba22345b0120d17836b66",
+        "bytes": 3770
+      },
+      {
+        "path": "core-compat/legacy-client-compat.json",
+        "sha256": "8398cc3dad016e53aa4741778f835b352a2babbc54929ff58296971fb480d6c6",
+        "bytes": 5409
+      },
+      {
+        "path": "core-compat/modern-account.json",
+        "sha256": "de3e3045491b8040dfa83b6dc46b2cbcecd65eb967ebb93c0a0253811b7a0f6f",
+        "bytes": 3198
+      },
+      {
+        "path": "core-compat/native-plugin.stdout.log",
+        "sha256": "270334374168efd2229e5c0c454e86f0a936fbba45d291842c536ea6f5e0d1ea"
+      },
+      {
+        "path": "workspace-default-suite/workspace.log",
+        "sha256": "6ef731b06fce27b4fe3fbcea09f72985d4b9d3e047625c7605b3e65606a8acc9",
+        "bytes": 481106
+      }
+    ],
+    "public_copy": "This file is a sanitized derivation; raw local evidence is not published."
+  },
+  "boundaries": {
+    "cargo_invoked": false,
+    "models_started": false,
+    "installed_clients_reloaded": false,
+    "services_changed": false,
+    "official_v12_provenance_claimed": false,
+    "production_deployment_or_job_continuity_claimed": false,
+    "formal_release_published_claimed": false,
+    "interactive_finish_ui_acceptance_claimed": false
+  }
+}
