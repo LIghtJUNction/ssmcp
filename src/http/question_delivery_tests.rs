@@ -26,6 +26,8 @@ struct NativeAnswers {
     pending: bool,
     calls: Vec<String>,
     acknowledgements: Vec<Value>,
+    finish_operations: Vec<Value>,
+    held_replies: Vec<Frame>,
 }
 
 struct Fixture {
@@ -36,6 +38,7 @@ struct Fixture {
     agent_id: String,
     agent_token: String,
     native: Arc<Mutex<NativeAnswers>>,
+    release_held: tokio::sync::mpsc::UnboundedSender<()>,
     peer: JoinHandle<()>,
     server: JoinHandle<()>,
     _directory: Directory,
@@ -190,11 +193,26 @@ impl Fixture {
             pending: true,
             calls: vec![],
             acknowledgements: vec![],
+            finish_operations: vec![],
+            held_replies: vec![],
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
+        let (release_held, mut releases) = tokio::sync::mpsc::unbounded_channel();
         let peer = tokio::spawn(async move {
-            while let Some(frame) = receive(&mut socket).await {
+            loop {
+                let frame = tokio::select! {
+                    frame = receive(&mut socket) => {
+                        let Some(frame) = frame else { break; };
+                        frame
+                    },
+                    released = releases.recv() => {
+                        if released.is_none() { break; }
+                        let replies = std::mem::take(&mut answers.lock().unwrap().held_replies);
+                        for reply in replies { send(&mut socket, reply).await; }
+                        continue;
+                    },
+                };
                 if matches!(frame, Frame::Reject { .. }) {
                     break;
                 }
@@ -219,6 +237,54 @@ impl Fixture {
                         assert_eq!(attribution.account.subject, "42");
                         assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
                         let mut output = match name.as_str() {
+                            "fixture.hold" => {
+                                assert!(
+                                    arguments["slot"]
+                                        .as_u64()
+                                        .is_some_and(|slot| slot < wire::MAX_INFLIGHT as u64)
+                                );
+                                state.held_replies.push(Frame::Reply {
+                                    id,
+                                    result: Ok(json!({"structuredContent":{
+                                        "released":true,"slot":arguments["slot"]
+                                    }})),
+                                });
+                                // Keep receiving all native calls while their real
+                                // Session permits remain owned by pending replies.
+                                continue;
+                            }
+                            "ssmcp.exec.wait" => {
+                                assert_eq!(arguments["job_id"], "exec_capacity_fixture");
+                                json!({"structuredContent":{
+                                    "job_id":"exec_capacity_fixture","running":false,"exit_code":0
+                                }})
+                            }
+                            "ssmcp.ui.finish" => {
+                                state.finish_operations.push(arguments.clone());
+                                assert_eq!(arguments["request_id"], state.view["id"]);
+                                match arguments["op"].as_str() {
+                                    Some("request") => {
+                                        assert_eq!(arguments["reason"], state.view["question"]);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "created":false,"request":state.view,
+                                            "timed_out":state.view["finish"]["status"]=="pending",
+                                            "default_decision":"no",
+                                            "decision":state.view["finish"]["decision"],
+                                            "approved":state.view["finish"]["approved"]
+                                        }})
+                                    }
+                                    Some("cancel") => {
+                                        state.view["finish"]["status"] = json!("cancelled");
+                                        state.view["finish"]["approved"] = json!(false);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "request":state.view,"timed_out":false
+                                        }})
+                                    }
+                                    _ => panic!("unexpected fixture finish operation"),
+                                }
+                            }
                             "ssmcp.ui.questions" => {
                                 json!({"structuredContent":{"schema_version":1,"question":state.view}})
                             }
@@ -268,6 +334,7 @@ impl Fixture {
             agent_id,
             agent_token,
             native,
+            release_held,
             peer,
             server,
             _directory: directory,
@@ -585,3 +652,6 @@ async fn finalizer_validates_the_envelope_and_budget_before_claiming_exact_typed
         *remaining
     );
 }
+
+mod await_capacity;
+mod finish_receipts;
