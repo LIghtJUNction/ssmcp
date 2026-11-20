@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.20"
+version = "0.10.21"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -18,6 +18,17 @@ include = [
     "/docs/workspaces.md",
     "/docs/context.md",
     "/docs/code-mode.md",
+    "/docs/finish-and-questions.md",
+    "/docs/thread-listeners.md",
+    "/docs/zcalld-listener.md",
+    "/scripts/e2e_zcalld_listener.py",
+    "/docs/force-send-listener.md",
+    "/docs/thread-messaging.md",
+    "/docs/session-groups.md",
+    "/scripts/e2e_session_groups.py",
+    "/scripts/e2e_reload_state.py",
+    "/scripts/e2e_listener_transports.py",
+    "/scripts/e2e_force_send.py",
     "/docs/rtk.md",
     "/docs/validation-live-context-rtk.md",
     "/docs/session-control.md",
@@ -73,6 +84,8 @@ include = [
     "/docs/reports/ssmcp-iteration-20261118*",
     "/scripts/e2e_questions.py",
     "/scripts/e2e_input_history.py",
+    "/scripts/e2e_message_references.py",
+    "/scripts/e2e_interactions.py",
     "/scripts/e2e_presentations.py",
     "/scripts/e2e_image_fallback.py",
     "/scripts/e2e_context_memory.py",
@@ -83,6 +96,7 @@ include = [
     "/scripts/test_client_bootstrap.py",
     "/scripts/e2e_account_relay.py",
     "/scripts/e2e_account_compat.py",
+    "/scripts/e2e_account_gateway.py",
     "/scripts/e2e_account_interactive.py",
     "/scripts/test_installers.py",
     "/scripts/test_installer_download_bounds.py",
@@ -98,6 +112,8 @@ include = [
     "/scripts/e2e_browser_setup.py",
     "/scripts/e2e_private_desktop.py",
     "/scripts/e2e_zuse_worker.py",
+    "/scripts/e2e_x11_text.py",
+    "/scripts/private_xvfb.py",
     "/docs/reports/zuse-integration-20261120/**",
     "/docs/browser-desktop.md",
     "/docs/validation-cua-client-capabilities.md",
@@ -169,10 +185,10 @@ exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
 resolver = "3"
 
 [dependencies]
-zuse = { package = "zuse-computer", version = "=0.1.0", path = "crates/zuse", default-features = false, features = ["std"] }
+zuse = { package = "zuse-computer", version = "=0.2.2", path = "crates/zuse", default-features = false, features = ["std"] }
 ztuio = { version = "=0.1.0", path = "crates/ztuio" }
-zharness = { version = "=0.5.0", path = "crates/zharness", default-features = false, features = ["std"] }
-zplugin = { version = "=0.3.0", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
+zharness = { version = "=0.5.1", path = "crates/zharness", default-features = false, features = ["std"] }
+zplugin = { version = "=0.3.1", path = "crates/zplugin", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = "0.22"
 qrcodegen = "1.8.0"

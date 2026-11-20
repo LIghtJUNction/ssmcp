@@ -190,8 +190,8 @@ enum Presentation {
     LocalDiscovery,
 }
 
-#[cfg(test)]
-pub(crate) type ProjectedEvent = (Value, Option<Arc<crate::runtime::call_scope::CallScope>>);
+#[cfg(all(test, unix))]
+pub(crate) type ProjectedEvent = (Value, crate::runtime::call_scope::Source);
 
 pub struct EventLog {
     label: String,
@@ -200,7 +200,7 @@ pub struct EventLog {
     changed: Notify,
     archive: Mutex<Option<crate::output::Capture>>,
     observer: Option<std::sync::Weak<crate::observer::Pool>>,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     projection: Mutex<Option<std::sync::mpsc::SyncSender<ProjectedEvent>>>,
 }
 
@@ -232,7 +232,7 @@ impl EventLog {
     ) -> Arc<Self> {
         Arc::new(Self {
             label: label.into(),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             projection: Mutex::new(None),
             audit_mode,
             buffer: Mutex::new(Buffer::default()),
@@ -246,7 +246,7 @@ impl EventLog {
     }
 
     /// Test a real producer-to-presentation boundary without a global terminal.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn observe_projection(&self) -> std::sync::mpsc::Receiver<ProjectedEvent> {
         let (send, receive) = std::sync::mpsc::sync_channel(128);
         *self.projection.lock().unwrap() = Some(send);
@@ -262,20 +262,16 @@ impl EventLog {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_scoped(event, crate::runtime::call_scope::current());
+        self.push_scoped(event, crate::runtime::call_scope::current_source());
     }
 
     /// An explicitly retained native creator is independent of whichever call
     /// happens to be active when this event arrives. None remains local.
-    pub(crate) fn push_scoped(
-        &self,
-        event: Value,
-        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
-    ) {
+    pub(crate) fn push_scoped(&self, event: Value, source: crate::runtime::call_scope::Source) {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::Native, scope);
+        self.push_inner(event, Presentation::Native, source);
     }
 
     /// Only client-owned audit lifecycle code may publish these reserved events.
@@ -284,7 +280,7 @@ impl EventLog {
         if !crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::Control, None);
+        self.push_inner(event, Presentation::Control, Default::default());
     }
 
     /// Retain local picker reads in the security audit without publishing them
@@ -293,14 +289,14 @@ impl EventLog {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::LocalDiscovery, None);
+        self.push_inner(event, Presentation::LocalDiscovery, Default::default());
     }
 
     fn push_inner(
         &self,
         event: Value,
         presentation: Presentation,
-        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+        source: crate::runtime::call_scope::Source,
     ) {
         let mut event = self.audit_mode.event(event);
         if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -319,14 +315,14 @@ impl EventLog {
                     Some("background_output" | "bash_execution_update")
                 ));
         if !external_output && presentation != Presentation::LocalDiscovery {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             if let Some(sink) = self.projection.lock().unwrap().as_ref() {
-                let _ = sink.try_send((event.clone(), scope.clone()));
+                let _ = sink.try_send((event.clone(), source.clone()));
             }
             if presentation == Presentation::Control {
                 crate::client::render::trusted_event(&self.label, &event);
             } else {
-                crate::client::render::scoped_event(&self.label, &event, scope);
+                crate::client::render::scoped_event(&self.label, &event, source);
             }
         }
         // Codex command streaming carries bytes as base64. Keep the original event

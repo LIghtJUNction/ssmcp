@@ -1,0 +1,233 @@
+{
+  "schema": 1,
+  "checked_at": "2026-11-19T23:19:02.501755+00:00",
+  "source_commit": "829abbf333622c6f260d51003f5f3bc78659e6e5",
+  "base_commit": "b49da12ac890f4d2b00c42d9dcf05b97e2054bac",
+  "branch": "coord/shared-cohort-20261120",
+  "upstream_pairing_reference": "9c13277d1eacb68c2378f692a4d4660cb92f0c62",
+  "source_diff_sha256": "0fd60dd256ef5ae0e071fa6ac1486cb7929c597dcd88549507ccf2bd4bf900d2",
+  "submodules": [
+    {
+      "path": "crates/zharness",
+      "commit": "e3580c01c7252da090d04e59b59762bc561777d1",
+      "tree": "2ad233c0b016be315dd47650a0080a5a81989aa5"
+    },
+    {
+      "path": "crates/zplugin",
+      "commit": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "tree": "0d1d9c5eca387e80963b4689b07aa2e41655f7e4"
+    },
+    {
+      "path": "crates/ztuio",
+      "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "tree": "d16a5b9a87370e766b7cfeb9593d9b2b20c8fa60"
+    },
+    {
+      "path": "crates/zuse",
+      "commit": "557ea46ae70e9de8f93b0928b505132e8c94e9db",
+      "tree": "9b8dd39f2ab76f80e69826027cfedf3a74fb4150"
+    }
+  ],
+  "registry_archives": [
+    {
+      "package": "zplugin",
+      "version": "0.3.1",
+      "commit": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "checksum": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "bytes": 59748,
+      "yanked": false
+    },
+    {
+      "package": "zplugin-macros",
+      "version": "0.3.1",
+      "commit": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "checksum": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "bytes": 22487,
+      "yanked": false
+    },
+    {
+      "package": "zharness",
+      "version": "0.5.1",
+      "commit": "e3580c01c7252da090d04e59b59762bc561777d1",
+      "checksum": "0d68598de76bf21e9b0c37558cc850685eafc83e69b5d6d8bdf24b0c6f8b785b",
+      "bytes": 196852,
+      "yanked": false
+    },
+    {
+      "package": "ztuio",
+      "version": "0.1.0",
+      "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "checksum": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca",
+      "bytes": 19644,
+      "yanked": false
+    },
+    {
+      "package": "zuse-computer",
+      "version": "0.2.0",
+      "commit": "557ea46ae70e9de8f93b0928b505132e8c94e9db",
+      "checksum": "143c841259023ef3e78b10bba3219224c50c85096c883193d46764625dcdcd7f",
+      "bytes": 316612,
+      "yanked": false
+    },
+    {
+      "package": "zsys",
+      "version": "0.1.1",
+      "commit": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+      "checksum": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "bytes": 83184,
+      "yanked": false
+    }
+  ],
+  "resolved_shared_packages": [
+    {
+      "package": "zplugin",
+      "version": "0.3.1",
+      "source": "pinned submodule"
+    },
+    {
+      "package": "zplugin-macros",
+      "version": "0.3.1",
+      "source": "pinned submodule"
+    },
+    {
+      "package": "zharness",
+      "version": "0.5.1",
+      "source": "pinned submodule"
+    },
+    {
+      "package": "ztuio",
+      "version": "0.1.0",
+      "source": "pinned submodule"
+    },
+    {
+      "package": "zuse-computer",
+      "version": "0.2.0",
+      "source": "pinned submodule"
+    },
+    {
+      "package": "zsys",
+      "version": "0.1.1",
+      "source": "registry"
+    },
+    {
+      "package": "zcall",
+      "version": "0.3.0",
+      "source": "registry"
+    },
+    {
+      "package": "zconv",
+      "version": "0.4.0",
+      "source": "registry"
+    }
+  ],
+  "verified_edges": [
+    [
+      "zharness",
+      "zplugin"
+    ],
+    [
+      "zplugin",
+      "zplugin-macros"
+    ],
+    [
+      "zplugin",
+      "zsys"
+    ],
+    [
+      "zuse-computer",
+      "zsys"
+    ]
+  ],
+  "checks": {
+    "release_python_tests": {
+      "count": 73,
+      "exit_code": 0,
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_release.py"
+      ]
+    },
+    "release_helpers": [
+      "registry_dependencies",
+      "validate_package",
+      "check_registry_dependencies",
+      "source_submodules"
+    ],
+    "metadata": {
+      "command": [
+        "cargo",
+        "+1.100.0",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1"
+      ],
+      "duplicate_shared_packages": 0
+    },
+    "consumer_build": {
+      "name": "ssmcp-build",
+      "command": [
+        "nice",
+        "-n",
+        "19",
+        "cargo",
+        "+1.100.0",
+        "build",
+        "--locked",
+        "--offline",
+        "--bin",
+        "ssmcp"
+      ],
+      "exit_code": 0,
+      "seconds": 228.672,
+      "host": "Linux",
+      "machine": "x86_64",
+      "jobs": 1,
+      "private_registry_cache": "public index/cache files only; no credentials copied",
+      "rustc_wrapper": "",
+      "rustc_workspace_wrapper": ""
+    }
+  },
+  "binary": {
+    "path": "target/shared-cohort/target/debug/ssmcp",
+    "sha256": "3d5b950a5149ed30c36d02d5a5352a8536358f89480181316e6fa87f26024305",
+    "bytes": 187659304,
+    "executed": false
+  },
+  "logs": [
+    {
+      "path": "target/shared-cohort/evidence/release-tests.log",
+      "sha256": "4c002c34d429911f6d126157614c9276cde660efabdeb4f4ac8998ee9787efc1",
+      "bytes": 4101
+    },
+    {
+      "path": "target/shared-cohort/evidence/ssmcp-build.log",
+      "sha256": "751c23ccf1ebf76d91dd0f1e922ffea459d36f19e19bd16005c899180c21d8af",
+      "bytes": 5727
+    },
+    {
+      "path": "target/shared-cohort/evidence/cargo-metadata.json",
+      "sha256": "fa9bb89c2f4dcc3973a0328c8a622a8bd4b594920393b833fbb5b44173f34df1",
+      "bytes": 1324093
+    }
+  ],
+  "scope": {
+    "application_runtime_acceptance": "pending with the existing SSMCP application owner",
+    "windows_macos_consumer_acceptance": "pending with the existing SSMCP application owner",
+    "application_release": "not performed by this dependency update",
+    "services_installed_or_restarted": false,
+    "additional_ci_dispatched": false
+  },
+  "compatibility_notes": [
+    "Existing Desktop Rust signatures compile in the real SSMCP consumer.",
+    "zuse 0.2.0 Wayland keyboard operations require supported Hyprland keyboard-state inspection; unknown or non-neutral state is rejected. Application runtime acceptance must cover this behavior.",
+    "SSMCP retains its conservative handling of unknown native input failures and its existing Windows/macOS compensation adapters."
+  ]
+}

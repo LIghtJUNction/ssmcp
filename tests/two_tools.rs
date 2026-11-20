@@ -1023,7 +1023,10 @@ async fn public_tools_cover_every_backend_with_native_discovery_and_javascript_d
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list", "code_mode", "collab"]);
+        assert_eq!(
+            names,
+            ["list", "code_mode", "collab", "request_finish", "messages"]
+        );
     }
     let inventory = server.call("list", json!({})).await;
     let clients = inventory["clients"].as_array().unwrap();

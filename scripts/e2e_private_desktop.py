@@ -12,6 +12,7 @@ import time
 from e2e import wait_for
 from e2e_computer_use import ComputerUse
 from private_xvfb import PrivateXvfb
+from e2e_x11_text import OwnedGtkReceiver, run_mcp_recovery
 
 class PrivateDesktop(ComputerUse):
     def __init__(self, directory, binary_dir, evidence_dir):
@@ -56,7 +57,11 @@ class PrivateDesktop(ComputerUse):
         workspace.mkdir()
         self.client, credentials = self.start_client(label="private-desktop",
             name="private-desktop-fixture",cwd=workspace,
-            extra_env={key: self.host_env[key] for key in ("DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE")})
+            extra_env={
+                **{key: self.host_env[key] for key in ("DISPLAY", "XAUTHORITY", "XDG_SESSION_TYPE")},
+                "AT_SPI_BUS_ADDRESS":"unix:path="+str(workspace/"must-not-be-used.sock"),
+                "AT_SPI_DISPLAY":":invalid-private-sentinel",
+            })
         self.oauth_login(credentials)
         self.client_id = credentials["client_id"]
         self.check(self.computer("desktop_status")["running"] is False,
@@ -100,6 +105,17 @@ class PrivateDesktop(ComputerUse):
         wait_for(lambda: clicked.exists() and clicked.read_text()=="clicked",
             timeout=5,description="private native clicking")
         self.check(True,"native click reaches the private button")
+        with OwnedGtkReceiver(self,workspace/"gtk-text",self.evidence_dir/"gtk-text",started["display"]) as gtk:
+            self.metrics["gtk_text_cases"]=gtk.cases
+            run_mcp_recovery(self,gtk)
+            gtk_app_pid=int(gtk.receiver_pid)
+            self.check(len(gtk.cases)==2 and all(case["status"]=="passed" for case in gtk.cases),
+                "the same owned Computer rejects mixed text before input and recovers after both identity refusals")
+            self.metrics["gtk_text_scope"]={
+                "display":gtk.observed_context["display"],
+                "root_bus_observed":bool(gtk.observed_context["root_bus"]),
+                "private_environment_cleared":True,
+            }
         image = self.screenshot("ssmcp.computer.screenshot",{"max_width":640},
             "private-desktop.jpg")
         self.check(image["desktop"]=="isolated" and image["width"]==640 and image["engine"]=="zuse",
@@ -112,6 +128,7 @@ class PrivateDesktop(ComputerUse):
         def cleanup_state():
             return {"state_exists": runtime.parent.exists(),
                 "application_alive": Path(f"/proc/{app_pid}").exists(),
+                "gtk_application_alive": Path(f"/proc/{gtk_app_pid}").exists(),
                 "display_socket_exists": display_socket.exists()}
         try:
             wait_for(lambda: not any(cleanup_state().values()), timeout=10,
@@ -138,7 +155,7 @@ def main():
     parser.add_argument("--evidence-dir",type=Path,default=Path("target/private-desktop-evidence"))
     parser.add_argument("--report",type=Path)
     args=parser.parse_args()
-    for name in ("Xvfb","xdotool","xmessage","magick","xprop","dbus-run-session","dbus-daemon","wish"):
+    for name in ("Xvfb","xdotool","xmessage","magick","xprop","dbus-run-session","dbus-daemon","wish","gdbus","pkg-config","cc"):
         if not shutil.which(name): parser.error(f"missing test helper: {name}")
     started=time.monotonic()
     with tempfile.TemporaryDirectory(prefix="ssmcp-private-desktop-") as temporary:

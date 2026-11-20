@@ -1,9 +1,56 @@
 //! A visual pause for authenticated input waits. Waking never answers a wait.
 use super::{Frame, Key, State, nonzero};
-use crate::client::interface::user_wait;
+use crate::client::interface::{questions, user_wait};
 use std::collections::VecDeque;
 
-const DISMISSED_LIMIT: usize = 32;
+// At most 32 finish requests plus four ordinary input waits may be active.
+const DISMISSED_LIMIT: usize = 64;
+
+#[derive(Clone, Default)]
+struct Snapshot {
+    connection_id: Option<String>,
+    active: Vec<String>,
+}
+
+impl From<&user_wait::Snapshot> for Snapshot {
+    fn from(wait: &user_wait::Snapshot) -> Self {
+        let connection_id = wait.connected.then(|| wait.connection_id.clone()).flatten();
+        let active = if connection_id.is_some() {
+            wait.active
+                .iter()
+                .map(|entry| entry.episode_id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Self {
+            connection_id,
+            active,
+        }
+    }
+}
+
+impl Snapshot {
+    fn with_finish(mut self, finish: &questions::FinishWaitSnapshot) -> Self {
+        if finish.connection_id.is_some() {
+            // Join both generations without inventing a user-wait request.
+            self.connection_id = Some(
+                serde_json::to_string(&(
+                    self.connection_id.as_deref(),
+                    finish.connection_id.as_deref(),
+                ))
+                .expect("connection identifiers serialize"),
+            );
+            self.active.extend(
+                finish
+                    .active
+                    .iter()
+                    .map(|entry| format!("finish:{}", entry.request_id)),
+            );
+        }
+        self
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Sleep {
@@ -16,29 +63,24 @@ pub(super) struct Sleep {
 }
 
 impl Sleep {
-    fn wants(&self, snapshot: &user_wait::Snapshot) -> bool {
-        snapshot.connected
-            && snapshot.connection_id.is_some()
-            && snapshot.active.iter().any(|entry| {
-                self.connection != snapshot.connection_id
-                    || !self.dismissed.contains(&entry.episode_id)
+    fn wants(&self, snapshot: &Snapshot) -> bool {
+        snapshot.connection_id.is_some()
+            && snapshot.active.iter().any(|episode| {
+                self.connection != snapshot.connection_id || !self.dismissed.contains(episode)
             })
     }
 
-    fn refresh(&mut self, snapshot: &user_wait::Snapshot) {
-        let connection = snapshot
-            .connected
-            .then(|| snapshot.connection_id.clone())
-            .flatten();
+    fn refresh(&mut self, snapshot: &Snapshot) {
+        let connection = snapshot.connection_id.clone();
         if self.connection != connection {
             self.connection = connection;
             self.dismissed.clear();
         }
         self.active.clear();
         if self.connection.is_some() {
-            for entry in &snapshot.active {
-                if !self.active.contains(&entry.episode_id) {
-                    self.active.push(entry.episode_id.clone());
+            for episode in &snapshot.active {
+                if !self.active.contains(episode) {
+                    self.active.push(episode.clone());
                 }
             }
         }
@@ -85,15 +127,15 @@ impl Sleep {
 }
 
 impl State {
-    fn sleep_snapshot(&self) -> user_wait::Snapshot {
+    fn sleep_snapshot(&self) -> Snapshot {
         #[cfg(test)]
         if let Some(snapshot) = &self.sleep_fixture {
-            return snapshot.clone();
+            return Snapshot::from(snapshot);
         }
         if self.preview {
-            user_wait::Snapshot::default()
+            Snapshot::default()
         } else {
-            user_wait::snapshot()
+            Snapshot::from(&user_wait::snapshot()).with_finish(&questions::finish_wait_snapshot())
         }
     }
 
@@ -289,36 +331,37 @@ mod tests {
     #[test]
     fn sleep_dismissal_follows_episode_and_connection_with_bounded_memory() {
         let mut sleep = Sleep::default();
-        sleep.refresh(&snapshot("a", 1, 1));
+        sleep.refresh(&Snapshot::from(&snapshot("a", 1, 1)));
         assert!(sleep.visible);
         sleep.dismiss();
-        sleep.refresh(&snapshot("a", 1, 2));
+        sleep.refresh(&Snapshot::from(&snapshot("a", 1, 2)));
         assert!(
             !sleep.visible,
             "a new native wait ID is still the same episode"
         );
         let mut gap = snapshot("a", 1, 2);
         gap.active.clear();
-        sleep.refresh(&gap);
-        sleep.refresh(&snapshot("a", 1, 3));
+        sleep.refresh(&Snapshot::from(&gap));
+        sleep.refresh(&Snapshot::from(&snapshot("a", 1, 3)));
         assert!(
             !sleep.visible,
             "timeout polling gaps retain the visual dismissal"
         );
-        sleep.refresh(&snapshot("a", 2, 4));
+        sleep.refresh(&Snapshot::from(&snapshot("a", 2, 4)));
         assert!(sleep.visible);
         sleep.dismiss();
-        sleep.refresh(&snapshot("b", 2, 4));
+        sleep.refresh(&Snapshot::from(&snapshot("b", 2, 4)));
         assert!(
             sleep.visible,
             "another connection owns another visual episode"
         );
-        for episode in 0..40 {
-            sleep.refresh(&snapshot("b", episode, episode));
+        for episode in 0..DISMISSED_LIMIT + 8 {
+            sleep.refresh(&Snapshot::from(&snapshot("b", episode, episode)));
             sleep.dismiss();
         }
         assert_eq!(sleep.dismissed.len(), DISMISSED_LIMIT);
-        sleep.refresh(&user_wait::Snapshot::default());
+        assert_eq!(sleep.dismissed.front(), Some(&format!("{:064x}", 8)));
+        sleep.refresh(&Snapshot::from(&user_wait::Snapshot::default()));
         assert!(!sleep.visible);
         assert!(sleep.dismissed.is_empty());
     }
@@ -497,5 +540,77 @@ mod tests {
         assert_eq!(after.rows, before.rows);
         state.dirty = false;
         assert!(!state.should_redraw(Some(&after), state.graphics.cell()));
+    }
+    #[test]
+    fn one_wake_dismisses_the_full_bounded_combined_wait_set() {
+        let combined = Snapshot {
+            connection_id: Some("ordinary".into()),
+            active: (0..4).map(|id| format!("input-{id}")).collect(),
+        }
+        .with_finish(&questions::FinishWaitSnapshot {
+            connection_id: Some("room:1".into()),
+            active: (0..32)
+                .map(|id| questions::FinishWaitEntry {
+                    request_id: format!("finish-{id}"),
+                })
+                .collect(),
+        });
+        let mut sleep = Sleep::default();
+        sleep.refresh(&combined);
+        assert!(sleep.visible);
+        sleep.dismiss();
+        sleep.refresh(&combined);
+        assert!(
+            !sleep.visible,
+            "waking the full active set must not evict one of its own episodes"
+        );
+        assert_eq!(sleep.dismissed.len(), 36);
+    }
+
+    #[test]
+    fn finish_waits_dim_only_while_active_and_retry_keeps_episode_dismissal() {
+        let mut finish = questions::FinishWaitSnapshot {
+            connection_id: Some("room:1".into()),
+            active: vec![questions::FinishWaitEntry {
+                request_id: "finish-1".into(),
+            }],
+        };
+        let mut sleep = Sleep::default();
+        sleep.refresh(&Snapshot::default().with_finish(&finish));
+        assert!(sleep.visible);
+        assert!(sleep.consume(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: 1,
+            release: false
+        }));
+        assert!(sleep.consume(Key::Mouse {
+            button: 0,
+            x: 1,
+            y: 1,
+            release: true
+        }));
+        assert!(!sleep.visible);
+        finish.active.clear();
+        sleep.refresh(&Snapshot::default().with_finish(&finish));
+        assert!(
+            !sleep.visible,
+            "a retained question without a real wait does not dim"
+        );
+        finish.active.push(questions::FinishWaitEntry {
+            request_id: "finish-1".into(),
+        });
+        sleep.refresh(&Snapshot::default().with_finish(&finish));
+        assert!(!sleep.visible, "retry belongs to the same visible episode");
+        finish.active[0].request_id = "finish-2".into();
+        sleep.refresh(&Snapshot::default().with_finish(&finish));
+        assert!(sleep.visible);
+        sleep.dismiss();
+        finish.connection_id = Some("room:2".into());
+        sleep.refresh(&Snapshot::default().with_finish(&finish));
+        assert!(sleep.visible, "a new connection may dim again");
+        sleep.refresh(&Snapshot::default());
+        assert!(!sleep.visible);
+        assert!(sleep.dismissed.is_empty());
     }
 }

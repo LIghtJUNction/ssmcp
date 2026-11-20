@@ -147,8 +147,12 @@ pub(super) struct Meta {
     pub(super) scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
     pub(super) kind: Kind,
     pub(super) user: bool,
+    pub(super) history: crate::runtime::call_scope::DisplayHistory,
+    pub(super) history_message: bool,
+    pub(super) message_id: Option<String>,
     pub(super) author: String,
     pub(super) raw_message: bool,
+    pub(super) plain_message: bool,
     pub(super) keys: Vec<String>,
     pub(super) status: Option<Status>,
     pub(super) command: bool,
@@ -175,6 +179,7 @@ impl Meta {
             .unwrap_or(event);
         meta.kind = Kind::from_event(event, rpc);
         if meta.kind == Kind::Conversation {
+            meta.plain_message = event["format"] == "plain";
             meta.user = event["role"] == "user"
                 || kind == "user"
                 || event["message"]["role"] == "user"
@@ -306,7 +311,15 @@ impl Meta {
         }
     }
 
+    pub(super) fn set_source(&mut self, source: crate::runtime::call_scope::DisplaySource) {
+        self.history = source.history;
+        self.scope = source.call;
+    }
+
     pub(super) fn same_source(&self, other: &Self) -> bool {
+        if self.history != other.history {
+            return false;
+        }
         match (&self.scope, &other.scope) {
             (Some(left), Some(right)) => left.same_call(right),
             (None, None) => true,
@@ -352,6 +365,11 @@ impl Meta {
 
     pub(super) fn bytes(&self) -> usize {
         self.author.len()
+            + self
+                .history
+                .local_id()
+                .map_or(0, |owner| owner.as_str().len())
+            + self.message_id.as_ref().map_or(0, String::len)
             + self.scope.as_ref().map_or(0, |scope| {
                 std::mem::size_of::<crate::runtime::call_scope::CallScope>()
                     + scope.run_id().map_or(0, str::len)

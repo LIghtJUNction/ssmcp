@@ -114,6 +114,27 @@ class InputHistory(Composer):
         )
         return snapshot
 
+    def save_resized_shots(self, name, front, marker):
+        """Capture the same live view at two widths, then restore its terminal."""
+        rows, original_columns = front.snapshot()["size"]
+        try:
+            for columns in (120, 48):
+                front.resize(rows, columns)
+                front.pump(0.15)
+                front.until(
+                    lambda shot: shot["size"] == [rows, columns] and marker in text(shot),
+                    f"{name} redraw at {columns} columns", cells=True,
+                )
+                self.save_shot(f"{name}-{columns}", front, cells=True)
+        finally:
+            front.resize(rows, original_columns)
+            front.pump(0.15)
+            front.until(
+                lambda shot: shot["size"] == [rows, original_columns] and marker in text(shot),
+                f"{name} restoring the original terminal size",
+            )
+        return self.save_shot(name, front, cells=True)
+
     def wait_state(self, front, predicate, description):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
@@ -401,11 +422,13 @@ class InputHistory(Composer):
         self.wait_state(front, lambda state: not state["draft"]["text"], "attachment test draft did not clear")
 
         reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
-        request = {"text": reply, "kind": "answer", "idempotency_key": "handoff-reply-once"}
+        # This is copy/handoff source material, not an attempt to finish a task.
+        # Explicit completion approval is exercised by e2e_interactions.py.
+        request = {"text": reply, "kind": "progress", "idempotency_key": "handoff-reply-once"}
         receipt = self.observe("ssmcp.ui.message", request)
         duplicate = self.observe("ssmcp.ui.message", request)
         self.check(receipt["accepted"] and receipt["history_saved"] and not receipt["duplicate"]
-                   and receipt["kind"] == "answer" and duplicate["duplicate"]
+                   and receipt["kind"] == "progress" and duplicate["duplicate"]
                    and duplicate["message_id"] == receipt["message_id"],
                    "an idempotent native reply preserves its ID and is saved only once")
         pending_text = "HANDOFF_PENDING 界：尚未领取的用户要求"
@@ -568,7 +591,95 @@ class InputHistory(Composer):
             "bytes": len(resumed.transcript), "sha256": hashlib.sha256(resumed.transcript).hexdigest(),
         }
         self.metrics["history_messages"] = len(history["messages"])
-        resumed.close()
+        self.archive_scenario(resumed, session_id, path, counter)
+
+    def archive_scenario(self, front, session_id, path, counter):
+        original = path.read_bytes()
+        before_queue = [item["id"] for item in self.queue()["queue"]]
+        front.send("/archive\r")
+        front.until(lambda shot: "Conversation archived" in text(shot)
+                    and "No active history" in text(shot),
+                    "archiving the current conversation without deleting its messages")
+        active = self.observe("ssmcp.ui.history", {"action": "list"})
+        archived = self.observe("ssmcp.ui.history", {"action": "list", "state": "archived"})
+        self.check(active["state"] == "active" and not active["sessions"]
+                   and len(archived["sessions"]) == 1
+                   and archived["sessions"][0]["id"] == session_id
+                   and archived["sessions"][0]["archived"]
+                   and not archived["sessions"][0]["current"],
+                   "default history hides the archive and releases its active selection")
+        self.check(path.read_bytes() == original
+                   and [item["id"] for item in self.queue()["queue"]] == before_queue,
+                   "archiving keeps the original JSONL bytes and does not enqueue any requirement")
+        front.send("/archived\r")
+        front.until(lambda shot: "Archived conversations" in text(shot)
+                    and session_id in text(shot), "the explicit archived-conversation picker")
+        self.check(self.ui("/display/conversation")["history_archived"],
+                   "the history canvas exposes its archive filter")
+        draft = "ARCHIVE_DRAFT_KEEP 界"
+        front.send(draft)
+        self.wait_state(front, lambda state: state["draft"]["text"] == draft,
+                        "the archive fixture draft was not visible")
+        original_draft = self.ui("/display/conversation")["draft"]
+        restored = self.observe("ssmcp.ui.history_archive", {"action": "restore", "id": session_id})
+        self.check(restored["changed"] and not restored["archived"] and not restored["current"],
+                   "the explicit restore tool changes visibility without selecting the conversation")
+        again = self.observe("ssmcp.ui.history_archive", {"action": "restore", "id": session_id})
+        archived = self.observe("ssmcp.ui.history_archive", {"action": "archive", "id": session_id})
+        duplicate = self.observe("ssmcp.ui.history_archive", {"action": "archive", "id": session_id})
+        self.check(not again["changed"] and archived["changed"] and not duplicate["changed"]
+                   and self.ui("/display/conversation")["draft"] == original_draft
+                   and path.read_bytes() == original,
+                   "archive and restore are idempotent and preserve the live UTF-8 draft and saved bytes")
+        found = self.observe("ssmcp.ui.history", {
+            "action": "search", "query": "HISTORY_CONTINUATION", "id": session_id,
+        })
+        self.check(len(found["matches"]) == 1
+                   and found["matches"][0]["conversation_id"] == session_id,
+                   "archived content remains explicitly searchable through the read-only history tool")
+        self.save_resized_shots("archived", front, "Archived conversations")
+        front.send(b"\x01\x0b")
+        self.wait_state(front, lambda state: not state["draft"]["text"],
+                        "the archive preservation draft did not clear")
+        front.disconnect()
+        front.close()
+
+        restored_front = self.start_front("input-history-archive-restarted")
+        active = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
+        archives = self.observe("ssmcp.ui.history", {"action": "list", "state": "archived"})["sessions"]
+        self.check(not active and len(archives) == 1 and archives[0]["id"] == session_id
+                   and path.read_bytes() == original,
+                   "archive state survives a new process without rewriting the conversation")
+        restored_front.send("/resume\r")
+        restored_front.until(lambda shot: "No active history" in text(shot),
+                             "the normal history picker excluding the persisted archive")
+        restored_front.send("/archived\r")
+        restored_front.until(lambda shot: "Archived conversations" in text(shot)
+                             and session_id in text(shot), "the persisted archive in its own picker")
+        restored_front.send(HOME + ENTER)
+        restored_front.until(lambda shot: "HISTORY_CONTINUATION" in text(shot)
+                             and "History restored" in text(shot),
+                             "Enter restoring and resuming the archived conversation")
+        metadata = self.observe("ssmcp.ui.history", {"action": "metadata", "id": session_id})
+        self.check(not metadata["summary"]["archived"] and metadata["summary"]["current"]
+                   and path.read_bytes() == original and not self.queue()["queue"]
+                   and not self.messages(self.work()) and counter.read_text() == "once\n",
+                   "restoring selects the saved history without replaying requests or native tools")
+        continuation = "ARCHIVE_RESTORED_CONTINUATION 中文"
+        record = self.submit_source(restored_front, continuation)
+        self.expect_delivery(self.work(), record, request_text=continuation, agent_id=None)
+        history = self.observe("ssmcp.ui.history", {"action": "read", "id": session_id, "limit": 64})
+        previous = [json.loads(line) for line in original.splitlines()][1:]
+        self.check(history["messages"][:-1] == [
+            {key: value for key, value in item.items() if key != "type"} for item in previous
+        ] and history["messages"][-1]["content"] == continuation,
+                   "an explicit new requirement appends once to the restored original messages")
+        self.save_resized_shots("archive-restored", restored_front, "ARCHIVE_RESTORED_CONTINUATION")
+        self.metrics["archive_pty"] = {
+            "bytes": len(restored_front.transcript),
+            "sha256": hashlib.sha256(restored_front.transcript).hexdigest(),
+        }
+        restored_front.close()
 
     def shell_scenario(self, front):
         before = len(self.queue()["queue"])
@@ -652,8 +763,8 @@ def main():
     started = time.monotonic()
     report = {
         "status": "failed", "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
-        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL and resume; no models",
+        "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
+        "scope": "enumerated @/$ completion, file/skill/image delivery, large paste, private image attach, editable handoff, idempotent replies, copy/help, local shell/tasks, automatic JSONL, resume, and reversible conversation archives; no models",
         "binaries": {name: sha256(path) for name, path in binaries.items()},
         "sources": {name: sha256(Path(__file__).with_name(name)) for name in (
             "e2e_input_history.py", "e2e.py", "e2e_dashboard.py", "e2e_composer.py",

@@ -5,14 +5,19 @@ use serde_json::{Value, json};
 use steering::receipt::Receipt;
 mod access;
 mod canvas;
+mod groups;
 mod hints;
 mod history;
 mod listener;
 mod login;
 pub(super) mod logout;
+mod messaging;
+mod paste;
 mod questions;
 mod queue;
 mod receipts;
+pub(super) mod reload_state;
+mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
 mod tasks;
@@ -21,7 +26,7 @@ mod user_wait;
 const EXIT_CONFIRMATION: &str =
     "Press Ctrl+C again to exit · any other key keeps this session open";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(super) enum View {
     #[default]
     Activity,
@@ -38,7 +43,7 @@ impl View {
         match self {
             Self::Activity => "conversation",
             Self::Audit => "code audit",
-            Self::Agents => "agents",
+            Self::Agents => "sessions",
             Self::Queue => "queue",
             Self::Questions => "questions",
             Self::History => "history",
@@ -62,9 +67,12 @@ impl View {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InputStamp {
-    view: View,
+    view: Option<View>,
     question: Option<String>,
     target: Option<String>,
+    native_recipient: Option<String>,
+    native_account: Option<(String, String)>,
+    recipient_revision: u64,
     editing: Option<String>,
     text: String,
     cursor: usize,
@@ -77,6 +85,12 @@ pub(super) struct Conversation {
     pub(super) preferred_input_rows: Option<u16>,
     pub(super) view: View,
     pub(super) content_focus: bool,
+    pub(super) process_id: String,
+    pub(super) process_generation: u64,
+    groups: groups::Selection,
+    // The roster can outlive its use as the current /send destination.
+    send_to_group: bool,
+    recipient_revision: u64,
     canvas: canvas::Canvas,
     pub(super) logs_open: bool,
     pub(super) exit_requested: bool,
@@ -93,10 +107,22 @@ pub(super) struct Conversation {
     detail: bool,
     detail_scroll: usize,
     target: Option<String>,
+    native_recipient: Option<String>,
+    native_account: Option<(String, String)>,
+    native_pending: Option<messaging::Pending>,
+    native_retry: Option<messaging::Pending>,
+    native_last: Option<Value>,
+    native_refreshed: bool,
+    native_picker: bool,
+    #[cfg(test)]
+    native_fixture: Option<Value>,
+    #[cfg(test)]
+    native_connection: Option<crate::client::messaging::test_connection::Connection>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
+    force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
     wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     parked: Option<steering::SavedDraft>,
@@ -104,6 +130,8 @@ pub(super) struct Conversation {
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
     input_task: Option<attachments::Task>,
+    paste_recovery: Option<String>,
+    retrying_paste: bool,
     login_task: Option<crate::client::account::login::Task>,
     access_request: Option<u64>,
     pub(super) logout_task: Option<logout::Task>,
@@ -111,10 +139,22 @@ pub(super) struct Conversation {
     input_stamp: Option<InputStamp>,
     input_command: Option<String>,
     restored: bool,
+    reload_input_history: Option<crate::client::composer::InputHistory>,
     question_id: Option<String>,
     answers: BTreeMap<String, Composer>,
+    finish_choices: BTreeMap<String, crate::client::interface::questions::FinishChoice>,
+    finish_button_rows: Vec<(
+        u16,
+        String,
+        crate::client::interface::questions::FinishChoice,
+    )>,
+    drawn_questions: Vec<String>,
+    #[cfg(test)]
+    question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
+    pub(super) history_list_stale: bool,
+    history_archived: bool,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
     pub(super) history_width: u16,
@@ -125,8 +165,10 @@ impl Conversation {
         json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
-            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"editing":self.editing,
-            "force_pending":self.force_task.is_some(),
+            "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
+            "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
+            "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
             "draft":{"text":self.composer.text(),"cursor":self.composer.cursor()}})
     }
@@ -191,17 +233,23 @@ fn recipients(value: &Value, observed: &[crate::client::render::CallerGroup]) ->
 }
 
 fn agent_key(value: &Value) -> String {
-    if field(value, "kind") == "observed" {
-        format!("caller:{}", field(value, "key"))
-    } else {
-        format!("member:{}", field(value, "agent_id"))
+    match field(value, "kind") {
+        "observed" => format!("caller:{}", field(value, "key")),
+        "native" => format!("native:{}", field(value, "id")),
+        "process" => format!("process:{}", field(value, "client_id")),
+        _ => format!("member:{}", field(value, "agent_id")),
     }
 }
 
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        recipients(data, &self.caller_tracker.groups(&observed, data))
+        let entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        sessions::arrange(
+            entries,
+            self.chat_native_entries(),
+            &self.conversation.process_id,
+        )
     }
 
     fn chat_saved_draft(&self) -> steering::SavedDraft {
@@ -209,7 +257,21 @@ impl State {
             text: self.conversation.composer.text().into(),
             cursor: self.conversation.composer.cursor(),
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
+            native_account: self.chat_native_account().cloned(),
+            send_group: self.chat_saved_group(),
         }
+    }
+
+    fn chat_saved_group(&self) -> Option<Vec<steering::SavedRecipient>> {
+        self.conversation
+            .send_to_group
+            .then(|| self.conversation.groups.saved_selection())
+    }
+
+    fn chat_native_account(&self) -> Option<&(String, String)> {
+        self.conversation.native_recipient.as_ref()?;
+        self.conversation.native_account.as_ref()
     }
 
     fn chat_restore_draft(&mut self, draft: steering::SavedDraft) {
@@ -218,6 +280,17 @@ impl State {
             && self.conversation.composer.left()
         {}
         self.conversation.target = draft.target;
+        self.conversation.native_recipient = draft.native_recipient;
+        self.conversation.native_account = draft.native_account;
+        self.conversation.send_to_group = draft.send_group.is_some();
+        if let Some(group) = draft.send_group {
+            self.conversation.groups.restore_selection(group);
+        }
+    }
+
+    fn chat_recipient_changed(&mut self, group: bool) {
+        self.conversation.send_to_group = group;
+        self.conversation.recipient_revision = self.conversation.recipient_revision.wrapping_add(1);
     }
 
     pub(super) fn chat_data(&self) -> Value {
@@ -264,7 +337,7 @@ impl State {
         self.dirty = true;
     }
 
-    fn chat_accepted(&mut self, id: String, text: String) {
+    fn chat_accepted(&mut self, id: String, text: String, warnings: Vec<String>) {
         let text = references::source(&text).to_owned();
         self.conversation.composer.remember(&text);
         if self.conversation.view == View::History {
@@ -274,8 +347,16 @@ impl State {
         for line in markdown::rows(&text, self.geometry.left, &self.ui) {
             let _ = writeln!(record, "{line}");
         }
-        record.push_str("  queued · waiting for the next eligible tool response\n\n");
-        self.log_message("user", &text, record.as_bytes());
+        record.push_str("  queued · waiting for the next eligible tool response\n");
+        for warning in &warnings {
+            let _ = writeln!(record, "  Reference notice: {}", panel::safe_text(warning));
+        }
+        record.push('\n');
+        if let Ok(identity) = crate::client::interface::history::request_identity(&id, &text) {
+            self.log_identified_message(&identity, "user", &text, record.as_bytes());
+        } else {
+            self.log_message("user", &text, record.as_bytes());
+        }
         if self
             .conversation
             .submitting
@@ -285,8 +366,45 @@ impl State {
             self.conversation.submitting = None;
         }
         // Even identical text may be a deliberately typed next request.
-        self.notice = Some("Queued · delivered with the next eligible tool response".into());
+        self.notice = Some(if warnings.is_empty() {
+            "Queued · delivered with the next eligible tool response".into()
+        } else {
+            format!(
+                "Queued · reference notice: {}",
+                panel::safe_text(&warnings.join(" · "))
+            )
+        });
         self.dirty = true;
+    }
+
+    fn chat_recalled(&mut self, id: &str, text: &str) {
+        let Ok(identity) = crate::client::interface::history::request_identity(id, text) else {
+            return;
+        };
+        self.events.recall_message(&identity);
+        if let Some(history) = self.conversation.history.as_mut() {
+            std::sync::Arc::make_mut(history)
+                .messages
+                .retain(|message| message.id != identity);
+            self.conversation.history_width = 0;
+            self.conversation.history_rows.clear();
+        }
+        // The audit transcript keeps the actual queue acceptance and its later
+        // confirmed recall; only the current conversation presentation retracts it.
+        self.log_raw(
+            format!("\n[RECALLED] #{id} · queued request returned to editing\n").as_bytes(),
+        );
+        self.dirty = true;
+    }
+
+    fn chat_retargeted(&mut self, id: &str, source: Option<&str>) {
+        if source.is_some_and(|source| {
+            source != id && self.conversation.editing.as_deref() == Some(source)
+        }) {
+            // Only the exact predecessor may transfer its editing association.
+            // Text, recipient selection, cursor and parked draft remain intact.
+            self.conversation.editing = Some(id.to_owned());
+        }
     }
 
     fn chat_editable(&mut self, id: String, text: String, target: Option<String>) {
@@ -309,6 +427,9 @@ impl State {
             self.conversation.composer.set_text(&text);
         }
         self.conversation.target = target;
+        self.conversation.native_recipient = None;
+        self.conversation.native_account = None;
+        self.chat_recipient_changed(false);
         self.conversation.editing = Some(id);
         self.conversation.content_focus = false;
         self.notice = Some("Editing · this request is held until you press Enter".into());
@@ -326,11 +447,17 @@ impl State {
                 text,
                 cursor,
                 target: context.target,
+                native_recipient: context.native_recipient,
+                native_account: context.native_account,
+                send_group: context.send_group,
             });
             self.conversation.editing = context.editing;
             self.conversation.parked = context.parked;
+            self.chat_restore_reload_input();
             self.conversation.restored = true;
+            self.chat_restore_interrupted_force_send();
         }
+        self.chat_poll_native();
         if self.preview {
             return;
         }
@@ -342,17 +469,31 @@ impl State {
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
-                steering::UiEvent::Accepted { id, text } => {
-                    self.chat_accepted(id, text);
+                steering::UiEvent::Accepted {
+                    id,
+                    text,
+                    reference_warnings,
+                } => {
+                    self.chat_accepted(id, text, reference_warnings);
                 }
-                steering::UiEvent::Editable { id, text } => {
+                steering::UiEvent::Editable { id, text, recalled } => {
+                    if recalled {
+                        self.chat_recalled(&id, &text);
+                    }
                     let data = steering::snapshot();
-                    let target = items(&data, "queue")
-                        .iter()
-                        .find(|item| message_id(item) == id)
+                    let entries = items(&data, "queue");
+                    let record = entries.iter().find(|item| message_id(item) == id);
+                    let target = record
                         .and_then(|record| record.get("target").and_then(Value::as_str))
                         .filter(|target| *target != "next")
                         .map(str::to_owned);
+                    if !recalled {
+                        self.chat_retargeted(
+                            &id,
+                            record
+                                .and_then(|record| record.get("retry_of").and_then(Value::as_str)),
+                        );
+                    }
                     self.chat_editable(id, text, target);
                 }
                 steering::UiEvent::Failed { id, message } => {
@@ -413,6 +554,9 @@ impl State {
                 editing: self.conversation.editing.clone(),
                 target: self.conversation.target.clone(),
                 parked: self.conversation.parked.clone(),
+                native_recipient: self.conversation.native_recipient.clone(),
+                native_account: self.chat_native_account().cloned(),
+                send_group: self.chat_saved_group(),
             });
         }
     }
@@ -443,17 +587,36 @@ impl State {
     }
 
     fn chat_select_target(&mut self) {
+        self.chat_native_refresh();
+        self.conversation.native_picker = false;
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
-        let target = self.conversation.target.as_deref().unwrap_or("next");
-        self.conversation.selected = entries
-            .iter()
-            .position(|entry| field(entry, "agent_id") == target)
-            .unwrap_or(0);
-        self.conversation.selected_agent = entries.get(self.conversation.selected).map(agent_key);
+        if let Some(id) = &self.conversation.native_recipient {
+            let index = entries
+                .iter()
+                .position(|entry| sessions::group_id(entry) == Some(id.as_str()));
+            self.conversation.selected = index.unwrap_or(0);
+            self.conversation.selected_agent = Some(
+                index
+                    .map(|index| agent_key(&entries[index]))
+                    .unwrap_or_else(|| format!("native:{id}")),
+            );
+        } else {
+            let target = self.conversation.target.as_deref().unwrap_or("next");
+            self.conversation.selected = entries
+                .iter()
+                .position(|entry| field(entry, "agent_id") == target)
+                .unwrap_or(0);
+            self.conversation.selected_agent =
+                entries.get(self.conversation.selected).map(agent_key);
+        }
     }
 
     fn chat_command(&mut self, text: &str) -> Result<bool, String> {
+        if let Some(arguments) = groups::arguments(text) {
+            self.chat_group_command(arguments)?;
+            return Ok(true);
+        }
         if let Some(arguments) = user_wait::arguments(text) {
             self.chat_user_wait(arguments)?;
             return Ok(true);
@@ -488,19 +651,28 @@ impl State {
                 self.help = true;
                 self.conversation.content_focus = true;
             }
+            "/message" | "/recipients" => self.chat_native_picker(rest)?,
+            "/sessions" => {
+                if !rest.is_empty() {
+                    return Err("Use /sessions without arguments; i shows the selected IDs".into());
+                }
+                self.chat_group_command("")?;
+            }
             "/paste" => {
                 if !rest.is_empty() {
                     return Err("Use /paste without arguments to read your local clipboard".into());
                 }
                 self.chat_start_input(attachments::Source::Clipboard, true)?;
             }
+            "/paste-retry" => self.chat_retry_paste(rest)?,
             "/attach" => {
                 self.chat_start_input(attachments::source_argument(rest)?, true)?;
             }
             "/select" => {
                 if !rest.is_empty() {
                     return Err(
-                        "Use /select without arguments; F7 or Esc returns to the interface".into(),
+                        "Use /select without arguments; Alt+C, F7 or Esc returns to the interface"
+                            .into(),
                     );
                 }
                 self.set_selection_mode(true);
@@ -542,6 +714,9 @@ impl State {
                 }
                 self.chat_resume();
             }
+            "/archive" | "/archived" | "/unarchive" => {
+                self.chat_archive_command(command, rest)?;
+            }
             "/pi" | "/cc" | "/codex" => {
                 if self.preview {
                     return Err("Preview does not invoke installed harnesses".into());
@@ -556,6 +731,19 @@ impl State {
                     );
                 }
                 self.notice = Some(crate::client::interface::computer::local_command(rest)?);
+            }
+            "/command" => {
+                if rest.split_whitespace().count() > 1 {
+                    return Err("Use /command [JOB_ID] to inspect a complete command".into());
+                }
+                self.chat_change_view(View::Tasks);
+                self.conversation.content_focus = true;
+                if let Err(error) = self.conversation.tasks.refresh(self.preview) {
+                    self.notice = Some(error);
+                }
+                self.conversation
+                    .tasks
+                    .open_command((!rest.is_empty()).then_some(rest));
             }
             "/tasks" => {
                 if rest.is_empty() {
@@ -706,7 +894,9 @@ impl State {
             && !self.selection
             && !self.help
             && self.conversation.view != View::Questions
-            && !self.conversation.content_focus;
+            && !self.conversation.content_focus
+            && self.conversation.native_recipient.is_none()
+            && !self.chat_native_has_mention();
         self.conversation.composer.refresh_completions(enabled);
     }
 
@@ -774,7 +964,7 @@ impl State {
             self.dirty = true;
             return;
         }
-        if user_wait::arguments(&text).is_some() {
+        if self.conversation.native_recipient.is_none() && user_wait::arguments(&text).is_some() {
             if let Err(error) = self.chat_command(&text) {
                 self.notice = Some(error);
             }
@@ -787,6 +977,16 @@ impl State {
             return;
         }
         if self.chat_wait_for_input() {
+            return;
+        }
+        if let Some(body) = listener::body(&text) {
+            if let Err(error) = self.chat_force_send(body) {
+                self.notice = Some(error);
+            }
+            self.dirty = true;
+            return;
+        }
+        if self.chat_native_pick_mention(&text) {
             return;
         }
         self.chat_refresh_completions();
@@ -829,17 +1029,12 @@ impl State {
         if text.trim().is_empty() {
             return;
         }
-        if listener::body(&text).is_some() {
-            if let Err(error) = self.chat_command(&text) {
-                self.notice = Some(error);
-            }
-            // Force-send retains the exact draft until an accepted receipt.
-            return;
-        }
-        if self.conversation.editing.is_none() {
+        if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart")) {
+                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart"))
+                        && !groups::retains_draft(&text)
+                    {
                         self.conversation.composer.take_text();
                     }
                     return;
@@ -850,6 +1045,10 @@ impl State {
                 }
                 Ok(false) => {}
             }
+        }
+        if self.conversation.native_recipient.is_some() {
+            self.chat_native_submit(&text);
+            return;
         }
         if self.preview {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
@@ -903,6 +1102,10 @@ impl State {
             View::Audit => self.audit.open(),
             View::Agents => {
                 if let Some(agent) = self.chat_selected() {
+                    if field(&agent, "kind") == "process" {
+                        self.notice = Some("This process exposes threads but no verified inbox; select an exact thread".into());
+                        return;
+                    }
                     if field(&agent, "kind") == "observed" {
                         if self.audit.open_run(field(&agent, "run_id")) {
                             self.conversation.detail = true;
@@ -915,8 +1118,26 @@ impl State {
                         }
                         return;
                     }
+                    if field(&agent, "kind") == "native" {
+                        self.chat_native_select(&agent);
+                        return;
+                    }
+                    if self.conversation.native_picker {
+                        if let Some(id) = sessions::group_id(&agent) {
+                            self.chat_native_select(&json!({"id":id}));
+                        } else {
+                            self.notice = Some(
+                                "This row has no verified native message address · draft retained"
+                                    .into(),
+                            );
+                        }
+                        return;
+                    }
+                    self.conversation.native_recipient = None;
+                    self.conversation.native_account = None;
                     self.conversation.target = (field(&agent, "agent_id") != "next")
                         .then(|| field(&agent, "agent_id").into());
+                    self.chat_recipient_changed(false);
                     self.chat_change_view(View::Activity);
                     self.notice = Some(format!(
                         "To {} · Enter sends · ← at draft start switches agent",
@@ -1285,12 +1506,15 @@ impl State {
                 self.filter_offset = 0;
             }
             Key::FocusBack => self.conversation.content_focus = !content,
-            Key::Up => self.chat_page(
-                -(isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
-            Key::Down => self.chat_page(
-                (isize::try_from(self.geometry.log_rows).unwrap_or(1).max(1) - 1).max(1),
-            ),
+            Key::Up | Key::Down => {
+                let page = if self.conversation.view == View::History && !self.conversation.detail {
+                    self.conversation.list_count
+                } else {
+                    usize::from(self.geometry.log_rows.saturating_sub(1))
+                };
+                let step = isize::try_from(page.max(1)).unwrap_or(isize::MAX);
+                self.chat_page(if matches!(key, Key::Up) { -step } else { step });
+            }
             Key::HistoryStart if self.conversation.view == View::Tasks => {
                 self.conversation
                     .tasks
@@ -1624,6 +1848,30 @@ impl State {
         }
         if self.conversation.view == View::Agents
             && self.conversation.content_focus
+            && !self.conversation.detail
+        {
+            let handled = match character {
+                ' ' => {
+                    self.chat_group_toggle();
+                    true
+                }
+                'g' | 'G' => {
+                    self.chat_group_compose();
+                    true
+                }
+                'i' | 'I' => {
+                    self.chat_session_info();
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                self.dirty = true;
+                return;
+            }
+        }
+        if self.conversation.view == View::Agents
+            && self.conversation.content_focus
             && matches!(
                 character,
                 '\n' | '\u{1}' | '\u{5}' | '\u{15}' | '\u{b}' | '\u{17}' | '\u{7f}' | '\u{8}'
@@ -1680,6 +1928,9 @@ impl State {
                             .set_text(references::source(field(&message, "text")));
                         self.conversation.editing = None;
                         self.conversation.target = None;
+                        self.conversation.native_recipient = None;
+                        self.conversation.native_account = None;
+                        self.chat_recipient_changed(false);
                         self.conversation.content_focus = false;
                         self.notice = Some(
                             (if self.conversation.parked.is_some() {
@@ -1762,24 +2013,40 @@ impl State {
     }
 
     fn chat_input_stamp(&self) -> Option<InputStamp> {
-        let editor = if self.conversation.view == View::Questions {
-            self.question_editor()?
+        let view = self.conversation.view;
+        if view == View::Questions {
+            Some(self.chat_stamp(
+                self.question_editor()?,
+                Some(view),
+                self.conversation.question_id.clone(),
+            ))
         } else {
-            &self.conversation.composer
-        };
-        Some(InputStamp {
-            view: self.conversation.view,
-            question: if self.conversation.view == View::Questions {
-                self.conversation.question_id.clone()
-            } else {
-                None
-            },
+            Some(self.chat_stamp(&self.conversation.composer, Some(view), None))
+        }
+    }
+
+    fn chat_composer_stamp(&self) -> InputStamp {
+        self.chat_stamp(&self.conversation.composer, None, None)
+    }
+
+    fn chat_stamp(
+        &self,
+        editor: &Composer,
+        view: Option<View>,
+        question: Option<String>,
+    ) -> InputStamp {
+        InputStamp {
+            view,
+            question,
             target: self.conversation.target.clone(),
+            native_recipient: self.conversation.native_recipient.clone(),
+            native_account: self.chat_native_account().cloned(),
+            recipient_revision: self.conversation.recipient_revision,
             editing: self.conversation.editing.clone(),
             text: editor.text().into(),
             cursor: editor.cursor(),
             revision: editor.revision(),
-        })
+        }
     }
 
     /// Start exactly one local input job; successful commands are cleared by chat_submit.
@@ -1802,6 +2069,12 @@ impl State {
         let copying = matches!(&source, attachments::Source::Copy(_));
         let context = matches!(&source, attachments::Source::Context { .. });
         let inserts = !copying && !context;
+        if inserts
+            && self.conversation.paste_recovery.is_some()
+            && !self.conversation.retrying_paste
+        {
+            return Err("A previous paste is retained · use /paste-retry, or /paste-retry discard before importing more input".into());
+        }
         if self.conversation.view == View::Questions && inserts {
             self.question_paste_len()?;
         }
@@ -1863,7 +2136,21 @@ impl State {
         result: Result<attachments::Loaded, String>,
     ) {
         let unchanged = expected.is_some() && self.chat_input_stamp().as_ref() == expected;
+        let retrying = std::mem::take(&mut self.conversation.retrying_paste);
+        if retrying && matches!(&result, Ok(attachments::Loaded::Reference { .. })) {
+            self.conversation.paste_recovery = None;
+        }
         match result {
+            Ok(attachments::Loaded::RetainedText { text, error }) => {
+                if unchanged && let Some(command) = original_command {
+                    self.conversation.composer.set_text(command);
+                }
+                self.conversation.paste_recovery = Some(text);
+                self.notice = Some(format!(
+                    "{error} · {}",
+                    self.chat_paste_recovery_hint().unwrap()
+                ));
+            }
             Ok(attachments::Loaded::Copied) => {
                 self.notice = Some("Latest agent message copied to the system clipboard".into());
             }
@@ -1930,14 +2217,18 @@ impl State {
                 if unchanged && let Some(command) = original_command {
                     self.conversation.composer.set_text(command);
                 }
-                self.notice = Some(format!("Local input failed: {error}"));
+                let recovery = self
+                    .chat_paste_recovery_hint()
+                    .map(|hint| format!(" · {hint}"))
+                    .unwrap_or_default();
+                self.notice = Some(format!("Local input failed: {error}{recovery}"));
             }
         }
         self.dirty = true;
     }
 
     fn chat_paste_text(&mut self, text: &str) -> Result<(), String> {
-        let large = text.len() > 8 * 1024;
+        let large = references::paste::should_store(text);
         let question = self.conversation.view == View::Questions;
         let used = if question {
             self.question_paste_len()?
@@ -1958,7 +2249,20 @@ impl State {
             }
             // File creation/fsync happens on the shared async input job. The
             // completion stamp protects edits, answers and recipient changes.
-            return self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            let result = self.chat_start_input(attachments::Source::Text(text.to_owned()), false);
+            if let Err(error) = result {
+                if self.conversation.input_task.is_none()
+                    && self.conversation.paste_recovery.is_none()
+                {
+                    self.conversation.paste_recovery = Some(text.to_owned());
+                    return Err(format!(
+                        "{error} · {}",
+                        self.chat_paste_recovery_hint().unwrap()
+                    ));
+                }
+                return Err(error);
+            }
+            return Ok(());
         }
         let accepted = if question {
             self.question_paste(text)
@@ -2174,6 +2478,12 @@ impl State {
                 ("↑ / ↓ choose another entry".into(), PanelTone::Muted),
             ];
         };
+        if matches!(field(selected, "session_role"), "process" | "thread") {
+            return self.session_details(selected, data);
+        }
+        if field(selected, "kind") == "native" {
+            return self.chat_native_details(selected);
+        }
         let observed = field(selected, "kind") == "observed";
         let next = field(selected, "agent_id") == "next";
         let mut details = vec![
@@ -2259,7 +2569,7 @@ impl State {
                     PanelTone::Normal,
                 ),
             ]);
-            if id == target {
+            if id == target && self.conversation.native_recipient.is_none() {
                 details.push(("● Current recipient".into(), PanelTone::Accent));
             }
             details.extend([
@@ -2294,128 +2604,7 @@ impl State {
     }
 
     fn chat_agent_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
-        let entries = self.chat_recipients(data);
-        if let Some(selected) = &self.conversation.selected_agent {
-            if let Some(index) = entries
-                .iter()
-                .position(|entry| agent_key(entry) == *selected)
-            {
-                self.conversation.selected = index;
-            } else {
-                self.conversation.selected = 0;
-                self.notice = Some("Selected member or caller left · choose a recipient".into());
-            }
-        }
-        let missing = self
-            .conversation
-            .selected_agent
-            .as_ref()
-            .is_some_and(|key| !entries.iter().any(|entry| agent_key(entry) == *key));
-        let window = self.chat_list_window(entries.len(), height);
-        self.conversation.drawn_agents = entries.iter().map(agent_key).collect();
-        let selected = &entries[self.conversation.selected];
-        if !missing {
-            self.conversation.selected_agent = Some(agent_key(selected));
-        }
-        let width = self.geometry.left;
-        let list_width = self.chat_agent_list_width();
-        let target = self.conversation.target.as_deref().unwrap_or("next");
-        let callers = entries
-            .iter()
-            .filter(|entry| field(entry, "kind") == "observed")
-            .count();
-        let mut rows = vec![self.chat_line(
-            &format!(
-                "  Agents · {} members · {callers} callers",
-                items(data, "agents").len()
-            ),
-            PanelTone::Heading,
-            list_width,
-        )];
-        for index in window {
-            let entry = &entries[index];
-            let observed = field(entry, "kind") == "observed";
-            let marker = if !missing && index == self.conversation.selected {
-                "›"
-            } else {
-                " "
-            };
-            let current = !observed && field(entry, "agent_id") == target;
-            let symbol = if current {
-                "● "
-            } else if observed {
-                "↳ "
-            } else {
-                ""
-            };
-            let title = if observed && !field(entry, "model").is_empty() {
-                format!(
-                    " {marker} {symbol}{} · {}",
-                    field(entry, "name"),
-                    field(entry, "model")
-                )
-            } else {
-                format!(" {marker} {symbol}{}", field(entry, "name"))
-            };
-            let subtitle = if observed {
-                format!("     {} calls · {}", entry["calls"], field(entry, "status"))
-            } else if field(entry, "agent_id") == "next" {
-                "     Next eligible response".into()
-            } else {
-                let duplicate = entries
-                    .iter()
-                    .filter(|other| {
-                        field(other, "kind") != "observed"
-                            && field(other, "name") == field(entry, "name")
-                    })
-                    .count()
-                    > 1;
-                let id = field(entry, "agent_id");
-                let suffix: String = id
-                    .chars()
-                    .rev()
-                    .take(8)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect();
-                let status = field(entry, "status");
-                format!(
-                    "     {}{}",
-                    if status.is_empty() { "Member" } else { status },
-                    if duplicate {
-                        format!(" · …{suffix}")
-                    } else {
-                        String::new()
-                    }
-                )
-            };
-            rows.push(self.chat_line(
-                &title,
-                if !missing && index == self.conversation.selected {
-                    PanelTone::Accent
-                } else {
-                    PanelTone::Normal
-                },
-                list_width,
-            ));
-            rows.push(self.chat_line(&subtitle, PanelTone::Muted, list_width));
-        }
-        if list_width < width {
-            let details = self.chat_agent_details((!missing).then_some(selected), data);
-            rows.resize_with(usize::from(height), || {
-                self.chat_line("", PanelTone::Normal, list_width)
-            });
-            for (index, row) in rows.iter_mut().enumerate() {
-                let (detail, tone) = details
-                    .get(index)
-                    .map(|(text, tone)| (text.as_str(), *tone))
-                    .unwrap_or(("", PanelTone::Normal));
-                row.push_str(&self.tone(PanelTone::Muted, " │ "));
-                row.push_str(&self.chat_line(detail, tone, width - list_width - 3));
-            }
-        }
-        rows
+        self.chat_session_rows(data, height)
     }
 
     fn chat_list_rows(&mut self, data: &Value, height: u16) -> Vec<String> {
@@ -2435,6 +2624,9 @@ impl State {
         let relative = row.checked_sub(body_top(self.geometry.rows) + 1)?;
         if relative >= self.geometry.log_rows.saturating_sub(1) {
             return None;
+        }
+        if self.conversation.view == View::History {
+            return self.chat_history_list_hit(usize::from(relative));
         }
         let index = usize::from(relative / 2);
         (index < self.conversation.list_count).then_some(self.conversation.list_start + index)
@@ -2469,7 +2661,7 @@ impl State {
     /// It is not a separate mode that can drift away from the active editor.
     fn chat_mode_label(&self, width: u16) -> &'static str {
         let (full, compact) = if self.selection {
-            ("Select · F7/Esc back", "Select")
+            ("Select · Alt+C/F7/Esc back", "Select")
         } else if self.help
             || self.conversation.content_focus
             || (self.conversation.view == View::Questions && !self.conversation.detail)
@@ -2570,7 +2762,12 @@ impl State {
         if self.conversation.view == View::Questions && input.is_empty() && !prompt.lines.is_empty()
         {
             prompt.lines[0] =
-                self.chat_input_line("❯ Type an answer · number selects an option", g.left);
+                self.chat_input_line(&format!("❯ {}", self.question_input_hint()), g.left);
+        } else if self.conversation.native_recipient.is_some()
+            && input.is_empty()
+            && !prompt.lines.is_empty()
+        {
+            prompt.lines[0] = self.chat_input_line("❯ Message text · Enter sends", g.left);
         }
         self.conversation.reference_stamp = Some(reference_stamp);
         self.conversation.reference_rows = std::mem::take(&mut prompt.references)
@@ -2593,6 +2790,11 @@ impl State {
                     .unwrap_or_else(|| "offline recipient".into())
             })
             .unwrap_or_else(|| "next caller".into());
+        if self.conversation.send_to_group {
+            label = format!("group for /send · {}", self.conversation.groups.len());
+        } else if let Some(native_label) = self.chat_native_label() {
+            label = native_label;
+        }
         if self.conversation.view == View::Questions {
             label = self
                 .conversation
@@ -2608,8 +2810,13 @@ impl State {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
                 let scroll_hint = self.chat_scroll_hint();
                 let wait_hint = self.chat_user_wait_hint();
-                let priority_hint =
-                    self.notice.is_some() || scroll_hint.is_some() || wait_hint.is_some();
+                let paste_hint = self.chat_paste_recovery_hint();
+                let native_hint = self.chat_native_hint();
+                let priority_hint = self.notice.is_some()
+                    || scroll_hint.is_some()
+                    || wait_hint.is_some()
+                    || paste_hint.is_some()
+                    || native_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else {
@@ -2617,6 +2824,8 @@ impl State {
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
                     if let Some(hint) = wait_hint { return hint; }
+                    if let Some(hint) = paste_hint { return hint; }
+                    if let Some(hint) = native_hint { return hint; }
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
@@ -2632,11 +2841,7 @@ impl State {
                             else { "↑↓ select · Enter resume · Esc back".into() };
                     }
                     if self.conversation.view == View::Questions {
-                        return if self.conversation.detail {
-                            "Enter answer · Shift+↑ next · Esc list · Tab browse".into()
-                        } else {
-                            "↑↓ select · Enter answer · Delete skip · Esc back".into()
-                        };
+                        return self.question_navigation_hint().into();
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
@@ -2645,7 +2850,8 @@ impl State {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
                                 "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
                             } else {
-                                "Esc back · ↑↓ select · Enter message · ←/→ panels".into()
+                                format!("{} selected · Esc back · Space select · g group · i IDs · Enter message",
+                                    self.conversation.groups.selected.len())
                             }
                         };
                     }
@@ -2876,6 +3082,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    mod tool_groups;
     use super::*;
 
     fn preview(rows: u16, cols: u16) -> State {
@@ -2968,12 +3175,40 @@ mod tests {
         assert_eq!(state.conversation.composer.text(), "next draft");
         input(&mut state, b" stays");
         let next = state.chat_saved_draft();
-        state.chat_accepted("held".into(), "amended".into());
+        state.chat_accepted("held".into(), "amended".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), next);
         assert!(state.conversation.submitting.is_none());
         let divider = mode_divider(&mut state);
         assert!(divider.trim_start().starts_with("Edit"));
         assert!(!divider.contains("pending") && !divider.contains("Enter sends"));
+    }
+
+    #[test]
+    fn full_budget_raw_reference_ack_shows_notice_without_rewriting_source_or_new_draft() {
+        let tail = " @missing.txt";
+        let source = format!(
+            "{}{tail}",
+            "x".repeat(crate::wire::MAX_USER_MESSAGE_BYTES - tail.len())
+        );
+        let mut state = preview(32, 120);
+        state.conversation.composer.set_text("newer unsent draft");
+        state.chat_accepted(
+            "full_budget_request".into(),
+            source.clone(),
+            vec!["@missing.txt: file not found".into()],
+        );
+        assert_eq!(state.conversation.composer.text(), "newer unsent draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Queued · reference notice:")
+        );
+        assert!(state.notice.as_deref().unwrap().contains("@missing.txt"));
+        assert_eq!(references::source(&source), source);
+        let rendered = display(&mut state).screen().contents();
+        assert!(rendered.contains("reference notice") || rendered.contains("Reference notice"));
     }
 
     #[test]
@@ -3040,6 +3275,14 @@ mod tests {
                 &json!({"type":"exec.stdout","job_id":id}),
                 format!("[STDOUT] preview {id}\n{output}").as_bytes(),
             );
+            if id == "build" {
+                // A retained diagnostic splits adjacency even while hidden in Chat.
+                state.log_event(
+                    "preview",
+                    &json!({"type":"ssmcp.status"}),
+                    b"separating diagnostic\n",
+                );
+            }
         }
         state.log_event(
             "preview",
@@ -3092,7 +3335,7 @@ mod tests {
             let first = state.events.snapshot();
             assert_eq!(first["scroll"], before["scroll"]);
             assert_eq!(first["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(first["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(first["events"][3]["panel"]["scroll"], 37);
             state.chat_key(Key::Mouse {
                 button: 64,
                 x: 8,
@@ -3102,7 +3345,7 @@ mod tests {
             display(&mut state);
             let both = state.events.snapshot();
             assert_eq!(both["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(both["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(both["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "independent-scroll");
             state.chat_key(Key::Mouse {
                 button: 64,
@@ -3133,7 +3376,7 @@ mod tests {
                 "{expanded}"
             );
             assert_eq!(state.events.snapshot()["events"][1]["panel"]["scroll"], 0);
-            assert_eq!(state.events.snapshot()["events"][2]["panel"]["scroll"], 34);
+            assert_eq!(state.events.snapshot()["events"][3]["panel"]["scroll"], 34);
             save_command_panel_preview(&mut state, "expanded");
             state.chat_key(Key::Down);
             display(&mut state);
@@ -3198,7 +3441,7 @@ mod tests {
             let left = state.events.snapshot();
             assert_eq!(left["scroll"], before["scroll"]);
             assert_eq!(left["events"][1]["panel"]["scroll"], 34);
-            assert_eq!(left["events"][2]["panel"]["scroll"], 37);
+            assert_eq!(left["events"][3]["panel"]["scroll"], 37);
             save_command_panel_preview(&mut state, "scroll-zones-left");
 
             state.chat_key(Key::Mouse {
@@ -3218,12 +3461,35 @@ mod tests {
                 left["events"][1]["panel"]["scroll"]
             );
             assert_eq!(
-                right["events"][2]["panel"]["scroll"],
-                left["events"][2]["panel"]["scroll"]
+                right["events"][3]["panel"]["scroll"],
+                left["events"][3]["panel"]["scroll"]
             );
             assert_eq!(state.conversation.snapshot()["draft"], draft);
             save_command_panel_preview(&mut state, "scroll-zones-page");
         }
+    }
+
+    #[test]
+    fn command_shortcut_is_read_only_and_selects_the_exact_task() {
+        let mut state = preview(32, 120);
+        display(&mut state);
+        state.conversation.composer.set_text("keep draft");
+        let before = state.conversation.snapshot()["draft"].clone();
+        assert!(state.chat_command("/command preview-task-test").unwrap());
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
+        assert_eq!(state.conversation.snapshot()["draft"], before);
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen.contains("complete argv") && screen.contains("cargo"),
+            "{screen}"
+        );
+        assert!(state.chat_command("/command target extra").is_err());
+        assert!(state.actions.is_empty() && state.conversation.submitting.is_none());
     }
 
     #[test]
@@ -3306,7 +3572,19 @@ mod tests {
         state.chat_character('\r');
         assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
         let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("cargo test --lib"), "{screen}");
+        for expected in [
+            "Job: preview-task-test",
+            "Command · complete argv · read only",
+            "argv[0]: \"cargo\"",
+            "argv[1]: \"test\"",
+            "argv[2]: \"--lib\"",
+        ] {
+            assert!(screen.contains(expected), "{screen}");
+        }
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_job"]["command"],
+            json!(["cargo", "test", "--lib"])
+        );
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.tasks.snapshot()["detail"], false);
         assert!(state.conversation.content_focus);
@@ -3702,18 +3980,26 @@ mod tests {
 
     #[test]
     fn narrow_agent_list_keeps_different_models_visible() {
-        let mut state = preview(24, 70);
-        state.audit = Default::default();
-        for model in ["Model A", "Model B"] {
-            state.audit.ingest(&json!({
-                "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
-                "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
-            }));
+        for columns in [48, 70] {
+            let mut state = preview(24, columns);
+            state.audit = Default::default();
+            for model in ["Model A", "Model B"] {
+                state.audit.ingest(&json!({
+                    "type":"ssmcp.code_mode", "run_id":model, "phase":"started",
+                    "controller":{"name":"ChatGPT","model":model,"source":"caller-reported"}
+                }));
+            }
+            state.chat_agents();
+            let screen = display(&mut state).screen().contents();
+            assert!(
+                screen.contains("ChatGPT · Model A"),
+                "{columns} columns:\n{screen}"
+            );
+            assert!(
+                screen.contains("ChatGPT · Model B"),
+                "{columns} columns:\n{screen}"
+            );
         }
-        state.chat_agents();
-        let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("ChatGPT · Model A"));
-        assert!(screen.contains("ChatGPT · Model B"));
     }
 
     #[test]
@@ -3805,7 +4091,7 @@ mod tests {
                 assert_eq!(shot.screen().size(), (nonzero(rows), nonzero(cols)));
                 if rows >= 10 && cols >= 80 {
                     let visible = shot.screen().contents();
-                    assert!(visible.contains("Agents"));
+                    assert!(visible.contains("Sessions"));
                     assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }
@@ -4024,6 +4310,7 @@ mod tests {
             text: "界x\\".into(),
             cursor: "界".len(),
             target: None,
+            ..Default::default()
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界x\\");
@@ -4032,6 +4319,7 @@ mod tests {
             text: "界\\tail".into(),
             cursor: "界\\".len(),
             target: None,
+            ..Default::default()
         });
         input(&mut state, b"\r");
         assert_eq!(state.conversation.composer.text(), "界\ntail");
@@ -4115,6 +4403,7 @@ mod tests {
             text: "继续review".into(),
             cursor: "继续re".len(),
             target: Some("example-reviewer".into()),
+            ..Default::default()
         };
         state.chat_restore_draft(original.clone());
         state.conversation.view = View::Queue;
@@ -4206,7 +4495,11 @@ mod tests {
                 state.conversation.composer.set_text("下一条 draft");
                 state.conversation.composer.left();
                 let draft = state.chat_saved_draft();
-                state.chat_accepted("follow-request".into(), "newly sent request".into());
+                state.chat_accepted(
+                    "follow-request".into(),
+                    "newly sent request".into(),
+                    Vec::new(),
+                );
                 display(&mut state);
                 assert_eq!(state.events.snapshot()["rows_below"], 0);
                 state.log_message("assistant", &"New assistant reply 中文 ".repeat(30), b"");
@@ -4247,7 +4540,7 @@ mod tests {
             state.conversation.composer.set_text("保留 this draft");
             state.conversation.composer.left();
             let draft = state.chat_saved_draft();
-            state.chat_accepted("follow-request".into(), "send then read".into());
+            state.chat_accepted("follow-request".into(), "send then read".into(), Vec::new());
             state.log_message("assistant", &"A later reply 中文 ".repeat(40), b"");
             state.log_event(
                 "fixture",
@@ -4287,7 +4580,7 @@ mod tests {
             assert!(state.conversation.composer.is_empty());
             input(&mut state, next.as_bytes());
             assert_eq!(state.conversation.composer.text(), next);
-            state.chat_accepted("request_one".into(), "first".into());
+            state.chat_accepted("request_one".into(), "first".into(), Vec::new());
             assert_eq!(
                 state.conversation.composer.text(),
                 next,
@@ -4304,6 +4597,7 @@ mod tests {
             text: "原稿 A".into(),
             cursor: "原".len(),
             target: Some("example-reviewer".into()),
+            ..Default::default()
         };
         state.conversation.parked = Some(parked.clone());
         state.conversation.editing = Some("request_b".into());
@@ -4314,7 +4608,7 @@ mod tests {
         assert!(state.conversation.parked.is_none());
         input(&mut state, b"next");
         let following = state.chat_saved_draft();
-        state.chat_accepted("request_b".into(), "edited B".into());
+        state.chat_accepted("request_b".into(), "edited B".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), following);
     }
 
@@ -4594,6 +4888,7 @@ mod tests {
             text: "parked request".into(),
             cursor: 6,
             target: None,
+            ..Default::default()
         });
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.composer.text(), "/re");
@@ -4707,6 +5002,82 @@ mod tests {
     }
 
     #[test]
+    fn alt_c_selects_text_without_changing_draft_or_queue() {
+        let mut state = preview(24, 100);
+        state.conversation.composer.set_text("draft remains 界");
+        let before = state.conversation.snapshot()["draft"].clone();
+        let queue = state.chat_data()["queue"].clone();
+        input(&mut state, b"\x1bc");
+        assert!(state.selection);
+        assert!(!state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.notice.as_deref(), Some(COPY_HINT));
+        input(&mut state, b"\x1bc");
+        assert!(!state.selection);
+        assert!(state.frame(Instant::now()).mouse_capture);
+        assert_eq!(state.conversation.snapshot()["draft"], before);
+        assert_eq!(state.chat_data()["queue"], queue);
+        assert!(state.conversation.input_task.is_none());
+    }
+
+    #[test]
+    fn alt_c_protocol_variants_survive_split_input_and_preserve_both_focus_modes() {
+        let sequences: &[&[u8]] = &[
+            b"\x1bc",
+            b"\x1bC",
+            b"\x1b[99;3u",
+            b"\x1b[67;3u",
+            b"\x1b[99;4u",
+            b"\x1b[67;4u",
+            b"\x1b[27;3;99~",
+            b"\x1b[27;3;67~",
+            b"\x1b[27;4;99~",
+            b"\x1b[27;4;67~",
+        ];
+        for sequence in sequences {
+            for split in 1..sequence.len() {
+                for content in [false, true] {
+                    let mut state = preview(24, 100);
+                    state.conversation.content_focus = content;
+                    state.conversation.composer.set_text("retained 界");
+                    state.conversation.composer.left();
+                    let draft = state.conversation.snapshot()["draft"].clone();
+                    let queue = state.chat_data()["queue"].clone();
+                    input(&mut state, &sequence[..split]);
+                    assert!(
+                        !state.selection,
+                        "partial key must wait: {sequence:?}/{split}"
+                    );
+                    input(&mut state, &sequence[split..]);
+                    assert!(state.selection, "{sequence:?}/{split}");
+                    assert!(!state.frame(Instant::now()).mouse_capture);
+                    input(&mut state, sequence);
+                    assert!(!state.selection);
+                    assert_eq!(state.conversation.content_focus, content);
+                    assert_eq!(state.conversation.snapshot()["draft"], draft);
+                    assert_eq!(state.chat_data()["queue"], queue);
+                    assert!(state.conversation.input_task.is_none());
+                    assert!(state.actions.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alt_c_bytes_inside_bracketed_paste_do_not_toggle_text_selection() {
+        for sequence in [b"\x1bc".as_slice(), b"\x1b[99;3u", b"\x1b[27;3;99~"] {
+            let mut state = preview(24, 100);
+            let queue = state.chat_data()["queue"].clone();
+            input(&mut state, b"\x1b[200~paste-marker ");
+            input(&mut state, sequence);
+            input(&mut state, b"\x1b[201~");
+            assert!(!state.selection);
+            assert!(state.conversation.composer.text().contains("paste-marker"));
+            assert_eq!(state.chat_data()["queue"], queue);
+            assert!(state.conversation.input_task.is_none());
+        }
+    }
+
+    #[test]
     fn copy_mode_command_uses_terminal_selection_without_clipboard_side_effects() {
         let mut state = preview(24, 100);
         let queue = state.chat_data()["queue"].clone();
@@ -4739,6 +5110,7 @@ mod tests {
             text: "previous draft".into(),
             cursor: 4,
             target: Some("example-reviewer".into()),
+            ..Default::default()
         };
         state.conversation.parked = Some(parked.clone());
         let queue = state.chat_data()["queue"].clone();
@@ -4812,6 +5184,119 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .starts_with("Answer cleared")
+        );
+    }
+
+    #[test]
+    fn confirmed_recall_retracts_only_its_card_and_edited_resubmission_is_single() {
+        for columns in [48, 120] {
+            let mut state = preview(32, columns);
+            state.events.clear();
+            state.chat_accepted("delivered_request".into(), "SAME_BODY".into(), Vec::new());
+            state.chat_accepted("pending_request".into(), "SAME_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            state.chat_recall_started("pending_request".into());
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                2,
+                "an unconfirmed takeback must keep its queued card"
+            );
+            state.chat_recalled("pending_request", "SAME_BODY");
+            state.chat_editable("pending_request".into(), "SAME_BODY".into(), None);
+            assert_eq!(state.events.snapshot()["retained_events"], 1);
+            assert_eq!(state.conversation.composer.text(), "SAME_BODY");
+            assert_eq!(state.conversation.composer.cursor(), "SAME_BODY".len());
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(
+                screen.matches("SAME_BODY").count(),
+                2,
+                "only the other message and the editable draft remain: {screen}"
+            );
+            input(&mut state, b"\x03");
+            state.chat_escape();
+            assert!(state.conversation.composer.is_empty());
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("pending_request")
+            );
+            assert_eq!(
+                state.events.snapshot()["retained_events"],
+                1,
+                "clearing or leaving the editor cannot restore the withdrawn card"
+            );
+            state.conversation.composer.set_text("EDITED_BODY");
+            state.chat_enqueued("pending_request".into(), "EDITED_BODY".into());
+            state.chat_accepted("pending_request".into(), "EDITED_BODY".into(), Vec::new());
+            assert_eq!(state.events.snapshot()["retained_events"], 2);
+            let screen = display(&mut state).screen().contents();
+            assert_eq!(screen.matches("SAME_BODY").count(), 1, "{screen}");
+            assert_eq!(screen.matches("EDITED_BODY").count(), 1, "{screen}");
+            assert!(
+                state.logs.screen().contents().contains("[RECALLED]"),
+                "the original audit transcript records the later recall"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_room_retarget_transfers_only_its_source_edit_and_keeps_unknown_history() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted("original_unknown".into(), "SHARED_BODY".into(), Vec::new());
+        state.conversation.editing = Some("original_unknown".into());
+        state.conversation.composer.set_text("AMENDED_DRAFT 界");
+        input(&mut state, b"\x1b[D");
+        let text = state.conversation.composer.text().to_owned();
+        let cursor = state.conversation.composer.cursor();
+        state.conversation.parked = Some(steering::SavedDraft {
+            text: "PARKED_DRAFT".into(),
+            cursor: 3,
+            target: Some("example-reviewer".into()),
+            ..Default::default()
+        });
+        let parked = state.conversation.parked.clone();
+        state.chat_retargeted("wrong_retry", Some("unrelated_source"));
+        assert_eq!(
+            state.conversation.editing.as_deref(),
+            Some("original_unknown")
+        );
+        state.chat_retargeted("new_attempt", Some("original_unknown"));
+        state.chat_editable("new_attempt".into(), "SHARED_BODY".into(), None);
+        assert_eq!(state.conversation.editing.as_deref(), Some("new_attempt"));
+        assert_eq!(state.conversation.composer.text(), text);
+        assert_eq!(state.conversation.composer.cursor(), cursor);
+        assert_eq!(state.conversation.parked, parked);
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        state.chat_enqueued("new_attempt".into(), "SHARED_BODY".into());
+        state.chat_accepted("new_attempt".into(), "SHARED_BODY".into(), Vec::new());
+        assert_eq!(state.events.snapshot()["retained_events"], 2);
+        state.chat_recalled("new_attempt", "SHARED_BODY");
+        assert_eq!(state.events.snapshot()["retained_events"], 1);
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen.contains("SHARED_BODY"),
+            "the original unknown attempt remains: {screen}"
+        );
+    }
+
+    #[test]
+    fn editable_without_confirmed_recall_keeps_existing_conversation() {
+        let mut state = preview(32, 120);
+        state.events.clear();
+        state.chat_accepted(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            Vec::new(),
+        );
+        state.chat_editable(
+            "uncertain_request".into(),
+            "POSSIBLY_DELIVERED".into(),
+            None,
+        );
+        assert_eq!(
+            state.events.snapshot()["retained_events"],
+            1,
+            "retarget or preparation recovery is not a confirmed recall"
         );
     }
 
@@ -5008,6 +5493,41 @@ mod tests {
         }
     }
 
+    fn reveal_tool_group_text(state: &mut State, needle: &str) -> String {
+        state.chat_key(Key::HistoryStart);
+        let screen = display(state).screen().contents();
+        let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+            return screen;
+        };
+        state.chat_key(Key::Mouse {
+            button: 0,
+            x: 8,
+            y: y as u16,
+            release: false,
+        });
+        for _ in 0..512 {
+            let screen = display(state).screen().contents();
+            if screen.contains(needle) {
+                return screen;
+            }
+            let before = state.events.snapshot()["tool_groups"].clone();
+            let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+                return screen;
+            };
+            state.chat_key(Key::Mouse {
+                button: 65,
+                x: 8,
+                y: y as u16,
+                release: false,
+            });
+            display(state);
+            if state.events.snapshot()["tool_groups"] == before {
+                return screen;
+            }
+        }
+        display(state).screen().contents()
+    }
+
     #[test]
     fn sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results() {
         let mut state = super::super::preview_state(
@@ -5050,7 +5570,7 @@ mod tests {
         state.chat_key(Key::Escape);
         assert!(!state.conversation.logs_open);
         assert_eq!(state.conversation.view, View::Activity);
-        let screen = display(&mut state).screen().contents();
+        let screen = reveal_tool_group_text(&mut state, "cargo test --lib");
         assert!(screen.contains("Improve the client experience"));
         assert!(screen.contains("cargo test --lib"));
         assert!(!screen.contains("A quieter workspace"));
@@ -5373,7 +5893,7 @@ mod tests {
             );
             state.chat_key(Key::Escape);
             assert!(!state.conversation.logs_open);
-            let conversation = display(&mut state).screen().contents();
+            let conversation = reveal_tool_group_text(&mut state, "cargo test --lib");
             assert!(
                 conversation
                     .lines()

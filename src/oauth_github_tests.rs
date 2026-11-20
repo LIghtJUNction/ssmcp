@@ -247,6 +247,8 @@ impl Fixture {
                 account: None,
                 session_access: true,
                 control_attribution: true,
+                native_messages: false,
+                version_notice: false,
             },
             crate::user_policy::TrafficFailureState::default(),
         ));

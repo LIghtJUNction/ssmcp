@@ -137,6 +137,7 @@ async fn connect(
                 login_expires_in: 0,
                 client_id: "fixture-client".into(),
                 capabilities: Vec::new(),
+                version_notice: None,
             }
         } else {
             Frame::Reject {

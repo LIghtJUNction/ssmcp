@@ -7,6 +7,7 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 mod management;
+mod messaging;
 mod traffic;
 use crate::{
     identity::{GitHubConfig, Identity, IdentityProviders},
@@ -547,6 +548,7 @@ impl Session {
 pub struct Broker {
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
+    native_messages: crate::messaging::Hub,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
     pub portal: crate::portal::Portal,
@@ -609,6 +611,7 @@ impl Broker {
             identities,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
+            native_messages: crate::messaging::Hub::default(),
             portal: crate::portal::Portal::default(),
             client_downloads: None,
             code_mode_runner: None,
@@ -851,6 +854,7 @@ impl Broker {
             .collect();
         for session in &active {
             session.alive.store(false, Ordering::Release);
+            self.native_messages.close_connection(session);
             session.collaboration.close();
             session.steering.close();
             session.disconnect.notify_one();
@@ -1086,12 +1090,21 @@ impl Broker {
         let access_supported =
             !legacy_account_self && peer.as_ref().is_some_and(|peer| peer.session_access);
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
+        let native_messages =
+            registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
+        let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
         let mut capabilities = Vec::new();
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
         }
         if control_attribution {
             capabilities.push(wire::CONTROL_ATTRIBUTION_CAPABILITY.into());
+        }
+        if native_messages {
+            capabilities.push(wire::messages::CAPABILITY.into());
+        }
+        if version_notice_supported {
+            capabilities.push(wire::versions::CAPABILITY.into());
         }
         let login_code = if restricted {
             String::new()
@@ -1206,7 +1219,18 @@ impl Broker {
             } => Ok(()),
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities }).await?;
+            let version_notice = if version_notice_supported {
+                let published_client = match &self.client_downloads {
+                    Some(publisher) => tokio::time::timeout(Duration::from_secs(2), publisher.version_notice())
+                        .await.ok().flatten(),
+                    None => None,
+                };
+                Some(wire::versions::Notice {
+                    server_version: env!("CARGO_PKG_VERSION").into(),
+                    published_client,
+                })
+            } else { None };
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities, version_notice }).await?;
             let mut next_id = 0u64;
             let mut delivered_runs = std::collections::VecDeque::<(String, Option<Authorization>)>::new();
             let mut dispatches: BillingQueue<DispatchReady> = FuturesUnordered::new();
@@ -1327,6 +1351,9 @@ impl Broker {
                             }
                         }
                         _ = expiry.tick() => {
+                            // Reuse this bounded connection heartbeat; no task,
+                            // remote lookup, or mailbox polling is required.
+                            self.refresh_native_connection(&session);
                             let expired: Vec<_> = pending.iter().filter(|(_, call)| Instant::now() >= call.deadline).map(|(id, _)| *id).collect();
                             for id in expired {
                                 if let Some(call) = pending.remove(&id) {
@@ -1347,7 +1374,16 @@ impl Broker {
                         } else {
                             Err("session access controls were not negotiated on this controlled connection".into())
                         };
+                        if result.is_ok() { self.refresh_native_connection(&session); }
                         timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::AccessReply { id, result })).await??;
+                    }
+                    Some(Frame::Messages { id, command }) => {
+                        let result = if native_messages {
+                            self.local_message_command(&session, registration, command).await
+                        } else {
+                            Err("native messaging was not negotiated on this authenticated connection".into())
+                        };
+                        timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &Frame::MessagesReply { id, result })).await??;
                     }
                     Some(Frame::Steering { id, command }) => {
                         let result = session.steering_command(command);
@@ -1429,6 +1465,7 @@ impl Broker {
         drop(reader);
         drop(writer);
         session.alive.store(false, Ordering::Release);
+        self.native_messages.close_connection(&session);
         session.collaboration.close();
         session.steering.close();
         let mut sessions = self.sessions.write().await;

@@ -1,11 +1,41 @@
 //! Local draft editing and rendering; submission and queue ownership live outside this module.
 use super::{completion, ui::Ui};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) const MAX_DRAFT_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_ENTRIES: usize = 64;
 const MAX_HISTORY_BYTES: usize = 256 * 1024;
+
+/// Local input navigation only; accepted requests are never resubmitted from this state.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct InputHistory {
+    entries: VecDeque<String>,
+    index: Option<usize>,
+    saved_draft: Option<(String, usize)>,
+}
+
+impl InputHistory {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.entries.len() > MAX_HISTORY_ENTRIES
+            || self
+                .entries
+                .iter()
+                .any(|text| text.trim().is_empty() || text.len() > MAX_DRAFT_BYTES)
+            || self.entries.iter().map(String::len).sum::<usize>() > MAX_HISTORY_BYTES
+            || self.index.is_some_and(|index| index >= self.entries.len())
+            || self.index.is_some() != self.saved_draft.is_some()
+            || self.saved_draft.as_ref().is_some_and(|(text, cursor)| {
+                text.len() > MAX_DRAFT_BYTES || !text.is_char_boundary(*cursor)
+            })
+        {
+            return Err("invalid reload input history".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Suggestion<'a> {
@@ -46,6 +76,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Local host-input handoff: status, host [1..60 seconds], stop",
     },
     SlashCommand {
+        name: "/command",
+        description: "View complete command and script: /command [JOB_ID]",
+    },
+    SlashCommand {
         name: "/tasks",
         description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },
@@ -55,7 +89,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/send",
-        description: "强制发送给当前监听程序：/send <正文>；无监听者时保留草稿",
+        description: "发送给当前选定的监听程序、原生收件人或群组：/send <正文>",
     },
     SlashCommand {
         name: "/wait",
@@ -118,8 +152,24 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Clear visible logs",
     },
     SlashCommand {
+        name: "/sessions",
+        description: "Browse session processes and threads, full IDs and group selection",
+    },
+    SlashCommand {
+        name: "/group",
+        description: "Select any exact recipients; send, save, inspect or retry a group",
+    },
+    SlashCommand {
+        name: "/message",
+        description: "Choose a verified agent or account inbox for a native text message",
+    },
+    SlashCommand {
         name: "/paste",
         description: "Import clipboard text, image or desktop file selection",
+    },
+    SlashCommand {
+        name: "/paste-retry",
+        description: "Retry the retained paste; /paste-retry discard explicitly clears it",
     },
     SlashCommand {
         name: "/attach",
@@ -160,6 +210,18 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/resume",
         description: "Resume saved local conversation history",
+    },
+    SlashCommand {
+        name: "/archive",
+        description: "Archive the current or named conversation without deleting messages",
+    },
+    SlashCommand {
+        name: "/archived",
+        description: "Browse archived conversations; Enter restores and resumes",
+    },
+    SlashCommand {
+        name: "/unarchive",
+        description: "Restore a named archived conversation without replaying it",
     },
     SlashCommand {
         name: "/pi",
@@ -420,6 +482,27 @@ impl Composer {
                 self.history_bytes -= removed.len();
             }
         }
+    }
+
+    pub(super) fn reload_history(&self) -> InputHistory {
+        InputHistory {
+            entries: self.history.clone(),
+            index: self.history_index,
+            saved_draft: self.saved_draft.clone(),
+        }
+    }
+
+    pub(super) fn restore_reload_history(&mut self, history: InputHistory) -> Result<(), String> {
+        history.validate()?;
+        self.history_bytes = history.entries.iter().map(String::len).sum();
+        self.history = history.entries;
+        // The outbox owns the current draft. Resume browsing only when that draft
+        // still matches the saved entry; a newer draft must win.
+        self.history_index = history
+            .index
+            .filter(|index| self.history[*index] == self.text);
+        self.saved_draft = self.history_index.and(history.saved_draft);
+        Ok(())
     }
 
     pub(super) fn history_previous(&mut self) -> bool {
@@ -1030,6 +1113,31 @@ mod tests {
         );
         draft.insert("a");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
+    }
+
+    #[test]
+    fn reload_history_validates_utf8_and_keeps_a_newer_outbox_draft() {
+        let mut composer = Composer::default();
+        composer.remember("accepted");
+        composer.set_text("草稿");
+        composer.history_previous();
+        let saved = composer.reload_history();
+        let mut restored = Composer::default();
+        restored.set_text("newer unsent draft");
+        restored.restore_reload_history(saved.clone()).unwrap();
+        assert_eq!(restored.text(), "newer unsent draft");
+        assert!(!restored.history_next());
+        assert!(restored.history_previous());
+        assert_eq!(restored.text(), "accepted");
+        assert!(restored.history_next());
+        assert_eq!(restored.text(), "newer unsent draft");
+
+        let mut invalid = saved;
+        invalid.saved_draft = Some(("界".into(), 1));
+        assert!(
+            invalid.validate().is_err(),
+            "a UTF-8 cursor cannot split a code point"
+        );
     }
 
     #[test]

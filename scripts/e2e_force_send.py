@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check explicit listener receipts through a private account router and real PTY.
+"""Check explicit listener and native inbox receipts through a private router and real PTY.
 
 Consumes already-built client/library-fixture/VT-decoder binaries. This script
 never invokes Cargo, an installed model, or the user's active connection.
@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 from pathlib import Path
 import subprocess
@@ -16,7 +17,7 @@ import tempfile
 import time
 
 from e2e_input_history import (
-    InputHistory, ENTER, HOME, DOWN, PASTE_START, PASTE_END,
+    InputHistory, ENTER, PASTE_START, PASTE_END,
     REFERENCE_BEGIN, REFERENCE_END, text,
 )
 
@@ -135,11 +136,17 @@ class ForceSend(InputHistory):
         front = self.start_front("force-send")
         front.resize(28, 120)
         front.until(lambda shot: shot["size"] == [28, 120], "the wide force-send fixture")
-        member = self.public_call("collab", {
-            "action": "join", "client_id": self.client_id,
-            "name": "Exact fixture recipient", "role": "routing guard only",
+        roster = self.public_call("messages", {
+            "action": "list", "client_id": self.client_id,
         })
-        self.sensitive.append(member["token"])
+        inboxes = [entry for entry in roster["recipients"]
+                   if entry["client_id"] == self.client_id
+                   and entry["kind"] == "account_inbox" and entry["agent_id"] is None]
+        self.check(len(inboxes) == 1 and inboxes[0]["online"] and inboxes[0]["sendable"],
+                   "the server lists one exact available account inbox for this owned client")
+        native_recipient = inboxes[0]["id"]
+        self.check(native_recipient == "client:" + self.client_id,
+                   "the native inbox has an authoritative stable recipient ID")
         ordinary = self.submit_source(front, "Ordinary request stays in its own queue")
 
         original = '  /send @"' + path + '"\n    code\n'
@@ -167,15 +174,44 @@ class ForceSend(InputHistory):
         self.check(lease["token"] not in json.dumps(snapshot),
                    "listener status contains no lease credential")
 
-        self.draft(front, "/send @missing.txt\n")
-        front.send(ENTER)
-        front.until(lambda shot: "发送失败" in text(shot) and "missing.txt:" in text(shot),
-                    "a real missing-reference validation failure")
-        self.wait_state(front, lambda state: not state["force_pending"],
-                        "the failed reference task did not finish")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == "/send @missing.txt\n"
-                   and self.listener("status")["pending"] is None,
-                   "reference validation failure preserves its draft without offering a delivery")
+        missing_body = "@missing.txt\n"
+        missing_original = "/send " + missing_body
+        delivery_id = self.force(front, missing_original)
+        offered = self.listener("read", **lease, wait_ms=0)["delivery"]
+        repeated = self.listener("read", **lease, wait_ms=0)["delivery"]
+        self.check(offered == repeated and offered["delivery_id"] == delivery_id
+                   and offered["connection_id"] == self.client_id
+                   and offered["listener_id"] == lease["listener_id"]
+                   and offered["source_text"] == missing_body and offered["source"] == "client_user",
+                   "missing-reference delivery retains its exact listener, identity and original body")
+        raw, separator, encoded = offered["text"].partition(REFERENCE_BEGIN)
+        self.check(raw == missing_body and bool(separator) and encoded.endswith(REFERENCE_END),
+                   "missing-reference force-send reaches the receiver with an explicit reference payload")
+        reference = json.loads(encoded[:-len(REFERENCE_END)])
+        entries = reference["references"]
+        self.check(reference["schema_version"] == 1
+                   and reference["source_sha256"] == hashlib.sha256(missing_body.encode()).hexdigest()
+                   and len(entries) == 1 and entries[0]["kind"] == "file"
+                   and entries[0]["path"] == "missing.txt" and entries[0]["status"] == "unavailable"
+                   and bool(entries[0].get("warning"))
+                   and "read" not in entries[0] and "preview" not in entries[0],
+                   "the receiver gets an unavailable-file warning without fabricated contents")
+        pending = front.until(lambda shot: "等待接收确认" in text(shot),
+                              "the missing reference still waiting for the real listener ACK")
+        self.check("引用提示：" not in text(pending)
+                   and self.ui("/display/conversation")["draft"]["text"] == missing_original,
+                   "a missing-reference notice and draft clearing wait for an accepted ACK")
+        self.listener("ack", **lease, delivery_id=delivery_id, status="accepted")
+        self.receipt(front, delivery_id, "accepted")
+        self.wait_state(front, lambda state: not state["draft"]["text"],
+                        "the accepted missing-reference draft did not clear")
+        front.until(lambda shot: "监听程序已接收" in text(shot)
+                    and any("引用提示：" in row and "@missing.txt" in row for row in shot["rows"]),
+                    "the missing-reference notice rendered only after the accepted receipt")
+        self.check(not (self.workspace / "missing.txt").exists(),
+                   "accepting an unavailable reference does not create a file")
+        self.ordinary_unchanged(ordinary)
+        self.save_shot("force-missing-accepted-120", front, cells=True)
 
         body = '@"' + path + '"\n    code\n'
         original = "/send\n" + body
@@ -244,26 +280,90 @@ class ForceSend(InputHistory):
         front.until(lambda shot: shot["size"] == [24, 48], "the narrow force-send fixture")
         self.save_shot("force-unknown-48", front, cells=True)
 
-        self.draft(front, "")
-        self.agents(front)
-        roster = self.queue()["agents"]
-        selected = 1 + next(index for index, entry in enumerate(roster)
-                            if entry["agent_id"] == member["agent_id"])
-        front.send(HOME + DOWN * selected + ENTER)
-        self.wait_state(front, lambda state: state["target"] == member["agent_id"],
-                        "the fixture did not select its exact recipient")
-        original = "/send Do not change this recipient"
-        self.draft(front, original)
+        # The local inbox is merged into the Next caller row. /message changes
+        # how Enter selects that row, while its canvas key stays member:next.
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120], "the native recipient viewport")
+        self.draft(front, "/message " + native_recipient)
         front.send(ENTER)
-        front.until(lambda shot: "指定 agent" in text(shot), "the exact-recipient force-send guard")
-        state = self.ui("/display/conversation")
-        self.check(state["target"] == member["agent_id"] and state["draft"]["text"] == original
-                   and self.listener("status")["pending"] is None,
-                   "force-send does not silently reroute an exact-agent draft")
-        self.draft(front, "")
-        self.agents(front)
-        front.send(HOME + ENTER)
-        self.wait_state(front, lambda state: state["target"] is None,
+        self.wait_state(front, lambda state: state["view"] == "agents"
+                        and state["focus"] == "content" and state["process_id"] == self.client_id
+                        and state["selected_agent"] == "member:next",
+                        "the real picker did not highlight the merged local process inbox row")
+        front.send(ENTER)
+        selected = self.wait_state(
+            front, lambda state: state["native_recipient"] == native_recipient
+            and state["focus"] == "input",
+            "the real picker did not retain the chosen native recipient",
+        )
+        inbox_before = self.public_call("messages", {
+            "action": "inbox", "client_id": self.client_id,
+        })
+        self.check(inbox_before["messages"] == [] and not inbox_before.get("user_messages"),
+                   "the owned native inbox starts empty without consuming the ordinary queue")
+        listener_before = self.listener("status")
+        body = f'@{native_recipient}  中文原文\n    @"{path}" $missing-skill  \n'
+        self.draft(front, "/send " + body)
+        front.send(ENTER)
+        front.until(lambda shot: "Queued by service" in shot["rows"][-1],
+                    "the native service's queued receipt reaches the sender")
+        state = self.wait_state(front, lambda state: not state["draft"]["text"]
+                                and not state["native_pending"],
+                                "the native service receipt clears the accepted draft")
+        self.check(state["native_recipient"] == native_recipient
+                   and state["target"] == selected["target"]
+                   and not state["force_pending"],
+                   "native /send keeps its exact selection and starts no listener task")
+
+        # The public inbox includes native messages without making an ordinary
+        # client tool call, which could take the fixture's steering request.
+        inbox_after = self.public_call("messages", {
+            "action": "inbox", "client_id": self.client_id,
+        })
+        self.check(len(inbox_after["messages"]) == 1 and not inbox_after.get("user_messages"),
+                   "the exact inbox receives one native message and no steering request")
+        native = inbox_after["messages"][0]
+        self.check(native["text"] == body
+                   and native["recipient"]["id"] == native_recipient
+                   and native["recipient"]["client_id"] == self.client_id
+                   and native["recipient"]["kind"] == "account_inbox"
+                   and native["recipient"]["agent_id"] is None
+                   and native["recipient"]["account"] == inboxes[0]["account"]
+                   and native["sender"]["kind"] == "local_user"
+                   and native["sender"]["client_id"] == self.client_id,
+                   "the inbox receives the literal mention, Unicode, reference and whitespace")
+        receipt = native["receipt"]
+        self.check(receipt["recipient_id"] == native_recipient
+                   and re.fullmatch(r"ui-[0-9a-f]{32}", receipt["request_id"])
+                   and re.fullmatch(r"native_[0-9a-f]{32}", receipt["message_id"])
+                   and receipt["status"] == "included" and receipt["included_at_ms"] is not None,
+                   "inbox inclusion returns the exact native UI request and recipient receipt")
+        acknowledged = self.public_call("messages", {
+            "action": "ack", "client_id": self.client_id, "message_id": receipt["message_id"],
+        })["receipts"]
+        self.check(len(acknowledged) == 1 and acknowledged[0]["status"] == "acknowledged"
+                   and acknowledged[0]["acknowledged_at_ms"] is not None
+                   and all(acknowledged[0][key] == receipt[key]
+                           for key in ("request_id", "message_id", "recipient_id", "created_at_ms")),
+                   "the inbox acknowledges the same native message and request")
+        front.until(lambda shot: "Acknowledged by recipient" in shot["rows"][-1],
+                    "the same native receipt refreshes the sender")
+        self.check(self.listener("read", **lease, wait_ms=0)["delivery"] is None,
+                   "the live local listener receives no native /send delivery")
+        listener_after = self.listener("status")
+        self.check(listener_before["pending"] is None and listener_after["pending"] is None
+                   and listener_after["receipts"] == listener_before["receipts"],
+                   "the live local listener records no receipt for native /send")
+        self.ordinary_unchanged(ordinary)
+        self.save_resized_shots("force-native-recipient-accepted", front, "Acknowledged by recipient")
+        self.draft(front, "/sessions")
+        front.send(ENTER)
+        self.wait_state(front, lambda state: state["view"] == "agents"
+                        and state["focus"] == "content" and state["selected_agent"] == "member:next",
+                        "the Sessions picker did not highlight the local Next caller")
+        front.send(ENTER)
+        self.wait_state(front, lambda state: state["view"] == "activity"
+                        and state["target"] is None and state["native_recipient"] is None,
                         "the fixture did not explicitly restore Next caller")
         self.listener("read", **lease, wait_ms=0)
 
@@ -278,10 +378,33 @@ class ForceSend(InputHistory):
         front.credentials = credentials
         self.check(self.client_id != previous_id,
                    "the owned WSS disconnect creates a new connection identity")
-        self.receipt(front, delivery_id, "unknown")
+        front.until(lambda shot: "上次连接：发送结果未确认" in text(shot)
+                    and "不会自动重发" in text(shot),
+                    "the original sender's explicit unknown outcome after reconnection")
+        self.check(not self.ui("/display/conversation")["force_pending"],
+                   "the disconnected sender finishes without resubmitting its delivery")
         status = self.listener("status")
         self.check(status["listener"] is None and status["pending"] is None,
                    "reconnection restores neither the old lease nor its forced delivery")
+        self.check(status["receipts"] == [] and delivery_id not in json.dumps(status),
+                   "the new network listener status contains no previous connection receipt")
+        self.check(self.ui("/listener")["receipts"] == [],
+                   "the new UI listener projection contains no previous connection receipt")
+        # Conversation snapshots contain generic headings, not message bodies.
+        # Leave and re-enter the conversation to clear the transient notice,
+        # then inspect the real retained card without editing the user's draft.
+        draft_before_navigation = self.ui("/display/conversation")["draft"]
+        self.activate_column(front, "queue")
+        self.activate_column(front, "conversation")
+        retained = front.until(
+            lambda shot: "上次连接：发送结果未确认" in text(shot)
+            and "不会自动重发" in text(shot),
+            "the interrupted sender's retained card after clearing the transient notice",
+        )
+        self.check(text(retained).count("上次连接：发送结果未确认") == 1
+                   and self.ui("/display/conversation")["draft"] == draft_before_navigation,
+                   "the real conversation renders the interrupted outcome once and keeps its draft")
+        self.save_shot("force-reconnected-unknown-120", front, cells=True)
         self.check(self.ui("/display/conversation")["draft"]["text"] == original,
                    "connection loss preserves the unconfirmed force-send draft")
         self.listener_error("read", **lease, wait_ms=0)
@@ -315,6 +438,7 @@ def main():
         "status": "failed",
         "transport": "production account router over loopback HTTP/WebSocket; synthetic GitHub provider",
         "scope": "real CLI/PTY and explicit synthetic listener; no model invocation",
+        "routing_scenario": "literal native /send to the exact merged local inbox, with inclusion and acknowledgement receipts",
         "binary_sha256": hashlib.file_digest((args.bin_dir / "ssmcp").open("rb"), "sha256").hexdigest(),
         "script_sha256": hashlib.file_digest(Path(__file__).open("rb"), "sha256").hexdigest(),
     }

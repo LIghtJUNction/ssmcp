@@ -101,6 +101,7 @@ struct Attempt {
 enum Request {
     Join {
         name: String,
+        #[serde(alias = "summary")]
         role: Option<String>,
         #[serde(default)]
         capabilities: Vec<String>,
@@ -111,6 +112,7 @@ enum Request {
         agent_id: String,
         token: String,
         name: Option<String>,
+        #[serde(alias = "summary")]
         role: Option<String>,
         status: Option<String>,
         capabilities: Option<Vec<String>>,
@@ -158,9 +160,11 @@ impl Agent {
             "agent_id": self.id,
             "thread_id": self.id,
             "session_id": self.session_id,
+            "client_id": self.session_id,
             "pending_messages": self.inbox.len(),
             "name": self.name,
             "role": self.role,
+            "summary": self.role,
             "status": self.status,
             "capabilities": self.capabilities,
             "joined_at_ms": self.joined_at_ms,
@@ -239,6 +243,28 @@ impl Hub {
             .collect())
     }
 
+    /// Server-only recipient lookup. Private tokens never leave the registry.
+    pub(crate) fn native_members(
+        &self,
+    ) -> Result<Vec<(String, crate::wire::SteeringAgent)>, String> {
+        let state = self.locked()?;
+        Ok(state
+            .agents
+            .values()
+            .map(|agent| {
+                (
+                    agent.owner.clone(),
+                    crate::wire::SteeringAgent {
+                        agent_id: agent.id.clone(),
+                        name: agent.name.clone(),
+                        role: agent.role.clone(),
+                        status: agent.status.clone(),
+                    },
+                )
+            })
+            .collect())
+    }
+
     pub(crate) fn bind(
         &self,
         owner: &str,
@@ -254,6 +280,20 @@ impl Hub {
             role: agent.role.clone(),
             status: agent.status.clone(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_lease_for_test(&self, owner: &str, id: &str) {
+        // Test only the passage of time for an existing, real membership. Its
+        // normal lookup/purge path still decides whether it is valid afterward.
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let member = state
+            .agents
+            .get_mut(id)
+            .filter(|member| member.owner == owner)
+            .expect("existing membership for this verified fixture owner");
+        member.expires = Instant::now();
+        member.expires_at_ms = now_ms();
     }
 
     fn locked(&self) -> Result<MutexGuard<'_, State>, String> {
@@ -305,7 +345,7 @@ impl Hub {
             Request::List {} => {
                 let state = self.locked()?;
                 Ok(
-                    json!({"session_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
+                    json!({"session_id":self.session_id, "client_id":self.session_id, "agents":state.public_agents(), "limits":limits()}),
                 )
             }
             Request::Update {
@@ -439,6 +479,7 @@ impl Hub {
             "agent_id":id,
             "thread_id":id,
             "session_id":self.session_id,
+            "client_id":self.session_id,
             "token":token,
             "lease_ms":LEASE_MS,
             "expires_at_ms":expires_at_ms,

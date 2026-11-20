@@ -64,6 +64,58 @@ await call(clientId, "ssmcp.ui.history", {
 
 Follow `next_offset` until it is null. List responses contain session summaries; read responses contain session metadata and `messages`. Offsets count records rather than bytes. Native reads do not select a conversation or write a user answer.
 
+## Archiving and restoring
+
+Archive hides a conversation from the ordinary history picker and protects its
+JSONL from automatic retention cleanup. It records an ID in the private,
+versioned `archives.json` sidecar; the original JSONL bytes and message IDs stay
+unchanged. The marker survives client restarts. Archive does not stop running
+jobs, cancel pending requests, delete content, or replay past work.
+
+| Local command | Result |
+| --- | --- |
+| `/archive` | Archive the current saved conversation and release its active lease. The next recorded message starts a new conversation. |
+| `/archive CONVERSATION_ID` | Archive that saved conversation in this workspace. A history actively written by another client cannot be archived. |
+| `/archived` | Open the archived history picker. Enter explicitly restores and resumes the selected conversation. |
+| `/unarchive CONVERSATION_ID` | Restore ordinary-list visibility without selecting the conversation. Use `/resume` to continue it. |
+
+Restoring makes a conversation eligible for ordinary retention again. Both
+archive and restore are idempotent. They preserve the current draft and do not
+submit a requirement. Restoring through the native tool or `/unarchive` keeps
+the currently selected history unchanged; Enter in the archive picker is the
+explicit combined restore-and-resume action.
+
+`ssmcp.ui.history` remains read-only. Its list action accepts `state: "active"`
+(the default, meaning all unarchived conversations), `"archived"`, or `"all"`.
+Each summary and metadata response reports `archived`. Direct reads and
+keyword searches still include archived content; archive is an organization
+state, not an access restriction.
+
+```javascript
+await call(clientId, "ssmcp.ui.history", {action: "list", state: "archived"});
+await call(clientId, "ssmcp.ui.history_archive", {
+  action: "archive",
+  id: "conversation_0123456789abcdef0123456789abcdef"
+});
+await call(clientId, "ssmcp.ui.history_archive", {
+  action: "restore",
+  id: "conversation_0123456789abcdef0123456789abcdef"
+});
+```
+
+The separate mutation tool requires an exact conversation ID and the explicit
+`archive` or `restore` action. Results include `id`, `archived`, `changed`,
+`current`, `message_count`, and `contents_changed: false`. Workspace ownership,
+private-file validation, and active-client leases apply to both operations.
+An invalid archive index blocks archive changes and retention writes; it does
+not cause protected content to be discarded.
+
+Archives count toward the existing 64-conversation and 16-MiB global limits.
+When active and archived histories occupy the whole budget, new history writes
+return a capacity error. Restoring an archive makes it eligible for cleanup;
+there is no automatic deletion of an archived conversation and no separate
+unbounded archive store.
+
 ### Metadata and keyword search
 
 `metadata` returns the session header and summary without message bodies. The
@@ -157,6 +209,6 @@ After connecting, agents should use `ssmcp.ui.message` for local progress and re
 | Managed histories | 64 files and 16 MiB in total |
 | Native response page | 64 KiB; at most 64 requested records |
 
-New messages remove the oldest retained messages if needed and increment `truncated_messages`. New or growing histories prune the oldest inactive conversations when the global budget is reached. Active conversations are protected by their leases. If all reclaimable space belongs to active clients, recording returns a clear capacity error.
+New messages remove the oldest retained messages if needed and increment `truncated_messages`. New or growing histories prune the oldest inactive conversations when the global budget is reached. Active conversations are protected by their leases, and archived conversations are protected by their archive markers. If active or archived conversations fill the available budget, recording returns a clear capacity error.
 
 Readers reject unsupported schema versions and incomplete files. Stored content passes through audit redaction again before display. Malformed, linked, or nonprivate files are not exposed or reclaimed as valid conversation histories. Raw exports remain ordinary JSONL files in the private state directory.
