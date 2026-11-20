@@ -838,6 +838,29 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
                     "invalid X11 keyboard-map range" | "could not read X11 keyboard mapping"
                 ));
     }
+    if backend == "wayland" {
+        // In zuse 0.2.0 these exact errors come from read-only keyboard
+        // preflight, before shortcut dispatch or virtual-keyboard creation.
+        // Do not accept an arbitrary prefix: a future error or appended
+        // keymap-restoration failure must retain the input lock.
+        return matches!(
+            error,
+            "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer"
+                | "unsupported_state: a keyboard key is held; release it before input"
+                | "unsupported_state: compositor cannot report held keyboard keys"
+                | "unsupported_state: Wayland keys require Hyprland keyboard-state inspection"
+                | "unsupported_state: cannot parse compositor keyboard state"
+                | "unsupported_state: compositor keyboard state is unavailable"
+                | "unsupported_state: too many keyboards to inspect"
+                | "unsupported_state: Caps Lock is enabled; disable it before input"
+                | "unsupported_state: Num Lock is enabled; disable it before input"
+                | "unsupported_state: Caps Lock state is unavailable"
+                | "unsupported_state: Num Lock state is unavailable"
+                | "unsupported_state: keyboard layout group must be 0 before input"
+                | "unsupported_state: keyboard layout group is unavailable"
+                | "unsupported_state: a unique main keyboard is required"
+        );
+    }
     if backend == "win32" && !typing {
         return error.starts_with("unknown key ") || error == "function key must be F1..F24";
     }
@@ -1189,6 +1212,34 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn wayland_preflight_rejection_does_not_poison_later_input() {
+        for typing in [false, true] {
+            for error in [
+                "unsupported_state: keyboard state inspection requires Hyprland 0.55 or newer",
+                "unsupported_state: Wayland keys require Hyprland keyboard-state inspection",
+                "unsupported_state: Num Lock is enabled; disable it before input",
+                "unsupported_state: a keyboard key is held; release it before input",
+            ] {
+                assert!(input_error_precedes_effect("wayland", error, typing));
+                assert!(!input_error_precedes_effect("x11", error, typing));
+                assert!(!input_error_precedes_effect(
+                    "wayland",
+                    &format!("{error}; keyboard keymap restoration failed: disconnected"),
+                    typing,
+                ));
+            }
+            for error in [
+                "unsupported_state: unknown future keyboard state",
+                "Wayland input exceeded its deadline",
+                "Wayland connection closed",
+                "input completed but keyboard keymap restoration failed: disconnected",
+            ] {
+                assert!(!input_error_precedes_effect("wayland", error, typing));
+            }
+        }
     }
 
     #[test]
