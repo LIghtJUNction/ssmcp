@@ -1058,25 +1058,45 @@ mod tests {
     async fn timeout_and_cancel_reap_owned_descendants() {
         use std::os::unix::fs::PermissionsExt;
         let dir = Directory::new();
+        let history_root = dir.0.join("history");
+        let cancel_root = dir.0.join("cancel");
+        std::fs::create_dir(&history_root).unwrap();
+        std::fs::create_dir(&cancel_root).unwrap();
         let fixture = dir.0.join("slow-git");
         std::fs::write(
             &fixture,
-            "#!/bin/sh\nsleep 30 &\necho $! > child.pid\nwait\n",
+            "#!/bin/sh\nsleep 30 &\nprintf '%s\\n' \"$!\" > child.pid.tmp && mv child.pid.tmp child.pid || exit 1\nwait\n",
         )
         .unwrap();
         std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let parse_pid = |stage: &str, raw: &str| {
+            raw.trim()
+                .parse::<i32>()
+                .ok()
+                .filter(|&pid| pid > 0)
+                .unwrap_or_else(|| panic!("{stage}: invalid fixture child PID {raw:?}"))
+        };
+        let assert_reaped = |stage: &str, pid: i32, before: Option<&str>| {
+            let proc = Path::new("/proc").join(pid.to_string());
+            assert!(
+                !proc.try_exists().unwrap(),
+                "{stage}: PID {pid} still exists after shutdown, before={before:?}, after={:?}",
+                std::fs::read_to_string(proc.join("stat"))
+            );
+        };
         let (stop, mut stopped) = watch::channel(false);
         let result = inspect(&fixture, &dir.0, Duration::from_millis(150), &mut stopped).await;
         assert!(matches!(
             result,
             Err(Failure::Error("Git status timed out"))
         ));
-        let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
-        assert!(!Path::new("/proc").join(pid.trim()).exists());
+        let pid =
+            std::fs::read_to_string(dir.0.join("child.pid")).expect("status fixture child PID");
+        assert_reaped("status", parse_pid("status", &pid), None);
         let (_history_stop, mut history_stopped) = watch::channel(false);
         let history = inspect_history(
             &fixture,
-            &dir.0,
+            &history_root,
             &"a".repeat(40),
             Duration::from_millis(150),
             &mut history_stopped,
@@ -1086,17 +1106,40 @@ mod tests {
             history,
             Err(Failure::Error("Git history timed out"))
         ));
-        let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
-        assert!(!Path::new("/proc").join(pid.trim()).exists());
-        let query = inspect(&fixture, &dir.0, TIMEOUT, &mut stopped);
-        let cancel = async {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            stop.send(true).unwrap();
+        let pid = std::fs::read_to_string(history_root.join("child.pid"))
+            .expect("history fixture child PID");
+        assert_reaped("history", parse_pid("history", &pid), None);
+
+        let query = inspect(&fixture, &cancel_root, TIMEOUT, &mut stopped);
+        tokio::pin!(query);
+        let marker = cancel_root.join("child.pid");
+        let ready = async {
+            loop {
+                match std::fs::read_to_string(&marker) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    result => break result,
+                }
+            }
         };
-        let (result, _) = tokio::join!(query, cancel);
+        let pid = tokio::select! {
+            result = &mut query => panic!("cancel fixture exited before child ready: {result:?}"),
+            raw = ready => parse_pid("cancel", &raw.expect("cancel fixture child PID")),
+        };
+        let before = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .expect("cancel fixture child must exist before cancellation");
+        let state = before
+            .rsplit_once(')')
+            .and_then(|(_, fields)| fields.split_whitespace().next());
+        assert!(
+            matches!(state, Some(state) if state != "Z" && state != "X"),
+            "{before}"
+        );
+        stop.send(true).unwrap();
+        let result = query.await;
         assert!(matches!(result, Err(Failure::Cancelled)));
-        let pid = std::fs::read_to_string(dir.0.join("child.pid")).unwrap();
-        assert!(!Path::new("/proc").join(pid.trim()).exists());
+        assert_reaped("cancel", pid, Some(&before));
     }
 
     #[tokio::test]
