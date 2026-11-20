@@ -427,7 +427,7 @@ def main():
     report = {
         "schema": "ssmcp.presentation-e2e.v1", "status": "failed",
         "source_commit": source_commit, "platform": platform.system(),
-        "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+        "transport": "isolated account OAuth + owned PTY + independent vt100 decoder",
         "scope": "native structured display, complete history/copy, idempotency and next-request delivery",
         "models_started": False, "production_contacted": False,
         "display_mode": "NO_COLOR owned terminal; native wide and narrow block layout",

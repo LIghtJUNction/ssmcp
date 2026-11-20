@@ -317,7 +317,7 @@ class Interactions(InputHistory):
         self.check(state["draft"]["text"] == original,
                    "explicit recipient selection preserves all draft bytes")
         front.send(ENTER)
-        self.quiet_until(front, lambda shot: "Queued by service" in text(shot),
+        self.quiet_until(front, lambda shot: "Queued by service" in shot["rows"][-1],
                          "the service's queued receipt replaces local submitting without another key")
         state = self.ui("/display/conversation")
         self.check(state["draft"]["text"] == "" and state["native_recipient"] == descriptor["id"],
@@ -331,11 +331,16 @@ class Interactions(InputHistory):
                    and messages[0]["recipient"]["id"] == descriptor["id"]
                    and messages[0]["sender"]["kind"] == "local_user",
                    "the selected account's next real call receives unchanged text with local-user origin")
-        self.quiet_until(front, lambda shot: "Included in recipient tool response" in text(shot),
+        self.quiet_until(front, lambda shot: "Included in recipient tool response" in shot["rows"][-1],
                          "queued changes to included solely after the recipient's remote call")
         message_id = messages[0]["receipt"]["message_id"]
-        self.messages_call("ack", destination, {"message_id": message_id})
-        self.quiet_until(front, lambda shot: "Acknowledged by recipient" in text(shot),
+        acknowledgement = self.messages_call("ack", destination, {"message_id": message_id})
+        receipts = acknowledgement.get("receipts", [])
+        self.check(len(receipts) == 1 and receipts[0]["message_id"] == message_id
+                   and receipts[0]["recipient_id"] == descriptor["id"]
+                   and receipts[0]["status"] == "acknowledged",
+                   "the account inbox acknowledges this exact message and recipient")
+        self.quiet_until(front, lambda shot: "Acknowledged by recipient" in shot["rows"][-1],
                          "explicit recipient acknowledgement refreshes the source without input")
         self.capture_pair(front, "native-acknowledged", "Acknowledged")
 
@@ -360,7 +365,7 @@ class Interactions(InputHistory):
         agent_text = "VERIFIED_AGENT_ONLY 中文原文"
         self.replace_short(front, agent_text)
         front.send(ENTER)
-        self.quiet_until(front, lambda shot: "Queued by service" in text(shot),
+        self.quiet_until(front, lambda shot: "Queued by service" in shot["rows"][-1],
                          "a verified-agent send obtains its own service receipt without another key")
         wrong = self.response("return await call(%s, 'terminal.status', {});" % json.dumps(destination))
         self.check(not wrong["structuredContent"].get("native_messages"),
@@ -373,11 +378,17 @@ class Interactions(InputHistory):
                    and received[0]["recipient"]["id"] == agent_id
                    and received[0]["recipient"]["kind"] == "agent",
                    "only the selected verified agent receives the message through its actual bound call")
-        self.quiet_until(front, lambda shot: "Included in recipient tool response" in text(shot),
+        self.quiet_until(front, lambda shot: "Included in recipient tool response" in shot["rows"][-1],
                          "the verified-agent delivery updates the source without input")
-        self.messages_call("ack", destination,
-                           {"message_id": received[0]["receipt"]["message_id"]}, agent=binding)
-        self.quiet_until(front, lambda shot: "Acknowledged by recipient" in text(shot),
+        agent_message_id = received[0]["receipt"]["message_id"]
+        acknowledgement = self.messages_call("ack", destination,
+                                             {"message_id": agent_message_id}, agent=binding)
+        receipts = acknowledgement.get("receipts", [])
+        self.check(len(receipts) == 1 and receipts[0]["message_id"] == agent_message_id
+                   and receipts[0]["recipient_id"] == agent_id
+                   and receipts[0]["status"] == "acknowledged",
+                   "the verified agent acknowledges this exact message and recipient")
+        self.quiet_until(front, lambda shot: "Acknowledged by recipient" in shot["rows"][-1],
                          "the exact agent's acknowledgement refreshes independently")
         return agent_id
 
