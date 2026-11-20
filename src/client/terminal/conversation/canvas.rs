@@ -103,7 +103,7 @@ impl ReloadCanvas {
                     position
                         .logs
                         .as_ref()
-                        .is_some_and(|logs| logs.query.len() > 4096 || logs.level > 4)
+                        .is_some_and(|logs| logs.query.len() > 4096 || logs.level > 2)
                         || [&position.history, &position.selected_history]
                             .into_iter()
                             .flatten()
