@@ -1,4 +1,5 @@
 //! Nonblocking terminal sender. Only broker receipts mean queued or delivered.
+mod groups;
 #[cfg(test)]
 mod tests;
 use crate::wire::messages::{Command, Receipt, Recipient, Reply, Status};
@@ -45,6 +46,8 @@ struct Manager {
     supported: bool,
     recipients: Vec<Recipient>,
     outgoing: Vec<Outgoing>,
+    groups: Vec<groups::Group>,
+    group_connection: u64,
     error: Option<String>,
     sender: Option<mpsc::Sender<Request>>,
     pending: BTreeMap<u64, Pending>,
@@ -63,12 +66,13 @@ impl Manager {
     fn snapshot(&self) -> Value {
         json!({
             "available":self.available(), "connected":self.connected,
-            "recipients":self.recipients, "outgoing":self.outgoing,
+            "recipients":self.recipients, "outgoing":self.outgoing, "groups":self.group_snapshots(),
             "error":self.error, "pending":self.pending.values().any(|pending|!pending.quiet), "revision":self.revision,
         })
     }
     fn connect(&mut self, supported: bool) -> mpsc::Receiver<Request> {
         self.disconnect();
+        self.group_connection = self.group_connection.saturating_add(1);
         let (sender, receiver) = mpsc::channel(16);
         self.sender = Some(sender);
         self.connected = true;
@@ -174,6 +178,7 @@ impl Manager {
             None
         };
         self.request(command)?;
+        self.sync_group_receipts();
         if let Some(index) = evict {
             self.outgoing.remove(index);
         }
@@ -324,6 +329,8 @@ impl Manager {
             }
             Err(error) => self.failure(&pending.command, &error),
         }
+        self.sync_group_receipts();
+        self.pump_groups();
     }
     fn poll(&mut self) {
         let now = Instant::now();
@@ -352,6 +359,8 @@ impl Manager {
                 let _ = self.refresh_with_visibility(true);
             }
         }
+        self.pump_groups();
+        self.sync_group_receipts();
     }
     fn disconnect(&mut self) {
         self.changed();
@@ -378,6 +387,7 @@ impl Manager {
                 );
             }
         }
+        self.close_groups();
     }
 }
 fn receipt_progresses(previous: Option<Status>, next: Status) -> bool {
@@ -410,6 +420,17 @@ pub(crate) fn refresh() -> Result<(), String> {
 }
 pub(crate) fn send(recipient_id: &str, text: &str, request_id: &str) -> Result<(), String> {
     state().send(recipient_id, text, request_id)
+}
+pub(crate) const MAX_GROUP_RECIPIENTS: usize = groups::MAX_TARGETS;
+pub(crate) fn send_group(
+    recipients: &[Recipient],
+    text: &str,
+    request_id: &str,
+) -> Result<(), String> {
+    state().group_send(recipients, text, request_id)
+}
+pub(crate) fn retry_group(request_id: &str) -> Result<(), String> {
+    state().group_retry(request_id)
 }
 // Network/lifecycle entry points run outside the terminal state lock.
 // UI send/refresh deliberately leave invalidation to their current input event.
