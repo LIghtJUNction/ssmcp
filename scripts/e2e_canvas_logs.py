@@ -476,8 +476,11 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(b"\r")
             detail = preview.until(lambda shot: view(shot, "tasks")
                                    and "Job: preview-task-test" in body(shot), "the selected task details")
+            displayed_argv = [row.strip() for row in body(detail).splitlines()
+                              if row.lstrip().startswith("argv[")]
             check("State: completed" in body(detail) and "Exit: 0" in body(detail)
-                  and "Command: cargo test --lib" in body(detail),
+                  and "Command · complete argv · read only" in body(detail)
+                  and displayed_argv == ['argv[0]: "cargo"', 'argv[1]: "test"', 'argv[2]: "--lib"'],
                   "Enter opens the selected task's status and command without launching work")
             save_shot(output, "canvas-tasks-detail", detail)
             preview.resize(12, 60)
