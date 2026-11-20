@@ -980,7 +980,7 @@ fn whole_file(file: &mut File) -> Result<Vec<u8>, String> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)))
+    crate::hex::encode(Sha256::digest(bytes))
 }
 
 fn validate_hash(expected: Option<&str>) -> Result<(), String> {

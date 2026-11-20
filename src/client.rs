@@ -1501,6 +1501,9 @@ pub async fn run() -> crate::Result<()> {
             management,
         )
         .and_then(|runtime| {
+            // Offline discovery lists this binary's native tools. It has no
+            // relay, queued requests or public-await display to negotiate.
+            runtime.configure_timing(true, false)?;
             runtime.enable_default_skill_sources()?;
             Ok(runtime)
         }) {
@@ -1732,6 +1735,8 @@ struct RegisteredSsh {
     ready: (String, String, u64, String),
     access_supported: bool,
     messaging_supported: bool,
+    time_observation_supported: bool,
+    wait_display_supported: bool,
     version_notice: Option<crate::wire::versions::Notice>,
 }
 
@@ -1777,7 +1782,9 @@ async fn register_ssh(
         _ = &mut cancelled => return Ok(None),
         _ = std::future::ready(()) => {},
     }
-    let mut ssh = command()
+    let mut transport_command = command();
+    let timing_offer = relay::timing_offer(&transport_command);
+    let mut ssh = transport_command
         .spawn()
         .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
     let mut stderr_pump = ssh.stderr.take().map(|mut stderr| {
@@ -1851,6 +1858,8 @@ async fn register_ssh(
                     .any(|capability| capability == crate::wire::versions::CAPABILITY)
                     && notice.valid()
             }),
+            relay::negotiated_timing(timing_offer, &capabilities).0,
+            relay::negotiated_timing(timing_offer, &capabilities).1,
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -1875,8 +1884,15 @@ async fn register_ssh(
         }
     };
     *registered = true;
-    let (ready, access_supported, self_only_capabilities, messaging_supported, version_notice) =
-        ready;
+    let (
+        ready,
+        access_supported,
+        self_only_capabilities,
+        messaging_supported,
+        version_notice,
+        time_observation_supported,
+        wait_display_supported,
+    ) = ready;
     if account_compat
         && (!metadata.allow.is_empty()
             || !ready.1.is_empty()
@@ -1905,6 +1921,8 @@ async fn register_ssh(
         ready,
         access_supported,
         messaging_supported,
+        time_observation_supported,
+        wait_display_supported,
         version_notice,
     }))
 }
@@ -1974,6 +1992,7 @@ async fn reclaim_steering(
                     Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                     Some(Ok(Some(Frame::AccessReply { id, result }))) => access::reply(id, result),
                     Some(Ok(Some(Frame::CodeModeFinished { completion }))) => backend.code_mode_finished(completion)?,
+                    Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => backend.wait_display(snapshot)?,
                     Some(Ok(Some(Frame::Call { id, .. }))) => {
                         let mut writer = writer.lock().await;
                         write_frame(&mut *writer, &Frame::Reply { id, result: Err("client reload is preparing; refresh clients after reconnection".into()) }).await?;
@@ -1997,6 +2016,17 @@ enum Transport<'a> {
 }
 
 impl Transport<'_> {
+    fn timing_support(&self, acknowledged: (bool, bool)) -> (bool, bool) {
+        match self {
+            Self::Account { .. } => acknowledged,
+            // The private host and native runtime are compiled into this same
+            // process, including the passive time-only delivery policy. Local
+            // OAuth still has no account identity for public typed awaits.
+            #[cfg(target_os = "linux")]
+            Self::Local(_) => (true, false),
+        }
+    }
+
     fn command(&self, executable: &std::path::Path) -> Command {
         match self {
             Self::Account { server, credential } => relay::command(executable, server, *credential),
@@ -2173,8 +2203,12 @@ async fn connect_inner(
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
         messaging_supported,
+        time_observation_supported,
+        wait_display_supported,
         version_notice,
     } = registration;
+    let (time_observation_supported, wait_display_supported) =
+        transport.timing_support((time_observation_supported, wait_display_supported));
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
     let display_session =
@@ -2230,6 +2264,7 @@ async fn connect_inner(
         management,
     )
     .and_then(|runtime| {
+        runtime.configure_timing(time_observation_supported, wait_display_supported)?;
         runtime.enable_default_skill_sources()?;
         Ok(runtime)
     }) {
@@ -2491,6 +2526,7 @@ async fn connect_inner(
                                     match incoming.frames.recv().await {
                                         Some(Ok(Some(Frame::ReloadCommit { id: acknowledged }))) if acknowledged == id => return Ok::<(), crate::Error>(()),
                                         Some(Ok(Some(Frame::CodeModeFinished { completion }))) => { backend.code_mode_finished(completion)?; }
+                                        Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => { backend.wait_display(snapshot)?; }
                                         Some(Ok(Some(Frame::SteeringReply { id, result }))) => { steering::reply(id, result)?; }
                                         Some(Ok(Some(Frame::MessagesReply { id, result }))) => { messaging::reply(id, result); }
                                         Some(Ok(Some(Frame::AccessReply { id, result }))) => { access::reply(id, result); }
@@ -2556,6 +2592,9 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::CodeModeFinished { completion }))) => {
                     if let Err(error) = backend.code_mode_finished(completion) { break Err(error.into()); }
                 }
+                Some(Ok(Some(Frame::WaitDisplay { snapshot }))) => {
+                    if let Err(error) = backend.wait_display(snapshot) { break Err(error.into()); }
+                }
                 Some(Ok(Some(Frame::SteeringReply { id, result }))) => {
                     if let Err(error) = steering::reply(id, result) { terminal::notice(&error); }
                 }
@@ -2581,6 +2620,7 @@ async fn connect_inner(
     if let Some(input) = local_input {
         input.shutdown().await;
     }
+    backend.disconnect_timing();
     steering::disconnect();
     access::disconnect();
     messaging::disconnect();

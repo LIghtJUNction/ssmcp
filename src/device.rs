@@ -388,6 +388,8 @@ pub(crate) struct DevicePeer {
     pub control_attribution: bool,
     pub native_messages: bool,
     pub version_notice: bool,
+    pub wait_display: bool,
+    pub time_observation: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -397,6 +399,8 @@ impl From<Registration> for DevicePeer {
             control_attribution: account.control_attribution,
             native_messages: false,
             version_notice: false,
+            wait_display: false,
+            time_observation: false,
             account: Some(account),
         }
     }
@@ -773,6 +777,8 @@ async fn connect(
         control_attribution,
         native_messages,
         version_notice: capability_requested(&headers, wire::versions::CAPABILITY),
+        wait_display: capability_requested(&headers, wire::wait_display::CAPABILITY),
+        time_observation: capability_requested(&headers, wire::wait_display::TIME_CAPABILITY),
     };
     let transport = broker
         .admit_transport()
@@ -1075,7 +1081,7 @@ mod tests {
         std::fs::write(&binary, b"fixture").unwrap();
         std::fs::write(assets.join("release.json"), serde_json::to_vec(&json!({
             "schema": 1, "version": "0.10.99", "wire_version": wire::VERSION,
-            "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": format!("{:x}", crate::digest::Hex(Sha256::digest(b"fixture")))}},
+            "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": crate::hex::encode(Sha256::digest(b"fixture"))}},
         })).unwrap()).unwrap();
         std::fs::set_permissions(&assets, std::fs::Permissions::from_mode(0o700)).unwrap();
         for path in [&binary, &assets.join("release.json")] {
@@ -1798,9 +1804,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = crate::http_client::builder()
-            .build()
-            .expect("HTTP client configuration");
+        let client = crate::http_client::builder().build().unwrap();
         let legacy_device = {
             let login = alice.clone();
             broker
@@ -2069,9 +2073,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = crate::http_client::builder()
-            .build()
-            .expect("HTTP client configuration");
+        let client = crate::http_client::builder().build().unwrap();
         let claimed: Value = client
             .post(format!("{base}/api/client/username"))
             .bearer_auth(&alice)
@@ -2291,9 +2293,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let app = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = crate::http_client::builder()
-            .build()
-            .expect("HTTP client configuration");
+        let client = crate::http_client::builder().build().unwrap();
         let ordinary: Value = client
             .get(format!("{base}/api/client/whoami"))
             .bearer_auth(&login)
@@ -2409,9 +2409,7 @@ mod tests {
         );
         let app = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = crate::http_client::builder()
-            .build()
-            .expect("HTTP client configuration");
+        let client = crate::http_client::builder().build().unwrap();
         let before: Value = client
             .get(&url)
             .bearer_auth(&login)

@@ -83,8 +83,8 @@ fn root() -> PathBuf {
     let mut bytes = [0; 16];
     platform::random_bytes(&mut bytes).unwrap();
     let root = std::env::temp_dir().join(format!(
-        "ssmcp-named-account-{:x}",
-        crate::digest::Hex(Sha256::digest(bytes))
+        "ssmcp-named-account-{}",
+        crate::hex::encode(Sha256::digest(bytes))
     ));
     create_tree(&root).unwrap();
     root

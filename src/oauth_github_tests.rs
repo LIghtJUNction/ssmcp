@@ -249,6 +249,8 @@ impl Fixture {
                 control_attribution: true,
                 native_messages: false,
                 version_notice: false,
+                wait_display: false,
+                time_observation: false,
             },
             crate::user_policy::TrafficFailureState::default(),
         ));

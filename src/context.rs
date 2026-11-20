@@ -402,7 +402,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
     json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}})
 }
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)))
+    crate::hex::encode(Sha256::digest(bytes))
 }
 fn normalize(path: &str) -> Result<String, String> {
     if path.len() > MAX_PATH || path.chars().any(char::is_control) {

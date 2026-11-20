@@ -5,6 +5,7 @@ pub mod hooks;
 pub(crate) mod native_host;
 pub(crate) mod native_plugins;
 mod plugins;
+pub(crate) mod time;
 use crate::catalog::{self, ToolDescriptor};
 use crate::{
     backend::{self, Backend, events::EventLog},
@@ -267,6 +268,7 @@ pub struct Runtime {
     backend: Arc<Backend>,
     registry: Arc<Registry>,
     native: NativeHost,
+    time: Arc<time::Clock>,
     files: Arc<Files>,
     desktop: Arc<Desktop>,
     plugins: plugins::Plugins,
@@ -306,18 +308,24 @@ impl Runtime {
         };
         let files = Files::new(&constructor)?;
         let desktop = Desktop::new(&constructor)?;
+        let time = time::Clock::new()?;
         let native = NativeHost::new(
             registry.clone(),
             vec![
                 Definition::new(backend.clone()),
                 Definition::new(files.clone()),
                 Definition::new(desktop.clone()),
+                Definition::new(time.clone()),
             ],
         )?;
         let plugins = plugins::Plugins::new(root, registry.clone());
         registry.replace(Provider::Client, capabilities::tools())?;
         for (provider, tools) in native.catalogs()? {
-            registry.replace(provider, tools)?;
+            // Time passivity is a server delivery guarantee. A new client must
+            // not advertise it to an older, unnegotiated relay.
+            if provider != Provider::Time {
+                registry.replace(provider, tools)?;
+            }
         }
         registry.replace(Provider::Plugins, plugins::Plugins::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
@@ -339,6 +347,7 @@ impl Runtime {
             backend,
             registry,
             native,
+            time,
             files,
             desktop,
             plugins,
@@ -353,6 +362,7 @@ impl Runtime {
         });
         crate::client::interface::harness::bind(&runtime);
         crate::client::completion::bind(&runtime);
+        runtime.time.bind();
         Ok(runtime)
     }
 
@@ -372,6 +382,34 @@ impl Runtime {
 
     pub(crate) fn local_registry(&self) -> Arc<Registry> {
         self.registry.clone()
+    }
+
+    pub(crate) fn configure_timing(
+        &self,
+        time_tools: bool,
+        wait_display: bool,
+    ) -> Result<(), String> {
+        self.time.configure(time_tools, wait_display);
+        self.registry.replace(
+            Provider::Time,
+            if time_tools {
+                time::tools()
+            } else {
+                Vec::new()
+            },
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn wait_display(
+        &self,
+        snapshot: crate::wire::wait_display::Snapshot,
+    ) -> Result<(), String> {
+        self.time.relay_display(snapshot)
+    }
+
+    pub(crate) fn disconnect_timing(&self) {
+        self.time.disconnect();
     }
     /// Local frontend methods, deliberately absent from the remote tool registry.
     pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
@@ -516,6 +554,11 @@ impl Runtime {
             }
             Operation::Status {} => ("terminal.status".into(), json!({})),
         };
+        if matches!(name.as_str(), "ssmcp.time.now" | "ssmcp.time.wait")
+            && !self.time.time_tools_enabled()
+        {
+            return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v1 server acknowledgement; old server delivery policies still apply to hard-coded unsupported calls".into());
+        }
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
         let call_id = self.next_call.fetch_add(1, Ordering::Relaxed);
@@ -609,36 +652,51 @@ impl Runtime {
             .get("path")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let outcome = match tool.provider {
-            Provider::Client => self
-                .client_resource_call(&tool.native_name, arguments)
-                .await
-                .map(backend::result),
-            Provider::Output => self
-                .output
-                .perform(&tool.native_name, arguments)
-                .await
-                .map(backend::result),
-            Provider::Reload => Err("reload requires an acknowledged foreground connection".into()),
-            Provider::Sessions => match &self.sessions {
-                Some(control) => control
+        let mut observation = self.time.observe(&name, &arguments, &source);
+        let dispatched = async {
+            match tool.provider {
+                Provider::Client => self
+                    .client_resource_call(&tool.native_name, arguments)
+                    .await
+                    .map(backend::result),
+                Provider::Output => self
+                    .output
                     .perform(&tool.native_name, arguments)
                     .await
                     .map(backend::result),
-                None => Err("session management was not granted with --session-control".into()),
-            },
-            Provider::Audit => self.audit.read(arguments).await.map(backend::result),
-            Provider::Plugins => self.plugins.perform(&tool, arguments).await,
-            provider if self.native.contains(provider) => {
-                let dispatch = source.clone().scope(self.native.call(&tool, arguments));
-                if let Some(call) = &harness_call {
-                    call.scope(dispatch).await
-                } else {
-                    dispatch.await
+                Provider::Reload => {
+                    Err("reload requires an acknowledged foreground connection".into())
                 }
+                Provider::Sessions => match &self.sessions {
+                    Some(control) => control
+                        .perform(&tool.native_name, arguments)
+                        .await
+                        .map(backend::result),
+                    None => Err("session management was not granted with --session-control".into()),
+                },
+                Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+                Provider::Plugins => self.plugins.perform(&tool, arguments).await,
+                provider if self.native.contains(provider) => {
+                    let dispatch = source.clone().scope(self.native.call(&tool, arguments));
+                    if let Some(call) = &harness_call {
+                        call.scope(dispatch).await
+                    } else {
+                        dispatch.await
+                    }
+                }
+                _ => Err("provider is not mounted in the native plugin host".into()),
             }
-            _ => Err("provider is not mounted in the native plugin host".into()),
         };
+        let outcome = if let Some(waiting) = observation.as_mut() {
+            tokio::select! {
+                biased;
+                _ = waiting.cancelled() => Err("native wait observation cancelled; the underlying job was not cancelled".into()),
+                outcome = dispatched => outcome,
+            }
+        } else {
+            dispatched.await
+        };
+        drop(observation);
         if tool.provider.is_harness() {
             self.audit.push(
                 json!({"type":"ssmcp.harness.tool.completed","call_id":call_id,

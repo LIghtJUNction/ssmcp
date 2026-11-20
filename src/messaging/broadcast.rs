@@ -41,8 +41,8 @@ impl Broadcast {
         let canonical = serde_json::to_vec(&(&self.request_id, recipient))
             .expect("broadcast child key serializes");
         format!(
-            "broadcast-{:x}",
-            crate::digest::Hex(Sha256::digest(canonical))
+            "broadcast-{}",
+            crate::hex::encode(Sha256::digest(canonical))
         )
     }
 }

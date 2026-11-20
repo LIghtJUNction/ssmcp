@@ -25,6 +25,7 @@ mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
 mod tasks;
+mod timing;
 mod user_wait;
 
 const EXIT_CONFIRMATION: &str =
@@ -130,6 +131,8 @@ pub(super) struct Conversation {
     force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
     wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
+    #[cfg(test)]
+    timing_fixture: Option<crate::runtime::time::Snapshot>,
     parked: Option<steering::SavedDraft>,
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
@@ -2832,6 +2835,7 @@ impl State {
                 .unwrap_or_else(|| "pending question".into());
         }
         let mut rows = Vec::new();
+        let clock_label = self.chat_clock_label();
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
@@ -2965,9 +2969,14 @@ impl State {
                 } else {
                     format!("{mode} · {context}")
                 };
-                let title = fit(&title, width);
+                let clock_width = clock_label
+                    .as_ref()
+                    .map_or(0, |label| label.width() as u16 + 1);
+                let title = fit(&title, width.saturating_sub(clock_width));
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
-                let detail = if g.left == g.cols {
+                let detail = if let Some(clock) = &clock_label {
+                    fit(clock, available.min(usize::from(u16::MAX)) as u16)
+                } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();
                     let full = format!("{} · {}", account.trim(), quota.trim());
                     if full.width() <= available {
@@ -5534,15 +5543,21 @@ mod tests {
     fn reveal_tool_group_text(state: &mut State, needle: &str) -> String {
         state.chat_key(Key::HistoryStart);
         let screen = display(state).screen().contents();
-        let Some(y) = screen.lines().position(|row| row.contains("Tools ·")) else {
+        let Some((y, heading)) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, row)| row.contains("Tools ·"))
+        else {
             return screen;
         };
-        state.chat_key(Key::Mouse {
-            button: 0,
-            x: 8,
-            y: y as u16,
-            release: false,
-        });
+        if heading.contains("▸ Tools ·") {
+            state.chat_key(Key::Mouse {
+                button: 0,
+                x: 8,
+                y: y as u16,
+                release: false,
+            });
+        }
         for _ in 0..512 {
             let screen = display(state).screen().contents();
             if screen.contains(needle) {

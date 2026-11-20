@@ -471,7 +471,7 @@ impl OutputStore {
                 id: id.clone(),
                 path: self.directory.join(&name).to_string_lossy().into_owned(),
                 scope: scope.into(),
-                sha256: format!("{:x}", crate::digest::Hex(Sha256::digest(b""))),
+                sha256: crate::hex::encode(Sha256::digest(b"")),
                 sha256_scope: "first_bytes_snapshot".into(),
                 bytes: 0,
                 lines: 0,
@@ -793,7 +793,7 @@ impl OutputStore {
                     json!({"id":args.id,"path":self.directory.join(artifact_name(&args.id)),"offset":args.offset,
                     "next_offset":next,"bytes":read,"size":size,"eof":next == size,
                     "complete":metadata.complete,"data_base64":STANDARD.encode(&data),
-                    "text":String::from_utf8_lossy(&data),"sha256":format!("{:x}",crate::digest::Hex(Sha256::digest(&data))),
+                    "text":String::from_utf8_lossy(&data),"sha256":crate::hex::encode(Sha256::digest(&data)),
                     "sha256_scope":"returned_chunk"}),
                 )
             }
@@ -825,7 +825,7 @@ impl OutputStore {
                 if bytes != size {
                     return Err("output artifact ended before its snapshot length".into());
                 }
-                let sha256 = format!("{:x}", crate::digest::Hex(digest.finalize()));
+                let sha256 = crate::hex::encode(digest.finalize());
                 if metadata.complete && sha256 != metadata.sha256 {
                     return Err(
                         "completed output artifact does not match its recorded SHA-256".into(),
@@ -1079,7 +1079,7 @@ impl Capture {
                 .to_string_lossy()
                 .into_owned(),
             scope: self.scope.clone(),
-            sha256: format!("{:x}", crate::digest::Hex(self.digest.clone().finalize())),
+            sha256: crate::hex::encode(self.digest.clone().finalize()),
             sha256_scope: "first_bytes_snapshot".into(),
             bytes: self.bytes,
             lines: self.lines(),
@@ -1753,10 +1753,7 @@ mod tests {
                             assert!(metadata.complete);
                             assert_eq!(
                                 metadata.sha256,
-                                format!(
-                                    "{:x}",
-                                    crate::digest::Hex(Sha256::digest(bytes.as_bytes()))
-                                )
+                                crate::hex::encode(Sha256::digest(bytes.as_bytes()))
                             );
                             let other = OutputStore::at(path.clone(), Policy::default()).unwrap();
                             assert_eq!(
@@ -2002,10 +1999,7 @@ mod tests {
         assert_eq!(bytes, b"prefix\n\xe4\xb8\xad\nend");
         assert_eq!(metadata.bytes, bytes.len() as u64);
         assert_eq!(metadata.lines, 3);
-        assert_eq!(
-            metadata.sha256,
-            format!("{:x}", crate::digest::Hex(Sha256::digest(&bytes)))
-        );
+        assert_eq!(metadata.sha256, crate::hex::encode(Sha256::digest(&bytes)));
         assert!(metadata.complete);
         #[cfg(unix)]
         assert_eq!(
@@ -2047,7 +2041,7 @@ mod tests {
         assert_eq!(metadata.observed_bytes, 16);
         assert_eq!(
             metadata.sha256,
-            format!("{:x}", crate::digest::Hex(Sha256::digest(b"1234567890")))
+            crate::hex::encode(Sha256::digest(b"1234567890"))
         );
         assert!(!metadata.complete);
         assert!(metadata.error.unwrap().contains("limit"));
@@ -2159,7 +2153,7 @@ mod tests {
         assert_eq!(stat["lines"], 2);
         assert_eq!(
             stat["sha256"],
-            format!("{:x}", crate::digest::Hex(Sha256::digest(b"a\0\xff\nb")))
+            crate::hex::encode(Sha256::digest(b"a\0\xff\nb"))
         );
     }
 
@@ -2240,10 +2234,7 @@ mod tests {
             assert_eq!(read["complete"], false);
             assert_eq!(stat["complete"], false);
             assert_eq!(stat["bytes"], bytes.len());
-            assert_eq!(
-                stat["sha256"],
-                format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)))
-            );
+            assert_eq!(stat["sha256"], crate::hex::encode(Sha256::digest(bytes)));
             if bytes == b"first\n" {
                 capture.push(b"second\n").unwrap();
             }

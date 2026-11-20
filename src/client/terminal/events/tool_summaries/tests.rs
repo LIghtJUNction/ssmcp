@@ -243,20 +243,24 @@ async fn oversized_native_reply_restores_only_its_original_summary_reservation()
             panic!("a bounded summary reply must keep its reservation")
         })
         .unwrap();
-        let mut captured = crate::code_mode::tool_summaries::Capture::default();
-        captured.reconcile("fixture", None, &delivered);
-        captured.observe("fixture", None, &delivered);
-        let outer = crate::code_mode::tool_summaries::append(
-            json!({"content":[],"structuredContent":{"result":null},"isError":true}),
-            captured.for_scope("fixture", None),
-        );
-        assert_eq!(outer["isError"], true);
-        let notices = outer["structuredContent"]["tool_summary_reminders"]
-            .as_array()
-            .unwrap();
-        assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0]["group_id"], id);
-        assert_eq!(notices[0]["revision"], 0);
+        #[cfg(target_os = "linux")]
+        {
+            let mut captured = crate::code_mode::tool_summaries::Capture::default();
+            captured.reconcile("fixture", None, &delivered);
+            captured.observe("fixture", None, &delivered);
+            let outer = crate::code_mode::tool_summaries::append(
+                json!({"content":[],"structuredContent":{"result":null},"isError":true}),
+                captured.for_scope("fixture", None),
+            );
+            assert_eq!(outer["isError"], true);
+            let notices = outer["structuredContent"]["tool_summary_reminders"]
+                .as_array()
+                .unwrap();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0]["group_id"], id);
+            assert_eq!(notices[0]["revision"], 0);
+        }
+        drop(delivered);
         assert!(view.take_tool_summary_reminder(&probe).is_none());
 
         // A late cancellation cannot rewind the replacement reply, even when

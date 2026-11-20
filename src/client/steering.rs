@@ -2189,7 +2189,7 @@ mod tests {
             "{text}\n\n<ssmcp-references-v1>\n{}\n</ssmcp-references-v1>",
             json!({
                 "schema_version": 1,
-                "source_sha256": format!("{:x}", crate::digest::Hex(Sha256::digest(text.as_bytes()))),
+                "source_sha256": crate::hex::encode(Sha256::digest(text.as_bytes())),
                 "references": [{"kind": "text", "path": "notes.txt", "preview": preview}],
             })
         )

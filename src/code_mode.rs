@@ -51,6 +51,9 @@ pub(crate) struct AuditRun {
     pub controller: Option<crate::wire::Controller>,
     targets: Arc<Mutex<HashSet<String>>>,
     steering_targets: Arc<Mutex<HashSet<String>>>,
+    // An actual time-only run remains passive even when identity was bound.
+    // false is sticky: subsequent time reads cannot erase real interaction.
+    time_observation_activity: Arc<Mutex<HashMap<String, bool>>>,
     finished: Arc<Mutex<Option<crate::wire::CodeCompletion>>>,
     bindings: Arc<Mutex<HashMap<String, RunBinding>>>,
     connections: Arc<Mutex<HashMap<String, Weak<crate::broker::Session>>>>,
@@ -89,6 +92,9 @@ pub(crate) struct RunBinding {
 
 tokio::task_local! {
     pub(crate) static AUDIT_RUN: AuditRun;
+    // Set only around the private response collector's read-only probe. A
+    // caller tool name or returned JSON cannot establish this provenance.
+    static PASSIVE_SUMMARY_PROBE: (Arc<crate::wire::CodeContext>, String);
 }
 
 impl AuditRun {
@@ -116,6 +122,7 @@ impl AuditRun {
             controller,
             targets: Arc::new(Mutex::new(HashSet::new())),
             steering_targets: Arc::new(Mutex::new(HashSet::new())),
+            time_observation_activity: Arc::new(Mutex::new(HashMap::new())),
             finished: Arc::new(Mutex::new(None)),
             bindings: Arc::new(Mutex::new(HashMap::new())),
             connections: Arc::new(Mutex::new(HashMap::new())),
@@ -155,6 +162,26 @@ impl AuditRun {
     /// requirements. Exact-agent delivery still requires an explicit binding.
     pub(crate) fn native_dispatched(&self, client_id: &str, tool: Option<&str>) {
         self.dispatched(client_id);
+        let passive_summary_probe = tool == Some(tool_summaries::TOOL)
+            && PASSIVE_SUMMARY_PROBE
+                .try_with(|(context, client)| {
+                    Arc::ptr_eq(context, &self.context) && client == client_id
+                })
+                .unwrap_or(false);
+        if let Some(name) = tool
+            && !passive_summary_probe
+        {
+            let mut activity = self
+                .time_observation_activity
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if matches!(name, "ssmcp.time.now" | "ssmcp.time.wait") {
+                activity.entry(client_id.into()).or_insert(true);
+            } else {
+                // Any other actual tool keeps its existing delivery rules.
+                activity.insert(client_id.into(), false);
+            }
+        }
         {
             let mut activity = self
                 .question_delivery_activity
@@ -168,6 +195,8 @@ impl AuditRun {
                         | "ssmcp.ui.question_ack"
                         | "ssmcp.ui.question_delivery"
                         | "ssmcp.ui.tool_summary"
+                        | "ssmcp.time.now"
+                        | "ssmcp.time.wait"
                 )
             }) {
                 activity.entry(client_id.into()).or_insert(false);
@@ -187,6 +216,8 @@ impl AuditRun {
                         | "ssmcp.context.status"
                         | "ssmcp.context.read"
                         | "ssmcp.context.list"
+                        | "ssmcp.time.now"
+                        | "ssmcp.time.wait"
                 )
         }) {
             self.interacted(client_id);
@@ -194,6 +225,14 @@ impl AuditRun {
     }
 
     pub(crate) fn interacted(&self, client_id: &str) {
+        self.time_observation_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into(), false);
+        self.bound_target(client_id);
+    }
+
+    fn bound_target(&self, client_id: &str) {
         self.dispatched(client_id);
         self.steering_targets
             .lock()
@@ -209,8 +248,33 @@ impl AuditRun {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
+        let time_observation = self
+            .time_observation_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        targets.retain(|client_id| time_observation.get(client_id) != Some(&true));
         targets.sort();
         targets
+    }
+
+    pub(crate) fn time_observation_only(&self, client_id: &str) -> bool {
+        self.time_observation_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(client_id)
+            == Some(&true)
+    }
+
+    /// Preserve passive provenance only for this collector operation. Task
+    /// locality keeps concurrent explicit calls outside the probe's scope.
+    pub(crate) async fn passive_summary_probe<T>(
+        &self,
+        client_id: &str,
+        operation: impl Future<Output = T>,
+    ) -> T {
+        PASSIVE_SUMMARY_PROBE
+            .scope((self.context.clone(), client_id.into()), operation)
+            .await
     }
 
     /// The broker calls this with a real native result and the binding captured
@@ -365,6 +429,10 @@ impl AuditRun {
     /// Called only after a real server action has accepted this target's
     /// authentication. Binding alone does not turn explicit readback into ack.
     pub(crate) fn question_delivery_server_action(&self, client_id: &str) {
+        self.time_observation_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(client_id.into(), false);
         self.question_delivery_activity
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -372,6 +440,9 @@ impl AuditRun {
     }
 
     pub(crate) fn question_delivery_eligible(&self, client_id: &str) -> bool {
+        if self.time_observation_only(client_id) {
+            return false;
+        }
         // A bound no-op run is eligible. An explicit readback-only run is not.
         self.question_delivery_activity
             .lock()
@@ -527,9 +598,9 @@ impl AuditRun {
             );
         }
         drop(bindings);
-        // Explicitly binding a room is an authorized interaction with it, even
-        // if this program only checks messages and makes no native tool call.
-        self.interacted(client_id);
+        // Preserve bound no-op delivery. An actual time-only run can separately
+        // prove it was passive; rebinding must not erase that execution audit.
+        self.bound_target(client_id);
         Ok(())
     }
 
@@ -1253,6 +1324,111 @@ mod tests {
             run.native_dispatched("writer", Some(tool));
             assert_eq!(run.steering_targets(), ["writer"]);
         }
+    }
+
+    #[test]
+    fn actual_time_only_runs_remain_passive_with_or_without_an_agent_binding() {
+        for bound in [false, true] {
+            let run =
+                AuditRun::new("return await call('clock', 'ssmcp.time.now', {});", None).unwrap();
+            if bound {
+                run.bind("clock", "verified-owner", "clock-agent", "private-token")
+                    .unwrap();
+            }
+            for tool in ["ssmcp.time.now", "ssmcp.time.wait"] {
+                run.native_dispatched("clock", Some(tool));
+                assert_eq!(run.targets(), ["clock"]);
+                assert!(run.steering_targets().is_empty());
+                assert!(!run.question_delivery_eligible("clock"));
+            }
+            // Catalog discovery and repeated binding are not new business work.
+            run.native_dispatched("clock", None);
+            if bound {
+                run.bind("clock", "verified-owner", "clock-agent", "private-token")
+                    .unwrap();
+            }
+            assert!(run.steering_targets().is_empty());
+            assert!(!run.question_delivery_eligible("clock"));
+            assert!(run.wait_recipient("clock").is_none());
+        }
+        let no_op = AuditRun::new("return null;", None).unwrap();
+        no_op
+            .bind("clock", "verified-owner", "clock-agent", "private-token")
+            .unwrap();
+        assert_eq!(no_op.steering_targets(), ["clock"]);
+        assert!(no_op.question_delivery_eligible("clock"));
+    }
+
+    #[tokio::test]
+    async fn passive_summary_probe_only_preserves_the_exact_run_client_and_tool() {
+        let run = AuditRun::new("return null;", None).unwrap();
+        run.bind("clock", "verified-owner", "clock-agent", "private-token")
+            .unwrap();
+        run.native_dispatched("clock", Some("ssmcp.time.now"));
+        let another = AuditRun::new("return null;", None).unwrap();
+        another.native_dispatched("clock", Some("ssmcp.time.now"));
+        run.native_dispatched("other-client", Some("ssmcp.time.now"));
+        run.passive_summary_probe("clock", async {
+            run.native_dispatched("clock", Some(tool_summaries::TOOL));
+            another.native_dispatched("clock", Some(tool_summaries::TOOL));
+            run.native_dispatched("other-client", Some(tool_summaries::TOOL));
+        })
+        .await;
+        assert!(run.time_observation_only("clock"));
+        assert!(run.steering_targets().is_empty());
+        assert!(!another.time_observation_only("clock"));
+        assert!(!run.time_observation_only("other-client"));
+        // An explicit caller summary read outside the collector stays on the
+        // existing bound readback policy; it cannot borrow the private scope.
+        run.native_dispatched("clock", Some(tool_summaries::TOOL));
+        assert!(!run.time_observation_only("clock"));
+        assert_eq!(run.steering_targets(), ["clock"]);
+        let mixed = AuditRun::new("return null;", None).unwrap();
+        mixed.native_dispatched("clock", Some("ssmcp.time.now"));
+        mixed
+            .passive_summary_probe("clock", async {
+                mixed.native_dispatched("clock", Some("ssmcp.exec.start"));
+                mixed.native_dispatched("clock", Some("ssmcp.time.wait"));
+            })
+            .await;
+        assert!(!mixed.time_observation_only("clock"));
+        assert_eq!(mixed.steering_targets(), ["clock"]);
+    }
+
+    #[test]
+    fn time_calls_never_erase_existing_interaction_in_either_mixed_order() {
+        for before in [false, true] {
+            for tool in ["ssmcp.exec.start", "ssmcp.ui.message", "ssmcp.fs.read_text"] {
+                let run = AuditRun::new("return null;", None).unwrap();
+                run.bind("clock", "verified-owner", "clock-agent", "private-token")
+                    .unwrap();
+                if before {
+                    run.native_dispatched("clock", Some("ssmcp.time.wait"));
+                }
+                run.native_dispatched("clock", Some(tool));
+                run.native_dispatched("clock", Some("ssmcp.time.now"));
+                assert_eq!(run.steering_targets(), ["clock"], "{tool}/{before}");
+                assert!(run.question_delivery_eligible("clock"), "{tool}/{before}");
+            }
+        }
+        let run = AuditRun::new("return null;", None).unwrap();
+        run.bind("clock", "verified-owner", "clock-agent", "private-token")
+            .unwrap();
+        run.native_dispatched("clock", Some("ssmcp.time.wait"));
+        run.interacted("clock");
+        run.native_dispatched("clock", Some("ssmcp.time.now"));
+        assert_eq!(run.steering_targets(), ["clock"]);
+        let ordinary = AuditRun::new("return null;", None).unwrap();
+        ordinary
+            .bind("clock", "verified-owner", "clock-agent", "private-token")
+            .unwrap();
+        ordinary.native_dispatched("clock", Some("ssmcp.ui.get"));
+        ordinary.native_dispatched("clock", Some("ssmcp.time.now"));
+        assert_eq!(
+            ordinary.steering_targets(),
+            ["clock"],
+            "existing bound UI observation delivery is unchanged"
+        );
     }
 
     #[test]

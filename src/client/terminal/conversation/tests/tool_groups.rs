@@ -50,10 +50,7 @@ fn save_preview(state: &mut State, name: &str) {
     static BINARY_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let binary_sha = BINARY_SHA.get_or_init(|| {
         let executable = std::env::current_exe().unwrap();
-        format!(
-            "{:x}",
-            crate::digest::Hex(Sha256::digest(std::fs::read(executable).unwrap()))
-        )
+        crate::hex::encode(Sha256::digest(std::fs::read(executable).unwrap()))
     });
     let source_revision = std::env::var("SSMCP_SOURCE_REVISION").ok();
     let mut manifest: serde_json::Value = std::fs::read(out.join("manifest.json"))
@@ -77,7 +74,7 @@ fn save_preview(state: &mut State, name: &str) {
         "path":filename,
         "rows":frame.geometry.rows,
         "cols":frame.geometry.cols,
-        "sha256":format!("{:x}", crate::digest::Hex(Sha256::digest(&ansi))),
+        "sha256":crate::hex::encode(Sha256::digest(&ansi)),
     }));
     std::fs::write(
         out.join("manifest.json"),
@@ -235,18 +232,39 @@ fn adjacent_tool_group_frame_scroll_expand_and_command_tail_preserve_draft_and_q
 
 #[test]
 fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay() {
+    let header_row = |screen: &str| {
+        screen
+            .lines()
+            .position(|row| row.contains("Tools · 5 calls"))
+            .unwrap() as u16
+    };
     for cols in [120, 48] {
         for expanded in [false, true] {
             let mut before = fixture(cols);
-            let initial = display(&mut before).screen().contents();
-            let y = initial
-                .lines()
-                .position(|row| row.contains("Tools · 5 calls"))
-                .unwrap() as u16;
+            let mut initial = display(&mut before).screen().contents();
+            let folded_scroll = if expanded {
+                None
+            } else {
+                let group = &before.events.snapshot()["tool_groups"][0];
+                assert_eq!(group["expanded"], true);
+                assert_eq!(group["following"], true);
+                before.chat_key(Key::Mouse {
+                    button: 64,
+                    x: 8,
+                    y: header_row(&initial),
+                    release: false,
+                });
+                initial = display(&mut before).screen().contents();
+                let group = &before.events.snapshot()["tool_groups"][0];
+                let scroll = group["scroll"].as_u64().unwrap();
+                assert!(scroll > 0, "{initial}");
+                assert_eq!(group["following"], false);
+                Some(scroll)
+            };
             before.chat_key(Key::Mouse {
                 button: 0,
                 x: 8,
-                y,
+                y: header_row(&initial),
                 release: false,
             });
             let first = display(&mut before).screen().contents();
@@ -255,14 +273,10 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
                 false
             );
             if expanded {
-                let y = first
-                    .lines()
-                    .position(|row| row.contains("Tools · 5 calls"))
-                    .unwrap() as u16;
                 before.chat_key(Key::Mouse {
                     button: 0,
                     x: 8,
-                    y,
+                    y: header_row(&first),
                     release: false,
                 });
                 before.chat_key(Key::End);
@@ -298,14 +312,20 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             after.chat_apply_reload_snapshot(saved, Vec::new(), None);
             after.chat_restore_draft(draft);
             after.chat_restore_reload_input();
+            assert_eq!(
+                after.events.snapshot()["tool_groups"][0]["following"],
+                events["tool_groups"][0]["following"]
+            );
             let screen = display(&mut after).screen().contents();
             save_preview(&mut after, &format!("reload-after-{mode}"));
             let restored = after.events.snapshot();
             assert_eq!(restored["tool_groups"][0]["expanded"], expanded);
-            assert_eq!(
-                restored["tool_groups"][0]["scroll"],
-                events["tool_groups"][0]["scroll"]
-            );
+            if expanded {
+                assert_eq!(
+                    restored["tool_groups"][0]["scroll"],
+                    events["tool_groups"][0]["scroll"]
+                );
+            }
             assert_eq!(
                 restored["events"][5]["expanded"],
                 events["events"][5]["expanded"]
@@ -349,7 +369,122 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
             assert_eq!(after.conversation.snapshot()["draft"], draft_display);
             assert_eq!(after.chat_data()["queue"], queue);
             assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+            if let Some(scroll) = folded_scroll {
+                after.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y: header_row(&screen),
+                    release: false,
+                });
+                display(&mut after);
+                let reopened = &after.events.snapshot()["tool_groups"][0];
+                assert_eq!(reopened["expanded"], true);
+                assert_eq!(reopened["following"], false);
+                assert_eq!(reopened["scroll"], scroll);
+                assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+                save_preview(&mut after, "reload-after-folded-reopened");
+            }
         }
+    }
+}
+
+#[test]
+fn reload_folded_following_tool_group_reopens_at_tail_without_native_replay() {
+    let click_header = |screen: &str, heading: &str| Key::Mouse {
+        button: 0,
+        x: 8,
+        y: screen
+            .lines()
+            .position(|row| row.contains(heading))
+            .unwrap() as u16,
+        release: false,
+    };
+    for cols in [120, 48] {
+        let mut before = fixture(cols);
+        let initial = display(&mut before).screen().contents();
+        let events = before.events.snapshot();
+        let group = &events["tool_groups"][0];
+        assert_eq!(group["expanded"], true);
+        assert_eq!(group["following"], true);
+        let saved_tail = group["scroll"].as_u64().unwrap();
+        assert!(
+            saved_tail > 0 && initial.contains("python3 -c"),
+            "{initial}"
+        );
+        assert_eq!(
+            saved_tail,
+            group["rows"].as_u64().unwrap() - group["visible_rows"].as_u64().unwrap()
+        );
+        let draft = before.chat_saved_draft();
+        assert!(draft.cursor < draft.text.len());
+        let queue = before.chat_data()["queue"].clone();
+        save_preview(&mut before, "reload-following-before-fold");
+
+        before.chat_key(click_header(&initial, "▾ Tools · 5 calls"));
+        let folded = display(&mut before).screen().contents();
+        assert!(folded.contains("▸ Tools · 5 calls") && !folded.contains("python3 -c"));
+        assert_eq!(
+            before.events.snapshot()["tool_groups"][0]["following"],
+            true
+        );
+        let bytes = serde_json::to_vec(&before.chat_reload_snapshot()).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("private-frame-secret"));
+
+        let mut after = preview(32, cols);
+        after.chat_apply_reload_snapshot(serde_json::from_slice(&bytes).unwrap(), Vec::new(), None);
+        after.chat_restore_draft(draft.clone());
+        after.chat_restore_reload_input();
+        let folded = display(&mut after).screen().contents();
+        let restored = after.events.snapshot();
+        let group = &restored["tool_groups"][0];
+        assert_eq!(group["expanded"], false);
+        assert_eq!(group["following"], true);
+        assert_eq!(group["stats"]["unknown"], 5);
+        let commands = restored["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["command"] == true)
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), 5);
+        assert!(
+            commands
+                .iter()
+                .all(|event| { event["historical"] == true && event["connection_ended"] == true })
+        );
+        assert_ne!(group["members"], events["tool_groups"][0]["members"]);
+        assert!(
+            folded.contains("▸ Tools · 5 calls")
+                && !folded.contains("python3 -c")
+                && folded.contains(&draft.text),
+            "{folded}"
+        );
+        assert_eq!(after.chat_saved_draft(), draft);
+        assert_eq!(after.chat_data()["queue"], queue);
+        assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+        save_preview(&mut after, "reload-following-after-folded");
+
+        after.chat_key(click_header(&folded, "▸ Tools · 5 calls"));
+        let reopened = display(&mut after).screen().contents();
+        let shown = &after.events.snapshot()["tool_groups"][0];
+        assert_eq!(shown["expanded"], true);
+        assert_eq!(shown["members"], group["members"]);
+        assert_eq!(shown["following"], true, "{reopened}");
+        assert_eq!(shown["scroll"], saved_tail);
+        assert_eq!(
+            saved_tail,
+            shown["rows"].as_u64().unwrap() - shown["visible_rows"].as_u64().unwrap()
+        );
+        assert!(
+            reopened.contains("python3 -c")
+                && reopened.contains(&draft.text)
+                && !reopened.contains("private-frame-secret"),
+            "{reopened}"
+        );
+        assert_eq!(after.chat_saved_draft(), draft);
+        assert_eq!(after.chat_data()["queue"], queue);
+        assert!(after.actions.is_empty() && after.conversation.submitting.is_none());
+        save_preview(&mut after, "reload-following-after-reopen");
     }
 }
 

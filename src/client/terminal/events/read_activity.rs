@@ -667,9 +667,17 @@ mod tests {
             b"[RUN] shell next true\n",
         );
         let command = view.events.back().unwrap().id;
-        assert_eq!(view.visible_ids(), vec![ids[0], command]);
-        view.select(-1);
+        let members = [ids[0], ids[1], ids[2], ids[3], command];
+        assert_eq!(view.visible_ids(), members);
+        let groups = &view.snapshot()["tool_groups"];
+        assert_eq!(groups.as_array().unwrap().len(), 1);
+        assert_eq!(groups[0]["members"], json!(members));
+        assert_eq!(groups[0]["expanded"], true);
+        view.select(-isize::MAX);
         assert_eq!(view.selected, Some(ids[0]));
+        assert_eq!(view.selected_group, Some(ids[0]));
+        assert!(view.back());
+        assert_eq!(view.visible_ids(), vec![ids[0]]);
         assert!(view.open());
         view.render(48, 20, &ui(), true);
         let row = view

@@ -179,6 +179,7 @@ class Local(Harness):
         self.browser_cookie_verified = False
         self.http_timeout = 30
         self.wait_user_verified = False
+        self.time_primitives_verified = False
         self.expected_runner_sha256 = runner_sha256
         self.bundled_runner_verified = False
         self.runner_mount_observed = False
@@ -390,6 +391,7 @@ class Local(Harness):
         self.check(len(matching) == 1,
                    "local authorization discovers the actual foreground client")
         self.client_id = matching[0]["id"]
+        self.time_roundtrip()
         content = "Pure local MCP\n中文与空格 remain intact.\n"
         self.call("ssmcp.fs.write_text", {"path": "local-check.txt", "text": content})
         read = self.call("ssmcp.fs.read_text", {"path": "local-check.txt"})
@@ -445,6 +447,77 @@ class Local(Harness):
             raise AssertionError("local gateway continued listening after the client stopped")
         self.check(True, "local gateway and its in-memory authorization lifetime end with the client")
         self.cleanup_verified = True
+
+    def time_roundtrip(self):
+        expected = {"ssmcp.time.now", "ssmcp.time.wait"}
+        page = self.public_call("list", {"client_id": self.client_id})
+        catalog = list(page["tools"])
+        cursors = set()
+        while page.get("nextCursor"):
+            cursor = page["nextCursor"]
+            if cursor in cursors or len(cursors) >= 128:
+                raise AssertionError("local native catalog did not finish within its bounded pages")
+            cursors.add(cursor)
+            page = self.public_call("list", {"client_id": self.client_id, "cursor": cursor})
+            catalog.extend(page["tools"])
+        local_tools = [tool for tool in catalog if tool["name"] in expected]
+        self.check(len(local_tools) == 2 and {tool["name"] for tool in local_tools} == expected
+                   and all(isinstance(tool.get("inputSchema"), dict) for tool in local_tools),
+                   "the actual private local connection lists both native time primitives")
+
+        discovery = subprocess.run([str(self.executable), "--list-tools", "--shell", "/bin/sh", "--no-watchdog"],
+            env=self.environments["local-fixture"], cwd=self.workspace,
+            capture_output=True, text=True, timeout=30, check=True)
+        offline = json.loads(discovery.stdout)
+        offline_names = [tool["name"] for tool in offline["tools"] if tool["name"] in expected]
+        self.check(offline["type"] == "shell" and len(offline_names) == 2 and set(offline_names) == expected,
+                   "offline --list-tools includes the same time primitives without a remote relay")
+
+        def native(name, arguments):
+            code = "return await call(%s, %s, %s);" % (
+                json.dumps(self.client_id), json.dumps(name), json.dumps(arguments))
+            outer = self.public_call("code_mode", {"code": code})
+            self.check(not any(outer.get(key) for key in ("user_messages", "native_messages", "question_answers"))
+                       and outer.get("user_consent_to_end") is None,
+                       "a local time-only response has no input, answer or task-completion receipt")
+            result = outer["result"]
+            if not isinstance(result, dict) or result.get("isError") or not isinstance(result.get("structuredContent"), dict):
+                raise AssertionError("actual local native time operation failed: " + name)
+            return result["structuredContent"]
+
+        now = native("ssmcp.time.now", {})
+        self.check(now["schema_version"] == 1 and type(now["unix_ms"]) is int
+                   and now["unix_ms"] > 1_000_000_000_000 and now["unix_seconds"] == now["unix_ms"] // 1000
+                   and type(now["monotonic_ms"]) is int and now["monotonic_ms"] >= 0
+                   and re.fullmatch(r"clock_[0-9a-f]{32}", now["monotonic_scope"]) is not None
+                   and now["wall_clock"] == "UTC Unix epoch" and now["deadline_clock"] == "monotonic",
+                   "local time.now separates a real UTC readout from the connection's monotonic counter")
+        started = native("ssmcp.time.wait", {"duration_ms": 60_000, "label": "Owned local timer"})
+        self.check(started["schema_version"] == 1 and started["status"] == "running"
+                   and re.fullmatch(r"timer_[0-9a-f]{32}_[0-9a-f]+", started["timer_id"]) is not None
+                   and 0 < started["remaining_ms"] <= 60_000 and started["completion_permission"] is False,
+                   "local time.wait starts an owned background countdown and returns its exact ID")
+        observed = native("ssmcp.time.wait", {"op": "status", "timer_id": started["timer_id"], "wait_ms": 20})
+        self.check(observed["timer_id"] == started["timer_id"] and observed["status"] == "running"
+                   and observed["wait_timed_out"] is True and observed["completion_permission"] is False
+                   and observed["elapsed_ms"] >= started["elapsed_ms"]
+                   and 0 < observed["remaining_ms"] < started["remaining_ms"],
+                   "a bounded local observation times out without consuming or replacing its running timer")
+        cancelled = native("ssmcp.time.wait", {"op": "cancel", "timer_id": started["timer_id"]})
+        final = native("ssmcp.time.wait", {"op": "status", "timer_id": started["timer_id"]})
+        self.check(cancelled["timer_id"] == final["timer_id"] == started["timer_id"]
+                   and cancelled["status"] == final["status"] == "cancelled"
+                   and cancelled["completion_permission"] is False and final["completion_permission"] is False,
+                   "cancellation affects only the exact local timer and never grants task completion")
+        status, response, _ = self.rpc("tools/call", {"name": "await", "arguments": {
+            "client_id": self.client_id, "targets": [{"type": "agent_messages"}], "timeout_ms": 1000}}, modern=True)
+        result = response.get("result", {})
+        expected_error = "await requires an authenticated account and the current participant's collab binding"
+        self.check(status == 200 and result.get("isError") is True
+                   and any(item.get("type") == "text" and item.get("text") == expected_error
+                           for item in result.get("content", [])),
+                   "enabling local timers preserves the existing account requirement for public typed await")
+        self.time_primitives_verified = True
 
     def wait_user_roundtrip(self):
         code = f"return await ui.wait({json.dumps(self.client_id)}, {{timeout_ms:10000,intent:'need_user',reason:'Synthetic local wait',notify:false}});"
@@ -599,6 +672,7 @@ def main():
                               bundled_runner_verified=harness.bundled_runner_verified,
                               runner_mount_observed=harness.runner_mount_observed,
                               observed_runner_sha256=harness.observed_runner_sha256,
+                              time_primitives_verified=harness.time_primitives_verified,
                               wait_user_verified=harness.wait_user_verified, cleanup_verified=harness.cleanup_verified,
                               duration_seconds=round(time.monotonic() - started, 3))
                 if args.browser_preview and args.browser_preview.is_file():

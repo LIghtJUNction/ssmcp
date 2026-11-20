@@ -1644,7 +1644,9 @@ fn commit_user_response_inner(
             waiting,
         } = target;
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
-        native_candidates.push((session.clone(), owner.clone(), binding.clone()));
+        if !report.run.time_observation_only(session.client_id()) {
+            native_candidates.push((session.clone(), owner.clone(), binding.clone()));
+        }
         if answers_deferred.len() < 8
             && binding.is_some()
             && let Some(reason) = report.run.question_answer_deferred(session.client_id())
@@ -2236,8 +2238,10 @@ mod tests {
             0
         );
         let response = json!({"content":"x".repeat(crate::wire::MAX_FRAME - 32 * 1024)});
-        assert!(delivery_budget(&response) < crate::steering::MAX_DELIVERY_BYTES);
-        assert!(delivery_budget(&response) > 0);
+        assert_eq!(delivery_budget(&response), 0);
+        let response = json!({"content":"x".repeat(crate::wire::MAX_FRAME - 64 * 1024)});
+        let budget = delivery_budget(&response);
+        assert!(budget > 0 && budget < crate::steering::MAX_DELIVERY_BYTES);
     }
 
     use super::*;

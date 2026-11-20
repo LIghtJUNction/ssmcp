@@ -11,7 +11,7 @@ pub mod code_mode;
 mod collab;
 pub mod computer;
 pub mod context;
-pub(crate) mod digest;
+pub(crate) mod hex;
 #[cfg(target_os = "linux")]
 pub mod history;
 #[cfg(target_os = "linux")]

@@ -622,9 +622,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let app = router("https://configured.example", Some(&root)).unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = crate::http_client::builder()
-            .build()
-            .expect("HTTP client configuration");
+        let client = crate::http_client::builder().build().unwrap();
         let manifest: Value = client
             .get(format!("http://{address}/client/release.json"))
             .send()

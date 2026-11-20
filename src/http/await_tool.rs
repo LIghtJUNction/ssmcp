@@ -853,6 +853,30 @@ pub(super) async fn wait(
             return Ok(envelope(Some(&record.id), record.mode, status, results));
         }
     };
+    // Presentation is best effort and follows admission. It owns no native
+    // slot, user-input reservation, target result or finish permission.
+    let _display = scope.session.show_wait(
+        &scope.broker,
+        crate::broker::wait_display::Request {
+            user: &scope.user,
+            token: &scope.token,
+            binding: &scope.binding,
+            wait_id: &record.id,
+            targets: record
+                .targets
+                .iter()
+                .map(|target| match target {
+                    Target::Exec { .. } => crate::wire::wait_display::Kind::Exec,
+                    Target::Job { .. } => crate::wire::wait_display::Kind::Job,
+                    Target::AgentStatus { .. } => crate::wire::wait_display::Kind::AgentStatus,
+                    Target::AgentMessages { .. } => crate::wire::wait_display::Kind::AgentMessages,
+                    Target::UserInput { .. } => crate::wire::wait_display::Kind::UserInput,
+                    Target::Finish { .. } => crate::wire::wait_display::Kind::Finish,
+                })
+                .collect(),
+            timeout_ms: args.timeout_ms,
+        },
+    );
     let mut cancelled = record.cancelled.subscribe();
     let mut pending = FuturesUnordered::new();
     // Leave a small transport margin so native bounded waits can return their

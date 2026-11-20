@@ -383,7 +383,7 @@ pub(super) fn take_exit_message() -> Option<String> {
 }
 
 /// Wake the display after asynchronous local discovery without publishing a log.
-pub(super) fn invalidate() {
+pub(crate) fn invalidate() {
     if let Some(shared) = shared() {
         shared
             .state

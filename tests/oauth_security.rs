@@ -2,6 +2,9 @@
 //! No browser, external callback, installed coding agent, or model is contacted.
 #![cfg(target_os = "linux")]
 
+#[path = "support/http_client.rs"]
+mod http_client;
+
 use reqwest::{Client, Response, StatusCode, Url, header};
 use serde_json::{Value, json};
 use ssmcp::{
@@ -66,14 +69,11 @@ impl Harness {
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
-        let client = {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            Client::builder()
-        }
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap();
+        let client = http_client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
         let mut harness = Self {
             broker,
             server,

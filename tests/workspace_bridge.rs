@@ -1,6 +1,9 @@
 //! Real system rsync and loopback TCP through authenticated HTTP code_mode calls.
 #![cfg(target_os = "linux")]
 
+#[path = "support/http_client.rs"]
+mod http_client;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use ssmcp::{
@@ -78,14 +81,11 @@ impl Server {
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         Self {
             broker,
-            http: {
-                let _ = rustls::crypto::ring::default_provider().install_default();
-                reqwest::Client::builder()
-            }
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
-            .build()
-            .unwrap(),
+            http: http_client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap(),
             url: format!("http://{address}"),
             owner: String::new(),
             task,

@@ -54,16 +54,20 @@ pub(super) async fn collect(report: &CodeRunReport) {
             {
                 return Err("binding_changed");
             }
-            let _ = code_mode::AUDIT_RUN
-                .scope(
-                    report.run.clone(),
-                    session.call_with_authorization(
-                        Operation::CallTool {
-                            name: code_mode::tool_summaries::TOOL.into(),
-                            arguments: serde_json::json!({"action":"list"}),
-                        },
-                        None,
-                        &authorization,
+            let _ = report
+                .run
+                .passive_summary_probe(
+                    &client_id,
+                    code_mode::AUDIT_RUN.scope(
+                        report.run.clone(),
+                        session.call_with_authorization(
+                            Operation::CallTool {
+                                name: code_mode::tool_summaries::TOOL.into(),
+                                arguments: serde_json::json!({"action":"list"}),
+                            },
+                            None,
+                            &authorization,
+                        ),
                     ),
                 )
                 .await;

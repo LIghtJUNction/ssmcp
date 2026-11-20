@@ -23,7 +23,11 @@ pub(crate) fn attach(mut value: Value, scope: Option<&CallScope>, tool: &str) ->
     // Explicit readback is a view, not automatic delivery or acknowledgement.
     if matches!(
         tool,
-        "ssmcp.ui.questions" | "ssmcp.ui.get" | "ssmcp.ui.question_ack"
+        "ssmcp.ui.questions"
+            | "ssmcp.ui.get"
+            | "ssmcp.ui.question_ack"
+            | "ssmcp.time.now"
+            | "ssmcp.time.wait"
     ) {
         return value;
     }

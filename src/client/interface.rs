@@ -66,6 +66,7 @@ pub(crate) fn get() -> Value {
         "steering": steering,
         "listener": listener::snapshot(),
         "user_wait": user_wait::snapshot(),
+        "time": crate::runtime::time::snapshot(),
         "questions": questions::snapshot(),
     })
 }

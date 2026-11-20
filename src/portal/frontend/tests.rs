@@ -121,7 +121,7 @@ async fn private_renderer_round_trip_and_owned_task_shutdown() {
     assert!(body.contains("lang=\"zh-CN\""));
     assert!(body.contains("https://ssmcp.test:8443/mcp"));
     let (content_type, bytes) = assets::public_bytes("brand-mark.png").unwrap();
-    let hash = format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)));
+    let hash = crate::hex::encode(Sha256::digest(bytes));
     let rendered = endpoint
         .render(
             Request::Asset {
@@ -177,7 +177,7 @@ async fn timeout_oversized_and_mismatched_worker_responses_fall_back() {
                 sha256: if variant == "wrong-hash" {
                     "0".repeat(64)
                 } else {
-                    format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)))
+                    crate::hex::encode(Sha256::digest(bytes))
                 },
             };
             write_frame(
@@ -216,7 +216,7 @@ async fn changed_css_worker(bound: socket::Bound, changed: &'static [u8]) {
         let header = Header {
             protocol: PROTOCOL,
             content_type: "text/css; charset=utf-8".into(),
-            sha256: format!("{:x}", crate::digest::Hex(Sha256::digest(changed))),
+            sha256: crate::hex::encode(Sha256::digest(changed)),
         };
         write_frame(
             &mut stream,
@@ -235,10 +235,8 @@ async fn new_worker_asset_hashes_work_while_old_core_urls_keep_exact_bytes() {
     let changed = b"body { color: rgb(3, 4, 5); }";
     let worker = tokio::spawn(changed_css_worker(bound, changed));
     let (base, server) = http(Arc::new(configured(&directory))).await;
-    let client = crate::http_client::builder()
-        .build()
-        .expect("HTTP client configuration");
-    let new_hash = format!("{:x}", crate::digest::Hex(Sha256::digest(changed)));
+    let client = crate::http_client::builder().build().unwrap();
+    let new_hash = crate::hex::encode(Sha256::digest(changed));
     let new_path = format!("/account/assets/{new_hash}/portal.css");
     let response = client
         .get(format!("{base}{new_path}"))
@@ -308,7 +306,7 @@ async fn guide_proxy_never_forwards_authorization_cookies_or_untrusted_host() {
         let header = Header {
             protocol: PROTOCOL,
             content_type: "text/html; charset=utf-8".into(),
-            sha256: format!("{:x}", crate::digest::Hex(Sha256::digest(body))),
+            sha256: crate::hex::encode(Sha256::digest(body)),
         };
         write_frame(
             &mut stream,
@@ -322,7 +320,7 @@ async fn guide_proxy_never_forwards_authorization_cookies_or_untrusted_host() {
     let (base, server) = http(Arc::new(configured(&directory))).await;
     let response = crate::http_client::builder()
         .build()
-        .expect("HTTP client configuration")
+        .unwrap()
         .get(format!("{base}/guide/en"))
         .header(header::AUTHORIZATION, "Bearer private-test-token")
         .header(header::COOKIE, "private-test-cookie")

@@ -2,6 +2,9 @@
 //! Native adapter protocols are covered by the backend-specific test suites.
 #![cfg(target_os = "linux")]
 
+#[path = "support/http_client.rs"]
+mod http_client;
+
 use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,
@@ -68,14 +71,11 @@ impl Server {
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         Self {
             broker,
-            http: {
-                let _ = rustls::crypto::ring::default_provider().install_default();
-                reqwest::Client::builder()
-            }
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap(),
+            http: http_client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
             url: format!("http://{address}"),
             owner: String::new(),
             task,

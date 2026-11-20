@@ -2354,7 +2354,7 @@ mod tests {
         assert_eq!(artifact["bytes"], saved.len() as u64);
         assert_eq!(
             artifact["sha256"],
-            format!("{:x}", crate::digest::Hex(Sha256::digest(&saved)))
+            crate::hex::encode(Sha256::digest(&saved))
         );
         assert_eq!(
             serde_json::from_slice::<Value>(&saved).unwrap()["tail"],
@@ -2419,7 +2419,7 @@ mod tests {
         assert_eq!(saved, expected);
         assert_eq!(
             artifact["sha256"],
-            format!("{:x}", crate::digest::Hex(Sha256::digest(&saved)))
+            crate::hex::encode(Sha256::digest(&saved))
         );
         server.await.unwrap();
         backend.shutdown().await;

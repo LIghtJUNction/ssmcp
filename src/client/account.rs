@@ -215,8 +215,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn credential_path(root: &Path, server: &str) -> PathBuf {
     root.join(format!(
-        "{:x}.json",
-        crate::digest::Hex(Sha256::digest(server.as_bytes()))
+        "{}.json",
+        crate::hex::encode(Sha256::digest(server.as_bytes()))
     ))
 }
 
@@ -310,7 +310,7 @@ impl Api {
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"));
         if let Some(tls) = super::trust::tls_config(&server)? {
-            builder = builder.use_preconfigured_tls((*tls).clone());
+            builder = builder.tls_backend_preconfigured((*tls).clone());
         }
         Ok(Self {
             client: builder.build()?,
@@ -1365,8 +1365,8 @@ mod tests {
         let mut random = [0; 16];
         platform::random_bytes(&mut random).unwrap();
         let root = std::env::temp_dir().join(format!(
-            "ssmcp-auth-{:x}",
-            crate::digest::Hex(Sha256::digest(random))
+            "ssmcp-auth-{}",
+            crate::hex::encode(Sha256::digest(random))
         ));
         create_tree(&root).unwrap();
         root

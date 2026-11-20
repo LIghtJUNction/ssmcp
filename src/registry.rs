@@ -14,6 +14,7 @@ pub enum Provider {
     Terminal,
     Ui,
     Exec,
+    Time,
     Browser,
     Computer,
     Omarchy,
@@ -39,6 +40,7 @@ impl Provider {
             Self::Terminal => "terminal",
             Self::Ui => "ui",
             Self::Exec => "exec",
+            Self::Time => "time",
             Self::Browser => "browser",
             Self::Computer => "computer",
             Self::Omarchy => "omarchy",
@@ -376,6 +378,7 @@ fn prepare(
             Provider::Terminal => id.starts_with("terminal."),
             Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),
+            Provider::Time => id.starts_with("ssmcp.time."),
             Provider::Browser => id.starts_with("ssmcp.browser."),
             Provider::Computer => id.starts_with("ssmcp.computer."),
             Provider::Omarchy => id.starts_with("ssmcp.omarchy."),
@@ -461,10 +464,7 @@ fn component(name: &str) -> String {
     }
     if encoded.len() > 96 {
         use sha2::{Digest, Sha256};
-        format!(
-            "_h{:x}",
-            crate::digest::Hex(Sha256::digest(name.as_bytes()))
-        )
+        format!("_h{}", crate::hex::encode(Sha256::digest(name.as_bytes())))
     } else {
         encoded
     }

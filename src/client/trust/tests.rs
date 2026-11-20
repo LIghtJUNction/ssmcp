@@ -116,8 +116,8 @@ async fn server(websocket: bool, expired: bool) -> (SocketAddr, JoinHandle<Vec<u
 
 async fn https_attempt(config: Arc<ClientConfig>, expired: bool, host: &str) -> (bool, Vec<u8>) {
     let (address, task) = server(false, expired).await;
-    let client = crate::http_client::builder()
-        .use_preconfigured_tls((*config).clone())
+    let client = reqwest::Client::builder()
+        .tls_backend_preconfigured((*config).clone())
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .resolve(host, address)
