@@ -143,6 +143,31 @@ async fn bounded_output(reader: impl AsyncRead + Unpin) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+// Output can contain arbitrary provider data, including echoed credentials.
+// Report only stable diagnostic categories and byte counts on failure.
+fn failure_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let cause = [stderr, stdout].into_iter().find_map(|stream| {
+        let text = String::from_utf8_lossy(stream).to_ascii_lowercase();
+        [
+            ("permission denied", "permission denied"),
+            ("authentication failed", "authentication failed"),
+            ("not logged in", "sign-in required"),
+            ("unauthorized", "authentication rejected"),
+            ("unknown option", "unsupported command option"),
+            ("unknown model", "model unavailable"),
+            ("rate limit", "rate limited"),
+        ]
+        .into_iter()
+        .find_map(|(needle, code)| text.contains(needle).then_some(code))
+    });
+    format!(
+        "{}stdout {} bytes, stderr {} bytes",
+        cause.map_or(String::new(), |cause| format!("{cause}; ")),
+        stdout.len(),
+        stderr.len()
+    )
+}
+
 impl Program {
     fn command(&self, text: &str) -> Command {
         let mut command = Command::new(&self.program);
@@ -174,7 +199,7 @@ impl Program {
         };
         let result = tokio::time::timeout(PROCESS_LIMIT, async {
             tokio::try_join!(
-                write,
+                async { Ok::<_, io::Error>(write.await) },
                 bounded_output(stdout),
                 bounded_output(stderr),
                 process.wait()
@@ -182,7 +207,8 @@ impl Program {
         })
         .await;
         match result {
-            Ok(Ok(((), output, _, status))) if status.success() => {
+            Ok(Ok((written, output, _, status))) if status.success() => {
+                written.map_err(|error| format!("chat agent input failed: {error}"))?;
                 let text =
                     String::from_utf8(output).map_err(|_| "chat agent output is not UTF-8")?;
                 Ok(crate::audit::event(serde_json::Value::String(text))
@@ -190,7 +216,10 @@ impl Program {
                     .unwrap_or_default()
                     .to_owned())
             }
-            Ok(Ok(((), _, _, status))) => Err(format!("chat agent exited with {status}")),
+            Ok(Ok((_, stdout, stderr, status))) => Err(format!(
+                "chat agent exited with {status} ({})",
+                failure_output(&stdout, &stderr)
+            )),
             Ok(Err(error)) => {
                 process.shutdown().await;
                 Err(format!("chat agent I/O failed: {error}"))
@@ -206,6 +235,18 @@ impl Program {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_output_keeps_the_error_category_without_raw_provider_data() {
+        let diagnostic = failure_output(
+            b"provider stdout with opaque secret",
+            b"Permission denied: /secret/path token=arbitrary-secret",
+        );
+        assert_eq!(
+            diagnostic,
+            "permission denied; stdout 34 bytes, stderr 54 bytes"
+        );
+    }
 
     #[tokio::test]
     async fn owned_process_gets_message_as_data_and_real_exit_status() {

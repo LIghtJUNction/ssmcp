@@ -131,14 +131,23 @@ impl HttpState {
     }
 
     fn check_origin(&self, headers: &HeaderMap) -> bool {
-        headers
-            .get(header::HOST)
-            .is_some_and(|host| host.as_bytes() == self.authority.as_bytes())
-            && headers.get_all(header::HOST).iter().count() == 1
+        // HTTP permits omission of its default port. Since both expected values
+        // come from our bound IP address, exact matching of these two forms also
+        // rejects paths, aliases, userinfo and arbitrary loopback origins.
+        let local = |value: &axum::http::HeaderValue, expected: &str| {
+            value.as_bytes() == expected.as_bytes()
+                || expected
+                    .strip_suffix(":80")
+                    .is_some_and(|default| value.as_bytes() == default.as_bytes())
+        };
+        headers.get_all(header::HOST).iter().count() == 1
+            && headers
+                .get(header::HOST)
+                .is_some_and(|host| local(host, &self.authority))
             && headers.get_all(header::ORIGIN).iter().count() <= 1
             && headers
                 .get(header::ORIGIN)
-                .is_none_or(|origin| origin.as_bytes() == self.origin.as_bytes())
+                .is_none_or(|origin| local(origin, &self.origin))
     }
 
     fn authenticate(&self, headers: &HeaderMap) -> Option<Authorization> {
@@ -162,14 +171,20 @@ pub(super) struct Authorization {
     fingerprint: [u8; 32],
 }
 
+impl Authorization {
+    pub(super) fn current(&self) -> bool {
+        token(&self.token_file).is_ok_and(|token| {
+            let fingerprint: [u8; 32] = Sha256::digest(token).into();
+            bool::from(fingerprint.as_slice().ct_eq(&self.fingerprint))
+        })
+    }
+}
+
 pub(super) async fn revoked(authorization: Option<&Authorization>) {
     let Some(authorization) = authorization else {
         return std::future::pending().await;
     };
-    while token(&authorization.token_file).is_ok_and(|token| {
-        let fingerprint: [u8; 32] = Sha256::digest(token).into();
-        bool::from(fingerprint.as_slice().ct_eq(&authorization.fingerprint))
-    }) {
+    while authorization.current() {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
@@ -256,6 +271,9 @@ async fn http_post(
     } else {
         match serde_json::from_slice::<Message>(&bytes) {
             Ok(message) => match sender.dispatch(&message.text, Some(authorization)).await {
+                Ok(receipt) if receipt.status == "failed" => {
+                    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!(receipt))).into_response()
+                }
                 Ok(receipt) => Json(json!(receipt)).into_response(),
                 Err(error) => (
                     StatusCode::UNPROCESSABLE_ENTITY,
@@ -340,7 +358,7 @@ async fn rpc(
 
 fn tool_result(outcome: Outcome) -> Value {
     let (value, is_error) = match outcome {
-        Ok(receipt) => (json!(receipt), false),
+        Ok(receipt) => (json!(receipt), receipt.status == "failed"),
         Err(error) => (json!({"error":error}), true),
     };
     json!({"isError":is_error,"content":[{"type":"text","text":value.to_string()}],"structuredContent":value})
@@ -396,7 +414,10 @@ mod tests {
     #[tokio::test]
     async fn mcp_passes_literal_framed_text_to_the_live_route_and_reports_a_queue_receipt() {
         let (tx, mut rx) = mpsc::channel::<Incoming>(1);
-        let sender = Sender(tx);
+        let sender = Sender {
+            queue: tx,
+            save_exchange: false,
+        };
         let original = "Inspect @not-created.rs and keep $100\nNext line";
         let call = json!({"jsonrpc":"2.0","id":"fixture","method":"tools/call","params":{
             "name":"chat_submit","arguments":{"text":original}
@@ -427,7 +448,10 @@ mod tests {
     #[tokio::test]
     async fn cancelling_an_input_ticket_leaves_no_receiver_for_dispatch() {
         let (tx, mut rx) = mpsc::channel::<Incoming>(1);
-        let sender = Sender(tx);
+        let sender = Sender {
+            queue: tx,
+            save_exchange: false,
+        };
         let ticket = sender.start("no replay", None).unwrap();
         assert!(sender.start("over capacity", None).is_err());
         drop(ticket);
@@ -455,6 +479,33 @@ mod tests {
         assert!(!state.check_origin(&headers));
     }
 
+    #[test]
+    fn loopback_origin_accepts_only_the_bound_host_and_http_default_port() {
+        let state = HttpState {
+            authority: "[::1]:80".into(),
+            origin: "http://[::1]:80".into(),
+            token_file: PathBuf::new(),
+            mcp: false,
+            readers: Arc::new(Semaphore::new(1)),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "[::1]".parse().unwrap());
+        for origin in ["http://[::1]", "http://[::1]:80"] {
+            headers.insert(header::ORIGIN, origin.parse().unwrap());
+            assert!(state.check_origin(&headers));
+        }
+        for origin in [
+            "https://[::1]",
+            "http://[::1]/",
+            "http://user@[::1]",
+            "http://127.0.0.1",
+            "http://[::1]:81",
+        ] {
+            headers.insert(header::ORIGIN, origin.parse().unwrap());
+            assert!(!state.check_origin(&headers));
+        }
+    }
+
     #[tokio::test]
     async fn unauthenticated_web_post_cannot_submit_to_the_route() {
         let (tx, mut rx) = mpsc::channel::<Incoming>(1);
@@ -473,9 +524,18 @@ mod tests {
             .body(axum::body::Body::from(r#"{"text":"must not dispatch"}"#))
             .unwrap();
         assert_eq!(
-            http_post(State((state, Sender(tx.clone()))), request)
-                .await
-                .status(),
+            http_post(
+                State((
+                    state,
+                    Sender {
+                        queue: tx.clone(),
+                        save_exchange: false
+                    }
+                )),
+                request
+            )
+            .await
+            .status(),
             StatusCode::UNAUTHORIZED,
         );
         assert!(matches!(

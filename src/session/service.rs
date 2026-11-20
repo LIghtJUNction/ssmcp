@@ -911,6 +911,48 @@ pub async fn available() -> bool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn create_rejects_foreground_chat_modes_before_saving_or_spawning() {
+        let directory = Directory::new();
+        let mut supervisor = Supervisor::new(directory.0.clone(), "a".repeat(32));
+        let mut cases = vec![vec!["--agent", "codex"]];
+        if cfg!(unix) {
+            cases.extend([vec!["--input", "pipe"], vec!["--input", "mcp-stdio"]]);
+        }
+        for flags in cases {
+            let name = "foreground-chat";
+            let args = [
+                "--server",
+                "https://relay.example",
+                "--name",
+                name,
+                "--no-watchdog",
+            ]
+            .into_iter()
+            .chain(flags)
+            .map(str::to_owned)
+            .collect();
+            let result = supervisor
+                .dispatch(Request::Create {
+                    spec: SessionSpec {
+                        name: name.into(),
+                        cwd: directory.0.clone(),
+                        args,
+                        watchdog: false,
+                        reconnect_delay_secs: 5,
+                    },
+                })
+                .await;
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("require the foreground")
+            );
+            assert!(!super::super::session_directory(&directory.0, name).exists());
+        }
+    }
+
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {

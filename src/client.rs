@@ -1165,6 +1165,7 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     }
     let options =
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
+    options.chat.validate_saved_input()?;
     if options.daemon
         || options.list_tools
         || (options.destination.is_none() && options.server.is_none())
@@ -1831,6 +1832,7 @@ pub async fn run() -> crate::Result<()> {
             && service.is_none()
             && !options.account_compat
             && !options.temporary
+            && !options.chat.input.uses_stdio()
             && options.username.is_some()
             && !reauthenticated
         {
@@ -2546,8 +2548,13 @@ async fn connect_inner(
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
     } else if options.chat.input != chat_io::Input::Terminal {
-        // External input owns its output protocol; do not emit account state.
-        Ok(())
+        // External input owns stdout. A local OAuth client still needs its
+        // connection URL and one-time code on the operator's stderr.
+        if options.is_local() {
+            render::local_connection_stderr(&output).map_err(Into::into)
+        } else {
+            Ok(())
+        }
     } else {
         render::connection(&output).map_err(Into::into)
     };
@@ -2557,10 +2564,6 @@ async fn connect_inner(
         incoming.stop().await;
         let _ = ssh.wait().await;
         return Err(error);
-    }
-    if options.is_local() && options.chat.input != chat_io::Input::Terminal {
-        // Local Ready URLs identify an MCP resource; login codes are separate.
-        render::status("shell", "Ready", &format!("Native MCP endpoint: {url}"));
     }
     render::status(
         "shell",

@@ -45,6 +45,19 @@ pub(crate) enum Agent {
     },
 }
 
+impl Agent {
+    pub(super) fn label(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::NextCaller => return None,
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+            Self::OpenCode => "OpenCode",
+            Self::Exec { .. } => "Configured executable",
+            Self::Ssmcp { .. } => "Configured SSMCP peer",
+        })
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Settings {
     pub(crate) input: Input,

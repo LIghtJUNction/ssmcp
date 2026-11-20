@@ -5,7 +5,10 @@ mod transport;
 
 pub(crate) use options::{Agent, Flags, Input, Settings, takes_value};
 
-use super::{interface::questions, messaging, steering};
+use super::{
+    interface::{history, questions},
+    messaging, steering,
+};
 use crate::runtime::Runtime;
 use serde::Serialize;
 use std::{
@@ -31,6 +34,15 @@ pub(crate) struct Receipt {
     pub(crate) output: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) warnings: Vec<String>,
+    #[serde(skip)]
+    pub(crate) display: Option<ProgramDisplay>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProgramDisplay {
+    pub(crate) history: history::HistoryId,
+    pub(crate) request_message: String,
+    pub(crate) reply_message: String,
 }
 
 impl Receipt {
@@ -40,6 +52,7 @@ impl Receipt {
             request_id,
             output: None,
             warnings: Vec::new(),
+            display: None,
         }
     }
 }
@@ -48,6 +61,7 @@ struct Request {
     text: String,
     reply: oneshot::Sender<Outcome>,
     authorization: Option<transport::Authorization>,
+    owner: Option<history::HistoryOwner>,
 }
 
 fn private_file(path: &Path) -> Result<Vec<u8>, String> {
@@ -61,7 +75,10 @@ fn private_file(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[derive(Clone)]
-struct Sender(mpsc::Sender<Request>);
+struct Sender {
+    queue: mpsc::Sender<Request>,
+    save_exchange: bool,
+}
 
 impl Sender {
     fn start(
@@ -71,11 +88,16 @@ impl Sender {
     ) -> Result<Ticket, String> {
         steering::validate_text(text)?;
         let (reply, ticket) = oneshot::channel();
-        self.0
+        let owner = self
+            .save_exchange
+            .then(|| history::capture(None))
+            .transpose()?;
+        self.queue
             .try_send(Request {
                 text: text.into(),
                 reply,
                 authorization,
+                owner,
             })
             .map_err(|_| "chat input is busy or disconnected; no request was admitted")?;
         Ok(ticket)
@@ -94,15 +116,23 @@ impl Sender {
     }
 }
 
-static TERMINAL_ROUTE: Mutex<Option<Sender>> = Mutex::new(None);
+static TERMINAL_ROUTE: Mutex<Option<(&'static str, Sender)>> = Mutex::new(None);
 
 pub(crate) fn terminal_submit(text: &str) -> Result<Option<Ticket>, String> {
+    let sender = TERMINAL_ROUTE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map(|(_, sender)| sender.clone());
+    sender.map(|sender| sender.start(text, None)).transpose()
+}
+
+pub(crate) fn terminal_agent_label() -> Option<&'static str> {
     TERMINAL_ROUTE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .as_ref()
-        .map(|sender| sender.start(text, None))
-        .transpose()
+        .map(|(label, _)| *label)
 }
 
 pub(super) struct Session {
@@ -119,7 +149,10 @@ impl Session {
         let transport = transport::Endpoint::open(&settings.input).await?;
         let graceful = matches!(settings.input, Input::Web(_) | Input::McpHttp(_));
         let (tx, mut rx) = mpsc::channel::<Request>(4);
-        let sender = Sender(tx);
+        let sender = Sender {
+            queue: tx,
+            save_exchange: matches!(&agent, process::Target::Program(_)),
+        };
         let (stop, mut cancelled) = watch::channel(false);
         let worker = tokio::spawn(async move {
             loop {
@@ -138,25 +171,26 @@ impl Session {
                     _ = cancelled.changed() => break,
                     _ = request.reply.closed() => continue,
                     _ = transport::revoked(request.authorization.as_ref()) => Err("chat input authorization was revoked; no automatic retry".into()),
-                    result = route(&agent, &runtime, &request.text) => result,
+                    result = route(&agent, &runtime, &request.text, request.owner.take(), request.authorization.as_ref()) => result,
                 };
                 let _ = request.reply.send(result);
                 super::terminal::invalidate();
             }
         });
-        let owns_terminal =
-            settings.input == Input::Terminal && settings.agent != Agent::NextCaller;
-        if owns_terminal {
+        let terminal_agent = (settings.input == Input::Terminal)
+            .then(|| settings.agent.label())
+            .flatten();
+        if let Some(label) = terminal_agent {
             *TERMINAL_ROUTE
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(sender.clone());
+                .unwrap_or_else(|error| error.into_inner()) = Some((label, sender.clone()));
         }
         Ok(Self {
             worker,
             transport: transport
                 .map(|transport| tokio::spawn(transport.serve(sender, stop.subscribe()))),
             stop,
-            owns_terminal,
+            owns_terminal: terminal_agent.is_some(),
             graceful,
         })
     }
@@ -211,15 +245,29 @@ impl Drop for Session {
     }
 }
 
-async fn route(agent: &process::Target, runtime: &Runtime, text: &str) -> Outcome {
-    steering::require_chat_connection()?;
-    let prepared = tokio::time::timeout(Duration::from_secs(5), runtime.prepare_references(text))
-        .await
-        .map_err(|_| "chat reference preparation timed out")??;
-    // A reload can start while workspace references are being read.
-    steering::require_chat_connection()?;
+async fn route(
+    agent: &process::Target,
+    runtime: &Runtime,
+    text: &str,
+    owner: Option<history::HistoryOwner>,
+    authorization: Option<&transport::Authorization>,
+) -> Outcome {
+    admit_dispatch(authorization)?;
+    let prepared = if matches!(agent, process::Target::Ssmcp { .. }) {
+        // Native inboxes carry the exact literal body, even local reference syntax.
+        None
+    } else {
+        Some(
+            tokio::time::timeout(Duration::from_secs(5), runtime.prepare_references(text))
+                .await
+                .map_err(|_| "chat reference preparation timed out")??,
+        )
+    };
+    // Workspace preparation can outlive the connection or token that admitted it.
+    admit_dispatch(authorization)?;
     match agent {
         process::Target::NextCaller => {
+            let prepared = prepared.expect("next-caller uses prepared input");
             let warnings = prepared.warnings.clone();
             let id = steering::submit_chat_prepared(prepared)?;
             let deadline = tokio::time::Instant::now() + ACK_LIMIT;
@@ -258,9 +306,7 @@ async fn route(agent: &process::Target, runtime: &Runtime, text: &str) -> Outcom
                 match messaging::chat_receipt(&request_id) {
                     Some((state, error)) => match state.as_str() {
                         "queued" | "included" | "acknowledged" => {
-                            let mut receipt = Receipt::new(&state, Some(request_id));
-                            receipt.warnings = prepared.warnings;
-                            return Ok(receipt);
+                            return Ok(Receipt::new(&state, Some(request_id)));
                         }
                         "failed" | "expired" => {
                             return Err(error.unwrap_or_else(|| format!("native message {state}")));
@@ -274,17 +320,90 @@ async fn route(agent: &process::Target, runtime: &Runtime, text: &str) -> Outcom
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            let mut receipt = Receipt::new("unconfirmed", Some(request_id));
-            receipt.warnings = prepared.warnings;
-            Ok(receipt)
+            Ok(Receipt::new("unconfirmed", Some(request_id)))
         }
         process::Target::Program(command) => {
+            let prepared = prepared.expect("explicit program uses prepared input");
+            let owner = owner.ok_or("no original conversation was captured for the chat agent")?;
+            let mut random = [0; 16];
+            crate::platform::random_bytes(&mut random).map_err(|error| error.to_string())?;
+            let request_id = format!("chat-{}", crate::hex::encode(&random));
+            let request_message = history::request_identity(&request_id, text)?;
+            let history = owner.display_id();
+            let user_owner = owner.clone();
+            let user_id = request_id.clone();
+            let user_text = text.to_owned();
+            tokio::task::spawn_blocking(move || {
+                history::record_owned_request(&user_owner, &user_id, &user_text)
+            })
+            .await
+            .map_err(|_| "chat request history worker stopped")??;
+
+            // The original request is now retained. Recheck permissions before
+            // starting the program in case saving took longer than the lease.
+            admit_dispatch(authorization)?;
             questions::user_input(None);
-            let output = command.run(&prepared.text).await?;
-            let mut receipt = Receipt::new("completed", None);
-            receipt.output = Some(output);
+            let mut receipt = Receipt::new("completed", Some(request_id.clone()));
             receipt.warnings = prepared.warnings;
+            let output = match command.run(&prepared.text).await {
+                Ok(output) => output,
+                Err(error) => {
+                    receipt.status = "failed".into();
+                    receipt.warnings.push(error);
+                    return Ok(receipt);
+                }
+            };
+            let retained = retained_reply(&output);
+            if retained.trim().is_empty() {
+                receipt.status = "unconfirmed".into();
+                receipt
+                    .warnings
+                    .push("the chat agent exited without returning a reply".into());
+                return Ok(receipt);
+            }
+            admit_dispatch(authorization)?;
+            let identity = request_id.clone();
+            let saved = tokio::task::spawn_blocking(move || {
+                history::record_owned_program_reply(&owner, &identity, &retained)
+            })
+            .await;
+            match saved {
+                Ok(Ok(reply_message)) => {
+                    receipt.display = Some(ProgramDisplay {
+                        history,
+                        request_message,
+                        reply_message,
+                    });
+                    receipt.output = Some(output);
+                }
+                _ => {
+                    receipt.status = "unconfirmed".into();
+                    receipt.warnings.push("the chat agent returned a reply, but the original conversation could not be saved; check history before sending again".into());
+                }
+            }
             Ok(receipt)
         }
     }
+}
+
+fn admit_dispatch(authorization: Option<&transport::Authorization>) -> Result<(), String> {
+    steering::require_chat_connection()?;
+    if authorization.is_some_and(|authorization| !authorization.current()) {
+        return Err("chat input authorization was revoked".into());
+    }
+    Ok(())
+}
+
+fn retained_reply(output: &str) -> String {
+    let mut text: String = output
+        .chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+        .collect();
+    const MARKER: &str = "\n[Reply shortened for conversation history]";
+    const LIMIT: usize = 16 * 1024;
+    if text.len() > LIMIT {
+        text.truncate(text.floor_char_boundary(LIMIT - MARKER.len()));
+        text.push_str(MARKER);
+    }
+    text
 }

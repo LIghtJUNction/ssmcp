@@ -126,11 +126,7 @@ pub(super) struct Conversation {
     native_connection: Option<crate::client::messaging::test_connection::Connection>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
-    agent_pending: Option<(
-        InputStamp,
-        Option<crate::client::interface::history::HistoryId>,
-        crate::client::chat_io::Ticket,
-    )>,
+    agent_pending: Option<(InputStamp, crate::client::chat_io::Ticket)>,
     agent_unconfirmed: Option<InputStamp>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
@@ -261,7 +257,14 @@ fn agent_key(value: &Value) -> String {
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        let entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        if let Some(label) = crate::client::chat_io::terminal_agent_label() {
+            entries.insert(
+                1,
+                json!({"agent_id":"configured", "name":label,
+                "role":"configured chat agent","status":"explicit chat dispatch"}),
+            );
+        }
         sessions::arrange(
             entries,
             self.chat_native_entries(),
@@ -636,7 +639,13 @@ impl State {
                     .unwrap_or_else(|| format!("native:{id}")),
             );
         } else {
-            let target = self.conversation.target.as_deref().unwrap_or("next");
+            let target = self.conversation.target.as_deref().unwrap_or_else(|| {
+                if crate::client::chat_io::terminal_agent_label().is_some() {
+                    "configured"
+                } else {
+                    "next"
+                }
+            });
             self.conversation.selected = entries
                 .iter()
                 .position(|entry| field(entry, "agent_id") == target)
@@ -1106,9 +1115,7 @@ impl State {
             }
             match crate::client::chat_io::terminal_submit(&text) {
                 Ok(Some(ticket)) => {
-                    let history = crate::client::interface::history::current_owner()
-                        .map(|owner| owner.display_id());
-                    self.conversation.agent_pending = Some((stamp, history, ticket));
+                    self.conversation.agent_pending = Some((stamp, ticket));
                     self.notice =
                         Some("Waiting for the configured chat agent · draft retained".into());
                     self.dirty = true;
@@ -1136,7 +1143,7 @@ impl State {
     }
 
     fn chat_poll_agent(&mut self) {
-        let Some((_, _, ticket)) = self.conversation.agent_pending.as_mut() else {
+        let Some((_, ticket)) = self.conversation.agent_pending.as_mut() else {
             return;
         };
         let outcome = match ticket.try_recv() {
@@ -1146,34 +1153,36 @@ impl State {
                 Err("chat agent disconnected before confirming the result".into())
             }
         };
-        let (stamp, history, _) = self.conversation.agent_pending.take().unwrap();
+        let (stamp, _) = self.conversation.agent_pending.take().unwrap();
         match outcome {
             Ok(receipt) => {
                 if receipt.status == "unconfirmed" {
-                    self.conversation.agent_unconfirmed = Some(stamp);
-                } else {
+                    self.conversation.agent_unconfirmed = Some(stamp.clone());
+                } else if receipt.status != "failed" {
                     self.conversation.agent_unconfirmed = None;
                     self.conversation.composer.remember(&stamp.text);
                     if self.chat_composer_stamp() == stamp {
                         self.conversation.composer.take_text();
                     }
                 }
-                if let Some(answer) = receipt.output.filter(|answer| !answer.is_empty()) {
-                    let answer = panel::safe_text(&answer);
-                    let event = json!({"type":"ssmcp.message","author":"Chat agent","text":answer});
-                    let bytes = format!("\n[CHAT AGENT]\n{answer}\n");
+                if let (Some(display), Some(answer)) = (receipt.display, receipt.output) {
+                    let source = crate::runtime::call_scope::DisplaySource {
+                        history: crate::runtime::call_scope::DisplayHistory::Local(display.history),
+                        call: None,
+                    };
+                    let text = panel::safe_text(&stamp.text);
                     self.log_scoped_event(
-                        "chat agent",
-                        &event,
-                        bytes.as_bytes(),
-                        crate::runtime::call_scope::DisplaySource {
-                            history: history.map_or(
-                                crate::runtime::call_scope::DisplayHistory::Global,
-                                crate::runtime::call_scope::DisplayHistory::Local,
-                            ),
-                            call: None,
-                        },
+                        "message",
+                        &json!({"type":"ssmcp.message","role":"user","text":text,
+                            "message_id":display.request_message}),
+                        format!("\n[USER]\n{text}\n").as_bytes(),
+                        source.clone(),
                     );
+                    let answer = panel::safe_text(&answer);
+                    let event = json!({"type":"ssmcp.message","author":"Chat agent","text":answer,
+                        "message_id":display.reply_message});
+                    let bytes = format!("\n[CHAT AGENT]\n{answer}\n");
+                    self.log_scoped_event("agent", &event, bytes.as_bytes(), source);
                 }
                 let mut notice = format!("Chat route: {}", receipt.status);
                 if let Some(id) = receipt.request_id {
@@ -1181,6 +1190,9 @@ impl State {
                 }
                 if !receipt.warnings.is_empty() {
                     let _ = write!(notice, " · {}", receipt.warnings.join("; "));
+                }
+                if matches!(receipt.status.as_str(), "unconfirmed" | "failed") {
+                    notice.push_str(" · draft retained");
                 }
                 self.notice = Some(panel::safe_text(&notice));
             }
@@ -1258,8 +1270,8 @@ impl State {
                     }
                     self.conversation.native_recipient = None;
                     self.conversation.native_account = None;
-                    self.conversation.target = (field(&agent, "agent_id") != "next")
-                        .then(|| field(&agent, "agent_id").into());
+                    let id = field(&agent, "agent_id");
+                    self.conversation.target = (id != "configured").then(|| id.into());
                     self.chat_recipient_changed(false);
                     self.chat_change_view(View::Activity);
                     self.notice = Some(format!(
@@ -2932,13 +2944,20 @@ impl State {
             .target
             .as_ref()
             .map(|target| {
+                if target == "next" {
+                    return "Next caller".into();
+                }
                 agents
                     .iter()
                     .find(|agent| field(agent, "agent_id") == target)
                     .map(|agent| field(agent, "name").to_owned())
                     .unwrap_or_else(|| "offline recipient".into())
             })
-            .unwrap_or_else(|| "next caller".into());
+            .unwrap_or_else(|| {
+                crate::client::chat_io::terminal_agent_label()
+                    .unwrap_or("next caller")
+                    .into()
+            });
         if self.conversation.send_to_group {
             label = format!("group for /send · {}", self.conversation.groups.len());
         } else if let Some(native_label) = self.chat_native_label() {
@@ -4180,6 +4199,18 @@ mod tests {
                 "{columns} columns:\n{screen}"
             );
         }
+    }
+
+    #[test]
+    fn choosing_next_caller_sets_the_literal_queue_target() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("keep this draft");
+        state.chat_agents();
+        assert!(state.conversation.target.is_none());
+        state.chat_open(false);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.target.as_deref(), Some("next"));
+        assert_eq!(state.conversation.composer.text(), "keep this draft");
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::{local_socket, wire::MAX_USER_MESSAGE_BYTES};
 use serde_json::json;
 use std::{
     io,
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -61,10 +62,33 @@ async fn request(stream: UnixStream, sender: Sender) -> Result<(), io::Error> {
         }
         match std::str::from_utf8(&frame) {
             Ok(text) => {
-                let mut trailing = [0; 1];
+                let invalid = async {
+                    let mut trailing = [0; 1];
+                    // A writer may half-close after its complete request and
+                    // continue reading the receipt. A second frame is invalid.
+                    if matches!(reader.read(&mut trailing).await, Ok(0)) {
+                        // Linux reports POLLHUP for a fully closed Unix peer,
+                        // while shutdown(Write) only closes the incoming half.
+                        let mut peer = libc::pollfd {
+                            fd: reader.get_ref().as_ref().as_raw_fd(),
+                            events: 0,
+                            revents: 0,
+                        };
+                        loop {
+                            // SAFETY: the read half owns this fd for the whole
+                            // check. poll reads and writes one stack entry.
+                            if unsafe { libc::poll(&mut peer, 1, 0) } > 0
+                                && peer.revents & (libc::POLLHUP | libc::POLLERR) != 0
+                            {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
+                    }
+                };
                 tokio::select! {
                     biased;
-                    _ = reader.read(&mut trailing) => return Ok(()),
+                    _ = invalid => return Ok(()),
                     result = sender.dispatch(text, None) => result,
                 }
             }
@@ -98,6 +122,89 @@ pub(super) async fn serve(bound: local_socket::Bound, sender: Sender) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn newline_then_write_eof_still_delivers_one_receipt() {
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let task = tokio::spawn(request(
+            server,
+            Sender {
+                queue: tx,
+                save_exchange: false,
+            },
+        ));
+        peer.write_all(b"question\n").await.unwrap();
+        peer.shutdown().await.unwrap();
+        let accepted = tokio::time::timeout(READ_LIMIT, rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.text, "question");
+        accepted
+            .reply
+            .send(Ok(crate::client::chat_io::Receipt::new(
+                "queued",
+                Some("request_1".into()),
+            )))
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(peer).read_line(&mut line).await.unwrap();
+        let receipt: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(receipt, json!({"status":"queued","request_id":"request_1"}));
+        task.await.unwrap().unwrap();
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn second_socket_frame_cancels_inflight_confirmation() {
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let task = tokio::spawn(request(
+            server,
+            Sender {
+                queue: tx,
+                save_exchange: false,
+            },
+        ));
+        peer.write_all(b"question\n").await.unwrap();
+        let mut accepted = tokio::time::timeout(READ_LIMIT, rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        peer.write_all(b"second frame\n").await.unwrap();
+        tokio::time::timeout(READ_LIMIT, accepted.reply.closed())
+            .await
+            .unwrap();
+        assert_eq!(peer.read(&mut [0; 1]).await.unwrap(), 0);
+        task.await.unwrap().unwrap();
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn closing_both_halves_cancels_pending_socket_dispatch() {
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let task = tokio::spawn(request(
+            server,
+            Sender {
+                queue: tx,
+                save_exchange: false,
+            },
+        ));
+        peer.write_all(b"question\n").await.unwrap();
+        peer.shutdown().await.unwrap();
+        let mut accepted = tokio::time::timeout(READ_LIMIT, rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(peer);
+        tokio::time::timeout(READ_LIMIT, accepted.reply.closed())
+            .await
+            .unwrap();
+        task.await.unwrap().unwrap();
+        assert!(rx.recv().await.is_none());
+    }
 
     #[tokio::test]
     async fn launch_does_not_replace_a_live_socket() {
