@@ -1,0 +1,32 @@
+{"started": "composer", "log": "/tmp/ssmcp-controller-contract-ld4lbz8i/owned-output/suites/composer/run.log"}
+{"finished": "message_references", "status": "failed", "seconds": null, "checks": 0}
+{"status": "failed", "receipt": "/tmp/ssmcp-controller-contract-hr35rmi2/owned-output/acceptance.json"}
+{"status": "failed", "receipt": "/tmp/ssmcp-controller-contract-4keki838/baseline-race-0/acceptance.json"}
+{"status": "failed", "receipt": "/tmp/ssmcp-controller-contract-4keki838/baseline-race-1/acceptance.json"}
+{"finished": "message_references", "status": "failed", "seconds": null, "checks": 0}
+{"status": "failed", "receipt": "/tmp/ssmcp-controller-contract-wpk9rkwg/owned-output/acceptance.json"}
+{"status": "failed", "receipt": "/tmp/ssmcp-controller-contract-lf98x1ew/owned-output/acceptance.json"}
+test_abnormal_wait_still_reaps_only_the_owned_child (__main__.Contracts.test_abnormal_wait_still_reaps_only_the_owned_child) ... ok
+test_actual_source_keys_from_three_fixed_producers (__main__.Contracts.test_actual_source_keys_from_three_fixed_producers) ... ok
+test_claimed_provenance_and_cleanup_must_match_actual_inputs (__main__.Contracts.test_claimed_provenance_and_cleanup_must_match_actual_inputs) ... ok
+test_escaped_suite_exception_remains_an_accountable_failed_row (__main__.Contracts.test_escaped_suite_exception_remains_an_accountable_failed_row) ... ok
+test_gate_manifest_cannot_drop_materialized_dependency_files (__main__.Contracts.test_gate_manifest_cannot_drop_materialized_dependency_files) ... ok
+test_gate_requires_passed_exact_source_all_artifacts_and_strict_zero_exits (__main__.Contracts.test_gate_requires_passed_exact_source_all_artifacts_and_strict_zero_exits) ... ok
+test_gate_source_manifest_hash_and_built_bytes_are_required (__main__.Contracts.test_gate_source_manifest_hash_and_built_bytes_are_required) ... ok
+test_gated_baseline_binds_inputs_and_originals (__main__.Contracts.test_gated_baseline_binds_inputs_and_originals) ... ok
+test_git_provenance_disables_inherited_configuration_and_lazy_fetch (__main__.Contracts.test_git_provenance_disables_inherited_configuration_and_lazy_fetch) ... ok
+test_interactions_integer_requires_exact_validated_passed_checks (__main__.Contracts.test_interactions_integer_requires_exact_validated_passed_checks) ... ok
+test_list_reports_reject_malformed_entries_or_wrong_totals (__main__.Contracts.test_list_reports_reject_malformed_entries_or_wrong_totals) ... ok
+test_main_rejects_prebaseline_change_before_any_suite (__main__.Contracts.test_main_rejects_prebaseline_change_before_any_suite) ... ok
+test_materialized_gitlink_uses_explicit_pinned_object_store_not_moving_head (__main__.Contracts.test_materialized_gitlink_uses_explicit_pinned_object_store_not_moving_head) ... ok
+test_ordinary_failed_suite_stops_and_marks_all_later_rows_not_run (__main__.Contracts.test_ordinary_failed_suite_stops_and_marks_all_later_rows_not_run) ... ok
+test_preflight_failure_is_recorded_before_any_suite (__main__.Contracts.test_preflight_failure_is_recorded_before_any_suite) ... ok
+test_report_reader_rejects_symlinks_and_non_object_json (__main__.Contracts.test_report_reader_rejects_symlinks_and_non_object_json) ... ok
+test_router_fixture_alias_requires_the_gated_library_hash (__main__.Contracts.test_router_fixture_alias_requires_the_gated_library_hash) ... ok
+test_source_archive_binding_rejects_changed_or_extra_files (__main__.Contracts.test_source_archive_binding_rejects_changed_or_extra_files) ... ok
+test_vt_evidence_requires_complete_decoder_schema (__main__.Contracts.test_vt_evidence_requires_complete_decoder_schema) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.430s
+
+OK
