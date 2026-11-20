@@ -191,7 +191,8 @@ fn surface(mut response: Value, desktop: &str) -> Value {
         );
         metadata.insert("moves_host_pointer".into(), json!(desktop == "host"));
         metadata.insert("host_input_requires_explicit_target".into(), json!(true));
-        metadata.insert("host_input_requires_local_handoff".into(), json!(true));
+        metadata.insert("host_input_requires_local_handoff".into(), json!(false));
+        metadata.insert("host_input_gate".into(), json!("shared_local_switch"));
         metadata.insert("background_enabled".into(), json!(true));
         let text = serde_json::to_string(metadata).unwrap_or_default();
         if let Some(items) = response.get_mut("content").and_then(Value::as_array_mut)
@@ -811,6 +812,33 @@ mod tests {
                 .unwrap_err()
                 .contains("desktop must")
         );
+    }
+
+    #[test]
+    fn desktop_metadata_describes_shared_gate_without_timed_handoff() {
+        for (desktop, input_scope, moves_host_pointer) in [
+            ("host", "host_desktop", true),
+            ("isolated", "private_display", false),
+        ] {
+            let response = surface(crate::backend::result(json!({"available": true})), desktop);
+            let metadata = &response["structuredContent"];
+            assert_eq!(metadata["desktop"], desktop);
+            assert_eq!(metadata["input_scope"], input_scope);
+            assert_eq!(metadata["moves_host_pointer"], moves_host_pointer);
+            assert_eq!(metadata["host_input_requires_explicit_target"], true);
+            assert_eq!(metadata["host_input_requires_local_handoff"], false);
+            assert_eq!(metadata["host_input_gate"], "shared_local_switch");
+            assert_eq!(metadata["background_enabled"], true);
+            let text = response["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["type"] == "text")
+                .unwrap()["text"]
+                .as_str()
+                .unwrap();
+            assert_eq!(serde_json::from_str::<Value>(text).unwrap(), *metadata);
+        }
     }
 
     #[tokio::test]
