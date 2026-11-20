@@ -1795,6 +1795,7 @@ mod tests {
         let output = run_code(r#"
             const listed = await messages.list('one',{client_id:'cannot-override'});
             const sent = await messages.send('one',{recipient_id:'client:explicit-recipient',text:'@project-owner remains plain text',request_id:'once'});
+            const broadcast = await messages.broadcast('one',{client_id:'cannot-override',recipient_ids:['client:first','agent:second:thread'],text:'selected recipients only',request_id:'group-once'});
             const inbox = await messages.inbox('one');
             const ack = await messages.ack('one',{message_id:'native_receipt'});
             const status = await messages.status('one',{message_id:'native_receipt'});
@@ -1802,7 +1803,7 @@ mod tests {
             for (const args of [null,[],{action:'send'}]) {
                 try { await messages.list('one',args); } catch (error) { rejected.push(error.message); }
             }
-            return {listed,sent,inbox,ack,status,rejected,frozen:Object.isFrozen(messages)};
+            return {listed,sent,broadcast,inbox,ack,status,rejected,frozen:Object.isFrozen(messages)};
         "#).await.unwrap();
         let result = &output["result"];
         assert_eq!(result["listed"]["name"], "messages.list");
@@ -1812,6 +1813,13 @@ mod tests {
             result["sent"]["arguments"]["text"],
             "@project-owner remains plain text"
         );
+        assert_eq!(result["broadcast"]["name"], "messages.broadcast");
+        assert_eq!(result["broadcast"]["arguments"]["client_id"], "one");
+        assert_eq!(
+            result["broadcast"]["arguments"]["recipient_ids"],
+            json!(["client:first", "agent:second:thread"])
+        );
+        assert_eq!(result["broadcast"]["arguments"]["request_id"], "group-once");
         assert_eq!(result["inbox"]["name"], "messages.inbox");
         assert_eq!(result["ack"]["name"], "messages.ack");
         assert_eq!(result["status"]["name"], "messages.status");

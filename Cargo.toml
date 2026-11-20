@@ -74,6 +74,7 @@ include = [
     "/docs/reports/ssmcp-iteration-20261118*",
     "/scripts/e2e_questions.py",
     "/scripts/e2e_input_history.py",
+    "/scripts/e2e_message_references.py",
     "/scripts/e2e_interactions.py",
     "/scripts/e2e_presentations.py",
     "/scripts/e2e_image_fallback.py",

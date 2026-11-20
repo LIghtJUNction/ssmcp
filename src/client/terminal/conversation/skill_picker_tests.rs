@@ -202,7 +202,7 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         assert_eq!(references[0]["path"], ".agents/skills/chosen/SKILL.md");
         assert!(!expanded.contains("unselected"));
         assert!(!expanded.contains("Private instructions"));
-        let prepared = steering::prepare_publish(id, expanded.clone())
+        let prepared = steering::prepare_publish(id, expanded.clone().into())
             .unwrap()
             .unwrap();
         assert!(steering::sent(id));
@@ -260,7 +260,7 @@ fn skill_picker_keys_only_deliver_the_explicitly_sent_selection() {
         assert_eq!(references::source(&expanded), draft);
         assert_eq!(references::warnings(&expanded).len(), 2);
         assert!(expanded.contains("Existing file preview."));
-        let prepared = steering::prepare_publish(id, expanded.clone())
+        let prepared = steering::prepare_publish(id, expanded.clone().into())
             .unwrap()
             .unwrap();
         assert!(steering::sent(id));

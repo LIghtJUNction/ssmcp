@@ -489,7 +489,7 @@ const bootstrap = `(() => {
     ])
   ));
   const messages = freeze(Object.fromEntries(
-    ['list', 'send', 'status', 'inbox', 'ack'].map(action => [action, (clientId, args = {}) => {
+    ['list', 'send', 'broadcast', 'status', 'inbox', 'ack'].map(action => [action, (clientId, args = {}) => {
       if (!args || typeof args !== 'object' || isArray(args) || 'action' in args) {
         throw new Failure('messages arguments must be an object without action');
       }

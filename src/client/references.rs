@@ -26,6 +26,21 @@ enum Reference {
     Skill(String),
 }
 
+/// Transport text and local notices are frozen together for one publication.
+/// Notices are not part of the wire budget when unavailable references do not fit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedReferences {
+    pub(crate) text: String,
+    pub(crate) warnings: Vec<String>,
+}
+
+impl From<String> for PreparedReferences {
+    fn from(text: String) -> Self {
+        let warnings = warnings(&text);
+        Self { text, warnings }
+    }
+}
+
 /// Recover only a validated generated suffix, leaving arbitrary user text intact.
 /// Queue editors can show this source while retaining the frozen transport payload.
 pub(crate) fn source(text: &str) -> &str {
@@ -63,20 +78,20 @@ fn generated(text: &str) -> Option<(&str, Value)> {
 
 /// Prepare one immutable queue payload. Reusing a generated payload never rereads
 /// files: a retry of the same command must not acquire different contents.
-pub(crate) async fn expand(
+pub(crate) async fn prepare(
     text: &str,
     workspace: &Workspace,
     context: &Context,
-) -> Result<String, String> {
+) -> Result<PreparedReferences, String> {
     if text.len() > MAX_USER_MESSAGE_BYTES {
         return Err("The request exceeds the 16 KiB message limit.".into());
     }
     if source(text).len() != text.len() {
-        return Ok(text.into());
+        return Ok(text.to_owned().into());
     }
     let references = parse(text)?;
     if references.is_empty() {
-        return Ok(text.into());
+        return Ok(text.to_owned().into());
     }
     let names = references
         .iter()
@@ -120,17 +135,57 @@ pub(crate) async fn expand(
         };
         expanded.push(value);
     }
+    let warnings = expanded
+        .iter()
+        .filter(|reference| reference["status"] == "unavailable")
+        .filter_map(|reference| reference["warning"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let result = encode_references(text, &expanded);
+    if result.len() <= MAX_USER_MESSAGE_BYTES {
+        return Ok(PreparedReferences {
+            text: result,
+            warnings,
+        });
+    }
+    if !warnings.is_empty() {
+        // A missing attachment must not consume the remaining wire budget and
+        // block otherwise valid text. Keep readable references when they fit;
+        // unavailable-reference notices travel only to the local ACK event.
+        expanded.retain(|reference| reference["status"] != "unavailable");
+        let result = if expanded.is_empty() {
+            text.to_owned()
+        } else {
+            encode_references(text, &expanded)
+        };
+        if result.len() <= MAX_USER_MESSAGE_BYTES {
+            return Ok(PreparedReferences {
+                text: result,
+                warnings,
+            });
+        }
+    }
+    Err("The request and reference previews exceed 16 KiB; use fewer references or shorten the request. Your draft is unchanged.".into())
+}
+
+fn encode_references(text: &str, references: &[Value]) -> String {
     let payload = json!({
         "schema_version":1,
         "source_sha256":digest(text.as_bytes()),
-        "references":expanded,
+        "references":references,
         "usage":"These explicitly reference workspace files or installed and embedded skills. Unavailable references retain the user's text and carry a warning, without file contents or read actions. Read available sources with the delivering client's ID. File previews may be partial; read a selected skill in full before applying it."
     });
-    let result = format!("{text}{BEGIN}{payload}{END}");
-    if result.len() > MAX_USER_MESSAGE_BYTES {
-        return Err("The request and reference previews exceed 16 KiB; use fewer references or shorten the request. Your draft is unchanged.".into());
-    }
-    Ok(result)
+    format!("{text}{BEGIN}{payload}{END}")
+}
+
+#[cfg(test)]
+pub(crate) async fn expand(
+    text: &str,
+    workspace: &Workspace,
+    context: &Context,
+) -> Result<String, String> {
+    prepare(text, workspace, context)
+        .await
+        .map(|prepared| prepared.text)
 }
 
 fn unavailable(kind: &str, key: &str, value: &str, warning: &str) -> Value {
@@ -674,6 +729,53 @@ mod tests {
             assert_eq!(warnings(&expanded).len(), 1);
             assert!(!expanded.contains("private fixture"));
         }
+    }
+
+    #[tokio::test]
+    async fn full_budget_unavailable_references_keep_exact_text_and_local_warnings() {
+        let fixture = Fixture::new();
+        let (workspace, context) = fixture.clients();
+        let tail = " @missing.txt $not-installed";
+        let draft = format!("{}{tail}", "x".repeat(MAX_USER_MESSAGE_BYTES - tail.len()));
+        let prepared = prepare(&draft, &workspace, &context).await.unwrap();
+        assert_eq!(draft.len(), MAX_USER_MESSAGE_BYTES);
+        assert_eq!(prepared.text, draft);
+        assert_eq!(prepared.warnings.len(), 2);
+        assert!(prepared.warnings[0].contains("@missing.txt"));
+        assert!(prepared.warnings[1].contains("$not-installed"));
+        assert!(!prepared.text.contains(BEGIN));
+        assert!(
+            prepare(&(draft + "x"), &workspace, &context)
+                .await
+                .unwrap_err()
+                .contains("16 KiB")
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_metadata_cannot_crowd_out_readable_reference_contents() {
+        let fixture = Fixture::new();
+        fixture.write("notes.txt", "real file contents");
+        let (workspace, context) = fixture.clients();
+        let readable = file_reference(&workspace, "notes.txt").await.unwrap();
+        let overhead = encode_references("", &[readable]).len();
+        let tail = " @notes.txt @future.txt";
+        let draft = format!(
+            "{}{tail}",
+            "x".repeat(MAX_USER_MESSAGE_BYTES - overhead - tail.len())
+        );
+        let prepared = prepare(&draft, &workspace, &context).await.unwrap();
+        assert_eq!(prepared.text.len(), MAX_USER_MESSAGE_BYTES);
+        assert_eq!(source(&prepared.text), draft);
+        assert_eq!(prepared.warnings.len(), 1);
+        assert!(prepared.warnings[0].contains("@future.txt"));
+        let data = payload(&prepared.text);
+        assert_eq!(data["references"].as_array().unwrap().len(), 1);
+        assert_eq!(data["references"][0]["preview"], "real file contents");
+        assert_eq!(data["references"][0]["read"]["tool"], "ssmcp.fs.read_text");
+
+        let too_large = format!("x{draft}");
+        assert!(prepare(&too_large, &workspace, &context).await.is_err());
     }
 
     #[tokio::test]

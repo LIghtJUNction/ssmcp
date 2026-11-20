@@ -1096,7 +1096,18 @@ mod tests {
     #[test]
     fn tools_do_not_offer_a_way_to_impersonate_the_users_answer() {
         let catalog = tools();
-        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog.len(), 7);
+        for tool in &catalog {
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["additionalProperties"], false);
+            for field in ["actor", "origin", "role", "agent", "thread_id", "subject"] {
+                assert!(
+                    schema["properties"].get(field).is_none(),
+                    "{} must not accept a caller-supplied {field}",
+                    tool["name"]
+                );
+            }
+        }
         let ask = &catalog[0]["inputSchema"];
         assert!(ask["properties"].get("answer").is_none());
         let read = &catalog[1];

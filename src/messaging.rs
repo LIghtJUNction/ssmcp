@@ -1,9 +1,11 @@
 //! Bounded native mailboxes. Agent messages never enter the user steering queue.
+mod broadcast;
 use crate::{
     broker::Session,
     identity::Identity,
     wire::messages::{self, Message, Origin, Receipt, Recipient, Sender, Status},
 };
+pub(crate) use broadcast::{Broadcast, MAX_BROADCAST_RECIPIENTS};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -65,6 +67,7 @@ impl Entry {
 struct State {
     entries: VecDeque<Entry>,
     bytes: usize,
+    broadcasts: Vec<broadcast::Record>,
 }
 
 struct ConnectionPair {
@@ -188,6 +191,17 @@ impl Hub {
         text: String,
         request_id: String,
     ) -> Result<Receipt, String> {
+        self.enqueue_prepared(proof, recipient, text, request_id, None)
+    }
+
+    fn enqueue_prepared(
+        &self,
+        proof: Proof,
+        recipient: Recipient,
+        text: String,
+        request_id: String,
+        broadcast: Option<&Broadcast>,
+    ) -> Result<Receipt, String> {
         recipient.validate()?;
         messages::validate_text(&text)?;
         messages::validate_request_id(&request_id)?;
@@ -204,10 +218,51 @@ impl Hub {
         let canonical = serde_json::to_vec(&(&recipient.id, &text)).map_err(|e| e.to_string())?;
         let fingerprint: [u8; 32] = Sha256::digest(canonical).into();
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let broadcast_index = if let Some(broadcast) = broadcast {
+            if !broadcast.recipients.contains(&recipient.id) {
+                return Err("recipient is outside the reserved broadcast".into());
+            }
+            let index = state
+                .broadcasts
+                .iter()
+                .position(|record| {
+                    same_sender(&record.sender, &proof.sender)
+                        && record.request_id == broadcast.request_id
+                        && record.fingerprint == broadcast.fingerprint
+                        && Weak::ptr_eq(&record.source, &proof.connection)
+                })
+                .ok_or("broadcast reservation changed before enqueue")?;
+            if let Some(id) = state.broadcasts[index].accepted.get(&recipient.id)
+                && !state
+                    .entries
+                    .iter()
+                    .any(|entry| entry.message.receipt.message_id == *id)
+            {
+                return Err("broadcast target was already accepted; its receipt is no longer retained and it was not resent".into());
+            }
+            Some(index)
+        } else {
+            if state.broadcasts.iter().any(|record| {
+                same_sender(&record.sender, &proof.sender) && record.request_id == request_id
+            }) {
+                return Err(
+                    "request_id belongs to a broadcast; retry its complete recipient set and text"
+                        .into(),
+                );
+            }
+            None
+        };
         if let Some(index) = state.entries.iter().position(|entry| {
             same_sender(&entry.message.sender, &proof.sender)
                 && entry.message.receipt.request_id == request_id
         }) {
+            if broadcast_index
+                .is_some_and(|index| !state.broadcasts[index].accepted.contains_key(&recipient.id))
+            {
+                return Err(
+                    "broadcast child request_id was already used by another message".into(),
+                );
+            }
             let entry = &mut state.entries[index];
             if entry.fingerprint != fingerprint {
                 return Err(
@@ -301,6 +356,11 @@ impl Hub {
                 "recipient mailbox byte capacity is full; acknowledge messages before retrying"
                     .into(),
             );
+        }
+        if let Some(index) = broadcast_index {
+            state.broadcasts[index]
+                .accepted
+                .insert(message.recipient.id.clone(), receipt.message_id.clone());
         }
         state.bytes += bytes;
         state.entries.push_back(Entry {
@@ -475,6 +535,9 @@ impl Hub {
             Weak::ptr_eq(&entry.proof.connection, &connection)
                 || Weak::ptr_eq(&entry.proof.destination, &connection)
         });
+        state
+            .broadcasts
+            .retain(|record| !Weak::ptr_eq(&record.source, &connection));
     }
 
     pub(crate) fn refresh_connection(
@@ -482,14 +545,15 @@ impl Hub {
         connection: &Arc<Session>,
         valid: impl Fn(&Proof, &Recipient) -> bool,
     ) {
-        let connection = Arc::downgrade(connection);
+        let weak = Arc::downgrade(connection);
         self.check_pending(
             |entry| {
-                Weak::ptr_eq(&entry.proof.connection, &connection)
-                    || Weak::ptr_eq(&entry.proof.destination, &connection)
+                Weak::ptr_eq(&entry.proof.connection, &weak)
+                    || Weak::ptr_eq(&entry.proof.destination, &weak)
             },
             valid,
         );
+        self.prune_broadcast_members(connection);
     }
 
     pub(crate) fn close_member(
@@ -499,22 +563,29 @@ impl Hub {
         agent_id: &str,
     ) {
         let connection = Arc::downgrade(connection);
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .expire_matching(|entry| {
-                (Weak::ptr_eq(&entry.proof.connection, &connection)
-                    && same_account(&entry.message.sender.account, identity)
-                    && entry
-                        .message
-                        .sender
-                        .agent
-                        .as_ref()
-                        .is_some_and(|agent| agent.id == agent_id))
-                    || (Weak::ptr_eq(&entry.proof.destination, &connection)
-                        && same_account(&entry.message.recipient.account, identity)
-                        && entry.message.recipient.agent_id.as_deref() == Some(agent_id))
-            });
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.expire_matching(|entry| {
+            (Weak::ptr_eq(&entry.proof.connection, &connection)
+                && same_account(&entry.message.sender.account, identity)
+                && entry
+                    .message
+                    .sender
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.id == agent_id))
+                || (Weak::ptr_eq(&entry.proof.destination, &connection)
+                    && same_account(&entry.message.recipient.account, identity)
+                    && entry.message.recipient.agent_id.as_deref() == Some(agent_id))
+        });
+        state.broadcasts.retain(|record| {
+            !(Weak::ptr_eq(&record.source, &connection)
+                && same_account(&record.sender.account, identity)
+                && record
+                    .sender
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.id == agent_id))
+        });
     }
 }
 
