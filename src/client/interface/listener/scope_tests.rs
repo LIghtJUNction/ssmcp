@@ -242,3 +242,91 @@ async fn listener_status_is_atomic_with_connection_generation() {
     );
     assert_eq!(hub.snapshot()["connection_id"], "new_scope");
 }
+
+#[tokio::test]
+async fn listener_reconnect_discards_completed_receipts_for_new_and_reused_connection_ids() {
+    for next_id in ["next_scope", "scope_fixture"] {
+        let hub = fixture();
+        let alice = remote("123", Some("agent_one"));
+        let (id, token) = lease(&hub, &alice, None);
+        let ticket = hub
+            .submit(
+                hub.target_for(Some("agent_one")).unwrap(),
+                "original source".into(),
+                "original text".into(),
+            )
+            .unwrap();
+        hub.read_for(id.clone(), token.clone(), 0, alice.clone())
+            .await
+            .unwrap();
+        let ack = Ack {
+            status: AckStatus::Rejected,
+            reason: Some("receiver-private rejection detail".into()),
+        };
+        let receipt = hub
+            .ack_for(&id, &token, &ticket.id, ack.clone(), &alice)
+            .unwrap();
+        assert_eq!(
+            hub.ack_for(&id, &token, &ticket.id, ack, &alice).unwrap(),
+            receipt
+        );
+        assert_eq!(ticket.wait().await.unwrap().status, Status::Rejected);
+        assert_eq!(hub.snapshot()["receipts"].as_array().unwrap().len(), 1);
+
+        hub.reset_for(Some(next_id), 8);
+        let mut bob = remote("456", Some("agent_two"));
+        bob.generation = 8;
+        bob.session = Some(next_id.into());
+        let status = hub.call_for(bob, json!({"op":"status"})).await.unwrap();
+        assert_eq!(status["connection_id"], next_id);
+        assert!(status["listener"].is_null());
+        assert!(status["pending"].is_null());
+        assert_eq!(status["receipts"], json!([]));
+        assert!(
+            !status
+                .to_string()
+                .contains("receiver-private rejection detail")
+        );
+        assert!(!status.to_string().contains(&id));
+        // The local UI projection must not carry old receipts either.
+        assert_eq!(hub.snapshot()["receipts"], json!([]));
+    }
+}
+
+#[tokio::test]
+async fn listener_disconnect_keeps_sender_outcome_outside_new_connection_history() {
+    for offered in [false, true] {
+        let hub = fixture();
+        let alice = remote("123", None);
+        let (id, token) = lease(&hub, &alice, None);
+        let ticket = hub
+            .submit(
+                hub.target_for(None).unwrap(),
+                "original source".into(),
+                "original text".into(),
+            )
+            .unwrap();
+        let delivery_id = ticket.id.clone();
+        if offered {
+            hub.read_for(id, token, 0, alice).await.unwrap();
+        }
+
+        hub.reset_for(None, 0);
+        assert_eq!(hub.snapshot()["receipts"], json!([]));
+        hub.reset_for(Some("scope_fixture"), 8);
+        let receipt = ticket.wait().await.unwrap();
+        assert_eq!(receipt.delivery_id, delivery_id);
+        assert_eq!(receipt.connection_id, "scope_fixture");
+        assert_eq!(receipt.code, "connection_ended");
+        assert_eq!(
+            receipt.status,
+            if offered {
+                Status::Unknown
+            } else {
+                Status::Failed
+            }
+        );
+        assert_eq!(hub.snapshot()["receipts"], json!([]));
+        assert!(hub.snapshot()["pending"].is_null());
+    }
+}
