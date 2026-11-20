@@ -764,6 +764,10 @@ const bootstrap = `(() => {
     wait: (id, args = {}) => builtin('jobs.wait', {...args, id}),
     cancel: id => builtin('jobs.cancel', {id}),
   });
+  const waitFor = freeze(Object.assign(
+    (id, args = {}) => builtin('await', {...args, client_id: id}),
+    {cancel: (id, waitId) => builtin('await', {client_id: id, op: 'cancel', wait_id: waitId})}
+  ));
   const ports = freeze({
     open: args => builtin('ports.open', args),
     list: () => builtin('ports.list'),
@@ -812,6 +816,7 @@ const bootstrap = `(() => {
     rsync: { value: rsync, enumerable: true },
     sync: { value: rsync, enumerable: true },
     jobs: { value: jobs, enumerable: true },
+    waitFor: { value: waitFor, enumerable: true },
     ports: { value: ports, enumerable: true },
     resources: { value: resources, enumerable: true },
     print: { value: print, enumerable: true },
@@ -885,4 +890,3 @@ input.on('close', () => {
   if (!finished) fail(new Error('parent closed code_mode input before completion'));
 });
 input.on('error', fail);
-

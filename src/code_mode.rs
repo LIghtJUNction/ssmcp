@@ -1837,6 +1837,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typed_wait_helper_preserves_targets_and_uses_server_wait_identifiers() {
+        let _guard = TESTS.lock().await;
+        let output = run_code(r#"
+            const observed = await waitFor('room',{client_id:'cannot-override',targets:[{type:'exec',job_id:'job-1'}],mode:'all',timeout_ms:20000});
+            const resumed = await waitFor('room',{wait_id:'await_server_id',timeout_ms:1000});
+            const cancelled = await waitFor.cancel('room','await_server_id');
+            return {observed,resumed,cancelled,frozen:Object.isFrozen(waitFor)};
+        "#).await.unwrap();
+        let result = &output["result"];
+        assert_eq!(result["observed"]["name"], "await");
+        assert_eq!(result["observed"]["arguments"]["client_id"], "room");
+        assert_eq!(
+            result["observed"]["arguments"]["targets"],
+            json!([{"type":"exec","job_id":"job-1"}])
+        );
+        assert_eq!(result["observed"]["arguments"]["mode"], "all");
+        assert_eq!(
+            result["resumed"]["arguments"],
+            json!({"client_id":"room","wait_id":"await_server_id","timeout_ms":1000})
+        );
+        assert_eq!(
+            result["cancelled"]["arguments"],
+            json!({"client_id":"room","op":"cancel","wait_id":"await_server_id"})
+        );
+        assert_eq!(result["frozen"], true);
+    }
+
+    #[tokio::test]
     async fn native_message_helpers_select_the_exact_client_and_keep_plain_text_and_origin() {
         let _guard = TESTS.lock().await;
         let output = run_code(r#"

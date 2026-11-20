@@ -157,6 +157,21 @@ def body_text(shot):
     return "\n".join(left_rows(shot)[1:start]) if start is not None else ""
 
 
+def folded_command_preview(shot):
+    rows = body_text(shot).splitlines()
+    headers = [index for index, row in enumerate(rows) if "Ran cargo test --lib" in row]
+    if len(headers) != 1:
+        return False
+    header = headers[0]
+    details = next((index for index in range(header + 1, len(rows))
+                    if "+3 lines · Show details · Enter" in rows[index]), None)
+    return (details is not None and details - header - 1 == 3
+            and "Command completed successfully" in "\n".join(rows[header + 1:details])
+            and "Source retained in the code audit" in "\n".join(rows[header + 1:details])
+            and "test client::ui::custom_colors" not in body_text(shot)
+            and "test client::audit_view::browse" not in body_text(shot))
+
+
 def empty_composer_ready(shot):
     return (shot["alternate_screen"] and column(shot) == ("conversation", 2, 8)
             and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"])
@@ -261,23 +276,22 @@ def main():
                   and "Message the agent" in prompt_text(initial),
                   "F3 exposes both sample agents while preserving the current page and composer")
 
-            check("cargo test --lib · done" in body_text(initial)
-                  and "Command completed successfully" in body_text(initial)
-                  and "4–6/6" in body_text(initial)
-                  and "test client::ui::custom_colors" not in body_text(initial),
-                  "completed commands show the latest lines in a bounded panel")
+            check(folded_command_preview(initial),
+                  "completed commands show their argv, three latest output rows and explicit details")
             check("src/client/terminal/events.rs" in body_text(initial)
                   and "expanded = true" in body_text(initial)
                   and "expanded = false" in body_text(initial)
                   and "@@ -1 +1 @@" not in body_text(initial),
                   "collapsed diff cards preview changes without showing the full hunk")
             command_row = next(index for index, row in enumerate(initial["rows"])
-                               if "▸" in row and "cargo test --lib" in row)
+                               if "Ran cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
-            expanded = preview.until(lambda s: "▾ cargo test --lib" in body_text(s)
+            expanded = preview.until(lambda s: "Ran cargo test --lib" in body_text(s)
+                                     and "Enter fold" in body_text(s)
                                      and "test client::ui::custom_colors" in body_text(s),
-                                     "click-expanded command output beyond its two-line preview")
-            check("done" in body_text(expanded)
+                                     "click-expanded command output beyond its three-row preview")
+            check("Ran cargo test --lib" in body_text(expanded)
+                  and "Command completed successfully" in body_text(expanded)
                   and "test client::ui::custom_colors" in body_text(expanded)
                   and "test client::audit_view::browse" in body_text(expanded),
                   "expanded commands retain their completed status and original results")
@@ -286,11 +300,10 @@ def main():
                   "explicit expansion reveals more content than the compact preview")
             save_shot(args.out, "command-expanded", expanded)
             command_row = next(index for index, row in enumerate(expanded["rows"])
-                               if "▾" in row and "cargo test --lib" in row)
+                               if "Ran cargo test --lib" in row)
             preview.send(f"\x1b[<0;3;{command_row + 1}M".encode())
             collapsed = preview.until(lambda s: view(s, "conversation")
-                                      and "▸ cargo test --lib" in body_text(s)
-                                      and "4–6/6" in body_text(s),
+                                      and folded_command_preview(s),
                                       "click-collapsed command output returning to its result preview")
             diff_row = next(index for index, row in enumerate(collapsed["rows"])
                             if "▸" in row and "src/client/terminal/events.rs" in row)
@@ -300,8 +313,7 @@ def main():
                                  and "expanded = false" in body_text(s)
                                  and "@@ -1 +1 @@" in body_text(s),
                                  "click-expanded diff with both source versions")
-            check("▸ cargo test --lib" in body_text(diff)
-                  and "4–6/6" in body_text(diff),
+            check(folded_command_preview(diff),
                   "expanding a diff keeps the neighboring command at its compact preview")
             save_shot(args.out, "diff-expanded", diff)
             diff_row = next(index for index, row in enumerate(diff["rows"])
@@ -324,8 +336,7 @@ def main():
             preview.until(lambda s: column(s) == ("conversation", 2, 8)
                           and "done" in body_text(s)
                           and "A quieter workspace" not in body_text(s)
-                          and "▸ cargo test --lib" in body_text(s)
-                          and "4–6/6" in body_text(s)
+                          and folded_command_preview(s)
                           and "expanded = false" in body_text(s)
                           and "@@ -1 +1 @@" not in body_text(s),
                           "raw toggle restoring the conversation and collapsed cards")

@@ -667,7 +667,7 @@ mod tests {
             b"[RUN] shell next true\n",
         );
         let command = view.events.back().unwrap().id;
-        assert_eq!(view.visible_ids(), vec![ids[0]]);
+        assert_eq!(view.visible_ids(), vec![ids[0], command]);
         view.select(-1);
         assert_eq!(view.selected, Some(ids[0]));
         assert!(view.open());
