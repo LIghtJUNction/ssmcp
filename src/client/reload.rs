@@ -428,10 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn foreground_reload_preserves_native_arguments_after_separator() {
-        let options = super::super::Options::parse(args(&["--server", "https://original.example"]))
-            .unwrap()
-            .unwrap();
+    fn foreground_reload_preserves_agent_selection_and_native_arguments_after_separator() {
         let native = args(&[
             "--agent",
             "codex",
@@ -442,14 +439,86 @@ mod tests {
             "native-context",
             "--title",
             "--context=literal",
+            "--help",
+            "--socket",
+            "native.sock",
             "中文参数",
+            "",
         ]);
+        let mut initial = args(&[
+            "--server",
+            "https://original.example",
+            "--title",
+            "client title",
+        ]);
+        initial.extend(native.clone());
+        let options = super::super::Options::parse(initial).unwrap().unwrap();
         let mut original = args(&["--context", "old-connection"]);
+        original.extend(args(&["--title", "client title"]));
         original.extend(native.clone());
         let pinned = connection_arguments(original, &options, false).unwrap();
-        let mut expected = args(&["--server", "https://original.example"]);
+        let mut expected = args(&[
+            "--server",
+            "https://original.example",
+            "--title",
+            "client title",
+        ]);
         expected.extend(native);
         assert_eq!(pinned, expected);
+        let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
+        assert_eq!(restored.agent, options.agent);
+        assert_eq!(restored.server, options.server);
+        assert_eq!(restored.title, options.title);
+        let saved = restored.session_spec().unwrap();
+        super::super::validate_session_spec(&saved).unwrap();
+        let from_saved = super::super::Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(from_saved.agent, options.agent);
+        assert_eq!(from_saved.server, options.server);
+        assert_eq!(super::super::session_title(&saved).unwrap(), options.title);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_local_reload_preserves_agent_and_socket_before_native_separator() {
+        for socket in [
+            args(&["--socket"]),
+            args(&["--socket=/tmp/ssmcp-cross/mcp.sock"]),
+        ] {
+            let mut trailing = socket;
+            trailing.extend(args(&[
+                "--agent",
+                "claude-code",
+                "--",
+                "--server",
+                "native-server",
+                "--context",
+                "native-context",
+                "--title",
+                "native title",
+                "--help",
+                "--socket",
+                "native.sock",
+                "",
+            ]));
+            let mut initial = args(&["local"]);
+            initial.extend(trailing.clone());
+            let options = super::super::Options::parse(initial).unwrap().unwrap();
+            let mut original = args(&["--context", "old-local-context"]);
+            original.extend(trailing.clone());
+            let pinned = connection_arguments(original, &options, false).unwrap();
+            let mut expected = args(&["local"]);
+            expected.extend(trailing);
+            assert_eq!(pinned, expected);
+            let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
+            assert!(restored.is_local());
+            assert_eq!(restored.agent, options.agent);
+            assert_eq!(
+                restored.local.as_ref().unwrap().socket_path(),
+                options.local.as_ref().unwrap().socket_path()
+            );
+            assert!(restored.server.is_none());
+            assert!(restored.title.is_none());
+        }
     }
 
     #[cfg(target_os = "linux")]
