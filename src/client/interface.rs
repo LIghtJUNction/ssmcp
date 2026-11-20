@@ -1085,23 +1085,27 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 17);
-        assert!(names.contains("ssmcp.ui.harness"));
-        assert!(names.contains("ssmcp.ui.history"));
-        for name in [
-            "ssmcp.ui.ask",
-            "ssmcp.ui.questions",
+        let expected = std::collections::BTreeSet::from([
+            "ssmcp.ui.action",
             "ssmcp.ui.answer",
+            "ssmcp.ui.ask",
+            "ssmcp.ui.filter",
             "ssmcp.ui.finish",
-            "ssmcp.ui.question_ack",
-            "ssmcp.ui.question_delivery",
+            "ssmcp.ui.get",
+            "ssmcp.ui.harness",
+            "ssmcp.ui.history",
+            "ssmcp.ui.history_archive",
             "ssmcp.ui.listener",
-            "ssmcp.ui.wait",
             "ssmcp.ui.message",
             "ssmcp.ui.present",
-        ] {
-            assert!(names.contains(name));
-        }
+            "ssmcp.ui.question_ack",
+            "ssmcp.ui.question_delivery",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.queue",
+            "ssmcp.ui.set",
+            "ssmcp.ui.wait",
+        ]);
+        assert_eq!(names, expected);
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")
