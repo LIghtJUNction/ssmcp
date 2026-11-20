@@ -1,0 +1,214 @@
+{
+  "schema": "ssmcp.zuse.e2e.v2",
+  "status": "passed",
+  "checks": [
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: windows",
+    "worker cleanup exit: focus",
+    "worker cleanup exit: type",
+    "native zuse typing preserves literal shell punctuation",
+    "worker cleanup exit: click",
+    "native zuse button input reaches the application",
+    "cancelled drag exits after cleanup",
+    "cancelled drag reports cancellation and successful release",
+    "cancellation wakes a sleeping drag and releases the physical button",
+    "native drag cancellation preserves the X11 keyboard mapping",
+    "no pointer button remains held after cancellation",
+    "real GTK whole-string, selection and cancellation checks pass",
+    "worker cleanup exit: capture",
+    "zuse native PNG capture is delivered as bounded JPEG",
+    "capture metadata names the actual library and coordinate mapping",
+    "capture reports the expected linked zuse engine version",
+    "two fixed display environments preserve the other desktop pointer, focus and keymap",
+    "all operation workers have exited"
+  ],
+  "text_cases": [
+    {
+      "name": "whole-string rejection for wrong machine",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "",
+      "observed": {
+        "text": "",
+        "other": "other window untouched",
+        "caret": 0,
+        "selection": [
+          0,
+          0
+        ],
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "fresh worker after corrected machine",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1
+      },
+      "status": "passed"
+    },
+    {
+      "name": "whole-string rejection for wrong pid",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "",
+      "observed": {
+        "text": "",
+        "other": "other window untouched",
+        "caret": 0,
+        "selection": [
+          0,
+          0
+        ],
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "fresh worker after corrected pid",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "恢复🙂",
+      "observed": {
+        "text": "恢复🙂",
+        "other": "other window untouched",
+        "caret": 3,
+        "selection": [
+          3,
+          3
+        ],
+        "changes": 1
+      },
+      "status": "passed"
+    },
+    {
+      "name": "whole UTF-8 replaces a character selection",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "左🙂नमé右",
+      "observed": {
+        "text": "左🙂नमé右",
+        "other": "other window untouched",
+        "caret": 6,
+        "selection": [
+          6,
+          6
+        ],
+        "changes": 2
+      },
+      "status": "passed"
+    },
+    {
+      "name": "cancel after native dispatch does not resend or roll back",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "zuse operation cancelled after X11 text dispatch; text may have changed; do not retry",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "取消🙂é",
+      "observed": {
+        "text": "取消🙂é",
+        "other": "other window untouched",
+        "caret": 5,
+        "selection": [
+          5,
+          5
+        ],
+        "changes": 1
+      },
+      "status": "passed",
+      "barrier": {
+        "gtk_changed_callback": true,
+        "worker_stdin_monitor_exited": true,
+        "sender_exited": true
+      },
+      "native_before": {
+        "x": 480,
+        "y": 180,
+        "focus": 4194319,
+        "mask": 0,
+        "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+      },
+      "native_after": {
+        "x": 480,
+        "y": 180,
+        "focus": 4194319,
+        "mask": 0,
+        "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+      }
+    }
+  ],
+  "whole_text_report": "/var/tmp/ssmcp-message-references-20261120/candidate-acceptance-1/desktop/native/whole-text.json",
+  "duration_seconds": 1.754,
+  "environment": "private Xvfb displays and private accessibility bus; no operator desktop input",
+  "binary_sha256": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+  "engine_version": "0.2.2",
+  "expected_engine_version": "0.2.2"
+}

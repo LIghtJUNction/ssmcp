@@ -1,0 +1,150 @@
+{
+  "production": {
+    "origin": "https://ssmcp.lmm.best",
+    "service": "ssmcpd.service",
+    "version": "0.10.13",
+    "sha256": "e8f59d66493e68ba3c196a72ae3733b8b7336fbfb1da0cf92960069637f1f7bf",
+    "can_reload": false,
+    "healthz_status": 200,
+    "observed_at": "2026-11-20T15:13:17.576713+08:00",
+    "service_active": true
+  },
+  "activity_observed_around": "2026-11-20T15:00:00+08:00",
+  "confirmed_running_exec_jobs": 4,
+  "coverage_limit": "Lower bound; does not include all other harness work, in-flight RPC or 007 activity.",
+  "installed_candidate": {
+    "status": "installed_candidate",
+    "at": "2026-11-20T15:03:52.191393+08:00",
+    "product_source_revision": "b39a8e96c7234b6fb097d388e97614a2102b9810",
+    "acceptance_source_revision": "5033cf3e3e89d24a133f18a6b2861b49a70cfc0e",
+    "binaries": {
+      "ssmcp": {
+        "path": "/home/lightjunction/.local/share/ssmcp/candidates/0.10.15-b39a8e9/bin/ssmcp",
+        "version": "ssmcp 0.10.15",
+        "sha256": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+        "matches_tested_binary": true
+      },
+      "ssmcpd": {
+        "path": "/home/lightjunction/.local/share/ssmcp/candidates/0.10.15-b39a8e9/bin/ssmcpd",
+        "version": "ssmcpd 0.10.15",
+        "sha256": "a825d2eacc01fafcd459aa795605a80647664059bc4604ffcbcfe0395e6fa223",
+        "matches_tested_binary": true
+      },
+      "ssmcp-frontend": {
+        "path": "/home/lightjunction/.local/share/ssmcp/candidates/0.10.15-b39a8e9/bin/ssmcp-frontend",
+        "version": "ssmcp-frontend 0.10.15",
+        "sha256": "dbb96cb89c13d4f4014bae52fccccd55053eb481f60a9599513b556c05c275ff",
+        "matches_tested_binary": true
+      }
+    },
+    "production_activation": "pending compatible relay deployment; existing active tasks retained"
+  },
+  "initial_shared_install": {
+    "status": "passed",
+    "installed": {
+      "ssmcp": {
+        "path": "/home/lightjunction/.cargo/bin/ssmcp",
+        "version": "ssmcp 0.10.15",
+        "sha256": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+        "matches_tested_binary": true
+      },
+      "ssmcpd": {
+        "path": "/home/lightjunction/.cargo/bin/ssmcpd",
+        "version": "ssmcpd 0.10.15",
+        "sha256": "a825d2eacc01fafcd459aa795605a80647664059bc4604ffcbcfe0395e6fa223",
+        "matches_tested_binary": true
+      },
+      "ssmcp-frontend": {
+        "path": "/home/lightjunction/.cargo/bin/ssmcp-frontend",
+        "version": "ssmcp-frontend 0.10.15",
+        "sha256": "dbb96cb89c13d4f4014bae52fccccd55053eb481f60a9599513b556c05c275ff",
+        "matches_tested_binary": true
+      }
+    },
+    "cargo_records": {
+      "ssmcp 0.10.15 (path+file:///var/tmp/ssmcp-message-references-20261120/source)": [
+        "ssmcp",
+        "ssmcp-frontend",
+        "ssmcpd"
+      ]
+    }
+  },
+  "latest_shared_install_observation": {
+    "observed_at": "2026-11-20T15:14:41.371104+08:00",
+    "installed": {
+      "ssmcp": {
+        "version": "ssmcp 0.10.14",
+        "sha256": "e726fbbe62277d833ddc7e47fb54f000ff072fbb049c42d4388620d1a71b98dd",
+        "mtime_utc": "2026-11-20T07:12:16.326397+00:00"
+      },
+      "ssmcpd": {
+        "version": "ssmcpd 0.10.14",
+        "sha256": "ebb3365eb0f077d6048d30475e2143acd0da63e9ccaafc1e7644b81a9558fccd",
+        "mtime_utc": "2026-11-20T07:12:16.327366+00:00"
+      },
+      "ssmcp-frontend": {
+        "version": "ssmcp-frontend 0.10.14",
+        "sha256": "027b2e137fee0bc6de5d03732848ac20991c14ac184a776a298799ac4b7f6141",
+        "mtime_utc": "2026-11-20T07:12:16.326426+00:00"
+      }
+    },
+    "cargo_records": {
+      "ssmcp 0.10.14 (path+file:///home/lightjunction/Documents/GITHUB/ssmcp)": [
+        "ssmcp",
+        "ssmcp-frontend",
+        "ssmcpd"
+      ]
+    }
+  },
+  "runtime": {
+    "client_id": "f90b6940c93f443df86f4dc300b53de37923e7ebceab32dace51c640b2a45154",
+    "name": "ssmcp-message-references-compat-20261120",
+    "connection_state": "connected",
+    "cwd": "/home/lightjunction/Documents/GITHUB/ssmcp",
+    "runtime_pid": 3146373,
+    "runtime_version": "ssmcp 0.10.13",
+    "runtime_sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+    "installed_version": "ssmcp 0.10.14",
+    "kind": "native systemd-user session; no model started",
+    "candidate_session_state": "stopped after incompatible handshake"
+  },
+  "candidate_foreground_handshake": {
+    "command": [
+      "/home/lightjunction/.local/share/ssmcp/candidates/0.10.15-b39a8e9/bin/ssmcp",
+      "--server",
+      "https://ssmcp.lmm.best",
+      "--name",
+      "ssmcp-candidate-account-check-20261120",
+      "--no-watchdog",
+      "--no-browser",
+      "--no-setup",
+      "--log-format",
+      "jsonl"
+    ],
+    "runtime_version": "ssmcp 0.10.15",
+    "binary_sha256_before": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+    "binary_sha256_after": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+    "inputs_unchanged": true,
+    "seconds": 4.88,
+    "exit_code": 1,
+    "observations": [
+      {
+        "type": "ssmcp.status",
+        "level": "Progress",
+        "message": "[authentication detail retained only in private local log]"
+      },
+      {
+        "type": "ssmcp.status",
+        "level": "Error",
+        "message": "allow entries must use username@github; only GitHub is supported"
+      }
+    ],
+    "timed_out": false,
+    "timeout_seconds": 10,
+    "termination_grace_seconds": 5
+  },
+  "candidate_007_session": "stopped after incompatible handshake; not connected",
+  "official_release_helper": "Requires published stable release, exact commit and manifest, archive checksums; no stage-only or dry-run public entry.",
+  "production_mutations_performed": false,
+  "required_next_action": "Coordinate work completion/checkpoints; create exact release artifacts with deployment deferred; authorize production switch and reconnect verification."
+}

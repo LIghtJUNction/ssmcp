@@ -1,0 +1,261 @@
+{
+  "schema": "ssmcp.x11.whole-text.v1",
+  "status": "passed",
+  "cases": [
+    {
+      "name": "whole-string rejection for wrong machine",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "",
+      "observed": {
+        "text": "",
+        "other": "other window untouched",
+        "caret": 0,
+        "selection": [
+          0,
+          0
+        ],
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "fresh worker after corrected machine",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+      "observed": {
+        "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+        "other": "other window untouched",
+        "caret": 24,
+        "selection": [
+          24,
+          24
+        ],
+        "changes": 1
+      },
+      "status": "passed"
+    },
+    {
+      "name": "whole-string rejection for wrong pid",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "",
+      "observed": {
+        "text": "",
+        "other": "other window untouched",
+        "caret": 0,
+        "selection": [
+          0,
+          0
+        ],
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "fresh worker after corrected pid",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "恢复🙂",
+      "observed": {
+        "text": "恢复🙂",
+        "other": "other window untouched",
+        "caret": 3,
+        "selection": [
+          3,
+          3
+        ],
+        "changes": 1
+      },
+      "status": "passed"
+    },
+    {
+      "name": "whole UTF-8 replaces a character selection",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {}
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "左🙂नमé右",
+      "observed": {
+        "text": "左🙂नमé右",
+        "other": "other window untouched",
+        "caret": 6,
+        "selection": [
+          6,
+          6
+        ],
+        "changes": 2
+      },
+      "status": "passed"
+    },
+    {
+      "name": "cancel after native dispatch does not resend or roll back",
+      "worker": {
+        "reply": {
+          "value": null,
+          "error": "zuse operation cancelled after X11 text dispatch; text may have changed; do not retry",
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      },
+      "expected": "取消🙂é",
+      "observed": {
+        "text": "取消🙂é",
+        "other": "other window untouched",
+        "caret": 5,
+        "selection": [
+          5,
+          5
+        ],
+        "changes": 1
+      },
+      "status": "passed",
+      "barrier": {
+        "gtk_changed_callback": true,
+        "worker_stdin_monitor_exited": true,
+        "sender_exited": true
+      },
+      "native_before": {
+        "x": 480,
+        "y": 180,
+        "focus": 4194319,
+        "mask": 0,
+        "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+      },
+      "native_after": {
+        "x": 480,
+        "y": 180,
+        "focus": 4194319,
+        "mask": 0,
+        "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+      }
+    }
+  ],
+  "scope": "real internal worker and real GTK; persistent Computer recovery is a separate MCP case",
+  "binary_sha256": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+  "script_sha256": "0408aa79331bccc611302b09840395eeedb0a03caa33fa9881c827585d6887fa",
+  "receiver_source_sha256": "f573758eae4d1ab7c6d16729961edb82169fb2ca802ed553570223c7557ebccc",
+  "private_xvfb_sha256": "45f9872a97ac81b5e0a9441dfce01fc5181c3c82fe4e339ba7058e9b94659dd7",
+  "state_probe_script_sha256": "c27ea79cebedf476a726aa839c632d1adef1279a3cb54b1c6a8a4a1636b1a344",
+  "display": {
+    "number": ":32294",
+    "private_auth": true,
+    "private_session_and_accessibility_buses": true
+  },
+  "setup_focus": [
+    {
+      "window_id": "0x40000f",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {
+              "focused": "0x40000f"
+            }
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "window_id": "0x40000f",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {
+              "focused": "0x40000f"
+            }
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "window_id": "0x40000f",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {
+              "focused": "0x40000f"
+            }
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "window_id": "0x40000f",
+      "worker": {
+        "reply": {
+          "value": {
+            "backend": "x11",
+            "result": {
+              "focused": "0x40000f"
+            }
+          },
+          "error": null,
+          "cleanup_ok": true
+        },
+        "exit_code": 0,
+        "stderr": ""
+      }
+    }
+  ],
+  "owned_process_cleanup": "passed",
+  "duration_seconds": 0.977
+}
