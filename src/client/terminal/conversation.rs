@@ -115,6 +115,7 @@ pub(super) struct Conversation {
     submitting: Option<(String, String)>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
+    force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
     wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     parked: Option<steering::SavedDraft>,

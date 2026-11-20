@@ -65,6 +65,7 @@ impl State {
 
     pub(super) fn chat_resume_selected(&mut self) {
         let sending = self.conversation.submitting.is_some()
+            || self.conversation.force_task.is_some()
             || items(&steering::snapshot(), "queue")
                 .iter()
                 .any(|item| field(item, "status") == "sending");

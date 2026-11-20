@@ -175,12 +175,11 @@ impl State {
                     if unchanged {
                         self.conversation.composer.take_text();
                     }
-                    let mut record = format!("\n[USER] #{}\n", completed.receipt.delivery_id);
-                    for line in markdown::rows(source, self.geometry.left, &self.ui) {
-                        let _ = writeln!(record, "{line}");
-                    }
-                    record.push_str("  监听程序已接收\n\n");
-                    self.log_message("user", source, record.as_bytes());
+                    self.chat_show_force_send_input(
+                        &completed.receipt.connection_id,
+                        &completed.receipt.delivery_id,
+                        source,
+                    );
                 }
                 let mut detail = completed.receipt.detail;
                 if completed.receipt.status == Status::Accepted
@@ -198,6 +197,53 @@ impl State {
             Err(error) => format!("发送失败：{error}；草稿已保留"),
         };
         self.chat_listener_notice(&detail);
+    }
+
+    fn chat_show_force_send_input(&mut self, connection: &str, delivery: &str, source: &str) {
+        if self
+            .conversation
+            .force_displayed
+            .iter()
+            .any(|(seen_connection, seen_delivery)| {
+                seen_connection == connection && seen_delivery == delivery
+            })
+        {
+            return;
+        }
+        // The Hub retains 32 receipts. This display-only cache owns no source, token or action.
+        if self.conversation.force_displayed.len() >= 32 {
+            self.conversation.force_displayed.pop_front();
+        }
+        self.conversation
+            .force_displayed
+            .push_back((connection.into(), delivery.into()));
+        let safe = crate::audit::event(json!(source));
+        let source = safe.as_str().unwrap_or("[redacted]");
+        let mut record = format!("\n[USER] #{delivery}\n");
+        for line in markdown::rows(source, self.geometry.left, &self.ui) {
+            let _ = writeln!(record, "{line}");
+        }
+        record.push_str("  监听程序已接收\n\n");
+        let event = json!({
+            "type":"ssmcp.message", "role":"user", "text":source,
+            "connection_id":connection, "delivery_id":delivery,
+        });
+        self.log_event("message", &event, record.as_bytes());
+        crate::session::attach::record_event("message", &event);
+    }
+
+    /// Called inside the scoped publication guard, before the sender task may have
+    /// delivered its ACK to the next frame. Both paths share one delivery marker.
+    pub(in crate::client::terminal) fn chat_log_listener_result(
+        &mut self,
+        connection: &str,
+        delivery: &str,
+        source: &str,
+        event: &Value,
+        bytes: &[u8],
+    ) {
+        self.chat_show_force_send_input(connection, delivery, source);
+        self.log_event("listener", event, bytes);
     }
 
     pub(super) fn chat_restore_interrupted_force_send(&mut self) {
@@ -378,6 +424,126 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    fn listener_frame(state: &mut State) -> String {
+        state.notice = None;
+        let frame = state.frame(Instant::now());
+        let mut screen = vt100::Parser::new(
+            nonzero(frame.geometry.rows),
+            nonzero(frame.geometry.cols),
+            0,
+        );
+        screen.process(&frame.diff(None));
+        screen.screen().contents()
+    }
+
+    fn assert_listener_input_before_result(state: &mut State) {
+        let visible = listener_frame(state);
+        assert_eq!(visible.matches("FAST_INPUT").count(), 1, "{visible}");
+        assert_eq!(visible.matches("FAST_RESULT").count(), 1, "{visible}");
+        assert!(
+            visible.find("FAST_INPUT").unwrap() < visible.find("FAST_RESULT").unwrap(),
+            "{visible}"
+        );
+    }
+
+    #[test]
+    fn force_listener_fast_reply_and_late_ack_render_input_once_before_result() {
+        for width in [120, 48] {
+            for ack_first in [false, true] {
+                let source = "FAST_INPUT 中文";
+                let mut state = preview(&format!("/send {source}"));
+                state.ui.layout = Layout::Chat;
+                state.ui.sidebar = false;
+                state.resize(28, width);
+                let stamp = state.chat_input_stamp().unwrap();
+                let (sender, receiver) = oneshot::channel();
+                let mut sender = Some(sender);
+                state.conversation.force_task = Some(Task {
+                    stamp,
+                    source: source.into(),
+                    receiver,
+                    handle: None,
+                });
+                // A new unsent draft must survive either arrival order. The
+                // sender's completion is withheld until the controlled ACK below.
+                state.conversation.composer.set_text("UNSENT_DRAFT");
+                let draft = state.chat_saved_draft();
+                if ack_first {
+                    assert!(
+                        sender
+                            .take()
+                            .unwrap()
+                            .send(completed(Status::Accepted))
+                            .is_ok()
+                    );
+                    state.chat_poll_force_send();
+                } else {
+                    state.chat_poll_force_send();
+                    assert!(state.conversation.force_task.is_some());
+                    assert_eq!(state.events.snapshot()["retained_events"], 0);
+                }
+
+                // The exact production callback used after the reply's scope
+                // guard runs before the sender oneshot becomes ready.
+                state.chat_log_listener_result(
+                    "synthetic-connection",
+                    "synthetic-delivery",
+                    source,
+                    &json!({
+                        "type":"ssmcp.message", "role":"assistant",
+                        "kind":"execution_result", "text":"FAST_RESULT",
+                        "task_completion_approved":false,
+                    }),
+                    b"\n[LISTENER] local receiver\nFAST_RESULT\n\n",
+                );
+                assert_eq!(state.chat_saved_draft(), draft);
+                assert_listener_input_before_result(&mut state);
+                if !ack_first {
+                    assert!(state.conversation.force_task.is_some());
+                    assert!(
+                        sender
+                            .take()
+                            .unwrap()
+                            .send(completed(Status::Accepted))
+                            .is_ok()
+                    );
+                    state.chat_poll_force_send();
+                }
+                assert!(state.conversation.force_task.is_none());
+                assert_eq!(state.chat_saved_draft(), draft);
+                assert_listener_input_before_result(&mut state);
+                assert_eq!(state.events.snapshot()["retained_events"], 3);
+                assert_eq!(state.conversation.force_displayed.len(), 1);
+                assert!(state.actions.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn force_listener_pending_ack_blocks_history_switch_without_touching_draft() {
+        let mut state = preview("/send pending original");
+        let stamp = state.chat_input_stamp().unwrap();
+        let (_sender, receiver) = oneshot::channel();
+        state.conversation.force_task = Some(Task {
+            stamp: stamp.clone(),
+            source: "pending original".into(),
+            receiver,
+            handle: None,
+        });
+        let events = state.events.snapshot();
+        state.chat_resume_selected();
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .is_some_and(|notice| { notice.contains("before switching history") })
+        );
+        assert!(state.conversation.force_task.is_some());
+        assert_eq!(state.chat_input_stamp().unwrap(), stamp);
+        assert_eq!(state.events.snapshot(), events);
+        assert!(state.actions.is_empty());
     }
 
     #[test]

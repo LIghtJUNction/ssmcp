@@ -55,7 +55,7 @@ trait Sink {
         message_id: &str,
         text: &str,
     ) -> Result<(), String>;
-    fn publish(&self, receipt: &ReplyReceipt, label: &str, text: &str) -> bool;
+    fn publish(&self, receipt: &ReplyReceipt, label: &str, source: &str, text: &str) -> bool;
 }
 
 struct ConversationSink;
@@ -81,8 +81,8 @@ impl Sink for ConversationSink {
         )
     }
 
-    fn publish(&self, receipt: &ReplyReceipt, label: &str, text: &str) -> bool {
-        crate::client::terminal::listener_result(receipt, label, text)
+    fn publish(&self, receipt: &ReplyReceipt, label: &str, source: &str, text: &str) -> bool {
+        crate::client::terminal::listener_result(receipt, label, source, text)
     }
 }
 
@@ -196,6 +196,8 @@ impl Hub {
             &message_id,
             reply.text,
         )?;
+        // The source stays private to this publication callback, never in the receipt.
+        let source = source.to_owned();
         let mut receipt = ReplyReceipt {
             delivery_id: reply.delivery_id.into(),
             connection_id,
@@ -218,7 +220,7 @@ impl Hub {
         let text = safe.as_str().unwrap_or("[redacted]");
         // Publication rechecks the connection, lease, retained result and active history
         // while holding the UI lock. A reconnect or /resume cannot receive an old result.
-        receipt.shown = sink.publish(&receipt, &label, text);
+        receipt.shown = sink.publish(&receipt, &label, &source, text);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(result) = state
             .receipts
@@ -309,7 +311,7 @@ mod tests {
                 Ok(())
             }
         }
-        fn publish(&self, receipt: &ReplyReceipt, _: &str, _: &str) -> bool {
+        fn publish(&self, receipt: &ReplyReceipt, _: &str, _: &str, _: &str) -> bool {
             if self.current(&receipt.conversation_id).is_err() {
                 return false;
             }

@@ -432,6 +432,7 @@ pub(super) fn log_event(
 pub(crate) fn listener_result(
     receipt: &super::interface::listener::ReplyReceipt,
     label: &str,
+    source: &str,
     text: &str,
 ) -> bool {
     let event = serde_json::json!({
@@ -458,7 +459,13 @@ pub(crate) fn listener_result(
             if !shared.alive.load(Ordering::Acquire) {
                 return false;
             }
-            state.log_event("listener", &event, &bytes);
+            state.chat_log_listener_result(
+                &receipt.connection_id,
+                &receipt.delivery_id,
+                source,
+                &event,
+                &bytes,
+            );
             crate::session::attach::record_event("listener", &event);
             true
         })
