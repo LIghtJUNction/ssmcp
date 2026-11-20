@@ -2,7 +2,15 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-20 22:45 UTC）
+## 当前状态（截至 2026-11-20 23:06 UTC）
+
+固定源码 [`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58) 的开发机五份构建产物已于 22:53:16.145 UTC 完成，回执状态为 `build_completed / build_only`；三个构建命令及产物保留、metadata、前后检查均完成。五项均为 Cargo `fresh=false`，回执中的实际链接输出、Cargo 对外产物和保留副本在字节数与 SHA256 上一致。此结论来自主审实际读取回执，未另行对五个二进制重算哈希。
+
+随后首轮 PTY 在测量夹具的目标就绪断言处退出 1：17 条账户夹具前置检查通过，但 `samples=[]`、`frames=[]`，Ctrl-V 步骤未执行，尚无粘贴基线或 A/B 数据。对[会话选择分支](https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/terminal/conversation.rs#L1271-L1276)及[状态快照](https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/terminal/conversation.rs#L175-L179)的检查确认 explicit `member:next` 对应 UI target 为 `next`、`native_recipient` 为 None；旧夹具要求 target 为 None，与该状态不符。后继工作限定为外部夹具条件及相应哈希绑定修正，其实际运行结果待取得。
+
+781 的三平台 CI 通过记录继续保留。18 项定向验收、最终 P1 和正式发布仍未完成，6733 粘贴补丁尚未应用。本次增量见[构建与首轮尝试记录](baseline-build-2253.json)，此前完整事实见[固定历史检查点](https://github.com/LIghtJUNction/ssmcp/blob/a74daa7e0d2ce32f00ec09b6b6e511b7bdcde49c/docs/reports/command-await-delivery-20261120/integration-checkpoint-2241.json)；下方历史按原时间保留。
+
+## 历史状态（截至 2026-11-20 22:45 UTC）
 
 [PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 的公开头为 [`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58)，仍为 draft、未合并。[Session service CI 44829555014](https://github.com/LIghtJUNction/ssmcp/actions/runs/44829555014) 已于 22:36:52 UTC 完成，Linux、Windows、macOS 三个平台全部成功。独立完整日志复核确认了各自的精确 checkout 与实际测试结果；781 的 Linux 外层库批次为 2034 通过、0 失败、23 忽略，38.29 秒。下方 441 的 30.44 秒结果保留为历史，不迁移到新提交。
 
@@ -442,3 +450,25 @@ Linux 完整原日志的独立复核确认了精确 checkout 与上述外层计�
 | macOS | [104,480 B](https://drive.google.com/file/d/1wyKVW6FUFk6AKMbsWyKE6fs9Ety7fZqD/view?usp=drivesdk) | [1,414 B](https://drive.google.com/file/d/1qLWyaOM0MHrxQ9l62-vm7cwjWDAtA_ov/view?usp=drivesdk) | [3,670 B](https://chatgpt.com/library?file_id=libfile_fde3_f-4c994b83bbb48191b116b26b65175926_e58c93d727108191bbc40d6c0d09ec81&account_id=personal) |
 
 日志身份以 GitHub 工具返回的解码文本经 UTF-8 保存后的字节为准：三者均保留 BOM，Linux/macOS 保留 LF，Windows 保留 CRLF。ZIP 身份以实际下载字节为准。完整 SHA256、原保存标识、版本 0 及回读范围见[结构化检查点](integration-checkpoint-2241.json)。这些归档证明本次 CI 证据已保全，不扩展为开发机重执行、粘贴 A/B、P1 或正式发布结果。
+
+## 23:06 检查点：五份构建产物完成，首次测量停在前置断言
+
+### 781 构建完成的范围
+
+本次源码为 [`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58)，tree 为 `6bf7beb143cfdce3878df856c27785164695430f`。r4 构建回执为 79,446 字节，SHA256 `d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0`；构建进程实际退出 0，两输出流均已结束。以下五项来自回执的实际链接输出、Cargo 对外产物与保留副本绑定：
+
+| 产物 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| `library-test-fixture` | 165,519,472 | `edea75a764a08d6b4ed76d49d16160ce3750dc9f333cce41e574c46562ac9c81` |
+| `ssmcp` | 15,754,224 | `09c7219a0863ebfc97f51246e569b65dd4963493b9e8b7f0885672b6b95c5ac2` |
+| `ssmcp-frontend` | 1,386,576 | `229e65b1f52098b7292d9e387e9442d24c9411ab2e34a55fcbe4a6171e0398b5` |
+| `ssmcpd` | 8,252,208 | `909133cae9bfc0d9bcefdf4af4740a9bc3c50a1097025a3178bc8e04daa62e86` |
+| `vt_snapshot` | 440,984 | `efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f` |
+
+五项均为 `fresh=false`，前后身份检查通过；该字段只描述选定产物，依赖仍可复用缓存。三个构建命令及全部保留、metadata、后置检查完成，修复了前述 441 保留阶段的阻塞。这里核对的是回执及其声明的产物绑定，未声称主审另行重算二进制哈希。当次产品测试为 0、基准为 0、package gate 为 0，release gate 未执行；旧 441 失败继续保留原归属。
+
+### 首轮 PTY 尚未产生性能样本
+
+执行回执为 23,288 字节，SHA256 `23cf70065f3b4aa72beaeb45fefe0a6006da6fa5d5d1b4667249081db1348cb4`，进程退出 1；失败报告为 7,946 字节，SHA256 `510422922070d1e6c3d831c3a5d41e91812cfa980d21feb36c082baa194ffcd0`，错误为 `AssertionError: the real Next caller input is active`。17 条账户夹具前置断言已通过，但六场景步骤在前置等待失败，样本与帧数组均为空；Ctrl-V 未执行、Cargo 未调用，输入前后相同。这 17 条前置断言不计入尚未执行的 18 项定向验收。
+
+针对固定 781 源码和冻结六场景驱动 `1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8` 的独立检查确认：explicit `member:next` 的 UI target 是 `next`，`native_recipient` 仍为 None。旧驱动要求 `target is None and native_recipient is None`，因此未通过前置判断。拟修正为 `target == 'next' and native_recipient is None`，同步派生 Ctrl-V 和相关哈希绑定；六场景、计时定义及时限保持，产品源码和本次五份产物无需重编。当前尚无后继驱动实际通过结论，也无粘贴基线、A/B、最终 P1 或正式发布结果。

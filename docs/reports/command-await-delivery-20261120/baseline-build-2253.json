@@ -1,0 +1,158 @@
+{
+  "schema": "ssmcp.baseline-build-and-first-paste-attempt.v1",
+  "document_status": "working_checkpoint",
+  "cutoff_utc": "2026-11-20T23:06:34Z",
+  "previous_checkpoint": {
+    "commit": "a74daa7e0d2ce32f00ec09b6b6e511b7bdcde49c",
+    "tree": "ff60b47c85c0173f5bdd577ed4556d0603e36145",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/a74daa7e0d2ce32f00ec09b6b6e511b7bdcde49c/docs/reports/command-await-delivery-20261120/integration-checkpoint-2241.json",
+    "history_copied": false
+  },
+  "base_report": {
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/a74daa7e0d2ce32f00ec09b6b6e511b7bdcde49c/docs/reports/command-await-delivery-20261120/README.md",
+    "bytes": 74119,
+    "sha256": "ed9837530e58f4b3a239baf365faabe2929dafc5f98d3a9778427eadcba173da"
+  },
+  "source": {
+    "commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "tree": "6bf7beb143cfdce3878df856c27785164695430f",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58"
+  },
+  "build": {
+    "status": "build_completed",
+    "scope": "build_only",
+    "started_at_utc": "2026-11-20T22:41:45.363Z",
+    "finished_at_utc": "2026-11-20T22:53:16.145Z",
+    "actual_exit_code": 0,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "receipt": {
+      "bytes": 79446,
+      "sha256": "d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0"
+    },
+    "build_commands_completed": 3,
+    "all_build_preservation_metadata_postchecks_completed": true,
+    "artifacts": [
+      {
+        "name": "library-test-fixture",
+        "bytes": 165519472,
+        "sha256": "edea75a764a08d6b4ed76d49d16160ce3750dc9f333cce41e574c46562ac9c81",
+        "fresh": false,
+        "link_copy_public_bytes_equal": true,
+        "link_copy_public_sha_equal": true
+      },
+      {
+        "name": "ssmcp",
+        "bytes": 15754224,
+        "sha256": "09c7219a0863ebfc97f51246e569b65dd4963493b9e8b7f0885672b6b95c5ac2",
+        "fresh": false,
+        "link_copy_public_bytes_equal": true,
+        "link_copy_public_sha_equal": true
+      },
+      {
+        "name": "ssmcp-frontend",
+        "bytes": 1386576,
+        "sha256": "229e65b1f52098b7292d9e387e9442d24c9411ab2e34a55fcbe4a6171e0398b5",
+        "fresh": false,
+        "link_copy_public_bytes_equal": true,
+        "link_copy_public_sha_equal": true
+      },
+      {
+        "name": "ssmcpd",
+        "bytes": 8252208,
+        "sha256": "909133cae9bfc0d9bcefdf4af4740a9bc3c50a1097025a3178bc8e04daa62e86",
+        "fresh": false,
+        "link_copy_public_bytes_equal": true,
+        "link_copy_public_sha_equal": true
+      },
+      {
+        "name": "vt_snapshot",
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+        "fresh": false,
+        "link_copy_public_bytes_equal": true,
+        "link_copy_public_sha_equal": true
+      }
+    ],
+    "guards": {
+      "verified_before_and_after": true,
+      "source_manifest_sha256": "db8e1b62cc4dd8a39656b89377b5f0cc92010b926f90888b558a49c468e4c354",
+      "dependency_manifest_sha256": "29db07b51aa093d1f8376af7c80c1b478610aedf12b2213d5fbde1fc03f9e2bc",
+      "git_heads_binding_sha256": "7783746571dbd3fcbdeeca3633f359bd21c44220d31160896af930c04ebcbb57",
+      "gitlinks": {
+        "crates/zharness": "cb63a9a0aa163214c6062664cd62fefb357be5a8",
+        "crates/zplugin": "cf02c1d9db575b92b36297dfe1fde72de9ee51e4",
+        "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+        "crates/zuse": "a1bb8fd2cbce0a9d85134999883c578358065242"
+      }
+    },
+    "verification_scope": "Primary reviewer actually read the completed build receipt and process exit/EOF. This checkpoint records receipt-declared link-output/Cargo-public/retained-copy byte and SHA equality; it does not claim a separate independent rehash of the five binaries.",
+    "independent_binary_hash_performed": false,
+    "bounds": {
+      "product_tests_executed": 0,
+      "benchmark_executed": false,
+      "package_gates_executed": 0,
+      "release_gate_executed": false,
+      "dependency_cache_reuse_allowed": true
+    }
+  },
+  "first_paste_attempt": {
+    "source_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "build_receipt_sha256": "d2204375614807af510f6c7fd08ec657d212a98f18f504cb21376c63f47ea7c0",
+    "actual_exit_code": 1,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "execution_receipt": {
+      "bytes": 23288,
+      "sha256": "23cf70065f3b4aa72beaeb45fefe0a6006da6fa5d5d1b4667249081db1348cb4",
+      "primary_selected_fields_read_complete": true
+    },
+    "fixture_stdout": {
+      "bytes": 1357,
+      "sha256": "edf332603fb607a52a2531abec6b65e0bb204307aa5a892e312bc7f7d34b28a7",
+      "passed_private_account_fixture_checks": 17
+    },
+    "six_cases_report": {
+      "bytes": 7946,
+      "sha256": "510422922070d1e6c3d831c3a5d41e91812cfa980d21feb36c082baa194ffcd0",
+      "status": "failed",
+      "error": "AssertionError: the real Next caller input is active",
+      "samples": [],
+      "frames": [],
+      "inputs_unchanged": true,
+      "private_account_fixture_checks_passed": 17
+    },
+    "six_cases_step_exit_code": 1,
+    "ctrlv_executed": false,
+    "cargo_executed": false,
+    "performance_samples_obtained": false,
+    "verification_scope": "Primary reviewer actually read execution exit/EOF, selected receipt fields, fixture stdout and failed report. Full private VT content is not included.",
+    "cause_review": {
+      "exact_product_source": "781b87df1d364137b6885f17f631a3e9e991bd58",
+      "product_source_url": "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/terminal/conversation.rs#L1271-L1276",
+      "frozen_six_case_driver_sha256": "1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8",
+      "explicit_member_next_ui_target": "next",
+      "native_recipient": null,
+      "old_driver_condition": "target is None and native_recipient is None",
+      "intended_successor_condition": "target == 'next' and native_recipient is None",
+      "independent_exact_source_and_driver_review_completed": true,
+      "scope": "The old fixture route-ready assertion expects target None for explicit member:next; fixed-source review confirms target next with native_recipient None.",
+      "planned_change": "external fixture route-ready predicate and dependent Ctrl-V/hash pins only; preserve all six cases, timing definitions and time limits",
+      "product_change_required": false,
+      "build_recompile_required": false,
+      "successor_driver_hash_received": false,
+      "successor_runtime_result_claimed": false,
+      "snapshot_source_url": "https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/terminal/conversation.rs#L175-L179"
+    },
+    "fixture_checks_are_the_pending_18_acceptance_checks": false
+  },
+  "remaining_status": {
+    "runtime18_executed": false,
+    "paste_baseline_completed": false,
+    "paste_ab_obtained": false,
+    "paste_patch_6733_applied": false,
+    "final_p1_passed": false,
+    "formal_release_verified": false
+  },
+  "history_unchanged": true
+}
