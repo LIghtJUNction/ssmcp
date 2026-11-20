@@ -1,5 +1,9 @@
 //! Bounded questions, authenticated answers, and explicit finish decisions.
 mod delivery;
+mod history;
+pub(crate) use history::owner as history_owner;
+#[cfg(test)]
+pub(crate) use history::tests::{enqueue_for_test, with_test_queue};
 #[cfg(test)]
 mod human_finish_tests;
 mod requests;
@@ -78,6 +82,7 @@ struct Record {
     question: Question,
     idempotency_key: Option<String>,
     routing: Option<Routing>,
+    history_owner: Option<history::Owner>,
 }
 
 impl Record {
@@ -90,6 +95,7 @@ impl Record {
             + question.answer.as_ref().map_or(0, String::len)
             + self.idempotency_key.as_ref().map_or(0, String::len)
             + self.routing.as_ref().map_or(0, Routing::bytes)
+            + history::bytes(&self.history_owner)
             + 256
     }
 
@@ -126,6 +132,10 @@ struct Queue {
 }
 
 fn state() -> &'static Mutex<Queue> {
+    #[cfg(test)]
+    if let Ok(queue) = history::tests::TEST_QUEUE.try_with(|queue| *queue) {
+        return queue;
+    }
     QUESTIONS.get_or_init(|| Mutex::new(Queue::default()))
 }
 
@@ -269,15 +279,27 @@ impl Queue {
         Ok(())
     }
 
+    #[cfg(test)]
     fn ask(&mut self, request: AskRequest) -> Result<(Question, bool), String> {
         self.ask_for(request, None, QuestionKind::Question)
     }
 
+    #[cfg(test)]
     fn ask_for(
         &mut self,
         request: AskRequest,
         scope: Option<RequestScope>,
         kind: QuestionKind,
+    ) -> Result<(Question, bool), String> {
+        self.ask_owned(request, scope, kind, None)
+    }
+
+    fn ask_owned(
+        &mut self,
+        request: AskRequest,
+        scope: Option<RequestScope>,
+        kind: QuestionKind,
+        owner: Option<history::Owner>,
     ) -> Result<(Question, bool), String> {
         if let Some(scope) = &scope {
             self.validate_scope(scope)?;
@@ -354,6 +376,7 @@ impl Queue {
             },
             idempotency_key: request.idempotency_key,
             routing: scope.map(|scope| Routing::new(scope, kind)),
+            history_owner: owner,
         };
         self.reserve(record.bytes(), 1, None)?;
         let question = record.question.clone();
@@ -768,11 +791,13 @@ fn history_text(question: &Question) -> String {
 fn enqueue(
     state: &Mutex<Queue>,
     request: AskRequest,
+    owner: history::Owner,
     on_created: impl FnOnce(&Question),
 ) -> Result<Value, String> {
     let (question, created, pending_count) = {
         let mut queue = state.lock().unwrap_or_else(|error| error.into_inner());
-        let (question, created) = queue.ask(request)?;
+        let (question, created) =
+            queue.ask_owned(request, None, QuestionKind::Question, Some(owner))?;
         (question, created, queue.pending_count())
     };
     if created {
@@ -795,14 +820,16 @@ fn enqueue(
 
 pub(super) fn ask(arguments: Value) -> Result<Value, String> {
     let request = parse_ask(arguments)?;
-    if let Some(scope) = caller_scope()? {
+    let scope = caller_scope()?;
+    let owner = history::capture();
+    if let Some(scope) = scope {
         let automatic_delivery = scope.has_thread();
         let (question, created) = state()
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .ask_for(request, Some(scope), QuestionKind::Question)?;
+            .ask_owned(request, Some(scope), QuestionKind::Question, Some(owner))?;
         if created {
-            let _ = super::history::record("assistant", &history_text(&question));
+            let _ = history::record_created(&question);
             changed();
         }
         return Ok(
@@ -813,8 +840,8 @@ pub(super) fn ask(arguments: Value) -> Result<Value, String> {
             "read_with":"ssmcp.ui.questions"}),
         );
     }
-    enqueue(state(), request, |question| {
-        if let Err(error) = super::history::record("assistant", &history_text(question)) {
+    enqueue(state(), request, owner, |question| {
+        if let Err(error) = history::record_created(question) {
             super::super::terminal::notice(&format!(
                 "Question queued; history could not be saved: {error}"
             ));
@@ -937,13 +964,18 @@ mod tests {
         }))
         .unwrap();
         let mut records = Vec::new();
-        let first = enqueue(&queue, request.clone(), |question| {
-            assert!(
-                queue.try_lock().is_ok(),
-                "history must run outside the queue lock"
-            );
-            records.push(history_text(question));
-        })
+        let first = enqueue(
+            &queue,
+            request.clone(),
+            Err("fixture history unavailable".into()),
+            |question| {
+                assert!(
+                    queue.try_lock().is_ok(),
+                    "history must run outside the queue lock"
+                );
+                records.push(history_text(question));
+            },
+        )
         .unwrap();
         assert_eq!(first["created"], true);
         assert_eq!(first["blocking"], false);
@@ -951,7 +983,13 @@ mod tests {
         assert!(records[0].contains("Destination"));
         assert!(records[0].contains("**Choose** a destination.\nKeep the details."));
         assert!(records[0].contains("1. GitHub\n2. Google Drive"));
-        let repeated = enqueue(&queue, request, |_| panic!("retry must not record again")).unwrap();
+        let repeated = enqueue(
+            &queue,
+            request,
+            Err("different retry history".into()),
+            |_| panic!("retry must not record again"),
+        )
+        .unwrap();
         assert_eq!(repeated["id"], first["id"]);
         assert_eq!(repeated["created"], false);
         assert_eq!(queue.lock().unwrap().pending_count(), 1);

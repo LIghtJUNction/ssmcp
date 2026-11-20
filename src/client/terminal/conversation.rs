@@ -1418,19 +1418,16 @@ impl State {
                 return;
             }
         }
-        if !self.help && matches!(key, Key::Back | Key::Open) {
-            let editor = if self.conversation.view == View::Questions {
-                self.question_editor()
+        if !self.help
+            && self.conversation.view != View::Questions
+            && matches!(key, Key::Back | Key::Open)
+        {
+            let editor = &self.conversation.composer;
+            let at_edge = if matches!(key, Key::Back) {
+                editor.cursor() == 0
             } else {
-                Some(&self.conversation.composer)
+                editor.cursor() == editor.text().len()
             };
-            let at_edge = editor.is_none_or(|editor| {
-                if matches!(key, Key::Back) {
-                    editor.cursor() == 0
-                } else {
-                    editor.cursor() == editor.text().len()
-                }
-            });
             if self.conversation.content_focus || at_edge {
                 self.canvas_move(if matches!(key, Key::Back) { -1 } else { 1 });
                 return;

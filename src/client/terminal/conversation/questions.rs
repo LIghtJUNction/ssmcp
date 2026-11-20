@@ -356,17 +356,35 @@ impl State {
                 .clone()
                 .unwrap_or_else(|| "Skipped by user".into())
         };
-        let history_error = if !self.preview {
-            crate::client::interface::history::record("answer", &text).err()
-        } else {
-            None
-        };
+        let owner = (!self.preview).then(|| queue::history_owner(id));
+        let persisted = owner.as_ref().map(|owner| {
+            owner.as_ref().map_err(Clone::clone).and_then(|owner| {
+                crate::client::interface::history::record_owned_answer(owner, id, &text)
+            })
+        });
+        let history_error = persisted
+            .as_ref()
+            .and_then(|result| result.as_ref().err())
+            .cloned();
         let mut record = format!("\n[ANSWER] #{id}\n");
         for row in markdown::rows(&text, self.geometry.left, &self.ui) {
             let _ = writeln!(record, "{row}");
         }
         record.push('\n');
-        self.log(record.as_bytes());
+        match owner {
+            Some(Ok(owner)) => self.log_scoped_event(
+                "message",
+                &json!({"type":"ssmcp.message", "role":"user", "author":"You",
+                    "message_id":persisted.and_then(Result::ok), "text":text}),
+                record.as_bytes(),
+                crate::runtime::call_scope::DisplaySource {
+                    call: None,
+                    history: crate::runtime::call_scope::DisplayHistory::Local(owner.display_id()),
+                },
+            ),
+            Some(Err(_)) => self.log_raw(record.as_bytes()),
+            None => self.log(record.as_bytes()),
+        }
         self.conversation.question_id = Some(id.clone());
         self.conversation.detail = true;
         self.conversation.content_focus = true;
@@ -1017,3 +1035,6 @@ mod tests {
         assert_eq!(state.question_views().len(), 3);
     }
 }
+
+#[cfg(test)]
+mod history_tests;
