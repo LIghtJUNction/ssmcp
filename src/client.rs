@@ -21,6 +21,8 @@ mod account_compat_tests;
 mod git_status;
 mod handoff;
 mod highlight;
+#[cfg(test)]
+mod incoming_tests;
 pub(crate) mod input;
 pub(crate) mod interface;
 mod link_metrics;
@@ -236,7 +238,7 @@ struct Incoming {
 }
 
 impl Incoming {
-    fn start(mut reader: BufReader<ChildStdout>) -> Self {
+    fn start<R: tokio::io::AsyncRead + Unpin + Send + 'static>(mut reader: BufReader<R>) -> Self {
         let (frames_tx, frames) = mpsc::channel(MAX_INFLIGHT);
         let (closed_tx, closed) = watch::channel(None);
         let task = tokio::spawn(async move {
@@ -290,6 +292,36 @@ impl Incoming {
         timeout(Duration::from_secs(2), self.disconnected())
             .await
             .unwrap_or(fallback)
+    }
+
+    // A connected writer can fail before the relay's final Reject is read.
+    // No queued work may run after that failure, but dropping this reader would
+    // turn a revoked credential into a transient error and retry it. Drain the
+    // bounded frame queue so even a reader blocked on a full queue can deliver
+    // the raw rejection. One deadline bounds the whole drain, including peers
+    // that keep sending ordinary frames. EOF, reader errors and timeout retain
+    // the original error and its type.
+    async fn after_connection_error(&mut self, fallback: crate::Error) -> crate::Error {
+        if fallback.downcast_ref::<relay::PermanentFailure>().is_some() {
+            return fallback;
+        }
+        let rejection = timeout(Duration::from_secs(2), async {
+            loop {
+                match self.frames.recv().await {
+                    Some(Ok(Some(Frame::Reject { message }))) => return Some(message),
+                    Some(Ok(Some(_))) => {}
+                    Some(Ok(None)) | Some(Err(_)) | None => return None,
+                }
+            }
+        })
+        .await;
+        if let Ok(Some(message)) = rejection {
+            let error = relay::failure(message);
+            if error.downcast_ref::<relay::PermanentFailure>().is_some() {
+                return error;
+            }
+        }
+        fallback
     }
 
     fn ensure_open(&self, ssh: &mut Child) -> Result<(), String> {
@@ -2528,6 +2560,15 @@ async fn connect_inner(
         result = Ok(());
     }
     git_status.shutdown().await;
+    if matches!(&transport, Transport::Account { .. })
+        && !intentionally_stopped
+        && !reload_requested
+    {
+        result = match result {
+            Err(error) => Err(incoming.after_connection_error(error).await),
+            other => other,
+        };
+    }
     incoming.stop().await;
     drop(writer);
     let _ = ssh.start_kill();
