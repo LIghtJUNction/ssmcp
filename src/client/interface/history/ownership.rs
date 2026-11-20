@@ -146,7 +146,12 @@ impl Ownership {
 
     pub(super) fn revoke(&mut self, id: &str) {
         self.issued.remove(id);
-        if self.current.get().as_ref().is_some_and(|owner| owner.id() == id) {
+        if self
+            .current
+            .get()
+            .as_ref()
+            .is_some_and(|owner| owner.id() == id)
+        {
             self.current.replace(None);
         }
     }
@@ -211,7 +216,10 @@ fn with_owner<T>(
     #[cfg(test)]
     if let Some(fixture) = &owner.fixture {
         let store = fixture.upgrade().ok_or(RELEASED)?;
-        let mut state = store.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         return operation(state.as_mut().ok_or(RELEASED)?, owner);
     }
     with(|history| operation(history, owner))
