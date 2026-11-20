@@ -49,10 +49,10 @@ pub(super) async fn submit(
         );
     }
     receipt["origin"] = json!(credential.server);
-    if let Some(subject) = &credential.subject {
-        if receipt["account"]["subject"].as_str() != Some(subject) {
-            return Err("chat receipt account differs from the saved login".into());
-        }
+    if let Some(subject) = &credential.subject
+        && receipt["account"]["subject"].as_str() != Some(subject)
+    {
+        return Err("chat receipt account differs from the saved login".into());
     }
     receipt["account"]["principal"] = json!(credential.principal);
     Ok(receipt)

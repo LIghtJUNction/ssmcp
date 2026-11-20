@@ -214,7 +214,7 @@ mod tests {
         crate::platform::random_bytes(&mut random).unwrap();
         let parent = PathBuf::from(format!(
             "/tmp/ssmcp-chat-test-{}",
-            crate::hex::encode(&random)
+            crate::hex::encode(random)
         ));
         crate::platform::private_directory(&parent).unwrap();
         let path = parent.join("input.sock");

@@ -296,24 +296,21 @@ async fn route(
         process::Target::Ssmcp { id, account } => {
             let mut bytes = [0; 16];
             crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
-            let request_id = format!("chat-{}", crate::hex::encode(&bytes));
+            let request_id = format!("chat-{}", crate::hex::encode(bytes));
             // Inboxes keep their existing literal body. No local file contents
             // or skill declarations are sent as implicit attachments.
             messaging::send(id, account, text, &request_id)?;
             questions::user_input(None);
             let deadline = tokio::time::Instant::now() + ACK_LIMIT;
-            loop {
-                match messaging::chat_receipt(&request_id) {
-                    Some((state, error)) => match state.as_str() {
-                        "queued" | "included" | "acknowledged" => {
-                            return Ok(Receipt::new(&state, Some(request_id)));
-                        }
-                        "failed" | "expired" => {
-                            return Err(error.unwrap_or_else(|| format!("native message {state}")));
-                        }
-                        _ => {}
-                    },
-                    None => break,
+            while let Some((state, error)) = messaging::chat_receipt(&request_id) {
+                match state.as_str() {
+                    "queued" | "included" | "acknowledged" => {
+                        return Ok(Receipt::new(&state, Some(request_id)));
+                    }
+                    "failed" | "expired" => {
+                        return Err(error.unwrap_or_else(|| format!("native message {state}")));
+                    }
+                    _ => {}
                 }
                 if tokio::time::Instant::now() >= deadline {
                     break;
@@ -327,7 +324,7 @@ async fn route(
             let owner = owner.ok_or("no original conversation was captured for the chat agent")?;
             let mut random = [0; 16];
             crate::platform::random_bytes(&mut random).map_err(|error| error.to_string())?;
-            let request_id = format!("chat-{}", crate::hex::encode(&random));
+            let request_id = format!("chat-{}", crate::hex::encode(random));
             let request_message = history::request_identity(&request_id, text)?;
             let history = owner.display_id();
             let user_owner = owner.clone();
