@@ -1,6 +1,7 @@
 //! Local terminal frontends for an existing background session. Detaching only
 //! releases an input lease; it never changes the session's desired state.
 pub(crate) mod input;
+pub(crate) mod thread_history;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
@@ -34,12 +35,20 @@ const EVENT_BYTES: usize = 64 * 1024;
 const PAGE_BYTES: usize = 128 * 1024;
 const LEASE_SECONDS: u64 = 15;
 static CAPTURE: OnceLock<Mutex<Option<Weak<Capture>>>> = OnceLock::new();
+// Ordinary foreground clients also retain the same bounded event journal.
+// No listener, persistent file, model or background service is created here.
+static PROCESS_CAPTURE: OnceLock<std::result::Result<Arc<Capture>, String>> = OnceLock::new();
 
 #[derive(Default)]
 struct Ring {
     next: u64,
     bytes: usize,
-    events: VecDeque<(u64, Box<RawValue>, usize)>,
+    events: VecDeque<(
+        u64,
+        Box<RawValue>,
+        usize,
+        Option<thread_history::RecordScope>,
+    )>,
 }
 
 struct Lease {
@@ -52,50 +61,80 @@ struct RuntimeSlot {
 }
 struct Capture {
     generation: String,
-    ring: Mutex<Ring>,
+    ring: Arc<Mutex<Ring>>,
     leases: Mutex<BTreeMap<String, Lease>>,
     runtime: Mutex<RuntimeSlot>,
-    changed: Notify,
+    changed: Arc<Notify>,
 }
 
 impl Capture {
     fn new() -> Result<Self> {
         Ok(Self {
             generation: super::random_suffix()?,
-            ring: Mutex::new(Ring::default()),
+            ring: Arc::new(Mutex::new(Ring::default())),
             leases: Mutex::new(BTreeMap::new()),
             runtime: Mutex::new(RuntimeSlot {
                 runtime: None,
                 generation: 0,
             }),
-            changed: Notify::new(),
+            changed: Arc::new(Notify::new()),
         })
     }
 
-    fn push(&self, mut event: Value) {
+    fn with_journal(history: &Self) -> Self {
+        // History outlives an attach listener; input authority and the Runtime
+        // must retain their original listener/connection lifetimes.
+        Self {
+            generation: history.generation.clone(),
+            ring: history.ring.clone(),
+            changed: history.changed.clone(),
+            leases: Mutex::new(BTreeMap::new()),
+            runtime: Mutex::new(RuntimeSlot {
+                runtime: None,
+                generation: 0,
+            }),
+        }
+    }
+
+    fn push(&self, event: Value) {
+        self.push_scoped(event, None);
+    }
+
+    fn push_scoped(&self, mut event: Value, scope: Option<thread_history::RecordScope>) {
         let mut bytes = event.to_string().len();
         if bytes > EVENT_BYTES {
+            let history = event.get("local_history_id").cloned();
             event = json!({"kind":"event","label":"attach","value":{
                 "type":"ssmcp.status","level":"Warning",
                 "message":format!("One {bytes}-byte event exceeds attach history's per-event limit; use the session log/output artifact for its complete contents.")}});
+            if let Some(history) = history {
+                event["local_history_id"] = history;
+            }
+            event["truncated"] = json!(true);
+        }
+        if let Some(scope) = &scope {
+            event["source"] = serde_json::to_value(scope).expect("record scope serializes");
         }
         let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let cursor = ring.next;
         event["sequence"] = json!(cursor);
         let encoded = event.to_string();
         drop(event);
-        bytes = encoded.len();
+        bytes = encoded.len()
+            + scope
+                .as_ref()
+                .map_or(0, thread_history::RecordScope::retained_bytes);
         // Keep replay payloads compact; expand only the requested page.
         let event = RawValue::from_string(encoded).expect("serialized attach event is valid JSON");
         while ring.bytes + bytes > HISTORY_BYTES || ring.events.len() >= 4096 {
-            let Some((_, _, old)) = ring.events.pop_front() else {
+            let Some((_, _, old, _)) = ring.events.pop_front() else {
                 break;
             };
             ring.bytes -= old;
         }
         ring.next = ring.next.saturating_add(1);
         ring.bytes += bytes;
-        ring.events.push_back((cursor, event, bytes));
+        ring.events.push_back((cursor, event, bytes, scope));
         drop(ring);
         self.changed.notify_waiters();
     }
@@ -107,6 +146,15 @@ impl Capture {
             frame["local_history_id"] = json!(history.as_str());
         }
         self.push(frame);
+    }
+
+    fn push_scoped_event(&self, label: &str, value: &Value, source: &DisplaySource) {
+        let mut frame =
+            json!({"kind":"event","label":label,"value":crate::audit::event(value.clone())});
+        if let Some(history) = source.history.local_id() {
+            frame["local_history_id"] = json!(history.as_str());
+        }
+        self.push_scoped(frame, thread_history::RecordScope::from_source(source));
     }
 
     fn open(&self, read_only: bool) -> Result<String> {
@@ -174,7 +222,7 @@ impl Capture {
                     let mut next = cursor.max(start);
                     let mut bytes = 0;
                     let mut events = Vec::new();
-                    for (sequence, event, size) in &ring.events {
+                    for (sequence, event, size, _) in &ring.events {
                         if *sequence < next {
                             continue;
                         }
@@ -208,11 +256,44 @@ fn capture() -> Option<Arc<Capture>> {
         .upgrade()
 }
 
+fn history_capture() -> Option<Arc<Capture>> {
+    capture().or_else(|| {
+        PROCESS_CAPTURE
+            .get_or_init(|| {
+                Capture::new()
+                    .map(Arc::new)
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .ok()
+            .cloned()
+    })
+}
+
 /// Called in the renderer's serialized emission path. Native payloads remain
 /// unchanged; this private display replay contains the usual redacted copy.
 pub(crate) fn record_event(label: &str, value: &Value, history: Option<&HistoryId>) {
-    if let Some(capture) = capture() {
+    if let Some(capture) = history_capture() {
         capture.push_event(label, value, history);
+    }
+}
+
+pub(crate) fn record_scoped_event(label: &str, value: &Value, source: &DisplaySource) {
+    if value["type"] == "ssmcp.code_mode"
+        || source
+            .call
+            .as_ref()
+            .and_then(|call| call.native_tool())
+            .is_some_and(thread_history::observer)
+    {
+        return;
+    }
+    if source.call.is_none() {
+        record_event(label, value, source.history.local_id());
+        return;
+    }
+    if let Some(capture) = history_capture() {
+        capture.push_scoped_event(label, value, source);
     }
 }
 
@@ -330,7 +411,8 @@ impl Drop for Handle {
 
 pub async fn serve(directory: PathBuf, runtime: Option<Arc<Runtime>>) -> Result<Handle> {
     let server = ipc::Server::bind(&directory, ENDPOINT).await?;
-    let capture = Arc::new(Capture::new()?);
+    let history = history_capture().ok_or("process event history is unavailable")?;
+    let capture = Arc::new(Capture::with_journal(&history));
     if let Some(runtime) = runtime {
         *capture.runtime.lock().unwrap_or_else(|e| e.into_inner()) = RuntimeSlot {
             runtime: Some(runtime),

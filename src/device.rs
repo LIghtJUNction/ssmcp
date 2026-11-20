@@ -1,5 +1,6 @@
 //! Account credentials and controlled WebSocket peers. Anonymous devices carry
 //! explicit account ACLs; remote control still requires a verified login.
+mod session_io;
 use crate::{
     broker::{Authorization, Broker, IDENTITY_RESOURCE},
     identity::Identity,
@@ -593,6 +594,7 @@ pub fn routes() -> Router<Arc<Broker>> {
         .route("/api/client/sessions", get(sessions))
         .route("/api/client/connect", get(connect))
         .route("/api/client/call", post(call_tool))
+        .route("/api/client/io", post(session_io::request))
 }
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -683,12 +685,19 @@ async fn sessions(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let registration = authenticate(&broker, &headers, true).await?;
-    let authorization = Authorization::Identity(registration.identity);
+    let actor = registration.identity.clone();
+    let authorization = Authorization::Identity(actor.clone());
     let sessions = broker
         .clients(IDENTITY_RESOURCE, &authorization)
         .await
         .map_err(|_| fail(StatusCode::FORBIDDEN, "access_denied"))?;
-    let clients:Vec<Value>=sessions.into_iter().map(|s|{let i=s.info();json!({"id":i.id,"name":i.name,"title":i.title,"type":i.mode.name(),"hostname":i.hostname,"cwd":i.cwd})}).collect();
+    if !registration.is_live(&broker).await {
+        return Err(fail(StatusCode::UNAUTHORIZED, "invalid_token"));
+    }
+    let clients: Vec<Value> = sessions
+        .into_iter()
+        .map(|s| session_io::directory(&broker, &s, &actor))
+        .collect();
     Ok(Json(json!({"clients":clients})))
 }
 #[derive(Deserialize)]

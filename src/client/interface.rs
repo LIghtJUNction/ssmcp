@@ -18,6 +18,7 @@ pub(crate) mod history;
 pub(crate) mod listener;
 pub(crate) mod messages;
 pub(crate) mod questions;
+pub(crate) mod reply;
 pub(crate) mod tool_summary;
 pub(crate) mod user_wait;
 
@@ -502,6 +503,9 @@ pub(crate) async fn call(
     if name == tool_summary::TOOL {
         return tool_summary::call(arguments);
     }
+    if name == reply::TOOL {
+        return reply::call(arguments);
+    }
     // Bounded waits must not hold the UI configuration lock.
     if name == "ssmcp.ui.wait" {
         return user_wait::call(arguments).await;
@@ -550,7 +554,8 @@ pub(crate) async fn call(
     if name == "ssmcp.ui.history" {
         // Search may inspect retained files; it must not hold the display lock
         // or block the async runtime while doing disk I/O.
-        return tokio::task::spawn_blocking(move || history::call(arguments))
+        let source = crate::runtime::call_scope::Source::capture();
+        return tokio::task::spawn_blocking(move || source.blocking(|| history::call(arguments)))
             .await
             .map_err(|_| "history storage worker stopped".to_owned())?;
     }
@@ -637,6 +642,7 @@ pub(crate) fn tools() -> Vec<Value> {
         queue_tool(),
         listener::tool(),
         tool_summary::tool(),
+        reply::tool(),
         user_wait::tool(),
         json!({"name":"ssmcp.ui.filter","description":"Filter the retained visible log history by case-insensitive text and all/commands/errors. Matching blocks keep their output. Does not alter audit events or running commands.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string","maxLength":256,"description":"Plain text, at most 256 UTF-8 bytes; empty clears the text filter."},"level":{"type":"string","enum":["all","commands","errors"]}}},"annotations":{"readOnlyHint":false,"destructiveHint":false}}),
         get_tool(),
@@ -1148,6 +1154,7 @@ mod tests {
             "ssmcp.ui.question_delivery",
             "ssmcp.ui.questions",
             "ssmcp.ui.queue",
+            "ssmcp.ui.reply",
             "ssmcp.ui.set",
             "ssmcp.ui.tool_summary",
             "ssmcp.ui.wait",

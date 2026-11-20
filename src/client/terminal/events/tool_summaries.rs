@@ -164,6 +164,7 @@ fn observer(name: &str) -> bool {
         name,
         "ssmcp.ui.tool_summary"
             | "ssmcp.ui.get"
+            | "ssmcp.ui.history"
             | "ssmcp.client.capabilities"
             | "ssmcp.resources.list"
             | "ssmcp.resources.templates"

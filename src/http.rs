@@ -33,6 +33,7 @@ mod finish_request;
 mod question_delivery_tests;
 #[cfg(test)]
 mod relay_composer_fixture;
+mod session_io;
 mod tool_summaries;
 mod user_wait;
 
@@ -1168,11 +1169,19 @@ fn code_host(
                 ],
             );
             let is_reload = crate::client::reload::is_reload(&operation);
+            let is_thread_reply = matches!(&operation, Operation::CallTool { name, .. }
+                if name == crate::client::interface::reply::TOOL);
             let answer_binding = code_mode::AUDIT_RUN.try_with(|run|run.binding(&client_id)).ok().flatten();
             let mut result = crate::observability::REQUEST_ID
                 .scope(
                     request_id,
-                    session.call_with_authorization(operation, controller, &authorization),
+                    async {
+                        if is_thread_reply {
+                            session.call_with_bound_authorization(operation, controller, &authorization, answer_binding.clone()).await
+                        } else {
+                            session.call_with_authorization(operation, controller, &authorization).await
+                        }
+                    },
                 )
                 .await?;
             // The authorized lifecycle action deliberately invalidates its old
@@ -1192,6 +1201,10 @@ fn code_host(
                 .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
             let current = broker.client(&user, &authorization, &client_id).await?;
             if !Arc::ptr_eq(&current, &session) { return Err("client connection changed before native answer delivery".into()); }
+            if is_thread_reply {
+                result = session_io::commit_reply(&broker, &session, &user, &authorization,
+                    answer_binding.as_ref(), result)?;
+            }
             if ending_intent {
                 let _ = code_mode::AUDIT_RUN.try_with(|run| run.native_ending_intent(&client_id, &result));
             }
@@ -1728,7 +1741,7 @@ fn commit_user_response_inner(
             serde_json::to_string(&answers_deferred).expect("bounded deferred reasons serialize"))}));
     }
     let mut native_messages = Vec::new();
-    for (session, owner, binding) in native_candidates {
+    for (session, owner, binding) in &native_candidates {
         if native_messages.len() >= crate::wire::messages::MAX_DELIVERY {
             break;
         }
@@ -1740,13 +1753,13 @@ fn commit_user_response_inner(
         };
         if !session.is_alive()
             || !authorization.is_live()
-            || !authorization.permits(&session)
+            || !authorization.permits(session)
             || crate::bridge::owner(&report.user, &authorization).as_deref() != Ok(owner.as_str())
             || binding.as_ref().is_some_and(|binding| {
-                binding.owner != owner
+                binding.owner.as_str() != owner.as_str()
                     || session
                         .collaboration
-                        .bind(&owner, &binding.agent_id, &binding.token)
+                        .bind(owner, &binding.agent_id, &binding.token)
                         .is_err()
             })
         {
@@ -1759,7 +1772,7 @@ fn commit_user_response_inner(
             continue;
         }
         let included = report.broker.include_native_messages(
-            &session,
+            session,
             &authorization,
             binding.as_ref().map(|binding| binding.agent_id.as_str()),
             crate::wire::messages::MAX_DELIVERY.saturating_sub(native_messages.len()),
@@ -1768,6 +1781,7 @@ fn commit_user_response_inner(
         native_messages.extend(included);
     }
     let response = crate::messaging::append(response, native_messages);
+    let response = session_io::include(report, response, native_candidates);
     acknowledge_question_answers(report, answer_acknowledgements);
     response
 }

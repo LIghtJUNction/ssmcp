@@ -163,6 +163,7 @@ pub(super) struct Conversation {
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     pub(super) history_list_stale: bool,
     history_archived: bool,
+    scoped_history: Option<history::ScopedHistoryHandle>,
     history: Option<std::sync::Arc<crate::client::interface::history::Conversation>>,
     history_rows: Vec<String>,
     pub(super) history_width: u16,
@@ -175,6 +176,7 @@ impl Conversation {
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "thread_history":self.scoped_history.as_ref().map(|history|history.lock().unwrap_or_else(|error|error.into_inner()).snapshot()),
             "goal":self.goal.snapshot(),
             "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
@@ -1415,12 +1417,22 @@ impl State {
         }
         if let Key::Mouse {
             button,
+            x,
+            y,
             release: false,
-            ..
         } = key
             && button & 3 == 2
             && button & (32 | 64) == 0
         {
+            if self.conversation.view == View::Agents {
+                self.chat_thread_history_mouse(x, y);
+                return;
+            }
+            if self.conversation.view == View::History && self.conversation.scoped_history.is_some()
+            {
+                self.chat_escape();
+                return;
+            }
             self.logs_toggle();
             return;
         }
@@ -1800,6 +1812,10 @@ impl State {
             return;
         }
         if self.conversation.view == View::History {
+            if self.conversation.scoped_history.is_some() {
+                self.chat_change_view(View::Agents);
+                return;
+            }
             if self.conversation.detail {
                 self.conversation.detail = false;
                 self.conversation.content_focus = true;
@@ -2886,6 +2902,9 @@ impl State {
                         };
                     }
                     if self.conversation.view == View::History {
+                        if let Some(history)=&self.conversation.scoped_history {
+                            return format!("{} · live records · PgUp/PgDn · Esc Agents",history.lock().unwrap_or_else(|error|error.into_inner()).title());
+                        }
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
                             else { "↑↓ select · Enter resume · Esc back".into() };
                     }
