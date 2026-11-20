@@ -70,11 +70,13 @@ jobs:
         id: deployment
         env:
           RELEASE_PUBLISH: ${{ steps.tag.outputs.publish }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
           python - <<'PY'
           # BEGIN release deployment policy
           import json
           import os
+          import re
 
           publish = os.environ["RELEASE_PUBLISH"]
           if publish not in ("true", "false"):
@@ -93,10 +95,21 @@ jobs:
                   requested = requested == "true"
               else:
                   raise ValueError("the deploy_server input must be a boolean")
-          deploy = "true" if publish == "true" and requested else "false"
+          version = os.environ.get("RELEASE_VERSION", "")
+          match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?", version)
+          if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
+                              for part in (match.group(4) or "").split(".")):
+              raise ValueError("validated version output must be a release version")
+          # Published versions keep this record: retries must not restart active relays.
+          deferred_versions = {
+              "0.10.15": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+          }
+          deferred = deferred_versions.get(version)
+          deploy = "true" if publish == "true" and requested and deferred is None else "false"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
               stream.write(f"deploy_server={deploy}\n")
-          print(json.dumps({"publish": publish, "deploy_server": deploy}))
+          print(json.dumps({"publish": publish, "deploy_server": deploy, "version": version,
+                            "deployment_deferred": deferred}))
           # END release deployment policy
           PY
       - name: Test publication safeguards
