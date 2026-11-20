@@ -2336,7 +2336,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_command_updates_replace_lifecycle_chrome_without_changing_logs() {
+    fn conversation_command_updates_preserve_command_source_and_output() {
         let mut view = EventView::new();
         let job = "1234567890abcdef1234567890abcdef-1a";
         let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n       cwd /example\n";
@@ -2368,8 +2368,24 @@ mod tests {
         for hidden in ["exit=0", "cwd /example", "[RUN", "[STDOUT", "[OK"] {
             assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
         }
-        let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
+        // The retained view adds the complete audited invocation to the
+        // concise start event; lifecycle updates must preserve that source
+        // and the original output/footer bytes without duplication.
+        let retained_started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\ncmd=bash -lc 'printf first'\n       cwd /example\n";
+        let retained = [
+            retained_started.as_slice(),
+            output.as_slice(),
+            finished.as_slice(),
+        ]
+        .concat();
         assert_eq!(view.events.len(), 1);
+        assert_eq!(
+            view.events[0]
+                .text
+                .matches("cmd=bash -lc 'printf first'\n")
+                .count(),
+            1
+        );
         assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
         assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
         let bytes = view.bytes;
