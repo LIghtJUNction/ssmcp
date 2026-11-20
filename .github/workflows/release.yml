@@ -103,6 +103,7 @@ jobs:
           # Published versions keep this record: retries must not restart active relays.
           deferred_versions = {
               "0.10.15": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+              "0.10.16": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
           }
           deferred = deferred_versions.get(version)
           deploy = "true" if publish == "true" and requested and deferred is None else "false"
