@@ -1999,6 +1999,7 @@ mod tests {
         )
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn full_budget_missing_reference_reaches_real_queue_once_with_ack_notice() {
         let root = std::env::temp_dir().join(format!("ssmcp-full-budget-{}", random_id().unwrap()));
@@ -2067,6 +2068,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn raw_reference_notices_survive_reload_and_only_explicit_edits_reprepare() {
         let tail = " @missing.txt";
