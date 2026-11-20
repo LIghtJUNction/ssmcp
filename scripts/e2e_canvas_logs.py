@@ -391,7 +391,7 @@ def run_diff_login(binary, decoder, output, checks):
                 check(not changed, f"{command} preview rejection preserves composer and canvas (changed: {changed})")
             save_shot(output, "canvas-login-preview", rejected)
             preview.send(ALT_LEFT)
-            previous = preview.until(lambda shot: view(shot, "conversation") and changes_visible(shot),
+            previous = preview.until(lambda shot: view(shot, "conversation") and single_visible(shot),
                                      "the original column's expanded diff")
             check("/login link" in prompt_text(previous),
                   "returning to the original conversation restores expansion and preserves the rejected command draft")
