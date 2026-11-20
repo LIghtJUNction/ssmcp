@@ -460,6 +460,7 @@ impl Api {
 #[derive(Default)]
 struct Arguments {
     server: Option<String>,
+    context: Option<String>,
     json: bool,
     interactive: bool,
     no_browser: bool,
@@ -486,6 +487,15 @@ impl Arguments {
                         return Err("--server may be supplied only once".into());
                     }
                     result.server = Some(normalize_server(&value()?)?);
+                }
+                Some("--context") => {
+                    super::connection_context::set_name(&mut result.context, &value()?)?
+                }
+                Some(value) if value.starts_with("--context=") => {
+                    super::connection_context::set_name(
+                        &mut result.context,
+                        &value["--context=".len()..],
+                    )?;
                 }
                 Some("--json") => result.json = true,
                 Some("-i" | "--interactive") => result.interactive = true,
@@ -1276,12 +1286,13 @@ fn standalone_interactive(args: &[OsString]) -> bool {
     let mut index = 0;
     while index < args.len() {
         match args[index].to_str() {
-            Some("--server" | "--client" | "--terminal") => {
+            Some("--server" | "--context" | "--client" | "--terminal") => {
                 if args.get(index + 1).is_none() {
                     return false;
                 }
                 index += 2;
             }
+            Some(value) if value.starts_with("--context=") => index += 1,
             Some("--interactive") => {
                 interactive = true;
                 index += 1;
@@ -1332,6 +1343,10 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
         return Ok(true);
     }
     let mut options = Arguments::parse(rest)?;
+    options.server = super::connection_context::remote_server(
+        options.context.as_deref(),
+        options.server.as_deref(),
+    )?;
     options.interactive |= interactive;
     if options.json && options.interactive {
         return Err("--json cannot be combined with interactive mode".into());
