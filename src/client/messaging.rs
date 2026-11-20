@@ -1,4 +1,6 @@
 //! Nonblocking terminal sender. Only broker receipts mean queued or delivered.
+#[cfg(test)]
+mod tests;
 use crate::wire::messages::{Command, Receipt, Recipient, Reply};
 use serde::Serialize;
 use serde_json::{Value, json};
