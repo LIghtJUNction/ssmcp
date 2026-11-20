@@ -767,10 +767,16 @@ async fn connect(
         session_access,
         control_attribution,
     };
+    let transport = broker
+        .admit_transport()
+        .ok_or_else(|| fail(StatusCode::SERVICE_UNAVAILABLE, "gateway_draining"))?;
     Ok(ws
         .max_message_size(wire::MAX_FRAME)
         .max_frame_size(wire::MAX_FRAME)
-        .on_upgrade(move |socket| socket_bridge(broker, peer, socket)))
+        .on_upgrade(move |socket| async move {
+            let _transport = transport;
+            socket_bridge(broker, peer, socket).await;
+        }))
 }
 
 async fn socket_bridge(broker: Arc<Broker>, peer: DevicePeer, socket: WebSocket) {

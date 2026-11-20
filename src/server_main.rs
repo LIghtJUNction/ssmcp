@@ -706,6 +706,8 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         .into_future();
     tokio::pin!(server);
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut drain = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
+    let mut reopen = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2())?;
     let interrupt = tokio::signal::ctrl_c();
     tokio::pin!(interrupt);
     let mut prune = tokio::time::interval(Duration::from_secs(60));
@@ -739,6 +741,8 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
                 }
             }
             result = &mut interrupt => { result?; break Ok(()); }
+            _ = drain.recv() => log_admission(&broker, true),
+            _ = reopen.recv() => log_admission(&broker, false),
             _ = terminate.recv() => break Ok(()),
         }
     };
@@ -748,6 +752,19 @@ async fn serve(config: Config) -> ssmcp::Result<()> {
         let _ = tokio::time::timeout(Duration::from_secs(3), &mut server).await;
     }
     result
+}
+
+fn log_admission(broker: &Broker, draining: bool) {
+    let transports = broker.set_draining(draining);
+    ssmcp::observability::log(
+        "info",
+        "session",
+        &[
+            ("event", "transport_admission".into()),
+            ("draining", draining.to_string()),
+            ("transports", transports.to_string()),
+        ],
+    );
 }
 
 #[cfg(test)]

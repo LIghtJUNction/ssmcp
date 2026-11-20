@@ -65,6 +65,8 @@ fn safe_key(key: &str) -> bool {
             | "status"
             | "outcome"
             | "clients"
+            | "draining"
+            | "transports"
             | "listen"
             | "socket"
             | "mode"

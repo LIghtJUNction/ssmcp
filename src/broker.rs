@@ -1,5 +1,7 @@
 //! Linux-credential-backed registrations and bounded request forwarding.
 mod access;
+mod admission;
+pub(crate) use admission::Transport;
 mod allow;
 mod attribution;
 #[cfg(test)]
@@ -557,6 +559,7 @@ pub struct Broker {
     pub(crate) user_policies: Arc<crate::user_policy::UserPolicies>,
     pub(crate) user_policy_updates: tokio::sync::Mutex<()>,
     sessions: RwLock<HashMap<String, HashMap<String, Arc<Session>>>>,
+    admission: Arc<admission::Admission>,
 }
 
 impl Broker {
@@ -616,6 +619,7 @@ impl Broker {
             ),
             user_policy_updates: tokio::sync::Mutex::new(()),
             sessions: RwLock::new(HashMap::new()),
+            admission: Arc::default(),
         }
     }
 
@@ -870,7 +874,20 @@ impl Broker {
         self.sessions.write().await.clear();
     }
 
+    /// Close or reopen transport admission and return the outstanding transport count.
+    /// Existing transports and HTTP operations continue running.
+    pub fn set_draining(&self, draining: bool) -> usize {
+        self.admission.set_draining(draining)
+    }
+
+    pub(crate) fn admit_transport(&self) -> Option<Transport> {
+        self.admission.admit()
+    }
+
     pub async fn attach(self: Arc<Self>, stream: UnixStream) -> crate::Result<()> {
+        let _transport = self.admit_transport().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::ConnectionRefused, "gateway is draining")
+        })?;
         let uid = stream.peer_cred()?.uid();
         let user = tokio::task::spawn_blocking(move || username(uid)).await??;
         self.attach_stream(stream, user, None).await
