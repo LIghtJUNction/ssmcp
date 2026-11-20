@@ -3,8 +3,8 @@ use super::{CodeRunReport, Operation};
 use crate::code_mode;
 use std::{sync::Arc, time::Duration};
 
-/// Only a client that actually advertised the native primitive is probed.
-/// Only a pending notice or native failure earns one probe per client/run.
+/// A pending notice or native failure earns one read-only probe per client/run.
+/// Its successful native receipt can establish capability without a catalog.
 /// A native failure is never retried or replaced by this read-only observation.
 pub(super) async fn collect(report: &CodeRunReport) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
@@ -12,9 +12,6 @@ pub(super) async fn collect(report: &CodeRunReport) {
         let Some(origin) = report.run.connection(&client_id) else {
             continue;
         };
-        if !origin.tool_summary_advertised() {
-            continue;
-        }
         let binding = report.run.binding(&client_id);
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
         if !report.run.claim_tool_summary_probe(&client_id, agent_id) {
