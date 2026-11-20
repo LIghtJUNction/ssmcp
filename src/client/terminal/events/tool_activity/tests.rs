@@ -400,6 +400,53 @@ fn command_group_defaults_to_readable_cards_and_respects_explicit_fold() {
 }
 
 #[test]
+fn legacy_command_group_fold_survives_head_pruning_without_crossing_a_boundary() {
+    let mut legacy = view();
+    for index in 0..MAX_EVENTS {
+        command(&mut legacy, &format!("legacy-{index}"), 0);
+    }
+    assert!(legacy.events.iter().all(|event| event.tool_group_id.is_none()));
+    legacy.select(isize::MIN);
+    assert!(legacy.back());
+    let old_head = legacy.tool_groups()[0].head;
+    let successor = legacy.events[1].id;
+    command(&mut legacy, "legacy-next", 0);
+    assert_eq!(legacy.events.len(), MAX_EVENTS);
+    assert!(!legacy.events.iter().any(|event| event.id == old_head));
+    assert_eq!(legacy.tool_groups()[0].head, successor);
+    assert_eq!(legacy.selected, Some(successor));
+    assert_eq!(legacy.selected_group, Some(successor));
+    for width in [120, 48] {
+        let text = legacy.render(width, 24, &ui(), true).join("\n");
+        assert!(!legacy.tool_groups()[0].expanded);
+        assert!(!legacy.events[0].group_automatic);
+        assert!(!text.contains("cargo"), "{text}");
+    }
+
+    // None is not an identity shared by unrelated runs. Removing the earlier
+    // folded run must not fold commands on the other side of this boundary.
+    let mut separated = view();
+    command(&mut separated, "before-a", 0);
+    command(&mut separated, "before-b", 0);
+    separated.select(isize::MIN);
+    assert!(separated.back());
+    separated.ingest_conversation(b"[AGENT] A different run\n");
+    for index in 0..MAX_EVENTS {
+        command(&mut separated, &format!("after-{index}"), 0);
+    }
+    assert_eq!(separated.events.len(), MAX_EVENTS);
+    assert_eq!(separated.tool_groups().len(), 1);
+    assert!(separated.tool_groups()[0].expanded);
+    assert!(separated.events[0].group_automatic);
+    assert!(
+        separated
+            .render(120, 24, &ui(), false)
+            .join("\n")
+            .contains("cargo after-")
+    );
+}
+
+#[test]
 fn non_command_groups_keep_their_default_summary() {
     let mut view = view();
     for path in ["one.rs", "two.rs"] {
