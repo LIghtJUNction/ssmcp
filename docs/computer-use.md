@@ -27,7 +27,7 @@ Linux 上首次调用 `computer.app_launch(id, {command: [...]})` 会先校验 a
 
 确实需要主桌面时，用户在 **ssmcp 本地终端** 输入 `/computer host`，交接默认 15 秒；可使用 `/computer host 30` 指定 1–60 秒。`/computer status` 查看当前状态，`/computer stop` 立即撤销。在 ssmcp 终端再次输入键盘、鼠标或粘贴内容也会撤销；时间到、重新交接或客户端关闭都会使旧调用失效。排队中的旧调用不会因后续交接而恢复执行。
 
-取消会中断正在等待或执行的输入，并运行已有的按键、按钮释放清理；清理完成前，本进程内其他主桌面输入保持排队。若释放清理失败，本进程的后续主桌面输入被锁住，避免继续叠加输入。私有桌面仍按连接隔离，客户端重连不继承交接状态。[本地交接与取消](../src/computer/host_control.rs) · [输入分派](../src/computer.rs)
+取消会停止可取消的等待和输入循环，并运行已有的按键、按钮释放清理；已经进入系统或目标应用的同步调用可能先完成，已发生的文字修改不会被回滚。清理完成前，本进程内其他主桌面输入保持排队。若释放清理失败，本进程的后续主桌面输入被锁住，避免继续叠加输入。私有桌面仍按连接隔离，客户端重连不继承交接状态。[本地交接与取消](../src/computer/host_control.rs) · [输入分派](../src/computer.rs)
 
 本轮检测范围是 **ssmcp 本地终端的输入**，不声称能够捕获其他应用中的全部键鼠活动；串行锁也只覆盖同一个客户端进程，不是整个操作系统的全局锁。需要继续在其他应用工作时，保持主桌面输入锁定并使用后台控制。浏览器 CDP、Omarchy、外部 harness 及任意 shell 命令拥有各自能力，这个护栏不把具有本机执行权限的工具变成安全沙箱。
 
@@ -186,6 +186,10 @@ return shot.structuredContent;
 常用按键名包括 `Return`、`Tab`、`Escape`、`BackSpace` 和方向键。macOS 的 `super` 对应 Command，Windows 对应 Windows 键；macOS 字母键按 ANSI 物理键位映射，文字内容使用 `computer.type`。不要用快捷键接口代替任意 Unicode 文本输入。
 
 Hyprland、Windows 和 macOS 的聚焦实现只发送一次焦点请求，随后读取前台状态，确认目标后才报告成功。系统前台窗口与网页输入框的 DOM 焦点是两个层次：需要物理键盘输入时，先确认前台窗口，再用桌面点击或页面原语激活目标输入区。
+
+Linux X11 的 `computer.type` 先验证整串文字，再选择可可靠输入该文字的原生路径。当前键盘布局无法直接表达全部字符时，zuse 只向经过本机进程身份、焦点窗口和可编辑控件核验的 AT-SPI 目标发送 UTF-8 文字。没有合适目标时会在输入前拒绝，回执包含 `no input was sent`；混合文字也不会先留下 ASCII 前缀。这个路径不借用剪贴板，也不临时改写键盘映射。私有桌面的应用与工作进程会清除继承的 AT-SPI 地址及显示覆盖，让辅助功能发现留在自己的 X11 桌面内。[固定版本的 X11 实现](https://github.com/LIghtJUNction/zuse/blob/d930769005d307c42639e8abedc81ab039427e40/src/platform/x11.rs) · [私有环境](../src/computer/isolated.rs)
+
+如果取消发生在整串 X11 文字已经发给目标应用之后，回执会明确包含 `cancelled after X11 text dispatch; text may have changed; do not retry`。此时先读取目标内容确认结果，不要直接重试同一输入；取消回执不等于文字未发生变化。[工作进程取消语义](../src/computer/zuse_backend.rs)
 
 同一客户端的电脑动作串行执行，辅助进程和整个动作都有超时。失败和取消路径会尝试释放本次按下的键或按钮；Windows 同时检查 `SendInput` 实际插入的事件数量。输入事件发出不等于目标应用完成业务操作，提交、保存或跳转后仍需读取页面、窗口或截图确认结果。
 
