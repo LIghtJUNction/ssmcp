@@ -188,6 +188,7 @@ fn action_inner(action: &str) -> Result<Option<(u16, u16)>, String> {
 
 /// Called outside the terminal lock by each keyboard frontend.
 pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
+    terminal::open_pending_link();
     let actions = terminal::take_actions();
     let theme = PENDING_THEME
         .lock()

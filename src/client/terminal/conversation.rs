@@ -1497,6 +1497,9 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if !matches!(key, Key::Mouse { .. }) {
+            self.links.cancel();
+        }
         if self.sleep_key(key) {
             return;
         }
@@ -1512,6 +1515,21 @@ impl State {
             return;
         }
         if self.selection {
+            return;
+        }
+        if self.help || self.conversation.view != View::Activity {
+            self.links.cancel();
+        } else if let Key::Mouse {
+            button,
+            x,
+            y,
+            release,
+        } = key
+            && self.links.mouse(button, x, y, release, Instant::now())
+        {
+            return;
+        }
+        if matches!(key, Key::Mouse { button, .. } if button & 32 != 0) {
             return;
         }
         if matches!(key, Key::InputGrow | Key::InputShrink) {
@@ -2500,6 +2518,9 @@ impl State {
     }
 
     fn chat_output(&mut self, output: &[u8]) {
+        if !output.is_empty() {
+            self.links.cancel();
+        }
         if output.is_empty() {
             return;
         }
@@ -2616,14 +2637,9 @@ impl State {
         Vec::new()
     }
 
-    /// Reuse one bounded row parser; serialize cells, never cursor/erase controls.
+    /// Normalize allowed styles without splitting user-visible Unicode clusters.
     fn chat_fill_body(&self, rows: &mut [String], width: u16) {
-        let mut parser = vt100::Parser::new(nonzero(1), nonzero(width), 0);
-        for row in rows {
-            parser.process(b"\x1b[0m\x1b[2J\x1b[H");
-            parser.process(row.as_bytes());
-            *row = screen_row(parser.screen(), 0, width, &self.ui);
-        }
+        links::fill_rows(rows, width, &self.ui);
     }
 
     fn chat_line(&self, text: &str, tone: PanelTone, width: u16) -> String {
@@ -3261,6 +3277,13 @@ impl State {
         } else {
             None
         };
+        self.links.stage(
+            if !self.help && !self.selection && self.conversation.view == View::Activity {
+                self.events.screen_links(top)
+            } else {
+                Vec::new()
+            },
+        );
         self.chat_fill_body(&mut body, g.left);
         let empty = Composer::default();
         let input = if self.conversation.view == View::Questions {

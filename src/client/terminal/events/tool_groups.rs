@@ -295,7 +295,7 @@ pub(super) fn render(
                     event.text.clone()
                 };
                 let lines = if event.meta.diff {
-                    diff::rows(&body, content_width, ui, event.meta.language, diff_mode)
+                    diff::rows(&body, content_width, ui, event.meta.language, diff_mode).into()
                 } else {
                     styled_rows(
                         &semantic_text(&body, ui, event.meta.language),

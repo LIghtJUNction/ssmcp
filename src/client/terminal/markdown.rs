@@ -1,6 +1,8 @@
 //! Bounded, terminal-safe Markdown. Unsupported syntax remains readable.
+use super::links;
 use crate::client::{highlight::Lexer, panel, ui::Ui};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Face {
@@ -10,19 +12,74 @@ struct Face {
     muted: bool,
     heading: bool,
     syntax: Option<&'static str>,
+    link: Option<u16>,
 }
 
-fn plain(text: &str, face: Face, out: &mut Vec<(char, Face)>) {
-    out.extend(text.chars().map(|c| (c, face)));
+fn plain(mut text: &str, mut face: Face, out: &mut Vec<(char, Face)>) -> Option<u16> {
+    while !text.is_empty() {
+        let (len, token) = links::token(text);
+        match token {
+            links::Token::Text(c) => out.push((c, face)),
+            links::Token::Osc(payload) => {
+                if let Some(link) = links::local_id(payload) {
+                    face.link = link;
+                }
+            }
+            _ => {}
+        }
+        text = &text[len..];
+    }
+    face.link
 }
 
-fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
+fn url_end(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(at),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn inline(
+    mut text: &str,
+    mut face: Face,
+    depth: u8,
+    out: &mut Vec<(char, Face)>,
+    targets: &mut links::Targets,
+) -> Option<u16> {
     if depth > 4 {
-        plain(text, face, out);
-        return;
+        return plain(text, face, out);
     }
     let source = text;
+    let bare = links::bare(source);
+    let mut next_bare = 0;
     while !text.is_empty() {
+        let offset = source.len() - text.len();
+        while bare.get(next_bare).is_some_and(|range| range.end <= offset) {
+            next_bare += 1;
+        }
+        if text.starts_with('\x1b') {
+            let (len, token) = links::token(text);
+            if let links::Token::Osc(payload) = token
+                && let Some(link) = links::local_id(payload)
+            {
+                face.link = link;
+            }
+            text = &text[len..];
+            continue;
+        }
+        if let Some(range) = bare.get(next_bare).filter(|range| range.start == offset) {
+            let url = &source[range.clone()];
+            let link = face.link.or_else(|| targets.insert(url));
+            plain(url, Face { link, ..face }, out);
+            text = &text[url.len()..];
+            continue;
+        }
         if let Some(rest) = text.strip_prefix('\\')
             && let Some(c) = rest.chars().next()
             && "\\*_`[]()#>~-".contains(c)
@@ -35,22 +92,34 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
             let n = text.bytes().take_while(|b| *b == b'`').count();
             let fence = &text[..n];
             if let Some(end) = text[n..].find(fence) {
-                plain(&text[n..n + end], Face { code: true, ..face }, out);
+                face.link = plain(&text[n..n + end], Face { code: true, ..face }, out);
                 text = &text[n + end + n..];
                 continue;
             }
         }
         if let Some(rest) = text.strip_prefix('[')
             && let Some(end) = rest.find("](")
-            && let Some(close) = rest[end + 2..].find(')')
+            && let Some(close) = url_end(&rest[end + 2..])
         {
-            inline(&rest[..end], Face { bold: true, ..face }, depth + 1, out);
             let url = &rest[end + 2..end + 2 + close];
+            let link = targets.insert(url).or(face.link);
+            inline(
+                &rest[..end],
+                Face {
+                    bold: true,
+                    link,
+                    ..face
+                },
+                depth + 1,
+                out,
+                targets,
+            );
             if !url.is_empty() {
                 plain(
                     &format!(" ({url})"),
                     Face {
                         muted: true,
+                        link,
                         ..face
                     },
                     out,
@@ -94,7 +163,7 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
                     ..face
                 }
             };
-            inline(&rest[..end], next, depth + 1, out);
+            face.link = inline(&rest[..end], next, depth + 1, out, targets);
             text = &rest[end + marker.len()..];
             matched = true;
             break;
@@ -105,6 +174,7 @@ fn inline(mut text: &str, face: Face, depth: u8, out: &mut Vec<(char, Face)>) {
             text = &text[c.len_utf8()..];
         }
     }
+    face.link
 }
 
 struct Fence {
@@ -116,8 +186,18 @@ struct Fence {
 fn paint(cells: &[(char, Face)], width: usize, ui: &Ui) -> String {
     let mut out = String::new();
     let mut previous = None;
-    let mut used = 0;
+    let mut previous_link = None;
+    let used = cells.iter().map(|(ch, _)| ch).collect::<String>().width();
     for &(c, face) in cells {
+        if previous_link != face.link {
+            out.push_str(
+                &face
+                    .link
+                    .map(links::marker)
+                    .unwrap_or_else(|| links::CLOSE.into()),
+            );
+            previous_link = face.link;
+        }
         if ui.color && previous != Some(face) {
             let color = if let Some(color) = face.syntax {
                 color
@@ -140,7 +220,9 @@ fn paint(cells: &[(char, Face)], width: usize, ui: &Ui) -> String {
             previous = Some(face);
         }
         out.push(c);
-        used += c.width().unwrap_or(0);
+    }
+    if previous_link.is_some() {
+        out.push_str(links::CLOSE);
     }
     if ui.color {
         out.push_str(&format!(
@@ -159,12 +241,7 @@ fn paint(cells: &[(char, Face)], width: usize, ui: &Ui) -> String {
 fn wrap(cells: Vec<(char, Face)>, prefix: &str, width: usize, ui: &Ui, out: &mut Vec<String>) {
     let margin = if width >= 4 { "  " } else { "" };
     let available = width.saturating_sub(margin.len()).max(1);
-    let prefix = if prefix
-        .chars()
-        .map(|c| c.width().unwrap_or(0))
-        .sum::<usize>()
-        < available
-    {
+    let prefix = if prefix.width() < available {
         prefix
     } else {
         ""
@@ -178,14 +255,24 @@ fn wrap(cells: Vec<(char, Face)>, prefix: &str, width: usize, ui: &Ui, out: &mut
         },
         &mut row,
     );
-    let indent: usize = row.iter().map(|(c, _)| c.width().unwrap_or(0)).sum();
+    let indent = margin.width() + prefix.width();
     let mut used = indent;
-    for (mut c, face) in cells {
-        let mut size = c.width().unwrap_or(0);
-        if size > width.saturating_sub(indent) {
-            c = '…';
-            size = 1;
+    let text: String = cells.iter().map(|(ch, _)| ch).collect();
+    let mut at = 0;
+    for cluster in text.graphemes(true) {
+        let count = cluster.chars().count();
+        let group = &cells[at..at + count];
+        let mut face = group[0].1;
+        if group.iter().any(|(_, other)| other.link != face.link) {
+            face.link = None;
         }
+        at += count;
+        let cluster = if cluster.width() > width.saturating_sub(indent) {
+            "…"
+        } else {
+            cluster
+        };
+        let size = cluster.width();
         if used + size > width && used > indent {
             out.push(paint(&row, width, ui));
             row = " "
@@ -195,7 +282,9 @@ fn wrap(cells: Vec<(char, Face)>, prefix: &str, width: usize, ui: &Ui, out: &mut
                 .collect();
             used = indent;
         }
-        row.push((c, face));
+        // One style/target per visible cluster prevents SGR or Markdown marks
+        // from splitting an emoji or giving its combining suffix another URI.
+        row.extend(cluster.chars().map(|ch| (ch, face)));
         used += size;
     }
     out.push(paint(&row, width, ui));
@@ -204,11 +293,19 @@ fn wrap(cells: Vec<(char, Face)>, prefix: &str, width: usize, ui: &Ui, out: &mut
 /// Headings, emphasis, inline/fenced code, links, lists and block quotes.
 /// Input escape sequences, URLs and HTML never execute terminal commands.
 pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
+    linked_rows(text, width, ui).plain()
+}
+
+pub(super) fn linked_rows(text: &str, width: u16, ui: &Ui) -> links::Rows {
+    let source = links::Source::new(&safe_source(text), false);
+    let marked = reopen_lines(&source.marked());
+    let mut targets = source.targets;
+    let text = marked.as_str();
     let width = usize::from(width.max(1));
     let mut rows = Vec::new();
     let mut fence: Option<Fence> = None;
     for raw in text.lines() {
-        let safe = panel::safe_text(&raw.replace('\t', "    "));
+        let safe = raw.replace('\t', "    ");
         let line = safe.trim_end();
         let trimmed = line.trim_start();
         let marker = trimmed.chars().next().unwrap_or(' ');
@@ -276,20 +373,22 @@ pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
         }
         let mut cells = Vec::new();
         if let Some(fence) = fence.as_mut() {
-            for token in fence.highlight.line(body) {
-                plain(
-                    token.text,
-                    Face {
-                        syntax: Some(token.tone),
-                        bold: token.bold,
-                        ..Face::default()
-                    },
-                    &mut cells,
-                );
+            plain(body, Face::default(), &mut cells);
+            let text: String = cells.iter().map(|(ch, _)| ch).collect();
+            let mut index = 0;
+            for token in fence.highlight.line(&text) {
+                for _ in token.text.chars() {
+                    if let Some((_, face)) = cells.get_mut(index) {
+                        face.syntax = Some(token.tone);
+                        face.bold = token.bold;
+                    }
+                    index += 1;
+                }
             }
         } else {
-            inline(body, face, 0, &mut cells);
+            inline(body, face, 0, &mut cells, &mut targets);
         }
+        auto_links(&mut cells, &mut targets);
         wrap(cells, &prefix, width, ui, &mut rows);
         if rows.len() > 2048 {
             rows.truncate(2048);
@@ -308,7 +407,115 @@ pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
     if rows.is_empty() {
         rows.push(paint(&[], width, ui));
     }
-    rows
+    links::Rows::new(rows, targets)
+}
+
+/// Preserve the existing literal-control/bidi and redaction policy for text.
+/// OSC8 alone is parsed as metadata; other control-string payloads never become
+/// visible text or automatic URLs. Only our generated SGR reaches the screen.
+fn safe_source(raw: &str) -> String {
+    fn string_control(text: &str) -> bool {
+        text.starts_with(['\u{90}', '\u{98}', '\u{9d}', '\u{9e}', '\u{9f}'])
+            || ["\x1b]", "\x1bP", "\x1b_", "\x1b^", "\x1bX"]
+                .iter()
+                .any(|prefix| text.starts_with(prefix))
+    }
+    fn flush(text: &mut String, out: &mut String) {
+        for line in text.split_inclusive('\n') {
+            let (body, newline) = line
+                .strip_suffix('\n')
+                .map_or((line, ""), |body| (body, "\n"));
+            out.push_str(&panel::safe_text(&body.replace('\t', "    ")));
+            out.push_str(newline);
+        }
+        text.clear();
+    }
+    // Redaction must see complete visible context, even when OSC metadata
+    // splits an Authorization header or another sensitive field. If it rewrites
+    // text, discard the original link metadata instead of reusing old offsets.
+    let mut text = raw;
+    let mut visible = String::with_capacity(raw.len());
+    while !text.is_empty() {
+        let (len, token) = links::token(text);
+        if !matches!(token, links::Token::Osc(_)) && !string_control(text) {
+            visible.push_str(&text[..len]);
+        }
+        text = &text[len..];
+    }
+    let redacted = crate::audit::event(serde_json::Value::String(visible.clone()));
+    if redacted.as_str() != Some(visible.as_str()) {
+        let mut out = String::new();
+        flush(
+            &mut redacted.as_str().unwrap_or("[redacted]").to_owned(),
+            &mut out,
+        );
+        return out;
+    }
+    let mut text = raw;
+    let mut out = String::with_capacity(text.len());
+    let mut literal = String::new();
+    while !text.is_empty() {
+        let (len, token) = links::token(text);
+        match token {
+            links::Token::Osc(payload) => {
+                flush(&mut literal, &mut out);
+                if links::osc_uri(payload).is_some() {
+                    out.push_str(&text[..len]);
+                }
+            }
+            links::Token::Ignore if string_control(text) => {}
+            _ => literal.push_str(&text[..len]),
+        }
+        text = &text[len..];
+    }
+    flush(&mut literal, &mut out);
+    out
+}
+
+/// OSC8 is cell state, so a hard newline must reopen the same local ID before
+/// a separate Markdown line is parsed. Full targets remain in one bounded table.
+fn reopen_lines(mut text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut link = None;
+    while !text.is_empty() {
+        let (len, token) = links::token(text);
+        match token {
+            links::Token::Osc(payload) => {
+                if let Some(id) = links::local_id(payload) {
+                    link = id;
+                }
+                out.push_str(&text[..len]);
+            }
+            links::Token::Text('\n') if link.is_some() => {
+                out.push_str(links::CLOSE);
+                out.push('\n');
+                out.push_str(&links::marker(link.unwrap()));
+            }
+            _ => out.push_str(&text[..len]),
+        }
+        text = &text[len..];
+    }
+    out
+}
+
+fn auto_links(cells: &mut [(char, Face)], targets: &mut links::Targets) {
+    let text: String = cells.iter().map(|(ch, _)| ch).collect();
+    let positions: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
+    for range in links::bare(&text) {
+        let start = positions.partition_point(|at| *at < range.start);
+        let end = positions.partition_point(|at| *at < range.end);
+        if cells[start..end]
+            .iter()
+            .any(|(_, face)| face.link.is_some())
+        {
+            continue;
+        }
+        if let Some(id) = targets.insert(&text[range]) {
+            for (_, face) in &mut cells[start..end] {
+                face.link = Some(id);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

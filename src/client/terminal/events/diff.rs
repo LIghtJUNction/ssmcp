@@ -323,7 +323,7 @@ pub(super) fn rows(
     {
         return rows;
     }
-    styled_rows(&semantic_text(text, ui, language), width, ui.color)
+    styled_rows(&semantic_text(text, ui, language), width, ui.color).plain()
 }
 
 #[cfg(test)]
