@@ -15,20 +15,16 @@ pub(super) struct Control {
 
 impl Control {
     fn badge(&self, width: u16) -> String {
-        let foreground = match self.status.as_ref() {
-            Some(status) if status["error"].is_string() => "off!",
-            Some(status) if status["enabled"] == true => "on",
-            Some(_) => "off",
-            None => "?",
+        let (state, short) = match self.status.as_ref() {
+            Some(status) if status["error"].is_string() => ("关闭（状态异常）", "关!"),
+            Some(status) if status["enabled"] == true => ("开启", "开"),
+            Some(_) => ("关闭", "关"),
+            None => ("未确认", "?"),
         };
-        [
-            format!("foreground {foreground} · background on"),
-            format!("FG {foreground} · BG on"),
-            format!("F:{foreground} B:on"),
-        ]
-        .into_iter()
-        .find(|text| text.width() <= usize::from(width))
-        .unwrap_or_default()
+        [format!("电脑控制：{state}"), format!("键鼠：{short}")]
+            .into_iter()
+            .find(|text| text.width() <= usize::from(width))
+            .unwrap_or_default()
     }
 }
 
@@ -174,8 +170,7 @@ mod tests {
         refresh_with(&second, now + POLL_INTERVAL, execute);
         for shared in [&first, &second] {
             let state = shared.state.lock().unwrap();
-            assert!(state.computer_badge(96).contains("foreground on"));
-            assert!(state.computer_badge(96).contains("background on"));
+            assert!(state.computer_badge(96).contains("电脑控制：开启"));
         }
         let state = first.state.lock().unwrap();
         assert!(enabled.get());

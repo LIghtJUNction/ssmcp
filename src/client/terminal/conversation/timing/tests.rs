@@ -69,7 +69,7 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
         for frame in [&first, &later, &elapsed] {
             let divider = frame.lines().find(|row| row.contains("Timer ")).unwrap();
             assert!(
-                divider.contains("foreground ? · background on")
+                divider.contains("电脑控制：未确认")
                     || divider.contains("FG ? · BG on")
                     || divider.contains("F:? B:on"),
                 "{cols}: {divider}"
