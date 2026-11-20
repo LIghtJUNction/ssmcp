@@ -1,0 +1,559 @@
+{
+  "old_main": "7ddaeab07be67f25f8277aa37486474710cb1fa3",
+  "new_main": "0128c356746b6a29b2cee811c3374c2f891c581f",
+  "old_tree": "96fa357bc77479043c25acf2daa35c3b1d18ea28",
+  "new_tree": "2e6999c3aa6664cf5605398538a1524a538b244d",
+  "changed_files": 91,
+  "removed": 91,
+  "non_removal_changes": [],
+  "protected_changes": [],
+  "paths": [
+    {
+      "path": "docs/assets/client-audit.png",
+      "old_sha": "d1392d47aa678be2c2e6acf65e0778e1c757e49a",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/client-ui-light.png",
+      "old_sha": "7be0273fbad8e9080136af97e31e560e7c70fb11",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/client-ui.png",
+      "old_sha": "edc04d5f80f5ee9a9e958353b36a780162763fe4",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/computer-use-consent-desktop.jpg",
+      "old_sha": "35c6ad8efd508f41fb912df0e07f2a92e0096943",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/computer-use-consent-narrow.jpg",
+      "old_sha": "79d0691a507557a9cbc4161ab9a62aaf058502bb",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/computer-use-runtime-browser.jpg",
+      "old_sha": "81817e1bcfd8f43318a81185fb4908c61fb5b66e",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/named-accounts-admin-desktop.png",
+      "old_sha": "28345a5efe1733fc17b779f9da9dca43c32527bd",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/named-accounts-admin-mobile.png",
+      "old_sha": "21d9f6afb29b4274dcbc719162dbc41f8ef512bd",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/portal-console-20261117/admin-desktop-demo.jpg",
+      "old_sha": "32752918149ac84d97421f5ace72621883a84a93",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/portal-console-20261117/history-mobile-demo.jpg",
+      "old_sha": "ee0e8c02d6582dda38344b9c60c3d95f2c3dc0a6",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/portal-console-20261117/home-desktop.jpg",
+      "old_sha": "8742eced26d1b77817a2e5d239e5767e86c1d858",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/portal-console-20261117/live-home.jpg",
+      "old_sha": "ef0bb435871922201dcb928e70cfa7da4fce314b",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/portal-console-20261117/sessions-mobile-demo.jpg",
+      "old_sha": "aa95e8982f2ba00de3cf888fecb2b77063aa7b98",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/readable-logs-100.png",
+      "old_sha": "31ef9780ae615858ec504d0a075e2147eae529dd",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/readable-logs-80.png",
+      "old_sha": "1e7b6e4f12f23db05086f8b1939450aa8e2f1cc4",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/readme-preview.jpg",
+      "old_sha": "6a6321a57599b4dd9c4021fdf6ba0a11f3cfd575",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/ssmcp-eclipse.jpg",
+      "old_sha": "1b04605142786872b57f717398c3fe336e057411",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/ssmcp-eclipse.mp4",
+      "old_sha": "3f100a1a648342a8f68785f442081ca23d50dcfc",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/terminal-logs.png",
+      "old_sha": "90bdd28af4f5879b57c7b027b5e8803a917d9a28",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/assets/terminal-sidebar-r5-20261116.jpg",
+      "old_sha": "2bda7d6427ac04ab0f9ffe853845ec7e581da978",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/desktop-consent.png",
+      "old_sha": "8f30b7d019fa0e34e6b12a5c40429be08138d4e4",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/desktop-redirect.png",
+      "old_sha": "2491dab41c4864bd853620bc5d6e7a985d8f7c74",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/mobile-consent.png",
+      "old_sha": "46bf000f0727f788aab157b56fde80671fa6eae9",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/mobile-login-code.png",
+      "old_sha": "fee341850f1b138a0f6bfcbe8ddae9ae04d7282f",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/mobile-redirect.png",
+      "old_sha": "6fcefd21d450ef4921248982f1add598e5447444",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/qa/oauth-air-2026-11-19/small-mobile-error.png",
+      "old_sha": "1cc3e342650f55fce0917b5f3cdc0842c7f4dc91",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/2026-11-18-execution-state-integrity.validation.json.gz",
+      "old_sha": "f6ee4b4e43fe214d7e4db999374f847d99f1e3df",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/agent-panel-call-details.png",
+      "old_sha": "35be3faa14ff6286f12bee985f1097bcde82dca4",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/agent-panel-callers.png",
+      "old_sha": "fc75041735797f19e2cc50feca8d5f4709926664",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/agent-panel-narrow-models.png",
+      "old_sha": "f609893c32db84a39afc6d8bebc08a54b784ac1b",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/agent-panel-narrow.png",
+      "old_sha": "9f8bb2bb62e883f37396c159ace62eea3072faeb",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/agent-panel-wide.png",
+      "old_sha": "2e191b1475b4341fb7645ab60e898c5fb6ec4ac3",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/legacy-thumbnail.png",
+      "old_sha": "fa2a2f420a65e53bc5bd477001890ab83e88791a",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/native-after-rejection.png",
+      "old_sha": "4b7619155e404e96408e587068dcb07862191d0e",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/native-tall-top.png",
+      "old_sha": "0c477c838f61b833aaefb0818d16dbed4293dbe9",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/agent-panel-readability-20261118/native-width-fit.png",
+      "old_sha": "4abf4215259f02472095ffc358d3fa3c4bb93dc9",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/guide-mobile.png",
+      "old_sha": "ea4368f8d847e013db62d442dc2aaef012694c60",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/native-image.png",
+      "old_sha": "d7c2ea3e6a01bc4ae36639f3e5080f5c60eb8ad6",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/sidebar-qr.png",
+      "old_sha": "7500c7d24da4f6ce08fb76d6302d1df939cab935",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/ui-audit.png",
+      "old_sha": "ca4d5945d51ac457fc68d25e2dbf457fbd5275fa",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/ui-chat.png",
+      "old_sha": "7e573b6a487bd1a42162c92c48c0bcc75b600a2b",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/client-completion-20261118/ui-scroll-hint.png",
+      "old_sha": "fce61e64f7d58c466a34c9fd4f66dcfcc18295f2",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/compact-tools-20261118/ui-chat.png",
+      "old_sha": "6791605fff1a290a719eab0bbd953aa1f3165b0e",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/compact-tools-20261118/ui-command-expanded.png",
+      "old_sha": "410a1a8d74062a9fcf1cd60a11f122dc48da634c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/compact-tools-20261118/ui-raw-activity.png",
+      "old_sha": "779168f1ec90228595429d6ac25e5fae3c682798",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/conversation-ui-20261119/chat-composer.png",
+      "old_sha": "d0742b6ec4c30c6d6fd845d06ffa7c19bb90277c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/conversation-ui-20261119/chat-dark.png",
+      "old_sha": "48899ef946ff0e8f743303b1b5b42e9d1f12f31a",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/conversation-ui-20261119/chat-light.png",
+      "old_sha": "9fe505eaa8ea0548eaeaff6af4ac67f4a4e87fbe",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/conversation-ui-20261119/chat-narrow.png",
+      "old_sha": "85628bd871ad7765477fcebb741d738920192f34",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/cua-client-capabilities-20261118/memory-merged-owned-background-browser.jpg",
+      "old_sha": "bb88df21daef4b1d52a4b91d1df99fd76ba7ff9c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/cua-client-capabilities-20261118/owned-background-browser.jpg",
+      "old_sha": "bb88df21daef4b1d52a4b91d1df99fd76ba7ff9c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/desktop-admin.png",
+      "old_sha": "091c533360c32b165d3e7de52ea45b3e2cf7b0bd",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/desktop-sessions.png",
+      "old_sha": "354e2665da4dcba74ad35a47e857d16839acee9b",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/mobile-admin.png",
+      "old_sha": "1356d1a80d51a5aff0eb395a63c41d567cf4b655",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/mobile-history.png",
+      "old_sha": "880ce75f98179736c2798fbf53250186dfe62df3",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/mobile-traffic.png",
+      "old_sha": "ba028615bcf0e5be21ed30d44ecd8a006507a9ec",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/frontend-polish-20261119/small-mobile-long-amount.png",
+      "old_sha": "13aff196c13a77944cfa550b8a145061018fc971",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-left-120.png",
+      "old_sha": "00b5d767bea7fec257ab2936c2c1f39e8741170f",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-left-48.png",
+      "old_sha": "83d43df03d84ffb396d85fb13dcdb6b23753b683",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-left-49.png",
+      "old_sha": "ebf2cce7a7dd98311e4b29b37b56d66edc2334f9",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-page-120.png",
+      "old_sha": "c3374c87644cb2538cc7c567cd8104a1d7fd1210",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-page-48.png",
+      "old_sha": "154006e6424c0e27842e52b28b9c5663dda19429",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/listener-integration-20261120/scroll-zones-page-49.png",
+      "old_sha": "6a29e3b173c6acc818294a1e6c80076c010cf6af",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/desktop-account.png",
+      "old_sha": "2bdf9ba33995dad56e23994fa321495d59499220",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/desktop-guest.png",
+      "old_sha": "5db9c5ae78cb0668b96f85409a461bf7aaf8fa8c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/desktop-install.png",
+      "old_sha": "4d4fdd84b05edf5792fdc7f6da87d64c7e6d16bc",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/mobile-account.png",
+      "old_sha": "9af51e24f5cfdb023388defd12ede1a26d0d3d9d",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/mobile-exhausted.png",
+      "old_sha": "f33b55f4f0cb76f93eb466937d83de95c1997a26",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/portal-air-20261119/small-mobile-registration.png",
+      "old_sha": "0fb00ff41f7716cfa39dbe23ccb93fc8e09c55af",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/session-service-2026-11-17/manager-attach-live.png",
+      "old_sha": "2e8df555f886400078e937c219fb4df4e7c5e616",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/guide-chinese-mobile.png",
+      "old_sha": "001cf64c6b1e7751d46d747022f58d8be46a4cdc",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/guide-english-desktop.png",
+      "old_sha": "b75b1283dbb53fe27f1d769ad3953449c5bc4005",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/native-image-resized.png",
+      "old_sha": "7bb2509c47d03f6faaa5247208be4d96ef5a6956",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/native-image.png",
+      "old_sha": "0ce7270e2832a0fbc5091e73bf8f17d98ef2e590",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/qr-120x30.png",
+      "old_sha": "cc99d88ca1e9b6e62ca011471770a29882abb45d",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/ssmcp-iteration-20261118/images/qr-60x16.png",
+      "old_sha": "6da10c42b0aca70742b1dcf16c93e06c08147a27",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/terminal-control-2026-11-16/cua-browser.jpg",
+      "old_sha": "7ff2d47ff4980de79aeec3263f79251807c79adc",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/terminal-control-2026-11-16/terminal-build.png",
+      "old_sha": "ef5d737fe75428a819deb8f9f2eb310fccaec16c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/terminal-control-2026-11-16/terminal-logs.png",
+      "old_sha": "6288685949e3dba302236a8fba9af067f08dae8c",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/terminal-control-2026-11-16/terminal-main.png",
+      "old_sha": "b0dbbe34f087a35b929fa1d024800ad5f2858eb6",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/tty-observer-kitty-20261118.png",
+      "old_sha": "39b3502c2eca3506273b9524959cb7afc6eea01e",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/tty-observer-ztty-20261118.png",
+      "old_sha": "68ed258c335d84f34ee45754c9424a755f8689a6",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/frame-awake-120.png",
+      "old_sha": "97a160cbeff92325cf385d7c2fe70a023e8a7de8",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/frame-awake-48.png",
+      "old_sha": "de54c212125fbe705285525f4c37b5b034e928d3",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/frame-sleep-120.png",
+      "old_sha": "8e919eaef0f1c28a96a8b7c14ff804824472b00f",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/frame-sleep-48.png",
+      "old_sha": "466d7bbb43f6131081dbe58d3206a01d07e3af08",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/pty-mouse-awake-120.png",
+      "old_sha": "733667354820152229a6d51a9c1e496ffc85db8a",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/pty-sleep-120.png",
+      "old_sha": "2296d68f7077a4b299920f78a394747420f8ae0e",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/user-wait-sleep-20261120/pty-sleep-48.png",
+      "old_sha": "720bfbd57b75bc2c0978446127cd86cf46ed84b8",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/zuse-integration-20261120/native-desktop.jpg",
+      "old_sha": "ffba1ab03d2cb4f9e8407f811169c477e7c2d94f",
+      "new_sha": null,
+      "type": "blob"
+    },
+    {
+      "path": "docs/reports/zuse-integration-20261120/private-desktop-mcp.jpg",
+      "old_sha": "f4570646e2c84eec8856de9db7a5203386a3ba15",
+      "new_sha": null,
+      "type": "blob"
+    }
+  ],
+  "scope": "current main endpoint trees only, not full history or tag compatibility"
+}
