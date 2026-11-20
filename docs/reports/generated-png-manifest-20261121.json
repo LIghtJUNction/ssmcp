@@ -1,0 +1,365 @@
+{
+  "schema": "ssmcp.generated-png-archive.v1",
+  "repository": "LIghtJUNction/ssmcp",
+  "source_revision": "55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a",
+  "recorded_at_utc": "2026-11-20T17:01:16.873662+00:00",
+  "file_count": 39,
+  "png_bytes": 2061704,
+  "retrieval_file_sha256": "a518efd3e400818cf646fd9d753c8cf336475e32b457454095171e208be7d402",
+  "scope": "Historical original PNG bytes from the specified commit; not a new or final acceptance run.",
+  "transformations": "Base64 decoding and ZIP packaging only; image bytes were not edited.",
+  "excluded_original_zip_count": 3,
+  "files": [
+    {
+      "path": "docs/reports/canvas-command-contract-20261120/ui-canvas-conversation.png",
+      "git_blob_sha1": "97da8407bf2ae4c56c0dbb464b5c80a9c6588bcf",
+      "sha256": "e49843bb084f43bf30bd55c421eddf5f3e1ef14714fbea34aaa32c406631757c",
+      "bytes": 57198,
+      "width_px": 1258,
+      "height_px": 888,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/canvas-command-contract-20261120/ui-canvas-conversation.png"
+    },
+    {
+      "path": "docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-detail.png",
+      "git_blob_sha1": "79110f36dc68c26e6d6de3803dcc769a8f815404",
+      "sha256": "60c800f1102b330e8fd373e811d8b3b9545a674e28efae6ae68d304f630b6d5d",
+      "bytes": 70570,
+      "width_px": 1258,
+      "height_px": 888,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-detail.png"
+    },
+    {
+      "path": "docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-narrow.png",
+      "git_blob_sha1": "531437fb78870ee01ec6a8fb37196edce353bdd3",
+      "sha256": "41fadadb5a7d3260ba2a00a68e9e0d8a1211b7d1fed130abc36dd9fd5b7afae3",
+      "bytes": 31779,
+      "width_px": 708,
+      "height_px": 384,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-narrow.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-120.png",
+      "git_blob_sha1": "aec79faf2b1f6d6cacffd0a97acab7e6c61bda49",
+      "sha256": "18857f3b466fb7c20a83b02e3ac98ee40aeea7dbd5f3bfb11c6c2c14027466e6",
+      "bytes": 31543,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-120.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-48.png",
+      "git_blob_sha1": "ed563967ec36d5ad4d8d908d06945f810e183ea6",
+      "sha256": "faf8a5b4c9c2d9d3fb5874828ebdaab04e99582819bc3995f572471aaa8bb2ac",
+      "bytes": 21120,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-48.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-120.png",
+      "git_blob_sha1": "c23bbad8198ab8d616ac99d45876bc6968aec201",
+      "sha256": "6ce1f3a2945652f7dae7d2e535baf0dcd4c644b5a2557b21f253d67ee94080f8",
+      "bytes": 30559,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-120.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-48.png",
+      "git_blob_sha1": "a75e36d1652abc4d339ec56ac6d0fcf332f03702",
+      "sha256": "6d2b22c834bc54ff45dbcc1d6670ce2071f415cf2078dde6ecd70e399b8a7cb0",
+      "bytes": 22484,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-48.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-120.png",
+      "git_blob_sha1": "eba93906d71df0fbe27cbfa22e64d481ce697201",
+      "sha256": "5207b3d3e33993dd00ca014993b93715c527ba35fff6d9e3397d22b0ada3405f",
+      "bytes": 48867,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-120.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-48.png",
+      "git_blob_sha1": "8dc06f4c936d61c2698f6b53e70c792710122f29",
+      "sha256": "fece4a0cc9d1d07825656ba40802f3da50f03781fccde2f764e4573a80215ba6",
+      "bytes": 39044,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-48.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-skill-picker-120.png",
+      "git_blob_sha1": "5070b9596869b110dd68734ccd6c81e447fbea23",
+      "sha256": "3eb47d06cb289f8188a75de0d15544197c0bbe26dc9db1c70bdbe416ee1fe304",
+      "bytes": 73063,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-skill-picker-120.png"
+    },
+    {
+      "path": "docs/reports/message-references-20261120/screenshots/message-references-skill-picker-48.png",
+      "git_blob_sha1": "006efdf45a3d8391afd4a83350f36a3ce2ff409b",
+      "sha256": "e84a7a98ded9fe7efee28c883225a4ec8ae6b0012d0ae81c4dbf5cb92b8d5d09",
+      "bytes": 60311,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/message-references-20261120/screenshots/message-references-skill-picker-48.png"
+    },
+    {
+      "path": "docs/reports/questions-history-readiness-20261120/archive-restored-120.png",
+      "git_blob_sha1": "d6b4b5fc4949016d8cbf7cbb089f219b541fb960",
+      "sha256": "c36230c33f5ac53abd59f2f4da04c07ba377c4a335cf1bf12d3168d6c728743e",
+      "bytes": 128090,
+      "width_px": 1368,
+      "height_px": 1672,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/questions-history-readiness-20261120/archive-restored-120.png"
+    },
+    {
+      "path": "docs/reports/questions-history-readiness-20261120/archive-restored-48.png",
+      "git_blob_sha1": "d737e108a64429735afd18180f77c069fa990220",
+      "sha256": "8f7374b219cbcb60cba1f1b9ba8ff89c4ffb1cf0e78b560ec3a4b76b40d15bbf",
+      "bytes": 114756,
+      "width_px": 576,
+      "height_px": 1672,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/questions-history-readiness-20261120/archive-restored-48.png"
+    },
+    {
+      "path": "docs/reports/readable-commands-20261120/commands-120.png",
+      "git_blob_sha1": "3e997641d88c648ffc7fff4b91f423d74ca44a2b",
+      "sha256": "0a4112f4175a775a0638cf479316b3ad4ea695acbbab6c929fef8d06648114e5",
+      "bytes": 51200,
+      "width_px": 1368,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/readable-commands-20261120/commands-120.png"
+    },
+    {
+      "path": "docs/reports/readable-commands-20261120/commands-48.png",
+      "git_blob_sha1": "ea7e9e9a341a3134eec7372b1a807bb403b635e5",
+      "sha256": "d60cb591de10957986cb116742d87aa1658fb45d0229e0ac506756f6cb589aa8",
+      "bytes": 41906,
+      "width_px": 576,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/readable-commands-20261120/commands-48.png"
+    },
+    {
+      "path": "docs/reports/readable-commands-20261120/preview-120-collapsed.png",
+      "git_blob_sha1": "49ec6cec9c4a9daf927ba2f121bf477c6a25ff69",
+      "sha256": "001d79283cdefae22c37a7998bc6f1435f48f3e1423c8270686103efb5dffc82",
+      "bytes": 62045,
+      "width_px": 1368,
+      "height_px": 888,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/readable-commands-20261120/preview-120-collapsed.png"
+    },
+    {
+      "path": "docs/reports/readable-commands-20261120/preview-120-expanded.png",
+      "git_blob_sha1": "52fe55c45b72c1c2c4c087d2999e818675b1ef9d",
+      "sha256": "7c40f93cc9e6ca5528ba5e5daaf80e2033670a97a0fdfbf02b64769c577be1e6",
+      "bytes": 120041,
+      "width_px": 1368,
+      "height_px": 888,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/readable-commands-20261120/preview-120-expanded.png"
+    },
+    {
+      "path": "docs/reports/send-reference-completion-20261120/message-references-send-file-accepted-120.png",
+      "git_blob_sha1": "2badeae7ef18e4fb1a98e04b1d6d86262cd81614",
+      "sha256": "c1045ebc14546883c2067f65f54ed4c7d4edc10a3133246c6b6b5e617b731fa4",
+      "bytes": 40759,
+      "width_px": 1248,
+      "height_px": 848,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/send-reference-completion-20261120/message-references-send-file-accepted-120.png"
+    },
+    {
+      "path": "docs/reports/send-reference-completion-20261120/message-references-send-file-picker-48.png",
+      "git_blob_sha1": "f352f4014372f1c17231bf0216b5800576f4cb9a",
+      "sha256": "376225fe74352cf7e029e085fb4bee8ccfea13d6b64c7637e688f10ad714fd89",
+      "bytes": 26869,
+      "width_px": 528,
+      "height_px": 848,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/send-reference-completion-20261120/message-references-send-file-picker-48.png"
+    },
+    {
+      "path": "docs/reports/send-reference-completion-20261120/message-references-send-missing-file-48.png",
+      "git_blob_sha1": "5f51809933bedddb762505c59dfbbeb10b2d9120",
+      "sha256": "b4bedde9f3fee76b3a6cda9baef3222aad254ae2b77b9838077e78c112181f36",
+      "bytes": 70622,
+      "width_px": 528,
+      "height_px": 848,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/send-reference-completion-20261120/message-references-send-missing-file-48.png"
+    },
+    {
+      "path": "docs/reports/send-reference-completion-20261120/message-references-send-skill-picker-120.png",
+      "git_blob_sha1": "770a24dc87e4a7fec6e2604f0918e03e6da4678f",
+      "sha256": "cbbe445f1ec4af2912ee178a2499b14111b804583ff6fdd09ff55408e49d77cc",
+      "bytes": 61577,
+      "width_px": 1248,
+      "height_px": 848,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/send-reference-completion-20261120/message-references-send-skill-picker-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-120.png",
+      "git_blob_sha1": "596e94e8a8c9f64804949a7c934e0253105274b3",
+      "sha256": "306e6b3d01760758a7df7afbbeae6280a4b322f3fde0048157de8dab9ccf612f",
+      "bytes": 26448,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-48.png",
+      "git_blob_sha1": "0c78d6e9bb1c370b67bd2c03baa2fd3281918f78",
+      "sha256": "cc24e3d05eb1a92a80672d80de699e6b5ab5894196a6855c0118861cd4c03ab5",
+      "bytes": 18945,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-120.png",
+      "git_blob_sha1": "2112a4e875d7a246da9405491c44b8cd9ffb0580",
+      "sha256": "c509b581c2b448855db5d3b6ed54a3761d06953fb92c02bad142db7c16563e60",
+      "bytes": 27462,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-48.png",
+      "git_blob_sha1": "0fe5b25a8f41fed0c0c7e55ac3ce678400264691",
+      "sha256": "a6ffa11a35d4c8426890e93aafaa8f1612aa4bd990d6a24bd911022a95866d58",
+      "bytes": 19737,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-120.png",
+      "git_blob_sha1": "d6836fdda6d470ee2df905e01ef83f62719fad7a",
+      "sha256": "0e8e0a86def77ccfc244e4457735aaae8d16103f4b40485ddbd5ed34b0327cc8",
+      "bytes": 92090,
+      "width_px": 1368,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-48.png",
+      "git_blob_sha1": "8f82758fed12b008a2952e95be9ce4694f7140e4",
+      "sha256": "aab83d56eceadac3bf55e9519302b3f3e4bb6b8ce74f07afbd0ce50003f201b8",
+      "bytes": 75117,
+      "width_px": 576,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-120.png",
+      "git_blob_sha1": "e901233300a6d5d0f676ad9966c227c59a52bedf",
+      "sha256": "5ab99f824a02673c67846b0737744fe5fc2bf7a59a7b4618884bc141f891f90a",
+      "bytes": 77183,
+      "width_px": 1368,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-48.png",
+      "git_blob_sha1": "4b3555ec1c50e75770d746c9b43ff1c122e7372f",
+      "sha256": "833540f50024ec4ad0773931464f53bd3f26177259acc15ce3b8bf240411e8aa",
+      "bytes": 66613,
+      "width_px": 576,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-120.png",
+      "git_blob_sha1": "70c49393fb6697c0d1405c40ca6a25049c98651d",
+      "sha256": "fbc4cf3ede4009dcf4c4c789b63f1141a606c2494804fc8f4554585e4f5522b1",
+      "bytes": 78149,
+      "width_px": 1368,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-48.png",
+      "git_blob_sha1": "b79353b5c18c20b5787b5b9085f8beec0e124aab",
+      "sha256": "818abf3d3f507d3fc9bdf4df0dfc90c24f1ca839bb50e511009c0dd929313acf",
+      "bytes": 65471,
+      "width_px": 576,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-120.png",
+      "git_blob_sha1": "c78497ad5bdeadc1a9e1bb043de9fb2016cb4f7f",
+      "sha256": "528aaa8e542c39e96ddb69b6ef3e75beeba252294452aef93106cf57a62636d7",
+      "bytes": 57898,
+      "width_px": 1368,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-48.png",
+      "git_blob_sha1": "dbf6ce6a9641c8266bbfa00df6b384c36f8e4dcb",
+      "sha256": "6a9b5a904e25784836881a5bce11cf28f5e11fe4f1ead68b0b76306a25bebae0",
+      "bytes": 48750,
+      "width_px": 576,
+      "height_px": 1168,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-120.png",
+      "git_blob_sha1": "b5ad38ecfae657bcde457732a7358e1d21a4f55d",
+      "sha256": "de0b70c9efa8d52e8c317d3e1cab16be9080f9186c01035a5a7650752f4b6c43",
+      "bytes": 27742,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-48.png",
+      "git_blob_sha1": "b5df966f5ea50aeb3c23ca8b3a1af05961289f2f",
+      "sha256": "2453dc309cde43eede0ed418d9159fbfba4bd7b66604ac3c5d0436092d9588cc",
+      "bytes": 22106,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-120.png",
+      "git_blob_sha1": "43c09cfbf2c7b3ed46186de42a1a28ddc9ba4b2d",
+      "sha256": "55b9638d81d37e21783a6a5cb9f7e94ad4dc72894b6b29d491ff6f051570c429",
+      "bytes": 26813,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-48.png",
+      "git_blob_sha1": "e61d4b7d80bfd2a01a14a55394d1407cc5399879",
+      "sha256": "504bfb9af07b0eaeb91ac7790a49aa85a177cb928bbf8f08a35893dc6f677ed3",
+      "bytes": 21133,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-48.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-120.png",
+      "git_blob_sha1": "51e110a4d1e00259f3d3bfbde51e9a41772caa4b",
+      "sha256": "25c8189a7db155b5287ebd61fd8dd26558a1c10e97500c7723ce6d50f6185c02",
+      "bytes": 56971,
+      "width_px": 1368,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-120.png"
+    },
+    {
+      "path": "docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-48.png",
+      "git_blob_sha1": "39df9d9dfac575d5221931b27d45b0a850d2ff3a",
+      "sha256": "74aba020be91a6889d4aec0d4bd252f4bffe767e5adf961334c0b6e59acc5156",
+      "bytes": 48673,
+      "width_px": 576,
+      "height_px": 944,
+      "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a/docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-48.png"
+    }
+  ]
+}

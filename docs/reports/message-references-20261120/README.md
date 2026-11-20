@@ -90,9 +90,11 @@ Windows GNU 目标的库与程序通过 cargo check 交叉目标检查，未验�
 
 8 张 PNG 均由本轮真实 VT 帧渲染并逐张检查。48 列下长警告被省略，完整警告保留在结构化回执；技能选择底栏的 `/queue` 与额度标签仍有一处间距不足。这两项不影响输入、选择或发送。
 
-![缺失文件仍可发送，48列](screenshots/message-references-missing-before-send-48.png)
+PNG 归档保留原目录 `docs/reports/message-references-20261120/`；下列链接指向云盘 ZIP，括号中是该目录内的文件名。完整清单见 [归档清单](../generated-png-manifest-20261121.json)。
 
-![技能选择，120列](screenshots/message-references-skill-picker-120.png)
+[缺失文件仍可发送，48列](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `screenshots/message-references-missing-before-send-48.png`）
+
+[技能选择，120列](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `screenshots/message-references-skill-picker-120.png`）
 
 ## 6. 安装、同步和生产激活
 

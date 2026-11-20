@@ -4,7 +4,7 @@
 
 ## 实际行为
 
-在 /send 消息正文输入 @文件 或 $技能 时，选择器可正常打开。第一次 Enter 或 Tab 选择候选项，随后 Enter 才发送正文。缺失引用保留可见提示；接收者选择和群组路由保持原来的含义。
+在 /send 消息正文输入 @文件 或 $技能 时，选择器可正常打开。当候选已加载且有选中项时，Enter 或 Tab 接受候选而不发送；收起列表后，再次 Enter 才发送正文。加载期间保留草稿。缺失引用保留可见提示；接收者选择和群组路由保持原来的含义。
 
 ## 验证范围
 
@@ -16,21 +16,23 @@
 
 ## 可见结果
 
+PNG 归档保留原目录 `docs/reports/send-reference-completion-20261120/`；下列链接指向云盘 ZIP，括号中是该目录内的文件名。完整清单见 [归档清单](../generated-png-manifest-20261121.json)。
+
 ### 48 列文件候选列表
 
-![48 列文件候选列表](message-references-send-file-picker-48.png)
+[48 列文件候选列表](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `message-references-send-file-picker-48.png`）
 
 ### 120 列技能候选列表
 
-![120 列技能候选列表](message-references-send-skill-picker-120.png)
+[120 列技能候选列表](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `message-references-send-skill-picker-120.png`）
 
 ### 文件选择后保留消息正文
 
-![文件选择后的消息正文](message-references-send-file-accepted-120.png)
+[文件选择后的消息正文](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `message-references-send-file-accepted-120.png`）
 
 ### 缺失引用的明确提示
 
-![48 列缺失引用提示](message-references-send-missing-file-48.png)
+[48 列缺失引用提示](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `message-references-send-missing-file-48.png`）
 
 ## 失败记录
 
