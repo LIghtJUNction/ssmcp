@@ -3072,7 +3072,21 @@ mod tests {
             .expect("cancelled raw bytes must remain inspectable")["artifact"]
             .clone();
         assert_eq!(artifact["complete"], false);
-        assert!(artifact["error"].as_str().unwrap().contains("before EOF"));
+        // The audit projection omits response-like error text. The owner-only
+        // artifact stat is the source of its complete persisted failure record.
+        assert_eq!(artifact["error"]["message_omitted"], true);
+        let metadata = private
+            .store
+            .perform("ssmcp.output.stat", json!({"id":artifact["id"]}))
+            .await
+            .unwrap();
+        assert_eq!(metadata["complete"], false);
+        assert!(
+            metadata["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("before EOF")),
+            "{metadata}"
+        );
         let saved = artifact_bytes(&private.store, artifact["id"].as_str().unwrap()).await;
         assert_eq!(saved, b"data: {\"type\":\"server.connected\"}\n\n");
     }
