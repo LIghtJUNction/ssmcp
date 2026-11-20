@@ -147,7 +147,7 @@ def run(binary, decoder, output, checks):
                   "horizontal round trip restores the original composer cursor")
 
             preview.send(LEFT + ALT_LEFT)
-            agents = preview.until(lambda shot: view(shot, "agents") and "Builder" in body(shot),
+            agents = preview.until(lambda shot: view(shot, "sessions") and "Builder" in body(shot),
                                    "Alt+Left reaching agents from inside a nonempty draft")
             check(draft in prompt_text(agents), "Alt+Left changes columns while preserving a nonempty draft")
             preview.send(b"\x1b[B")
@@ -158,14 +158,14 @@ def run(binary, decoder, output, checks):
             selected_body = body(selected)
             preview.send(ALT_LEFT)
             bounded_left = snapshot(preview)
-            check(view(bounded_left, "agents") and column(bounded_left)[1] == 1
+            check(view(bounded_left, "sessions") and column(bounded_left)[1] == 1
                   and body(bounded_left) == selected_body,
                   "horizontal navigation stops at the first column")
             preview.send(ALT_RIGHT)
             preview.until(lambda shot: view(shot, "conversation"), "leaving the selected agents column")
             preview.send(ALT_LEFT)
             retained = preview.until(
-                lambda shot: view(shot, "agents")
+                lambda shot: view(shot, "sessions")
                 and any("›" in row and "Builder" in row for row in shot["rows"]),
                 "the selected agent surviving a column round trip",
             )
@@ -175,7 +175,7 @@ def run(binary, decoder, output, checks):
             preview.until(logs_open, "diagnostic logs opened from the agents column")
             preview.send(mouse(2, release=True) + ESCAPE)
             restored = preview.until(
-                lambda shot: view(shot, "agents") and not logs_open(shot),
+                lambda shot: view(shot, "sessions") and not logs_open(shot),
                 "Escape restoring the agents column",
             )
             check(body(restored) == selected_body and draft in prompt_text(restored),
