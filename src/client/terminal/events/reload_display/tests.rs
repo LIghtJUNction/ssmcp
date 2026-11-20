@@ -215,3 +215,50 @@ fn reload_display_invalid_preview_and_old_positions_do_not_discard_conversation(
             .unwrap();
     assert!(bad.position(&view).panel_scroll.is_empty());
 }
+
+#[test]
+fn reload_display_keeps_transparent_read_bookkeeping_and_explicit_fold_before_first_frame() {
+    let mut before = EventView::new();
+    before.set_scope(EventScope::Conversation);
+    for name in ["one", "two", "three"] {
+        before.ingest_event(
+            "workspace",
+            &json!({"type":"ssmcp.file.read","path":format!("skills/{name}/SKILL.md")}),
+            b"[READ] workspace clipped path\n",
+        );
+        before.ingest_event("audit",&json!({"type":"ssmcp.skill.discovered","tool":"ssmcp.skills.list","path":name,"invoked":false}),b"[SKIL] discovered\n");
+    }
+    assert_eq!(before.tool_groups()[0].members.len(), 3);
+    assert!(before.open());
+    before.render(48, 24, &ui(), true);
+    assert!(before.back());
+    before.render(48, 24, &ui(), true);
+    assert!(!before.follow && before.selected_group.is_some());
+    let position = before.position().for_reload(&before);
+    let display: Snapshot =
+        serde_json::from_slice(&serde_json::to_vec(&before.reload_display()).unwrap()).unwrap();
+    // A newly allocated terminal has not rendered a conversation frame yet.
+    let mut after = EventView::new();
+    assert_eq!(after.scope, EventScope::All);
+    after.restore_reload_display(display);
+    let position = position.position(&after);
+    after.restore_position(&position);
+    after.render(48, 24, &ui(), true);
+    assert_eq!(after.tool_groups().len(), 1);
+    assert_eq!(after.tool_groups()[0].members.len(), 3);
+    assert!(!after.tool_groups()[0].expanded);
+    assert_eq!(after.selected_group, Some(after.tool_groups()[0].head));
+    assert!(
+        after
+            .events
+            .iter()
+            .filter(|event| event.meta.kind == Kind::Log)
+            .all(|event| event.meta.read_bookkeeping)
+    );
+    assert!(
+        after
+            .events
+            .iter()
+            .all(|event| event.meta.scope.is_none() && event.meta.keys.is_empty())
+    );
+}

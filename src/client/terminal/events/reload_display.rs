@@ -76,6 +76,8 @@ struct Entry {
     outcome: Option<Outcome>,
     interrupted: bool,
     boundary: bool,
+    #[serde(default)]
+    transparent_log: bool,
     language: String,
     tone: String,
     truncated: bool,
@@ -270,6 +272,7 @@ impl EventView {
                     outcome: event.meta.status.and_then(Outcome::capture),
                     interrupted: event.interrupted || event.meta.status == Some(Status::Running),
                     boundary: event.reload_boundary || event.image.is_some(),
+                    transparent_log: event.meta.kind == Kind::Log && event.meta.read_bookkeeping,
                     language: event.meta.language.to_owned(),
                     tone: event.tone.to_owned(),
                     truncated: event.truncated,
@@ -294,6 +297,9 @@ impl EventView {
             return saved.omitted.then(|| "Some tool display history was omitted during reload; your draft and conversation are preserved.".into());
         }
         self.clear();
+        // Positions belong to the Chat display; establish its grouping before
+        // Canvas restores a header selection on a terminal with no first frame.
+        self.scope = EventScope::Conversation;
         self.next_id = new_display_base();
         for entry in saved.entries {
             let kind = match entry.kind {
@@ -316,6 +322,7 @@ impl EventView {
                     String::new()
                 },
                 raw_message: entry.raw_message,
+                read_bookkeeping: kind == Kind::Log && entry.transparent_log,
                 command: entry.command,
                 diff: entry.diff,
                 status: entry.outcome.map(Outcome::status),
