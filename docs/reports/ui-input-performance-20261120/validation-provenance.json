@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-20T22:06:47+08:00",
+  "scope": "PR129 patch candidate; final integrated release acceptance remains pending",
+  "binary_source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+  "harness_source": "0d32db070eb349710339cb94d0e8914a71136c94",
+  "production_source_equal": true,
+  "harness_delta": "Only scripts/e2e_interactions.py: normalize queue next to UI null; retain full ID/text/UTF-8 cursor equality",
+  "rust_tests": {
+    "source": "67d546e7f9c4cfccdefbd15ba0aeb4a7fbbb3567",
+    "passed": 19,
+    "failed": 0
+  },
+  "post_test_source_change": "four exact rustfmt line-wrap replacements in two files",
+  "format_checks": [
+    {
+      "name": "rustfmt",
+      "argv": [
+        "rustfmt",
+        "--check",
+        "--edition",
+        "2024",
+        "--config",
+        "skip_children=true",
+        "src/client/interface/history.rs",
+        "src/client/interface/history/archive.rs",
+        "src/client/interface/history/ownership.rs",
+        "src/client/terminal/events.rs",
+        "src/client/terminal/events/tool_activity/tests.rs",
+        "src/client/steering.rs",
+        "src/client/terminal/conversation.rs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.189,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "git_diff_check",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "67d546e7f9c4cfccdefbd15ba0aeb4a7fbbb3567",
+        "2c26fff31bb64eae5e8f5cc390e84032d548e2f7"
+      ],
+      "exit_code": 0,
+      "seconds": 0.004,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "build": {
+    "source": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "tree": "222a2a68e91959f33f771837aa9fcec06f7eb673",
+    "jobs": 1,
+    "toolchain": {
+      "cargo": "cargo 1.100.0 (3acc79c0c 2026-11-05)",
+      "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5"
+    },
+    "submodule_commits": {
+      "zharness": "e3580c01c7252da090d04e59b59762bc561777d1",
+      "zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+    },
+    "commands": [
+      {
+        "name": "binaries",
+        "argv": [
+          "cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--jobs",
+          "1",
+          "--bin",
+          "ssmcp",
+          "--bin",
+          "ssmcpd",
+          "--example",
+          "vt_snapshot",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "seconds": 65.317
+      },
+      {
+        "name": "libtest_no_run",
+        "argv": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--jobs",
+          "1",
+          "--lib",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "exit_code": 0,
+        "seconds": 25.656
+      }
+    ],
+    "artifacts": [
+      {
+        "name": "ssmcp",
+        "kind": [
+          "bin"
+        ],
+        "test": false,
+        "sha256": "3fbf04e3cb5c38bcb83f8e9e674901af4b0ab111e014601f01df5208206a641c",
+        "bytes": 208265392,
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 1,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        }
+      },
+      {
+        "name": "ssmcpd",
+        "kind": [
+          "bin"
+        ],
+        "test": false,
+        "sha256": "a2d0b04a6f6ba8654f218de69defc122429896e92079df5a3d41c14c559c4b2f",
+        "bytes": 158401512,
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 1,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        }
+      },
+      {
+        "name": "vt_snapshot",
+        "kind": [
+          "example"
+        ],
+        "test": false,
+        "sha256": "b84e542a44cf19c271b9a13f5a4cfc593a88595789aed850ab88f686137d714e",
+        "bytes": 6473040,
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 1,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        }
+      },
+      {
+        "name": "ssmcp",
+        "kind": [
+          "lib"
+        ],
+        "test": true,
+        "sha256": "abf4aeb63926ec386933197212acc8e1ac3cbf75f0d8e9659015493992e00f5e",
+        "bytes": 315792472,
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 1,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        }
+      }
+    ]
+  },
+  "pty": {
+    "status": "passed",
+    "checks": 69,
+    "timing_samples": 8,
+    "source_revision": "2c26fff31bb64eae5e8f5cc390e84032d548e2f7",
+    "runner_sha256": "ea601787135257cb3838fa249a233b85a5944a9245de68daa900f5396709e106",
+    "report_sha256": "37aa2674407b19cb926228d4a994ce9cc1b55673a7d7d0d66573f029f82a6388",
+    "inputs_unchanged": true,
+    "binary_hashes_before": {
+      "ssmcp": "3fbf04e3cb5c38bcb83f8e9e674901af4b0ab111e014601f01df5208206a641c",
+      "ssmcpd": "a2d0b04a6f6ba8654f218de69defc122429896e92079df5a3d41c14c559c4b2f",
+      "decoder": "b84e542a44cf19c271b9a13f5a4cfc593a88595789aed850ab88f686137d714e",
+      "fixture": "abf4aeb63926ec386933197212acc8e1ac3cbf75f0d8e9659015493992e00f5e"
+    },
+    "binary_hashes_after": {
+      "ssmcp": "3fbf04e3cb5c38bcb83f8e9e674901af4b0ab111e014601f01df5208206a641c",
+      "ssmcpd": "a2d0b04a6f6ba8654f218de69defc122429896e92079df5a3d41c14c559c4b2f",
+      "decoder": "b84e542a44cf19c271b9a13f5a4cfc593a88595789aed850ab88f686137d714e",
+      "fixture": "abf4aeb63926ec386933197212acc8e1ac3cbf75f0d8e9659015493992e00f5e"
+    },
+    "harness_source_hashes": {
+      "e2e_composer": "b7c1c4eb3944d8555383081c6a505ae6aa001376a64fd15a9c73d116ceaf8e10",
+      "e2e_client_ui": "ec4c4978ef89d57ff23371b44ce86dae5f14abe54d466bcdb211eb30a5ae3c3d",
+      "e2e_dashboard": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+      "e2e": "eb6d38f05130666fa900be1be89e68288140806ae434d0a0a212b13b9fd5b74a",
+      "e2e_account_gateway": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+      "e2e_account_relay": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b",
+      "e2e_interactions": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+      "e2e_input_history": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708"
+    },
+    "python_version": "3.14.10",
+    "output_complete": true,
+    "output_sha256": "56ac1b05e006d2fdc8e759ae9458e74e0c7b736e3c91a59558da3e839d1e4186"
+  },
+  "prior_attempts": [
+    {
+      "attempt": 1,
+      "outcome": "fixture preparation failed",
+      "reason": "Node compatibility_wait timed out at 3000 ms; no physical latency measurement started",
+      "action": "One bounded retry with unchanged frozen inputs"
+    },
+    {
+      "attempt": 2,
+      "outcome": "existing test assertion failed",
+      "reason": "Queue default target next was compared directly with UI null",
+      "action": "Test-only alias normalization with exact ID, complete text and UTF-8 cursor checks retained"
+    }
+  ],
+  "limits": [
+    "Eight samples from one isolated debug-build scenario, not production long-session statistics",
+    "No before/after RSS reduction or one-second production latency reduction is inferred",
+    "No production install or release was performed"
+  ]
+}

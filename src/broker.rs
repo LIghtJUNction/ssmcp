@@ -171,6 +171,7 @@ pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
+    tool_summary_advertised: AtomicBool,
     login: Mutex<Option<LoginCode>>,
     // Membership may change, but grants always identify immutable provider subjects.
     allow: Mutex<Vec<Identity>>,
@@ -220,6 +221,10 @@ impl Session {
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn tool_summary_advertised(&self) -> bool {
+        self.tool_summary_advertised.load(Ordering::Acquire)
     }
 
     pub fn supports_controller(&self) -> bool {
@@ -395,6 +400,7 @@ impl Session {
             .try_acquire()
             .map_err(|_| "client busy; retry later")?;
         let duration = request_timeout(&operation);
+        let catalog_query = matches!(&operation, Operation::ListTools { .. });
         let audit_tool = match &operation {
             Operation::CallTool { name, .. } => Some(name.clone()),
             _ => None,
@@ -508,6 +514,30 @@ impl Session {
                 }
                 return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
             }
+        }
+        if let Ok(value) = &result
+            && value["isError"] != true
+            && ((catalog_query
+                && value
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tools| {
+                        tools
+                            .iter()
+                            .any(|tool| tool["name"] == crate::code_mode::tool_summaries::TOOL)
+                    }))
+                || (audit_tool.as_deref() == Some(crate::code_mode::tool_summaries::TOOL)
+                    && crate::code_mode::tool_summaries::valid_native_receipt(value)))
+        {
+            self.tool_summary_advertised.store(true, Ordering::Release);
+        }
+        if let Some(run) = audit_run.as_ref() {
+            run.native_tool_summary_reply(
+                self.client_id(),
+                reply_agent.as_deref(),
+                audit_tool.as_deref(),
+                &result,
+            );
         }
         if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
             run.native_reply(
@@ -736,6 +766,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            tool_summary_advertised: AtomicBool::new(false),
             login: Mutex::new(Some(LoginCode {
                 value: login_code.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1122,6 +1153,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            tool_summary_advertised: AtomicBool::new(false),
             login: Mutex::new((!restricted).then(|| LoginCode {
                 value: login_code.clone(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),
@@ -1996,6 +2028,7 @@ mod tests {
             collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            tool_summary_advertised: AtomicBool::new(false),
             login: Mutex::new(allow.is_empty().then(|| LoginCode {
                 value: secret.into(),
                 expires: Instant::now() + Duration::from_secs(LOGIN_LIFETIME),

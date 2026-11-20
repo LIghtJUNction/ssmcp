@@ -646,6 +646,94 @@ pub(crate) fn audit(value: &serde_json::Value) {
     }
 }
 
+/// Track the accepted native dispatch in the same store that renders tool windows.
+pub(crate) fn tool_summary_call_started(source: &crate::runtime::call_scope::Source, name: &str) {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.summary_call_started(source, name);
+    state.dirty = true;
+}
+
+pub(crate) fn tool_summary_call_finished(
+    source: &crate::runtime::call_scope::Source,
+    success: bool,
+) {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.summary_call_finished(source, success);
+    state.dirty = true;
+}
+
+pub(crate) fn tool_summary_list(
+    source: &crate::runtime::call_scope::Source,
+) -> Result<serde_json::Value, String> {
+    let shared = shared()
+        .filter(|shared| shared.alive.load(Ordering::Acquire))
+        .ok_or("tool_summary_inactive: built-in display is inactive")?;
+    let state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.tool_summary_list(source)
+}
+
+pub(crate) fn tool_summary_set(
+    source: &crate::runtime::call_scope::Source,
+    group_id: &str,
+    summary: &str,
+    expected_revision: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let shared = shared()
+        .filter(|shared| shared.alive.load(Ordering::Acquire))
+        .ok_or("tool_summary_inactive: built-in display is inactive")?;
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let receipt = state
+        .events
+        .tool_summary_set(source, group_id, summary, expected_revision)?;
+    state.dirty = true;
+    Ok(receipt)
+}
+
+/// The UI lock makes reminder selection and revision deduplication atomic.
+pub(crate) fn take_tool_summary_reminder(
+    source: &crate::runtime::call_scope::Source,
+) -> Option<serde_json::Value> {
+    let shared = shared().filter(|shared| shared.alive.load(Ordering::Acquire))?;
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.take_tool_summary_reminder(source)
+}
+
+/// A frame rejected before sending can relinquish its own reminder reservation.
+pub(crate) fn restore_tool_summary_reminder(
+    source: &crate::runtime::call_scope::Source,
+    reminder: &serde_json::Value,
+) {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.events.restore_tool_summary_reminder(source, reminder);
+}
+
 pub(crate) fn filter_logs(text: Option<&str>, level: Option<&str>) -> Result<(), String> {
     if text.is_some_and(|text| text.len() > 256 || text.chars().any(char::is_control)) {
         return Err("log filter must contain at most 256 bytes of plain text".into());

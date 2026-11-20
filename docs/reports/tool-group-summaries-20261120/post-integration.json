@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "source_revision": "4ca66fa12693b1b2db940da78b3c89cb2048425d",
+  "integrated_main": "c7086f9545602f45399e7a237995a48440e7d8aa",
+  "full_summary_validation_source": "8725b7b4606e8eb75c3d366c380f991842e0219a",
+  "full_summary_evidence_commit": "21342ea6b3de61883f70f3811f7d67e378091967",
+  "scope": "Account connection shutdown integration; existing UI acceptance remains attributed to its tested source.",
+  "source_clean_before_and_after": true,
+  "stages": [
+    {
+      "name": "01-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.206,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "02-libtest-build",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--no-run",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 75.672,
+      "stdout_sha256": "fc7fc1f599ea8044f3911479ef603bc68c997a82b5c9820a635eb33b2b92b18d",
+      "stderr_sha256": "647aaed81fadaa9940d07fa955d988f6dabf039d3061f83baa71e4d9040e6f17"
+    },
+    {
+      "name": "03-incoming",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::incoming_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.013,
+      "stdout_sha256": "c80e94477a697620800cde57a0db23302320f4eb75e0ffd1c89172723711c230",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "04-relay",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::relay::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.007,
+      "stdout_sha256": "03bd39a0d966c2c7502f50e1879e2583644878fc30214e4f35116e361163087d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "05-protocol",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::protocol_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.921,
+      "stdout_sha256": "d7948097ca455aa59a3a5261e2662f97d9297ca5b5992d1887084903adf6e192",
+      "stderr_sha256": "389fd1979af210d7599615206877e80cd27b92276044f837e2cb70186a6a06c9"
+    },
+    {
+      "name": "06-summary",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "tool_summar",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 1.688,
+      "stdout_sha256": "bcf7becc212d9f8a047fa0d81f5664cda4e32311dca6ac28e2dc231358ea6bce",
+      "stderr_sha256": "ba7ae72993bb0d2abc596dbeaf3898153bc8263bba9b90bc4b1a83e18a01c62e"
+    },
+    {
+      "name": "07-final-authorization",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "http::question_delivery_tests::question_finalization_rechecks_oauth_policy_binding_and_connection_after_eligibility",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.43,
+      "stdout_sha256": "33ef51697f41217683be4412831d75735c390a1839fddf22701a2a81c382fab1",
+      "stderr_sha256": "248375a54d575276acabcec56d4f666ee59c0945c2aa5440b1ae3a6d0a564f7e"
+    },
+    {
+      "name": "08-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--offline",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 47.406,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "6f7076f8ca93bebe16e5b840ca352844f4b9db683e1775f683faae67686446ae"
+    },
+    {
+      "name": "09-client-build",
+      "command": [
+        "cargo",
+        "build",
+        "--bin",
+        "ssmcp",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 40.207,
+      "stdout_sha256": "ea1d3487fea67e46a44e87c9b29b9faecae36a7d2893d5816676f44fe2f13694",
+      "stderr_sha256": "d52f454ab9283c2d16d0c72f789ba87c5597d8a01a49e0ad78fa2f19e3a1e3df"
+    },
+    {
+      "name": "10-account-e2e",
+      "command": [
+        "python3",
+        "-B",
+        "-u",
+        "<validation-root>/source-final-06/scripts/e2e_account_relay.py",
+        "--binary",
+        "<validation-root>/attempt-10/bin/ssmcp",
+        "--report",
+        "<validation-root>/attempt-10/account-report.json"
+      ],
+      "exit_code": 0,
+      "seconds": 14.175,
+      "stdout_sha256": "6bb13602914b47551014aaad01df4f3f956d7b4de8ceabe656deb6de9038060a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "rust_tests": [
+    {
+      "stage": "03-incoming",
+      "label": "连接退出时的晚到拒绝与队列竞争",
+      "filter": "client::incoming_tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "04-relay",
+      "label": "永久错误分类",
+      "filter": "client::relay::tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "05-protocol",
+      "label": "客户端帧协议",
+      "filter": "client::protocol_tests::",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06-summary",
+      "label": "摘要计数、来源、授权与提醒",
+      "filter": "tool_summar",
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "07-final-authorization",
+      "label": "最终交付前重新检查撤销",
+      "filter": "http::question_delivery_tests::question_finalization_rechecks_oauth_policy_binding_and_connection_after_eligibility",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "binaries_sha256": {
+    "ssmcp": "baaa03d72761f48680dd6ac1c95a47d6c09ff4fac8aba13db739b0616c8088c6",
+    "libtest": "e8fecdf082b7aa891c868e7c660a0ef14ce64e75b841b60a4d1e3d211ddf3419"
+  },
+  "account_script_sha256": "66913456fee0e72606a788ef43386464abf35eff7abff4faf5d6b4239031a919",
+  "account_e2e": {
+    "status": "passed",
+    "checks": 47,
+    "passed_checks": [
+      "A --ssh exits as expected",
+      "legacy SSH stops before any transport starts",
+      "A invite exits as expected",
+      "retired invite cannot enter a nonexistent invitation flow",
+      "A join exits as expected",
+      "retired join cannot enter a nonexistent invitation flow",
+      "retired commands never contact the relay",
+      "A login exits as expected",
+      "device login stores the verified identity and registered server username",
+      "login output excludes account and polling credentials",
+      "account credentials have owner-only file permissions",
+      "A whoami exits as expected",
+      "whoami verifies identity without exposing the login token",
+      "B --server exits as expected",
+      "an allow target from another relay is rejected before network access",
+      "B --server exits as expected",
+      "provider-style allow labels cannot replace a same-origin account target",
+      "A whoami exits as expected",
+      "selecting another origin never borrows the saved account credential",
+      "A whoami exits as expected",
+      "account API redirects never forward credentials to another origin",
+      "A --no-watchdog exits as expected",
+      "a changed stable identity cannot connect or replace the saved credential",
+      "A other@http://127.0.0.1:42971 exits as expected",
+      "a requested username must match the account registered on this relay",
+      "signed-in A binds its own username and origin with its saved account token",
+      "controlled session exits cleanly",
+      "unsigned B uses explicit same-origin allow and a supported WebSocket protocol",
+      "unsigned B never saves or receives A's account credential",
+      "A list exits as expected",
+      "A lists its currently controllable unsigned B session",
+      "B exposes a real terminal through the relay",
+      "real shell round-trip succeeds without relay credentials reaching native tools",
+      "watchdog reconnects the unsigned device without acquiring a credential",
+      "server access revocation terminates B with an error",
+      "revoked active sessions stop watchdog retries",
+      "revocation immediately after Ready also stops startup retries",
+      "HTTP 401 policy failures stop default watchdog retries",
+      "HTTP 403 policy failures stop default watchdog retries",
+      "controlled session exits cleanly",
+      "Ctrl-C cleans up an unsigned session without leaving credentials on B",
+      "the current lifecycle never depends on invitation or enrollment endpoints",
+      "A logout exits as expected",
+      "logout revokes its live session and declined authorization cannot reconnect it (exit=1, connect_attempts_before=2, connect_attempts_after=2)",
+      "a foreground account session offers at most one fresh authorization after revocation",
+      "logout revokes and removes the selected origin's account credential",
+      "gateways observed no malformed client protocol frames"
+    ],
+    "transport": "loopback WebSocket",
+    "oauth": "synthetic GitHub provider",
+    "device": "unsigned explicit same-origin allow",
+    "ssh": false,
+    "models_started": false,
+    "binary_sha256": "baaa03d72761f48680dd6ac1c95a47d6c09ff4fac8aba13db739b0616c8088c6",
+    "script_sha256": "66913456fee0e72606a788ef43386464abf35eff7abff4faf5d6b4239031a919"
+  },
+  "logout_observed": {
+    "exit_code": 1,
+    "connect_attempts_before": 2,
+    "connect_attempts_after": 2
+  },
+  "build_policy": {
+    "locked": true,
+    "offline": true,
+    "jobs": 1,
+    "incremental": false,
+    "debug_info": 0,
+    "ordinary_ci_dispatched": false
+  },
+  "submodule_commits": {
+    "crates/zharness": "db4206d3b74e37d57ff052948962f55514081d4b",
+    "crates/zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "crates/zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "recorded_at": "2026-11-20T23:35:51+08:00"
+}

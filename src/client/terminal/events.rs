@@ -19,6 +19,7 @@ pub(super) use reload_display::{ReloadPosition, Snapshot as ReloadDisplay};
 #[cfg(all(test, unix))]
 mod source_tests;
 mod tool_activity;
+mod tool_summaries;
 use correlation::{Kind, Meta, Status};
 pub(crate) use diff::DiffMode;
 
@@ -65,6 +66,7 @@ struct Event {
     interrupted: bool,
     reload_index: Option<usize>,
     reload_boundary: bool,
+    tool_group_id: Option<String>,
 }
 
 /// Independently bounded display metadata never becomes native output or log text.
@@ -90,6 +92,8 @@ struct CommandPanel {
     folded_scroll: Option<Option<usize>>,
     rows: usize,
     page: usize,
+    /// An explicit group fold must survive refreshes before its first paint.
+    user_folded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -98,6 +102,8 @@ struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
     group_expanded: bool,
+    #[serde(default)]
+    group_user_folded: bool,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -436,6 +442,7 @@ impl Event {
                 .as_ref()
                 .map_or(0, |source| source.text.len())
             + self.history_id.as_ref().map_or(0, String::len)
+            + self.tool_group_id.as_ref().map_or(0, String::len)
     }
 
     fn owned_by(&self, selection: &DisplayHistory) -> bool {
@@ -524,6 +531,10 @@ pub(crate) struct EventView {
     level: u8,
     scope: EventScope,
     history_selection: DisplayHistory,
+    summary_groups: VecDeque<tool_summaries::Group>,
+    summary_calls: VecDeque<tool_summaries::Call>,
+    summary_observers: VecDeque<(u64, u64)>,
+    active_summary_group: Option<String>,
     reload_history_preview: bool,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
@@ -555,9 +566,33 @@ impl EventView {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
         }
-        tool_activity::groups(&self.events, |event| {
+        let mut groups = tool_activity::groups(&self.events, |event| {
             event.owned_by(&self.history_selection)
-        })
+        });
+        for group in &mut groups {
+            if let Some(id) = &self.events[group.start].tool_group_id {
+                group.info = self
+                    .summary_groups
+                    .iter()
+                    .find(|saved| &saved.display.group_id == id)
+                    .map(|saved| saved.display.clone());
+            }
+        }
+        // Keep commands readable as standalone cards until the agent explicitly
+        // labels the complete group. Apply this to the whole canonical group so
+        // mixed reads/commands never expose duplicate IDs and partial counts.
+        groups.retain(|group| {
+            let summarized = group
+                .info
+                .as_ref()
+                .is_some_and(|info| info.summary.is_some());
+            let has_command = group.members.iter().any(|index| {
+                let event = &self.events[*index];
+                event.meta.command && !event.meta.diff
+            });
+            summarized || (group.members.len() > 1 && !has_command)
+        });
+        groups
     }
 
     fn tool_group_for(&self, id: u64) -> Option<tool_activity::Group> {
@@ -603,13 +638,36 @@ impl EventView {
         ids
     }
 
+    fn reveal_summary_commands(&mut self) {
+        for group in self.tool_groups() {
+            if group
+                .info
+                .as_ref()
+                .is_some_and(|info| info.summary.is_some())
+                && group.members.iter().any(|index| {
+                    let event = &self.events[*index];
+                    event.meta.command && !event.meta.diff
+                })
+            {
+                let head = &mut self.events[group.start];
+                if !head.group_panel.user_folded {
+                    head.group_expanded = true;
+                }
+            }
+        }
+    }
+
     fn preserve_tool_selection(&mut self) {
+        self.reveal_summary_commands();
         let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) else {
             self.selected_group = None;
             return;
         };
         if !group.expanded {
-            if !self.follow && self.selected_group.is_none() {
+            if !self.follow
+                && self.selected_group.is_none()
+                && !self.events[group.start].group_panel.user_folded
+            {
                 // A new adjacent call must not swallow an item already being read.
                 self.events[group.start].group_expanded = true;
                 self.reveal = true;
@@ -621,12 +679,13 @@ impl EventView {
     }
 
     fn set_tool_expanded(&mut self, group: &tool_activity::Group, expanded: bool) -> bool {
+        let head = &mut self.events[group.start];
+        head.group_panel.user_folded = !expanded;
         if group.expanded == expanded {
             return false;
         }
-        let head = &mut self.events[group.start];
         head.group_expanded = expanded;
-        if expanded && head.group_panel.rows == 0 {
+        if expanded && head.group_panel.rows == 0 && head.group_panel.scroll.is_none() {
             head.group_panel.scroll = Some(0);
         }
         self.selected = Some(group.head);
@@ -876,6 +935,7 @@ impl EventView {
                             scroll: event.panel.scroll,
                             group_scroll: event.group_panel.scroll,
                             group_expanded: event.group_expanded,
+                            group_user_folded: event.group_panel.user_folded,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -907,6 +967,7 @@ impl EventView {
             event.panel.scroll = panel.scroll;
             event.group_panel.scroll = panel.group_scroll;
             event.group_expanded = panel.group_expanded;
+            event.group_panel.user_folded = panel.group_user_folded;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
@@ -1076,6 +1137,18 @@ impl EventView {
     }
 
     fn ingest_event_with_meta(&mut self, label: &str, event: &Value, bytes: &[u8], mut meta: Meta) {
+        // Read runs retain their request barriers even when orchestration is
+        // transparent in the outer tool window.
+        let read_bookkeeping = meta.read_bookkeeping;
+        // Code-mode audit records describe the envelope, not another native call.
+        // Keep them in Logs without adding to or splitting the tool window.
+        if matches!(
+            event["type"].as_str(),
+            Some("ssmcp.code_mode" | "ssmcp.controller.started" | "ssmcp.controller.finished")
+        ) {
+            meta.kind = Kind::Log;
+            meta.read_bookkeeping = true;
+        }
         if event["type"] == "ssmcp.message" && matches!(label, "message" | "agent" | "listener") {
             meta.history_message = true;
             meta.message_id = event["message_id"].as_str().map(str::to_owned);
@@ -1101,8 +1174,11 @@ impl EventView {
         } else {
             meta.read.as_mut()
         };
-        self.read_boundary
-            .observe(event, read, meta.read_bookkeeping);
+        self.read_boundary.observe(event, read, read_bookkeeping);
+        // Balance controller boundaries before hiding observer diagnostics.
+        if self.summary_observer_event(&meta) {
+            return;
+        }
         if meta.kind == Kind::Conversation
             && event["presentation"].is_null()
             && let Some(text) = event["text"].as_str()
@@ -1139,7 +1215,10 @@ impl EventView {
         if meta.skip {
             return;
         }
-        let mut matches = Vec::new();
+        let mut matches = self
+            .summary_event_for(&meta)
+            .into_iter()
+            .collect::<Vec<_>>();
         for key in &meta.keys {
             if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
                 event.meta.same_source(&meta)
@@ -1160,6 +1239,11 @@ impl EventView {
         let first = plain.lines().map(heading).find(|line| !line.is_empty());
         if first.is_none() && matches.is_empty() {
             return; // Empty stream chunks must not become separate UI cards.
+        }
+        if meta.kind == Kind::Conversation
+            || (meta.kind == Kind::Log && !meta.read_bookkeeping && matches.is_empty())
+        {
+            self.active_summary_group = None;
         }
         let first = first.unwrap_or("");
         let conversation = meta.kind == Kind::Conversation
@@ -1246,6 +1330,19 @@ impl EventView {
                 }
             }
             let event = &mut self.events[index];
+            // Replace the dispatch placeholder with the first native display
+            // body; later stdout/lifecycle updates append to the same logical row.
+            if event.tool_group_id.is_some()
+                && event.meta.keys.is_empty()
+                && event.text.starts_with("[RUN] ssmcp.")
+                && !plain.trim().is_empty()
+            {
+                event.text.clear();
+                event.lines = 0;
+                event.summary = event_summary(&plain, attention.unwrap_or(first));
+                event.meta.read = meta.read.clone();
+                event.tone = tone;
+            }
             event.append(text, truncated);
             if let Some(source) = command_source {
                 event.command_source = Some(source);
@@ -1291,6 +1388,7 @@ impl EventView {
                 interrupted: false,
                 reload_index: None,
                 reload_boundary: false,
+                tool_group_id: None,
             });
         }
         self.prune();
@@ -1307,16 +1405,43 @@ impl EventView {
     }
 
     fn prune(&mut self) {
-        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
+        self.prune_summary_groups();
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum::<usize>()
+            + self
+                .summary_groups
+                .iter()
+                .map(tool_summaries::Group::retained_bytes)
+                .sum::<usize>();
         while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
-            if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.retained_bytes();
-                self.dropped = self.dropped.saturating_add(1);
+            let Some(event) = self.events.pop_front() else {
+                break;
+            };
+            if let Some(group_id) = &event.tool_group_id
+                && let Some(next) = self
+                    .events
+                    .iter_mut()
+                    .find(|next| next.tool_group_id.as_ref() == Some(group_id))
+            {
+                next.group_expanded = event.group_expanded;
+                next.group_panel = event.group_panel;
+                if self.selected_group == Some(event.id) {
+                    self.selected_group = Some(next.id);
+                    self.selected = Some(next.id);
+                }
             }
+            self.dropped = self.dropped.saturating_add(1);
+            self.prune_summary_groups();
+            self.bytes = self.events.iter().map(Event::retained_bytes).sum::<usize>()
+                + self
+                    .summary_groups
+                    .iter()
+                    .map(tool_summaries::Group::retained_bytes)
+                    .sum::<usize>();
         }
         let events = &self.events;
         self.read_expanded
             .retain(|id| events.iter().any(|event| event.id == *id));
+        self.prune_summary_groups();
     }
 
     pub(crate) fn filter(&mut self, query: &str, level: u8) {
@@ -1371,6 +1496,7 @@ impl EventView {
     /// Attach only a decoded image from the native result path. Text containing
     /// "[IMAGE]" cannot manufacture a protocol placement.
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        self.active_summary_group = None;
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
             event.meta.kind = Kind::Tool;
@@ -1655,6 +1781,10 @@ impl EventView {
 
     pub(crate) fn clear(&mut self) {
         self.events.clear();
+        self.summary_groups.clear();
+        self.summary_calls.clear();
+        self.summary_observers.clear();
+        self.active_summary_group = None;
         self.read_boundary.interrupt();
         self.read_expanded.clear();
         self.bytes = 0;
@@ -1678,10 +1808,11 @@ impl EventView {
 
     pub(crate) fn snapshot(&self) -> Value {
         let groups = self.read_groups();
+        let tool_groups = self.tool_groups();
         json!({
             "schema_version":1, "events":self.events.iter().enumerate().map(|(index,event)| json!({
                 "id":event.id,"summary":event.summary,"lines":event.lines,
-                "bytes":event.text.len(),"expanded":if self.tool_groups().iter().any(|group| group.contains(index)) { event.expanded(self.scope) } else { groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded) },"truncated":event.truncated,
+                "bytes":event.text.len(),"expanded":if tool_groups.iter().any(|group| group.contains(index)) { event.expanded(self.scope) } else { groups.iter().find(|group|group.contains(index)).map_or_else(||event.expanded(self.scope),|group|group.expanded) },"truncated":event.truncated,
                 "selected":Some(event.id)==self.selected,
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
@@ -1697,10 +1828,19 @@ impl EventView {
                 "id":group.head,"count":group.members.len(),"expanded":group.expanded,
                 "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
-            "tool_groups":self.tool_groups().iter().map(|group| {
+            "tool_groups":tool_groups.iter().map(|group| {
                 let panel = &self.events[group.start].group_panel;
                 json!({
                     "id":group.head,"count":group.members.len(),"expanded":group.expanded,
+                    "group_id":group.info.as_ref().map(|info|&info.group_id),
+                    "summary":group.info.as_ref().and_then(|info|info.summary.as_deref()),
+                    "revision":group.info.as_ref().map_or(0, |info|info.revision),
+                    "call_count":group.info.as_ref().map_or(group.members.len() as u64, |info|info.call_count),
+                    "covered_call_count":group.info.as_ref().map_or(0, |info|info.covered_call_count),
+                    "needs_summary":group.info.as_ref().is_some_and(|info|info.needs_summary()),
+                    "summary_editable":group.info.as_ref().is_some_and(|info|
+                        self.summary_groups.iter().any(|saved|
+                            saved.display.group_id == info.group_id && saved.editable())),
                     "stats":tool_activity::stats(&self.events, group),
                     "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>(),
                     "scroll":panel.offset(),"rows":panel.rows,"visible_rows":if group.expanded {panel.page} else {0},
