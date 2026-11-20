@@ -43,6 +43,48 @@ function Get-SmokeTextHash([string]$Text) {
     finally { $sha.Dispose() }
 }
 
+function Get-SmokeFailure([string]$Phase, [Management.Automation.ErrorRecord]$Record) {
+    # Keep enough structured context to distinguish extraction, file moves and
+    # process failures without recording messages, paths, arguments or stderr.
+    $chain = [Collections.Generic.List[object]]::new()
+    $exception = $Record.Exception
+    while ($null -ne $exception -and $chain.Count -lt 6) {
+        $item = [ordered]@{ type = $exception.GetType().FullName; hresult = $exception.HResult }
+        if ($exception -is [ComponentModel.Win32Exception]) { $item.native_error_code = $exception.NativeErrorCode }
+        $chain.Add($item)
+        $exception = $exception.InnerException
+    }
+    $browserFunctions = @('Invoke-SsmcpBrowserCommand', 'Test-SsmcpNativeFile', 'Test-SsmcpSamePath',
+        'Get-SsmcpUsableNode', 'Ensure-SsmcpBrowserDirectory', 'Expand-SsmcpNodeArchive',
+        'Get-SsmcpUserEnvironment', 'Set-SsmcpUserEnvironment', 'Get-SsmcpPlaywright', 'Install-SsmcpBrowserDependencies')
+    $downloadFunctions = @('Wait-DownloadTask', 'Receive-BoundedStream', 'Invoke-BoundedDownload')
+    $smokeFunctions = @('Write-SmokeReport', 'Get-SmokePeArchitecture', 'Get-SmokeTextHash', 'Initialize-SmokeJobType',
+        'Invoke-SmokeWorker', 'Assert-Smoke', 'Owned-SmokePath', 'Set-SmokeEnvironmentValue', 'Invoke-SmokeParent')
+    $frames = [Collections.Generic.List[object]]::new()
+    $trace = [string]$Record.ScriptStackTrace
+    if ($trace.Length -gt 16384) { $trace = $trace.Substring(0, 16384) }
+    foreach ($line in ($trace -split '\r?\n')) {
+        $match = [regex]::Match($line, '^at ([A-Za-z][A-Za-z0-9-]*), .*: line ([0-9]+)$')
+        if (-not $match.Success) { continue }
+        $name = $match.Groups[1].Value
+        $source = if ($browserFunctions -ccontains $name) { 'browser_dependency_block' }
+            elseif ($downloadFunctions -ccontains $name) { 'download_function' }
+            elseif ($smokeFunctions -ccontains $name) { 'smoke_script' }
+            else { continue }
+        $lineNumber = 0
+        if (-not [int]::TryParse($match.Groups[2].Value, [ref]$lineNumber) -or $lineNumber -lt 1) { continue }
+        $frames.Add([ordered]@{ function = $name; source = $source; line = $lineNumber })
+        if ($frames.Count -eq 8) { break }
+    }
+    return [ordered]@{
+        phase = $Phase
+        exception_type = $Record.Exception.GetType().Name
+        category = $Record.CategoryInfo.Category.ToString()
+        exception_chain = $chain.ToArray()
+        frames = $frames.ToArray()
+    }
+}
+
 function Initialize-SmokeJobType {
     if ('SsmcpWindowsSmokeJob' -as [type]) { return }
     # A job keeps descendants owned even after an intermediate Node process exits.
@@ -310,7 +352,7 @@ const timer=setTimeout(()=>{process.stderr.write("Headless smoke deadline exceed
         $report.ok = $true
     } catch {
         # Native/npm stderr may contain environment-derived values; never serialize it.
-        $report.failure = [ordered]@{ phase = $phase; exception_type = $_.Exception.GetType().Name }
+        $report.failure = Get-SmokeFailure $phase $_
     } finally {
         $report.elapsed_seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 3)
         Write-SmokeReport $Out $report
@@ -447,7 +489,7 @@ function Invoke-SmokeParent {
         }
     } catch {
         $report.ok = $false
-        $report.failure = [ordered]@{ phase = $phase; exception_type = $_.Exception.GetType().Name }
+        $report.failure = Get-SmokeFailure $phase $_
     } finally {
         if ($job) {
             try {
