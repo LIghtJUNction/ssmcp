@@ -609,7 +609,14 @@ mod tests {
             }
             assert!(view.read_groups().is_empty(), "barrier {barrier}");
             assert_eq!(view.events.len(), 5);
-            assert_eq!(view.events[2].text, text);
+            // Command details supplement the concise transcript with audited
+            // source. All other barriers keep their exact incoming text.
+            let expected = if barrier["type"] == "exec.started" {
+                "[RUN] command\ncmd=true\n"
+            } else {
+                text
+            };
+            assert_eq!(view.events[2].text, expected);
         }
     }
 

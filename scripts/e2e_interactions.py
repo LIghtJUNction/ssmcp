@@ -17,7 +17,8 @@ import subprocess
 import tempfile
 import time
 
-from e2e_composer import DOWN, ENTER, ESC, HOME, RIGHT
+from e2e_client_ui import body_text, prompt_text
+from e2e_composer import DOWN, ENTER, ESC, HOME, LEFT, RIGHT, UP
 from e2e_dashboard import text
 from e2e_input_history import InputHistory, PASTE_START, PASTE_END
 
@@ -64,19 +65,19 @@ class Interactions(InputHistory):
         self.quiet_checks.append(description)
         return shot
 
-    def capture_pair(self, front, name, marker):
+    def capture_pair(self, front, name, marker, *, rows=32):
         for columns in (120, 48):
-            front.resize(32, columns)
+            front.resize(rows, columns)
             front.pump(0.15)
             shot = front.until(
-                lambda value: value["size"] == [32, columns] and marker in text(value),
+                lambda value: value["size"] == [rows, columns] and marker in text(value),
                 name + " at " + str(columns) + " columns", cells=True)
             stem = "interactions-" + name + "-" + str(columns)
             (self.output / (stem + ".json")).write_text(
                 json.dumps(shot, ensure_ascii=False, indent=2) + "\n")
             (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
             self.frames.append(stem + ".json")
-        front.resize(32, 120)
+        front.resize(rows, 120)
         front.pump(0.15)
 
     def conversation(self, front):
@@ -143,61 +144,257 @@ class Interactions(InputHistory):
             front, lambda item: item["view"] == "questions" and item["answering"] == request_id,
             "Shift+Up opening the exact pending request")
 
+    def pending_recall(self, front):
+        delivered_text = "UP_ALREADY_DELIVERED"
+        original = "UP_PENDING_ORIGINAL 中文"
+        revised = "UP_EDITED_SENT 中文"
+        markers = (delivered_text, "UP_PENDING_ORIGINAL", "UP_EDITED_SENT")
+        self.conversation(front)
+        front.resize(58, 120)
+        front.pump(0.15)
+        initial = self.ui("/display/conversation")
+        before_ids = {item["id"] for item in self.queue()["queue"]}
+        self.check(initial["draft"]["text"] == "" and initial["target"] is None
+                   and initial["native_recipient"] is None,
+                   "pending recall starts with an empty next-caller composer")
+
+        def queue_state(record, status, source):
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                front.pump(0.05)
+                current = self.record(self.queue(), message_id=record["id"])
+                if current["status"] == status and current["text"] == source:
+                    return current
+            raise AssertionError("the exact recall fixture did not become " + status)
+
+        def frames(name, expected, draft_marker=None):
+            self.capture_pair(front, "pending-recall-" + name, delivered_text, rows=58)
+            for filename in self.frames[-2:]:
+                shot = json.loads((self.output / filename).read_text())
+                body, prompt = body_text(shot), prompt_text(shot)
+                self.check(tuple(body.count(marker) for marker in markers) == expected,
+                           name + ": real conversation has exact old/new/delivered body counts at "
+                           + str(shot["size"][1]) + " columns")
+                self.check(all(prompt.count(marker) == int(marker == draft_marker)
+                               for marker in markers),
+                           name + ": recalled text appears only in its intended physical composer")
+
+        delivered = self.submit_source(front, delivered_text)
+        self.expect_delivery(self.work(), delivered)
+        queue_state(delivered, "delivered", delivered_text)
+        pending = self.submit_source(front, original)
+        expected_ids = before_ids | {delivered["id"], pending["id"]}
+        self.quiet_until(
+            front, lambda shot: body_text(shot).count(markers[0]) == 1
+            and body_text(shot).count(markers[1]) == 1 and markers[1] not in prompt_text(shot),
+            "the acknowledged pending bubble is visible before Up")
+        frames("before-up", (1, 1, 0))
+
+        front.send(UP)
+        self.quiet_until(
+            front, lambda shot: original in prompt_text(shot)
+            and markers[1] not in body_text(shot) and body_text(shot).count(markers[0]) == 1,
+            "server-confirmed Up recall removes only the old pending bubble without another key")
+        recalled = self.ui("/display/conversation")
+        self.check(recalled["editing"] == pending["id"] and recalled["target"] == pending["target"]
+                   and recalled["draft"] == {"text": original, "cursor": len(original.encode())},
+                   "Up restores the exact request identity, source and UTF-8 end cursor")
+        queue_state(pending, "editing", original)
+        frames("recalled", (1, 0, 0), markers[1])
+
+        # Escape dismisses the notice; it does not cancel or republish an edit.
+        # Exercise a non-end UTF-8 cursor so preservation is not a default value.
+        front.send(LEFT)
+        cursor = len(original[:-1].encode())
+        before_escape = self.wait_state(
+            front, lambda state: state["draft"]["text"] == original and state["draft"]["cursor"] == cursor,
+            "move the recalled cursor left across one Chinese character")
+        front.send(ESC)
+        front.pump(0.12)
+        escaped = self.ui("/display/conversation")
+        self.check(escaped["draft"] == before_escape["draft"] and escaped["editing"] == pending["id"]
+                   and escaped["target"] == recalled["target"],
+                   "Escape preserves the held edit, its exact text, cursor and recipient")
+        queue_state(pending, "editing", original)
+        self.check(not self.messages(self.work()),
+                   "the held edit is not delivered and the earlier delivered message is not replayed")
+        self.check({item["id"] for item in self.queue()["queue"]} == expected_ids,
+                   "recall and Escape do not create or cancel a replacement request")
+        frames("escape-held", (1, 0, 0), markers[1])
+
+        self.replace_short(front, revised)
+        front.send(ENTER)
+        self.quiet_until(
+            front, lambda shot: body_text(shot).count(markers[2]) == 1
+            and markers[1] not in body_text(shot) and body_text(shot).count(markers[0]) == 1
+            and markers[2] not in prompt_text(shot),
+            "resubmitting the edit adds exactly one new bubble and keeps the delivered bubble")
+        edited = queue_state(pending, "queued", revised)
+        accepted = self.ui("/display/conversation")
+        self.check(edited["revision"] > pending["revision"] and edited["target"] == pending["target"]
+                   and accepted["editing"] is None and accepted["draft"]["text"] == "",
+                   "resubmission advances the same request revision and clears only its accepted edit")
+        self.check({item["id"] for item in self.queue()["queue"]} == expected_ids,
+                   "resubmission reuses the original message ID without an additional request")
+        frames("resubmitted", (1, 0, 1))
+        self.expect_delivery(self.work(), pending, request_text=revised)
+        queue_state(pending, "delivered", revised)
+        self.check(not self.messages(self.work()), "the revised request is delivered once without replay")
+
+        # With no queued request, Up is ordinary input-history navigation.
+        # Its copied text must not retract either already delivered chat card.
+        self.check(self.record(self.queue(), message_id=delivered["id"])["status"] == "delivered",
+                   "the earlier delivered request remains delivered throughout pending editing")
+        before_history = {item["id"]: {key: item[key] for key in ("text", "status", "revision", "target")}
+                          for item in self.queue()["queue"]}
+        front.send(UP)
+        self.quiet_until(
+            front, lambda shot: revised in prompt_text(shot)
+            and body_text(shot).count(markers[0]) == 1 and body_text(shot).count(markers[2]) == 1
+            and markers[1] not in body_text(shot),
+            "Up after delivery copies history while retaining the delivered conversation bodies")
+        history = self.ui("/display/conversation")
+        self.check(history["editing"] is None
+                   and history["draft"] == {"text": revised, "cursor": len(revised.encode())},
+                   "history recall of delivered text is an ordinary draft, not a queue takeback")
+        after_history = {item["id"]: {key: item[key] for key in ("text", "status", "revision", "target")}
+                         for item in self.queue()["queue"]}
+        self.check(after_history == before_history,
+                   "ordinary history recall cannot change delivered queue identities, revisions or states")
+        frames("delivered-history", (1, 0, 1), markers[2])
+        self.replace_short(front, "")
+        front.resize(32, 120)
+        front.pump(0.15)
+        return {"request_id": pending["id"], "preserved_delivered_id": delivered["id"],
+                "original_revision": pending["revision"], "edited_revision": edited["revision"],
+                "verified_widths": [120, 48], "rows": 58, "escape_preserves_edit": True, "delivered_once": True}
+
     def command_details(self, front):
         secret = "command-visibility-fixture-private"
         self.sensitive.append(secret)
         counter = self.workspace / "command-view-once.txt"
+        jobs_before = {item["job_id"] for item in self.call("ssmcp.exec.list")["jobs"]}
         script = (
+            "import sys\n"
             "from pathlib import Path\n"
             "p=Path('command-view-once.txt')\n"
             "p.write_text((p.read_text() if p.exists() else '') + 'once\\n')\n"
+            "print('COMMAND_VIEW_EXECUTED_ONCE', flush=True)\n"
             "# API_TOKEN=" + secret + "\n"
             "# " + "界" * 700 + "\n"
+            "sys.stdin.read()\n"
             "# COMMAND_SOURCE_END\n"
         )
-        argv = ["python3", "-c", script, "COMMAND_ARGV_LAST"]
-        job = self.run_job(argv)
-        self.finish_job(job, front)
+        argv = ["python3", "-c", script, "", "COMMAND_ARGV_LAST"]
+        # Keep only this harmless fixture alive so inspection can prove that it
+        # neither cancels the selected job nor creates a replacement execution.
+        job = self.call("ssmcp.exec.start", {
+            "command": argv, "cwd": str(self.workspace), "stdin": "pipe", "timeout_ms": 90000})
+        deadline = time.monotonic() + 8
+        while not counter.exists() and time.monotonic() < deadline:
+            front.pump(0.05)
+        self.check(counter.exists() and counter.read_text() == "once\n",
+                   "the owned command reached its private stdin wait exactly once")
+        before = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(before["running"] is True and before["cancelled"] is False,
+                   "the native command is running before opening its details")
         self.replace_short(front, "/command " + job["job_id"])
         front.send(ENTER)
-        state = self.wait_state(
-            front, lambda item: item["view"] == "tasks"
-            and item["tasks"]["detail"] and item["tasks"]["selected_id"] == job["job_id"],
-            "the complete-command shortcut selects the exact real native job")
+        self.quiet_until(
+            front, lambda shot: "argv[0]" in text(shot) and "State: running" in text(shot),
+            "native command details arrive without keyboard input or UI observation")
+        state = self.ui("/display/conversation")
+        self.check(state["view"] == "tasks" and state["tasks"]["source"] == "native"
+                   and state["tasks"]["loaded"] is True and state["tasks"]["detail"]
+                   and state["tasks"]["selected_id"] == job["job_id"]
+                   and isinstance(state["tasks"]["selected_job"], dict),
+                   "the completed asynchronous read selects the exact real native job")
         self.check(state["tasks"]["selected_job"]["command"] == argv,
                    "display redaction does not modify native command arguments")
+
+        def save_frame(name, columns, shot):
+            encoded = json.dumps(shot, ensure_ascii=False, indent=2) + "\n"
+            self.check(secret not in encoded,
+                       f"{name} frame contains no fixture secret at {columns} columns")
+            stem = f"interactions-{name}-{columns}"
+            (self.output / (stem + ".json")).write_text(encoded)
+            (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
+            self.frames.append(stem + ".json")
+
         for columns in (120, 48):
             front.resize(32, columns)
             front.pump(0.15)
             front.send(HOME)
             shot = front.until(lambda item: "argv[0]" in text(item),
                                "the first exact argument is visible", cells=True)
-            for name, value in (("command-start", shot),):
-                stem = f"interactions-{name}-{columns}"
-                (self.output / (stem + ".json")).write_text(
-                    json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-                (self.output / (stem + ".txt")).write_text(text(value) + "\n")
-                self.frames.append(stem + ".json")
+            save_frame("command-start", columns, shot)
+            redacted_seen = empty_seen = source_end_seen = False
             for _ in range(200):
-                shot = front.until(lambda _item: True, "read the owned command pane", cells=True)
-                self.check(secret not in text(shot),
+                shot = front.snapshot(cells=True)
+                visible = text(shot)
+                self.check(secret not in visible,
                            f"command details keep the fixture secret redacted at {columns} columns")
-                if "COMMAND_ARGV_LAST" in text(shot):
+                redacted_seen |= "API_TOKEN=[redacted]" in visible
+                empty_seen |= 'argv[3]: ""' in visible
+                source_end_seen |= "COMMAND_SOURCE_END" in visible
+                if "COMMAND_ARGV_LAST" in visible:
                     break
                 front.send(DOWN)
                 front.pump(0.025)
             else:
                 raise AssertionError("scrolling never reached the last complete argument")
-            self.check("COMMAND_SOURCE_END" in text(shot),
+            self.check(redacted_seen,
+                       f"the actual token assignment is visibly redacted at {columns} columns")
+            self.check(empty_seen,
+                       f"the empty argument remains explicit at {columns} columns")
+            self.check(source_end_seen,
                        f"long multiline source reaches its real final line at {columns} columns")
-            stem = f"interactions-command-end-{columns}"
-            (self.output / (stem + ".json")).write_text(
-                json.dumps(shot, ensure_ascii=False, indent=2) + "\n")
-            (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
-            self.frames.append(stem + ".json")
+            save_frame("command-end", columns, shot)
+
+        # Tasks Escape returns to its list/input, not to the conversation column.
+        front.resize(32, 120)
+        front.pump(0.15)
+        self.activate_column(front, "conversation")
+        self.conversation(front)
+        missing = "not-retained-" + job["job_id"]
+        self.replace_short(front, "/command " + missing)
+        front.send(ENTER)
+        self.quiet_until(
+            front, lambda shot: "isnolongerretained." in "".join(text(shot).split()),
+            "an exact missing command ID renders its own unavailable result")
+        state = self.ui("/display/conversation")
+        self.check(state["view"] == "tasks" and state["tasks"]["detail"]
+                   and state["tasks"]["selected_id"] == missing
+                   and state["tasks"]["selected_job"] is None,
+                   "a missing exact ID never falls back to another retained task")
+        for columns in (120, 48):
+            front.resize(32, columns)
+            shot = front.until(
+                lambda item: item["size"] == [32, columns]
+                and "isnolongerretained." in "".join(text(item).split()),
+                f"the missing command result at {columns} columns", cells=True)
+            self.check("COMMAND_ARGV_LAST" not in text(shot)
+                       and "COMMAND_SOURCE_END" not in text(shot),
+                       f"the missing-ID pane contains no other job's script at {columns} columns")
+            save_frame("command-missing", columns, shot)
+
+        jobs_after = {item["job_id"] for item in self.call("ssmcp.exec.list")["jobs"]}
+        after = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(jobs_after == jobs_before | {job["job_id"]},
+                   "opening, scrolling and unknown-ID lookup create no native jobs")
+        self.check(all(after[key] == before[key]
+                       for key in ("job_id", "pid", "command", "cwd", "state", "running",
+                                   "exit_code", "exit_signal", "cancelled", "timed_out"))
+                   and after["running"] is True and after["cancelled"] is False,
+                   "read-only command navigation preserves the running native task")
         self.check(counter.read_text() == "once\n",
                    "opening and scrolling command details never re-executes the command")
+        self.call("ssmcp.exec.write", {"job_id": job["job_id"], "close_stdin": True})
+        finished = self.finish_job(job, front)
+        self.check(finished["exit_code"] == 0 and finished["cancelled"] is False,
+                   "only fixture-owned stdin EOF finishes the inspected command normally")
         front.resize(32, 120)
+        self.activate_column(front, "conversation")
         self.conversation(front)
 
     def ordinary_question(self, front, requester):
@@ -540,6 +737,7 @@ class Interactions(InputHistory):
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5,
         )
         front = self.start_front("PTY-interactions")
+        recalled = self.pending_recall(front)
         requester = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY requester", "role": "requester"})
         reviewer = self.public_call("collab", {
@@ -555,6 +753,7 @@ class Interactions(InputHistory):
         return {
             "status": "passed", "checks": len(self.checks), "passed_checks": self.checks,
             "frames": self.frames, "quiet_checks": self.quiet_checks,
+            "pending_recall": recalled,
             "transport": "real production account router, native tools, WebSocket and owned PTY",
             "upstream_provider": "synthetic GitHub fixture",
             "models_started": False, "existing_clients_reloaded": False,

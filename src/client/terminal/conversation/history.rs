@@ -1,6 +1,10 @@
 use super::*;
 use crate::client::interface::history;
 
+fn history_entry_height(session: &history::SessionSummary) -> usize {
+    2 + usize::from(session.summary.is_some())
+}
+
 impl State {
     pub(super) fn chat_resume(&mut self) {
         self.chat_history_list(false);
@@ -131,7 +135,12 @@ impl State {
                         let _ = writeln!(record, "{row}");
                     }
                     record.push('\n');
-                    self.log_message(&message.role, &message.content, record.as_bytes());
+                    self.log_identified_message(
+                        &message.id,
+                        &message.role,
+                        &message.content,
+                        record.as_bytes(),
+                    );
                 }
                 self.conversation.history = Some(conversation.into());
                 self.conversation.history_width = 0;
@@ -186,6 +195,28 @@ impl State {
                 .cloned()
                 .collect();
         }
+        if std::mem::take(&mut self.conversation.history_list_stale) && !self.preview {
+            let selected = self
+                .conversation
+                .sessions
+                .get(self.conversation.selected)
+                .map(|session| session.id.clone());
+            let filter = if self.conversation.history_archived {
+                history::archive::Filter::Archived
+            } else {
+                history::archive::Filter::Active
+            };
+            match history::archive::sessions(filter) {
+                Ok(sessions) => {
+                    self.conversation.selected = selected
+                        .and_then(|id| sessions.iter().position(|session| session.id == id))
+                        .unwrap_or_default();
+                    self.conversation.sessions = sessions;
+                }
+                Err(error) => self.notice = Some(format!("Could not read history: {error}")),
+            }
+        }
+        self.conversation.list_count = 0;
         let mut rows = vec![self.chat_line(
             if self.conversation.history_archived {
                 "  Archived conversations · ↑↓ select · Enter restore and resume · Esc back"
@@ -207,8 +238,29 @@ impl State {
             ));
             return rows;
         }
-        for index in self.chat_list_window(self.conversation.sessions.len(), height) {
-            let session = &self.conversation.sessions[index];
+        let sessions = &self.conversation.sessions;
+        let selected = self.conversation.selected.min(sessions.len() - 1);
+        self.conversation.selected = selected;
+        let mut start = selected;
+        let mut used = history_entry_height(&sessions[selected]);
+        let capacity = usize::from(height.saturating_sub(1));
+        while start > 0 {
+            let previous = history_entry_height(&sessions[start - 1]);
+            if used + previous > capacity {
+                break;
+            }
+            used += previous;
+            start -= 1;
+        }
+        self.conversation.list_start = start;
+        let height = usize::from(height);
+        for (index, session) in sessions.iter().enumerate().skip(start) {
+            if rows.len() >= height
+                || (index > start && rows.len() + history_entry_height(session) > height)
+            {
+                break;
+            }
+            self.conversation.list_count += 1;
             rows.push(self.chat_line(
                 &format!(
                     "{} {}",
@@ -217,7 +269,7 @@ impl State {
                     } else {
                         " "
                     },
-                    session.title
+                    panel::safe_text(&session.title)
                 ),
                 if index == self.conversation.selected {
                     PanelTone::Accent
@@ -242,8 +294,38 @@ impl State {
                 PanelTone::Muted,
                 width,
             ));
+            if let Some(summary) = &session.summary {
+                rows.push(self.chat_line(
+                    &format!(
+                        "  {}",
+                        panel::fit(summary, usize::from(width).saturating_sub(2))
+                    ),
+                    PanelTone::Muted,
+                    width,
+                ));
+            }
         }
+        rows.truncate(height);
         rows
+    }
+
+    pub(super) fn chat_history_list_hit(&self, mut row: usize) -> Option<usize> {
+        let start = self.conversation.list_start;
+        for (index, session) in self
+            .conversation
+            .sessions
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(self.conversation.list_count)
+        {
+            let height = history_entry_height(session);
+            if row < height {
+                return Some(index);
+            }
+            row -= height;
+        }
+        None
     }
 
     pub(super) fn chat_help_rows(&mut self, height: u16) -> Vec<String> {
@@ -305,6 +387,7 @@ mod archive_tests {
             id: "conversation_00000000000000000000000000000000".into(),
             workspace: "/fixture".into(),
             title: "Saved original conversation".into(),
+            summary: None,
             created_at_ms: 1,
             updated_at_ms: 2,
             message_count: 3,
@@ -320,5 +403,58 @@ mod archive_tests {
         assert!(rows.contains("archived"));
         assert_eq!(state.conversation.selected, 0);
         assert!(state.actions.is_empty());
+    }
+
+    #[test]
+    fn history_list_places_summary_with_its_exact_session_across_pages() {
+        for columns in [48, 120] {
+            let mut state = super::super::super::preview_state(
+                24,
+                columns,
+                &Ui {
+                    layout: Layout::Chat,
+                    sidebar: false,
+                    color: true,
+                    ..Ui::default()
+                },
+            );
+            state.canvas_focus(View::History);
+            state.conversation.sessions = (0..3)
+                .map(|index| history::SessionSummary {
+                    id: format!("conversation_{index:032x}"),
+                    workspace: "/fixture".into(),
+                    title: if index == 1 {
+                        "Custom **title**".into()
+                    } else {
+                        format!("History {index}")
+                    },
+                    summary: (index == 1).then(|| "Review [the saved context]".into()),
+                    created_at_ms: 1,
+                    updated_at_ms: 2,
+                    message_count: index + 1,
+                    truncated_messages: 0,
+                    current: false,
+                    archived: false,
+                })
+                .collect();
+            let rows = state.chat_history_rows(6);
+            assert_eq!(rows.len(), 6);
+            assert!(rows[3].contains("Custom **title**"));
+            assert!(rows[4].contains("2 messages"));
+            assert!(rows[5].contains("Review [the saved context]"));
+            let first_row = body_top(state.geometry.rows) + 1;
+            assert_eq!(state.chat_list_hit(first_row + 4), Some(1));
+            assert_eq!(state.chat_list_hit(first_row + 5), None);
+
+            state.chat_key(Key::Down);
+            let rows = state.chat_history_rows(6);
+            assert!(rows[1].contains("Custom **title**"));
+            assert!(rows[4].contains("› History 2"));
+            assert_eq!(state.chat_list_hit(first_row + 2), Some(1));
+            assert_eq!(state.chat_list_hit(first_row + 3), Some(2));
+            if columns == 120 {
+                assert!(rows[2].contains(&state.conversation.sessions[1].id));
+            }
+        }
     }
 }

@@ -54,16 +54,29 @@ fn config_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn get() -> Value {
+    let steering = super::steering::snapshot();
     json!({
         "schema_version": 1,
         "config": render::current_ui(),
         "config_path": config_path(),
         "display": terminal::snapshot(),
         "activity": render::snapshot(),
-        "steering": super::steering::snapshot(),
+        "identity": client_identity(&steering),
+        "steering": steering,
         "listener": listener::snapshot(),
         "user_wait": user_wait::snapshot(),
         "questions": questions::snapshot(),
+    })
+}
+
+fn client_identity(steering: &Value) -> Value {
+    let client_id = (steering["connected"] == true)
+        .then(|| steering["session_id"].as_str())
+        .flatten();
+    json!({
+        "process_id":std::process::id(),
+        "client_id":client_id,
+        "thread_id_kind":"registered_agent_id"
     })
 }
 
@@ -471,10 +484,7 @@ fn queue_call(request: QueueRequest) -> Result<Value, String> {
             super::steering::cancel(&id)?;
             id
         }
-        QueueRequest::Retarget { id, target } => {
-            super::steering::retarget(&id, target.as_deref())?;
-            id
-        }
+        QueueRequest::Retarget { id, target } => super::steering::retarget(&id, target.as_deref())?,
     };
     // This native entry runs outside the terminal State lock. Local input
     // handlers mark themselves dirty and only notify finish waiters.
@@ -515,6 +525,11 @@ pub(crate) async fn call(
         })
         .await
         .map_err(|_| "message storage worker stopped".to_owned())?;
+    }
+    if name == "ssmcp.ui.history_update" {
+        return tokio::task::spawn_blocking(move || history::descriptions::call(arguments))
+            .await
+            .map_err(|_| "history description worker stopped".to_owned())?;
     }
     if name == "ssmcp.ui.history_archive" {
         return tokio::task::spawn_blocking(move || history::archive::call(arguments))
@@ -618,6 +633,7 @@ pub(crate) fn tools() -> Vec<Value> {
     ].into_iter().chain(questions::tools())
     .chain(std::iter::once(history::tool()))
     .chain(std::iter::once(history::archive::tool()))
+    .chain(std::iter::once(history::descriptions::tool()))
     .chain(std::iter::once(harness::tool()))
     .chain(std::iter::once(super::presentation::tool())).collect()
 }
@@ -625,7 +641,7 @@ pub(crate) fn tools() -> Vec<Value> {
 fn get_tool() -> Value {
     json!({
         "name":"ssmcp.ui.get",
-        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /context/status, /context/read and /context/list projections read the same local memory document off the UI thread; use /context/read/summary or /context/read/recent for bounded paging. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
+        "description":"Read versioned display configuration and sanitized client state with or without the built-in TUI. Empty arguments preserve the full snapshot. The /identity projection reports this client's actual OS process_id and current relay client_id; /steering/agents enumerates registered logical thread IDs, not kernel thread IDs. For bounded polling, use a nonempty JSON Pointer such as /display/conversation, /config, /steering/queue or /display/audit/entries. The /context/status, /context/read and /context/list projections read the same local memory document off the UI thread; use /context/read/summary or /context/read/recent for bounded paging. Projections return {schema_version:1,path,value}; arrays and strings also return total and next_offset when more remains. Page offsets count array items or Unicode code points. Objects and scalars reject paging. Projected responses are limited to 8 KiB serialized; choose a narrower path or smaller page if rejected. Use terminal.*, ssmcp.exec.* and ssmcp.audit.events for independent I/O and events.",
         "inputSchema":{
             "type":"object",
             "additionalProperties":false,
@@ -654,7 +670,7 @@ fn queue_tool() -> Value {
     };
     json!({
         "name":"ssmcp.ui.queue",
-        "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
+        "description":"Read or change this client's local request queue without starting a model. submit and edit request asynchronous publication; read state until acknowledged. takeback reclaims a still-queued request using its current revision before editing the same ID. Delivery can win that race; delivered requests cannot be edited or cancelled. A changed room or uncertain delivery requires explicit retarget, then edit to republish. When an already-sent request belongs to another room, retarget preserves that unknown attempt and returns a new held request ID with retry_of pointing to the original. Always edit the returned ID; retarget does not publish it. Same-room retries and ordinary edits retain their ID. Agents are the actual public collaboration roster. Requests are included at the next eligible tool response, not evidence that an agent has read or executed them.",
         "inputSchema":{"type":"object","oneOf":[
             variant("get", &[], json!({})),
             variant("submit", &["text"], json!({"text":text,"target":target})),
@@ -705,6 +721,23 @@ mod tests {
 
     fn read_projection(snapshot: &Value, arguments: Value) -> Result<Value, String> {
         project_snapshot(snapshot.clone(), parse_get(&arguments)?)
+    }
+
+    #[test]
+    fn identity_projection_reports_os_pid_and_only_a_current_relay_id() {
+        let id = "f".repeat(64);
+        for connected in [true, false] {
+            let steering = json!({"session_id":id,"connected":connected});
+            let snapshot = json!({"schema_version":1,"identity":client_identity(&steering)});
+            let result = read_projection(&snapshot, json!({"path":"/identity"})).unwrap();
+            assert_eq!(result["value"]["process_id"], std::process::id());
+            assert_eq!(
+                result["value"]["client_id"],
+                json!(connected.then_some(&id))
+            );
+            assert_eq!(result["value"]["thread_id_kind"], "registered_agent_id");
+            assert!(result["value"].get("thread_id").is_none());
+        }
     }
 
     #[test]
@@ -1085,24 +1118,28 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 18);
-        assert!(names.contains("ssmcp.ui.harness"));
-        assert!(names.contains("ssmcp.ui.history"));
-        assert!(names.contains("ssmcp.ui.history_archive"));
-        for name in [
-            "ssmcp.ui.ask",
-            "ssmcp.ui.questions",
+        let expected = std::collections::BTreeSet::from([
+            "ssmcp.ui.action",
             "ssmcp.ui.answer",
+            "ssmcp.ui.ask",
+            "ssmcp.ui.filter",
             "ssmcp.ui.finish",
-            "ssmcp.ui.question_ack",
-            "ssmcp.ui.question_delivery",
+            "ssmcp.ui.get",
+            "ssmcp.ui.harness",
+            "ssmcp.ui.history",
+            "ssmcp.ui.history_archive",
+            "ssmcp.ui.history_update",
             "ssmcp.ui.listener",
-            "ssmcp.ui.wait",
             "ssmcp.ui.message",
             "ssmcp.ui.present",
-        ] {
-            assert!(names.contains(name));
-        }
+            "ssmcp.ui.question_ack",
+            "ssmcp.ui.question_delivery",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.queue",
+            "ssmcp.ui.set",
+            "ssmcp.ui.wait",
+        ]);
+        assert_eq!(names, expected);
         let schema = catalog
             .iter()
             .find(|tool| tool["name"] == "ssmcp.ui.action")

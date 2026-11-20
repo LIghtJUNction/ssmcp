@@ -149,6 +149,7 @@ pub(super) struct Meta {
     pub(super) user: bool,
     pub(super) author: String,
     pub(super) raw_message: bool,
+    pub(super) plain_message: bool,
     pub(super) keys: Vec<String>,
     pub(super) status: Option<Status>,
     pub(super) command: bool,
@@ -175,6 +176,7 @@ impl Meta {
             .unwrap_or(event);
         meta.kind = Kind::from_event(event, rpc);
         if meta.kind == Kind::Conversation {
+            meta.plain_message = event["format"] == "plain";
             meta.user = event["role"] == "user"
                 || kind == "user"
                 || event["message"]["role"] == "user"

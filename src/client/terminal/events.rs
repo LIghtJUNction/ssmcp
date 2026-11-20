@@ -59,6 +59,7 @@ struct Event {
     interrupted: bool,
     reload_index: Option<usize>,
     reload_boundary: bool,
+    history_id: Option<String>,
 }
 
 /// Independently bounded display metadata never becomes native output or log text.
@@ -429,6 +430,7 @@ impl Event {
                 .command_source
                 .as_ref()
                 .map_or(0, |source| source.text.len())
+            + self.history_id.as_ref().map_or(0, String::len)
     }
 
     fn matches(&self, query: &str, level: u8, scope: EventScope) -> bool {
@@ -879,6 +881,57 @@ impl EventView {
         inserted
     }
 
+    /// Attach an internal JSONL identity; display text and external event fields
+    /// never grant the ability to retract a retained conversation message.
+    pub(crate) fn ingest_identified_message(
+        &mut self,
+        id: &str,
+        role: &str,
+        text: &str,
+        bytes: &[u8],
+    ) {
+        let next = self.next_id;
+        self.ingest_event(
+            "message",
+            &json!({"type":"ssmcp.message", "role":role, "text":text}),
+            bytes,
+        );
+        if let Some(event) = self.events.back_mut().filter(|event| event.id == next) {
+            event.history_id = Some(id.to_owned());
+            self.prune();
+        }
+    }
+
+    pub(crate) fn recall_message(&mut self, id: &str) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| {
+            !(event.meta.user
+                && event.meta.kind == Kind::Conversation
+                && event.history_id.as_deref() == Some(id))
+        });
+        if self.events.len() == before {
+            return false;
+        }
+        self.prune();
+        self.preserve_read_selection();
+        let visible = self.visible_ids();
+        if !self
+            .selected
+            .is_some_and(|selected| visible.contains(&selected))
+        {
+            self.selected = if self.follow {
+                visible.last()
+            } else {
+                visible.first()
+            }
+            .copied();
+            self.reveal = true;
+        }
+        self.hit_rows.clear();
+        self.panel_hit_rows.clear();
+        true
+    }
+
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
         self.ingest_scoped_event(label, event, bytes, None);
@@ -1092,6 +1145,7 @@ impl EventView {
                 interrupted: false,
                 reload_index: None,
                 reload_boundary: false,
+                history_id: None,
             });
         }
         self.prune();
@@ -1700,7 +1754,10 @@ impl EventView {
                     } else {
                         conversation_body(&event.text)
                     };
-                    let lines = if event.meta.raw_message && !event.meta.user {
+                    let lines = if event.meta.raw_message
+                        && !event.meta.user
+                        && !event.meta.plain_message
+                    {
                         super::markdown::rows(body, body_width as u16, ui)
                     } else {
                         styled_rows(body, body_width, ui.color)
@@ -1961,7 +2018,7 @@ impl EventView {
                     })
                 {
                     let lines = if event.meta.raw_message {
-                        if event.meta.user {
+                        if event.meta.user || event.meta.plain_message {
                             styled_rows(&event.text, body_width, ui.color)
                         } else {
                             super::markdown::rows(&event.text, body_width as u16, ui)
@@ -2471,7 +2528,7 @@ fn retained_text_with_note(bytes: &[u8], note: &str) -> (String, bool) {
 }
 
 /// Reflow only the retained display text, maintaining SGR across soft wraps.
-fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
+pub(super) fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
     let text = sanitize(text, color);
     let text = text.trim_matches('\n');
     let mut rows = Vec::new();
@@ -2541,6 +2598,57 @@ fn styled_rows(text: &str, width: usize, color: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recalled_message_uses_internal_identity_and_preserves_identical_other_messages() {
+        let mut view = EventView::new();
+        view.ingest_identified_message(
+            "message_pending",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        let removed = view.events[0].id;
+        view.ingest_identified_message(
+            "message_delivered",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        view.ingest_event(
+            "message",
+            &json!({
+                "type":"ssmcp.message", "role":"user", "text":"SAME_BODY",
+                "history_id":"message_pending",
+            }),
+            b"[USER] SAME_BODY\n",
+        );
+        view.selected = Some(removed);
+        assert!(view.recall_message("message_pending"));
+        assert_eq!(view.events.len(), 2);
+        assert!(view.events.iter().all(|event| event.text == "SAME_BODY"));
+        assert!(
+            view.selected
+                .is_some_and(|id| view.events.iter().any(|event| event.id == id))
+        );
+        assert_eq!(
+            view.bytes,
+            view.events.iter().map(Event::retained_bytes).sum::<usize>()
+        );
+        assert!(!view.recall_message("message_pending"));
+        assert_eq!(view.events.len(), 2);
+        // Resumed JSONL messages keep their internal identity as well.
+        view.clear();
+        view.ingest_identified_message(
+            "message_pending",
+            "user",
+            "SAME_BODY",
+            b"[USER] SAME_BODY\n",
+        );
+        assert!(view.recall_message("message_pending"));
+        assert!(view.events.is_empty());
+        assert_eq!(view.bytes, 0);
+    }
 
     #[test]
     fn diff_modes_reflow_existing_events_without_changing_retained_content() {
@@ -2667,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn conversation_command_updates_replace_lifecycle_chrome_without_changing_logs() {
+    fn conversation_command_updates_preserve_command_source_and_output() {
         let mut view = EventView::new();
         let job = "1234567890abcdef1234567890abcdef-1a";
         let started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\n       cwd /example\n";
@@ -2699,8 +2807,24 @@ mod tests {
         for hidden in ["exit=0", "cwd /example", "[RUN", "[STDOUT", "[OK"] {
             assert!(!done.contains(hidden), "unexpected {hidden}: {done}");
         }
-        let retained = [started.as_slice(), output.as_slice(), finished.as_slice()].concat();
+        // The retained view adds the complete audited invocation to the
+        // concise start event; lifecycle updates must preserve that source
+        // and the original output/footer bytes without duplication.
+        let retained_started = b"[RUN ] shell #1a bash -lc \xc2\xb7 2 lines started\ncmd=bash -lc 'printf first'\n       cwd /example\n";
+        let retained = [
+            retained_started.as_slice(),
+            output.as_slice(),
+            finished.as_slice(),
+        ]
+        .concat();
         assert_eq!(view.events.len(), 1);
+        assert_eq!(
+            view.events[0]
+                .text
+                .matches("cmd=bash -lc 'printf first'\n")
+                .count(),
+            1
+        );
         assert_eq!(view.events[0].text.as_bytes(), retained.as_slice());
         assert_eq!(view.events[0].meta.status, Some(Status::Exit(0)));
         let bytes = view.bytes;

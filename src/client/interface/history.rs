@@ -1,5 +1,6 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
+pub(crate) mod descriptions;
 mod listener;
 pub(crate) use listener::{
     ensure_current_id, record_listener_result, record_request_in, with_listener_conversation,
@@ -61,6 +62,8 @@ pub(crate) struct SessionSummary {
     pub id: String,
     pub workspace: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub message_count: usize,
@@ -248,7 +251,7 @@ pub(super) fn validate_content(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn request_identity(request_id: &str, text: &str) -> Result<String, String> {
+pub(crate) fn request_identity(request_id: &str, text: &str) -> Result<String, String> {
     if request_id.is_empty()
         || request_id.len() > 128
         || !request_id
@@ -458,6 +461,7 @@ impl History {
             id: conversation.metadata.id.clone(),
             workspace: conversation.metadata.workspace.clone(),
             title,
+            summary: None,
             created_at_ms: conversation.metadata.created_at_ms,
             updated_at_ms: conversation
                 .messages
@@ -475,10 +479,10 @@ impl History {
         }
     }
 
-    fn histories(&self) -> Result<Vec<(SessionSummary, usize)>, String> {
+    fn histories(&self, names: &[String]) -> Result<Vec<(SessionSummary, usize)>, String> {
         let archived = self.archive_index()?;
         let mut output = Vec::new();
-        for name in self.directory.names()? {
+        for name in names {
             let Some(id) = name
                 .strip_suffix(".jsonl")
                 .filter(|id| valid_id(id, "conversation"))
@@ -489,7 +493,7 @@ impl History {
             let Ok(conversation) = self.load(id) else {
                 continue;
             };
-            let file = self.directory.open(&name, false, false, false)?;
+            let file = self.directory.open(name, false, false, false)?;
             let bytes = usize::try_from(
                 file.metadata()
                     .map_err(|_| "cannot inspect history size")?
@@ -511,7 +515,8 @@ impl History {
     }
 
     fn retain(&self, id: &str, bytes: usize) -> Result<(), String> {
-        let histories = self.histories()?;
+        let names = self.directory.names()?;
+        let histories = self.histories(&names)?;
         let mut count = 1 + histories
             .iter()
             .filter(|(history, _)| history.id != id)
@@ -540,13 +545,18 @@ impl History {
             return Err("conversation retention is full of active or archived sessions; restore an archive or close an older client and retry".into());
         }
         for (id, _lease) in reclaim {
+            self.remove_description(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }
         Ok(())
     }
 
-    fn delivered_source(&self, request_id: &str, text: &str) -> Result<(String, Message), String> {
+    fn request_source(
+        &self,
+        request_id: &str,
+        text: &str,
+    ) -> Result<Option<(String, Message)>, String> {
         let identity = request_identity(request_id, text)?;
         let mut expected_text = safe_text(text);
         if expected_text.len() > MAX_CONTENT {
@@ -556,7 +566,6 @@ impl History {
             }
             expected_text.truncate(end);
         }
-        let _lock = self.directory.lock()?;
         let mut ids = Vec::new();
         if let Some(active) = &self.active {
             ids.push(active.metadata.id.clone());
@@ -583,10 +592,40 @@ impl History {
                         "delivered request conflicts with its original history source".into(),
                     );
                 }
-                return Ok((id, message.clone()));
+                return Ok(Some((id, message.clone())));
             }
         }
-        Err("delivered request source is absent from retained JSONL; memory was not changed".into())
+        Ok(None)
+    }
+
+    fn delivered_source(&self, request_id: &str, text: &str) -> Result<(String, Message), String> {
+        let _lock = self.directory.lock()?;
+        self.request_source(request_id, text)?.ok_or_else(|| {
+            "delivered request source is absent from retained JSONL; memory was not changed".into()
+        })
+    }
+
+    /// Called only after a confirmed takeback, never for an uncertain edit or retry.
+    /// Resolve the original exact request source even after switching histories.
+    fn recall_request(&mut self, request_id: &str, text: &str) -> Result<bool, String> {
+        let _lock = self.directory.lock()?;
+        let Some((id, message)) = self.request_source(request_id, text)? else {
+            return Ok(false);
+        };
+        let _lease = if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.metadata.id == id)
+        {
+            None
+        } else {
+            Some(self.lease(&id)?)
+        };
+        let mut conversation = self.load(&id)?;
+        conversation.messages.retain(|entry| entry.id != message.id);
+        self.directory
+            .write_atomic(&session_name(&id)?, &Self::encode(&conversation)?)?;
+        Ok(true)
     }
 
     fn record(&mut self, role: &str, text: &str) -> Result<Option<Committed>, String> {
@@ -714,12 +753,17 @@ impl History {
 
     fn sessions_filtered(&self, filter: archive::Filter) -> Result<Vec<SessionSummary>, String> {
         let _lock = self.directory.lock()?;
+        let names = self.directory.names()?;
         Ok(self
-            .histories()?
+            .histories(&names)?
             .into_iter()
             .map(|(summary, _)| summary)
             .filter(|summary| {
                 summary.workspace == self.workspace && filter.includes(summary.archived)
+            })
+            .map(|mut summary| {
+                self.describe_summary(&mut summary, &names);
+                summary
             })
             .collect())
     }
@@ -747,6 +791,7 @@ impl History {
             return Err("conversation belongs to a different workspace".into());
         }
         let mut summary = self.summary(&conversation);
+        self.describe_summary(&mut summary, &self.directory.names()?);
         summary.archived = self.archive_index()?.contains(id);
         Ok(json!({"schema_version":1,"metadata":conversation.metadata,"summary":summary}))
     }
@@ -903,6 +948,10 @@ pub(crate) fn record_agent(id: &str, text: &str) -> Result<(), String> {
 }
 pub(crate) fn record_request(request_id: &str, text: &str) -> Result<(), String> {
     with(|history| history.record_request(request_id, text)).map(|_| ())
+}
+/// Retract only the exact queued source whose takeback was confirmed by the broker.
+pub(crate) fn recall_request(request_id: &str, text: &str) -> Result<(), String> {
+    with(|history| history.recall_request(request_id, text)).map(|_| ())
 }
 /// Resolve the saved original text only after a new delivery receipt arrives.
 /// Targeted requests remain outside shared automatic memory even after delivery.
@@ -1409,7 +1458,7 @@ pub(super) fn tool() -> Value {
     let offset = json!({"type":"integer","minimum":0,"default":0});
     json!({
         "name":"ssmcp.ui.history",
-        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible changes. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
+        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible archive changes and ssmcp.ui.history_update to edit saved titles/summaries without changing messages. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
         "inputSchema":{"type":"object","oneOf":[
             {"type":"object","required":["action"],"additionalProperties":false,"properties":{
                 "action":{"const":"list"},"state":{"type":"string","enum":["active","archived","all"],"default":"active"},"offset":offset,"limit":page
@@ -1437,9 +1486,9 @@ pub(super) fn tool() -> Value {
 mod tests {
     use super::*;
 
-    struct Temporary(PathBuf);
+    pub(super) struct Temporary(PathBuf);
     impl Temporary {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
@@ -1447,7 +1496,7 @@ mod tests {
             crate::platform::private_directory(&path).unwrap();
             Self(path)
         }
-        fn history(&self) -> History {
+        pub(super) fn history(&self) -> History {
             History::with_workspace(self.0.join("conversations"), "/fixture/workspace".into())
                 .unwrap()
         }
@@ -1820,6 +1869,67 @@ mod tests {
             .record_request("request_one", "Original request")
             .unwrap();
         assert_eq!(resumed.read(&session_id).unwrap().messages.len(), 3);
+    }
+
+    #[test]
+    fn recalled_request_removes_only_its_original_source_and_stays_removed_after_resume() {
+        let temp = Temporary::new();
+        let mut history = temp.history();
+        let original = "SAME_REQUEST_BODY 界";
+        history
+            .record_request("request_delivered", original)
+            .unwrap();
+        history
+            .record_request("request_recalled", original)
+            .unwrap();
+        history.record("assistant", "KEEP_ASSISTANT_REPLY").unwrap();
+        let first = history.current().unwrap().unwrap();
+        let retained = vec![first.messages[0].clone(), first.messages[2].clone()];
+        let first_id = first.metadata.id;
+        // Switching the active history must not make recall edit the wrong file.
+        history.active = None;
+        history.record("assistant", "SECOND_CONVERSATION").unwrap();
+        let second = history.current().unwrap().unwrap();
+        assert!(
+            !history
+                .recall_request("request_recalled", "different source")
+                .unwrap()
+        );
+        assert!(
+            history
+                .recall_request("request_recalled", original)
+                .unwrap()
+        );
+        assert!(
+            !history
+                .recall_request("request_recalled", original)
+                .unwrap()
+        );
+        assert_eq!(history.read(&first_id).unwrap().messages, retained);
+        assert_eq!(history.current().unwrap().unwrap(), second);
+        assert!(
+            history
+                .delivered_source("request_delivered", original)
+                .is_ok()
+        );
+        assert!(
+            history
+                .delivered_source("request_recalled", original)
+                .is_err()
+        );
+        drop(history);
+        let mut resumed = temp.history();
+        assert_eq!(resumed.resume(&first_id).unwrap().messages, retained);
+        resumed
+            .record_request("request_recalled", "EDITED_REQUEST_BODY")
+            .unwrap();
+        resumed
+            .record_request("request_recalled", "EDITED_REQUEST_BODY")
+            .unwrap();
+        let conversation = resumed.read(&first_id).unwrap();
+        assert_eq!(&conversation.messages[..2], retained.as_slice());
+        assert_eq!(conversation.messages.len(), 3);
+        assert_eq!(conversation.messages[2].content, "EDITED_REQUEST_BODY");
     }
 
     #[test]

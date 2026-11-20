@@ -61,7 +61,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 | `offline` | 当前未连接，要求尚未发布到服务器 |
 | `cancelled` | 已取消，不再等待交付 |
 
-取回与交付可能同时发生。若服务器已经交付，取回会失败并显示最新状态，不能把正在传输的内容改写成“已撤回”。在队列中对 `uncertain`、`retarget-required` 或 `offline` 项按 R，会显式改为 `Next caller` 并进入复核编辑；仍需按 Enter 才重新提交。对 `delivered` 项按 R 只复制成一条新草稿，原记录保持不变。
+取回与交付可能同时发生。若服务器已经交付，取回会失败并显示最新状态，不能把正在传输的内容改写成“已撤回”。在队列中对 `uncertain`、`retarget-required` 或 `offline` 项按 R，会显式改为 `Next caller` 并进入复核编辑；仍需按 Enter 才重新提交。对 `delivered` 项按 R 只复制成一条新草稿，原记录保持不变。已经发出、仍属于旧连接房间的未知请求会保留原记录；显式重新选择目标会创建独立的新请求 ID，并先停在 `editing`。新尝试的 `retry_of` 指向原请求，撤回新尝试不会撤下旧请求的历史。
 
 复制队列内容时，输入框中的原草稿会暂存。在普通复制草稿中，如果没有正在取回编辑的要求或等待确认的变更，按 Esc 可恢复原草稿的文字、接收目标和光标。已有暂存草稿时，界面会阻止再次复制或取回另一条要求来覆盖它。
 
@@ -601,7 +601,7 @@ return await call(matches[0].id, "ssmcp.ui.filter", {
 | `takeback` | `id` | 按当前版本请求取回尚未交付的要求，等待进入 `editing` |
 | `edit` | `id`、`text`、可选 `target` | 重新发布已取回的要求；省略目标时保留原目标 |
 | `cancel` | `id` | 请求取消尚未交付且可确认状态的要求 |
-| `retarget` | `id`、可选 `target` | 显式重新选择目标并进入编辑；省略时设为 `"next"`，不自动发布 |
+| `retarget` | `id`、可选 `target` | 显式重新选择目标并进入编辑；返回实际可编辑的 `id`；省略目标时设为 `"next"`，不自动发布 |
 
 `target` 使用 `"next"` 或当前成员快照中的精确 `agent_id`。显式 `null` 无效，文本不能为空白，长度上限为 16 KiB UTF-8 字节。`id` 与成员 ID 必须使用实际返回值。
 
@@ -626,7 +626,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.queue", {
 });
 ```
 
-编辑同一条要求时，先 `takeback`，确认状态已是 `editing`，再 `edit`。如果交付先完成，取回返回错误，记录成为只读。对 `uncertain` 或 `retarget-required` 记录，先复核旧请求，再 `retarget` 并 `edit`；不确定旧要求是否已经交付时，不应由前端自动重试。需要再次发送已交付内容时，用 `submit` 创建新记录。
+编辑同一条要求时，先 `takeback`，确认状态已是 `editing`，再 `edit`。如果交付先完成，取回返回错误，记录成为只读。对 `uncertain` 或 `retarget-required` 记录，先复核旧请求，再 `retarget`，使用其返回的 `id` 调用 `edit`。跨房间的已发送请求使用新 ID，原未知记录继续保留；同房间重试和普通取回编辑保持原 ID。不确定旧要求是否已经交付时，不应由前端自动重试。需要再次发送已交付内容时，用 `submit` 创建新记录。
 
 快照包含 `connected`、`supported`、`room_id`、`agents`、`draft`、`queue`、`error` 与 `reloading`。每条要求带目标、版本、状态和可用的交付信息。接口可用于没有内置 TUI 的客户端；队列发布仍需要支持协议 v7 的活动连接。
 

@@ -19,6 +19,16 @@ fn wire(entry: Value) -> Value {
         "online":true,"sendable":true})
 }
 
+fn screen_contents(frame: &Frame) -> String {
+    let mut parser = vt100::Parser::new(
+        nonzero(frame.geometry.rows),
+        nonzero(frame.geometry.cols),
+        0,
+    );
+    parser.process(&frame.diff(None));
+    parser.screen().contents()
+}
+
 #[test]
 fn session_hierarchy_keeps_exact_process_and_thread_ids_without_duplicate_local_rows() {
     let own = "1".repeat(64);
@@ -107,14 +117,7 @@ fn session_process_thread_group_frames_show_ids_and_explicit_selection() {
         state.conversation.content_focus = true;
         state.conversation.selected_agent = Some(format!("native:agent:{own}:{builder}"));
         let frame = state.chat_frame(Instant::now());
-        let bytes = frame.diff(None);
-        let mut parser = vt100::Parser::new(
-            std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
-            std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
-            0,
-        );
-        parser.process(&bytes);
-        let contents = parser.screen().contents();
+        let contents = screen_contents(&frame);
         assert!(contents.contains("Sessions"));
         assert!(contents.contains("process"));
         assert!(contents.contains("thread"));
@@ -135,12 +138,68 @@ fn session_process_thread_group_frames_show_ids_and_explicit_selection() {
             let directory = std::path::PathBuf::from(directory);
             std::fs::create_dir_all(&directory).unwrap();
             let name = format!("session-groups-{columns}");
-            std::fs::write(directory.join(format!("{name}.ansi")), bytes).unwrap();
+            std::fs::write(directory.join(format!("{name}.ansi")), frame.diff(None)).unwrap();
             std::fs::write(directory.join(format!("{name}.json")),serde_json::to_vec(&json!({
                 "rows":frame.geometry.rows,"cols":frame.geometry.cols,
                 "source":"production conversation Frame with synthetic authenticated recipient fixtures"
             })).unwrap()).unwrap();
         }
+        state.chat_character('i');
+        let contents = screen_contents(&state.chat_frame(Instant::now()));
+        let joined: String = contents.split_whitespace().collect();
+        assert!(joined.contains(&format!("ClientID:{own}")), "{contents}");
+        assert!(
+            joined.contains(&format!("ThreadID:{builder}")),
+            "{contents}"
+        );
+        assert!(
+            joined.contains(&format!("Exactrecipient:agent:{own}:{builder}")),
+            "{contents}"
+        );
+    }
+}
+
+#[test]
+fn sessions_render_the_wire_role_as_a_summary_in_wide_and_narrow_frames() {
+    for columns in [48, 120] {
+        let mut state = preview_state(
+            28,
+            columns,
+            &Ui {
+                layout: Layout::Chat,
+                sidebar: false,
+                color: true,
+                ..Ui::default()
+            },
+        );
+        state.conversation.process_id = "a".repeat(64);
+        state.chat_change_view(View::Agents);
+        state.conversation.content_focus = true;
+        state.conversation.selected_agent = Some("member:example-builder".into());
+        let rows = screen_contents(&state.chat_frame(Instant::now()));
+        assert!(rows.contains("implementation"), "{rows}");
+        state.chat_character('i');
+        let rows = screen_contents(&state.chat_frame(Instant::now()));
+        assert!(rows.contains("Thread ID: example-builder"), "{rows}");
+        assert!(rows.contains("Summary: implementation"), "{rows}");
+
+        let data = json!({"agents":[],"queue":[]});
+        let role = format!("**literal** {}\u{001b}[2J\u{202e}", "界".repeat(31));
+        let entry = json!({"session_role":"thread","agent_id":"example-builder","name":"Builder",
+            "client_id":"a".repeat(64),"role":role});
+        let details = state.session_details(&entry, &data);
+        let summary_start = details
+            .iter()
+            .position(|(line, _)| line == "Summary")
+            .unwrap();
+        let summary: String = details[summary_start + 1..]
+            .iter()
+            .take_while(|(line, _)| !line.is_empty())
+            .map(|(line, _)| line.as_str())
+            .collect();
+        assert_eq!(summary, panel::safe_text(&role));
+        assert!(summary.contains("**literal**"));
+        assert!(!summary.contains('\u{001b}'));
     }
 }
 
