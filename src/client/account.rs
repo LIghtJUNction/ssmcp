@@ -16,8 +16,12 @@ use std::{
 use tokio::process::Command;
 
 mod attach;
+mod chat;
+mod directory;
 pub(super) mod login;
+mod send;
 pub(super) mod status;
+mod wait;
 
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
@@ -142,6 +146,10 @@ fn verify_directory(path: &Path) -> Result<()> {
 }
 
 fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
+    read_private_limit(path, STORE_LIMIT)
+}
+
+fn read_private_limit(path: &Path, limit: usize) -> Result<Option<Vec<u8>>> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -172,19 +180,23 @@ fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
     }
     #[cfg(windows)]
     platform::windows::verify_file(&file)?;
-    if meta.len() > STORE_LIMIT as u64 {
+    if meta.len() > limit as u64 {
         return Err("account credential exceeds its size limit".into());
     }
     let mut bytes = Vec::new();
-    file.take(STORE_LIMIT as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > STORE_LIMIT {
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
         return Err("account credential exceeds its size limit".into());
     }
     Ok(Some(bytes))
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    if bytes.len() > STORE_LIMIT {
+    write_private_limit(path, bytes, STORE_LIMIT)
+}
+
+fn write_private_limit(path: &Path, bytes: &[u8], limit: usize) -> Result<()> {
+    if bytes.len() > limit {
         return Err("account credential exceeds its size limit".into());
     }
     let mut random = [0; 16];
@@ -387,6 +399,24 @@ impl Api {
         if !reply.status.is_success() {
             // Match only known codes: arbitrary error bodies may reflect request secrets.
             let message = match reply.value["error"].as_str() {
+                Some("io_reply_unsupported") => Some(
+                    "selected client has not advertised ssmcp.ui.reply; update that client to use chat I/O, or use explicit --terminal for its existing PTY",
+                ),
+                Some("io_capability_unavailable") => Some(
+                    "could not verify the selected client's chat reply capability; no chat input was queued; retry when the client is available",
+                ),
+                Some("io_request_conflict") => Some(
+                    "request_id already identifies different text or a different fixed recipient set; inspect its receipt before retrying",
+                ),
+                Some("io_unavailable") => Some(
+                    "chat request or recipient is unavailable for this account, connection, or retention window",
+                ),
+                Some("io_capacity") => Some(
+                    "chat request/output retention is full; existing request IDs remain readable and retryable",
+                ),
+                Some("io_invalid_request") => {
+                    Some("invalid chat input, target, output cursor or reply state")
+                }
                 Some("account_banned") => {
                     Some("this account is banned on this server; contact its administrator")
                 }
@@ -1159,11 +1189,14 @@ async fn list(args: &Arguments) -> Result<()> {
     let value = api.get("/api/client/sessions", &credential.token).await?;
     let entries = clients(&value)?;
     if !args.interactive {
-        attach::remember_list(&credential, entries)?;
+        let directory = directory::Directory::parse(&value)?;
+        directory.remember(&credential)?;
         if args.json {
+            let mut value = value.clone();
+            value["selection"] = directory.selection_json();
             println!("{}", serde_json::to_string_pretty(&value)?);
         } else {
-            print!("{}", list_table(entries));
+            print!("{}", directory.table());
         }
         return Ok(());
     }
@@ -1180,7 +1213,9 @@ async fn list(args: &Arguments) -> Result<()> {
     let selected = if let Some(id) = &args.client {
         id.clone()
     } else {
-        attach::remember_list(&credential, entries)?;
+        eprintln!(
+            "This PTY chooser uses its own immediate numbering; ssmcp list numbers remain unchanged."
+        );
         eprint!("{}", list_table(entries));
         prompt_selection().await?
     };
@@ -1335,6 +1370,14 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     let Some(first) = args.first().and_then(|v| v.to_str()) else {
         return Ok(false);
     };
+    if first == "send" {
+        send::run(&args[1..]).await?;
+        return Ok(true);
+    }
+    if first == "wait" {
+        wait::run(args).await?;
+        return Ok(true);
+    }
     if first == "attach" {
         attach::run(&args[1..]).await?;
         return Ok(true);

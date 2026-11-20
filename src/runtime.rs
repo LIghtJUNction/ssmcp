@@ -20,7 +20,7 @@ use std::{
     collections::VecDeque,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -276,6 +276,7 @@ pub struct Runtime {
     audit: Arc<EventLog>,
     code_audit: CodeAudit,
     call_connection: u64,
+    client_id: OnceLock<String>,
     next_call: AtomicU64,
     tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
@@ -353,6 +354,7 @@ impl Runtime {
             plugins,
             code_audit: CodeAudit::new(audit.clone()),
             call_connection: call_scope::connection(),
+            client_id: OnceLock::new(),
             audit,
             output,
             next_call: AtomicU64::new(1),
@@ -452,6 +454,22 @@ impl Runtime {
         self.call_connection
     }
 
+    pub(crate) fn bind_client_id(&self, client_id: &str) -> Result<(), String> {
+        if client_id.len() != 64 || !client_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("invalid registered client identity".into());
+        }
+        if let Some(previous) = self.client_id.get() {
+            return if previous == client_id {
+                Ok(())
+            } else {
+                Err("native connection identity is already bound".into())
+            };
+        }
+        self.client_id
+            .set(client_id.to_owned())
+            .map_err(|_| "native connection identity is already bound".to_owned())
+    }
+
     /// Accept only metadata supplied by the authenticated relay frame, before
     /// entering a provider. Tool arguments cannot create this scope.
     pub(crate) fn call_scope(
@@ -460,7 +478,13 @@ impl Runtime {
         attribution: Option<&crate::wire::ControlAttribution>,
         context: Option<&crate::wire::CodeContext>,
     ) -> Result<Arc<call_scope::CallScope>, String> {
-        call_scope::CallScope::from_relay(self.call_connection, request_id, attribution, context)
+        call_scope::CallScope::from_relay_for_client(
+            self.call_connection,
+            self.client_id.get().map(String::as_str),
+            request_id,
+            attribution,
+            context,
+        )
     }
 
     pub(crate) fn begin_code_call(
@@ -621,6 +645,11 @@ impl Runtime {
     ) -> Result<Value, String> {
         let started = std::time::Instant::now();
         let source = call_scope::Source::capture();
+        if let Some(call) = &source.call {
+            call.set_native_tool(&name);
+        }
+        let mut history_call =
+            crate::session::attach::thread_history::ToolCall::start(&source, &name);
         crate::client::terminal::tool_summary_call_started(&source, &name);
         let caller = source.call.clone();
         let harness_call = tool
@@ -745,6 +774,7 @@ impl Runtime {
                 );
             }
         }
+        history_call.finish(outcome.as_ref().is_ok_and(|value| value["isError"] != true));
         let mut value = match outcome {
             Ok(value) => value,
             Err(error) => {

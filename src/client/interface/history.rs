@@ -1355,6 +1355,19 @@ impl SafeDirectory {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
+    Thread {
+        client_id: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        main: bool,
+        #[serde(default)]
+        cursor: Option<u64>,
+        #[serde(default)]
+        generation: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     List {
         #[serde(default)]
         state: archive::Filter,
@@ -1433,17 +1446,48 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
         return Err("history expects an object; omit optional fields instead of null".into());
     }
     let request: Request = serde_json::from_value(arguments)
-        .map_err(|_| "expected a history list, metadata, read or search action")?;
+        .map_err(|_| "expected a history list, metadata, read, search or thread action")?;
     let (offset, limit) = match &request {
         Request::List { offset, limit, .. }
         | Request::Read { offset, limit, .. }
         | Request::Search { offset, limit, .. } => (offset.unwrap_or(0), limit.unwrap_or(16)),
         Request::Metadata { .. } => (0, 1),
+        Request::Thread { limit, .. } => (0, limit.unwrap_or(16)),
     };
     if !(1..=64).contains(&limit) {
         return Err("history page limit must be in 1..=64".into());
     }
     match request {
+        Request::Thread {
+            client_id,
+            agent_id,
+            main,
+            cursor,
+            generation,
+            ..
+        } => {
+            let source = crate::runtime::call_scope::Source::capture();
+            if source.call.as_ref().and_then(|call| call.client_id()) != Some(client_id.as_str()) {
+                return Err(
+                    "thread history requires this native connection's real client_id".into(),
+                );
+            }
+            if generation.as_ref().is_some_and(|value| {
+                value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+            }) {
+                return Err("invalid history generation".into());
+            }
+            crate::session::attach::thread_history::page(
+                &crate::session::attach::thread_history::Selector {
+                    client_id,
+                    agent_id,
+                    main,
+                },
+                cursor,
+                generation.as_deref(),
+                limit,
+            )
+        }
         Request::Metadata { id } => with(|history| history.metadata(&id)),
         Request::Search {
             query,
@@ -1519,8 +1563,15 @@ pub(super) fn tool() -> Value {
     let offset = json!({"type":"integer","minimum":0,"default":0});
     json!({
         "name":"ssmcp.ui.history",
-        "description":"Read and search this workspace's local, redacted conversation history. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible archive changes and ssmcp.ui.history_update to edit saved titles/summaries without changing messages. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
+        "description":"Read and search this workspace's local, redacted conversation history. action:thread reads bounded live process events using the real client_id and optional authenticated agent_id, or main:true for only the unbound main caller. Omit agent_id/main for the process aggregate; unassigned legacy records never appear in thread/main views. Follow generation and next_cursor; retention_gap_possible reports that the shared process journal was pruned, not proof that this thread lost events. This projection does not replay old JSONL or treat tool output as a completed answer. list returns recent session summaries (state: active by default, archived, or all); archived conversations remain readable/searchable and protected from automatic retention cleanup. Use ssmcp.ui.history_archive for reversible archive changes and ssmcp.ui.history_update to edit saved titles/summaries without changing messages. metadata returns one session's metadata and summary without messages; read returns metadata and message pages; search matches literal keywords (case-insensitive by default) with optional session ID and role filters. Search returns source message IDs, message indexes and bounded snippets; use read for full text. Pages are at most 64 KiB: follow next_offset. Search scans at most 64 sessions / 16 MiB and reports scan_truncated. The open JSONL schema is ssmcp.conversation.v1. These read-only actions never resume a harness, invoke a model, resend requirements or expose saved agent credentials. Only current-workspace histories are readable. Each history keeps at most 500 messages / 512 KiB and reports truncated_messages.",
         "inputSchema":{"type":"object","oneOf":[
+            {"type":"object","required":["action","client_id"],"additionalProperties":false,"properties":{
+                "action":{"const":"thread"},"client_id":{"type":"string","pattern":"^[0-9a-fA-F]{64}$"},
+                "agent_id":{"type":"string","pattern":"^agent_[0-9a-fA-F]{32}$"},
+                "main":{"type":"boolean","default":false,"description":"Only authenticated unbound main calls; mutually exclusive with agent_id. Omit both for the process aggregate, including unattributed records."},
+                "cursor":{"type":"integer","minimum":0,"description":"Returned next_cursor, not an array offset. Nonzero cursors require generation."},
+                "generation":{"type":"string","minLength":1,"maxLength":128},"limit":page
+            },"not":{"required":["agent_id","main"],"properties":{"main":{"const":true}}}},
             {"type":"object","required":["action"],"additionalProperties":false,"properties":{
                 "action":{"const":"list"},"state":{"type":"string","enum":["active","archived","all"],"default":"active"},"offset":offset,"limit":page
             }},
@@ -1710,7 +1761,28 @@ mod tests {
         assert!(call(json!({"action":"search","query":"valid","id":null})).is_err());
         let schema = tool();
         assert_eq!(schema["annotations"]["readOnlyHint"], true);
-        assert_eq!(schema["inputSchema"]["oneOf"].as_array().unwrap().len(), 4);
+        assert_eq!(schema["inputSchema"]["oneOf"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn thread_history_schema_rejects_spoofed_identity_and_array_offset_paging() {
+        let valid = json!({"action":"thread","client_id":"a".repeat(64),"main":true,"limit":16});
+        assert!(matches!(
+            serde_json::from_value::<Request>(valid.clone()).unwrap(),
+            Request::Thread { main: true, .. }
+        ));
+        for field in ["offset", "account", "controller", "author", "source"] {
+            let mut bad = valid.clone();
+            bad[field] = json!(1);
+            assert!(serde_json::from_value::<Request>(bad).is_err());
+        }
+        assert!(call(valid).unwrap_err().contains("real client_id"));
+        let variants = tool()["inputSchema"]["oneOf"].as_array().unwrap().clone();
+        let schema = variants
+            .iter()
+            .find(|variant| variant["properties"]["action"]["const"] == "thread")
+            .unwrap();
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]

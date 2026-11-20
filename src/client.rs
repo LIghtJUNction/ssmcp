@@ -6,8 +6,8 @@ mod audit_view;
 mod browser_setup;
 mod clipboard;
 pub(crate) mod completion;
-mod computer_control;
 mod composer;
+mod computer_control;
 mod config;
 pub(crate) mod context_memory;
 
@@ -75,9 +75,11 @@ Start
   ssmcp                         Reuse your last authorized account
   ssmcp local                   Run a local MCP session on Linux
   ssmcp alice@relay.example     Connect and sign in when needed
-  ssmcp list                    List your online devices
+  ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
-  ssmcp attach ID|NAME|N        Attach to a listed device or saved local session
+  ssmcp attach [process|thread] ID|N   Attach to remote chat
+  ssmcp send [process|thread] ID|N TEXT   Submit chat input; print its receipt
+  ssmcp wait [REQUEST_ID ...]   Print actual replies; accepts piped receipts
 
 Manage
   config · whoami · logout      Account and server settings
@@ -112,7 +114,12 @@ Usage: ssmcp username@server [options]
        ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
-       ssmcp attach [ID|NAME|N|list] [--local|--remote] [--read-only]
+       ssmcp attach [process|thread] ID|N [--remote] [--read-only]
+       ssmcp attach --local NAME [--read-only]
+       ssmcp attach process ID|N --terminal TERMINAL_ID [--read-only]
+       ssmcp send [process|thread] ID|N [TEXT|--stdin] [--wait] [--json]
+       ssmcp wait [REQUEST_ID ...] [--stdin] [--any|--all|--count N]
+                  [--timeout SECONDS] [--json] [--server URL]
        ssmcp computer [on|off|toggle|status] [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
@@ -171,7 +178,9 @@ Examples:
   sudo systemctl enable --now ssmcp
   ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp sessions create shared --allow alice@ssmcp.lmm.best
-  ssmcp attach workstation
+  ssmcp attach --local workstation
+  ssmcp attach thread THREAD_ID
+  ssmcp send process PROCESS_ID 'Review the patch' | ssmcp wait --count 2
   ssmcp sessions close workstation
 
 On the controlled device, use --allow username@relay-server. No login or invitation
@@ -193,11 +202,24 @@ your account, and logout removes the selected server's saved login. Other server
 and independent logins are preserved. --no-browser prints the authorization URL.
 An update or a controlled-device restart does not grant a new controller identity.
 
-ssmcp list shows remotely controllable sessions; sessions list shows local saved
-sessions. Use attach ID, a unique NAME, or an index from the last list. --remote
-and --local choose the target scope explicitly. Remote attach opens the selected
-PTY, not the original chat panel. --read-only sends no input or terminal resize.
-Ctrl-] leaves remote interactive control; Ctrl-C is sent to its terminal.
+ssmcp list shows authorized processes and their registered threads. Numbers bind
+the last displayed directory for 5 minutes. Full IDs work directly; exact unique
+process names also work. Display names never identify a thread.
+Remote attach opens chat stdin/stdout. Process input fans out to its selected main
+and registered threads; thread input reaches only that exact recipient. Enter
+submits input. Ctrl-] or Ctrl-C detaches; pending requests remain running.
+Use -i or attach process ID --terminal TERMINAL_ID for a remote shell PTY;
+Ctrl-C reaches that shell. --read-only sends no chat/terminal input or resize.
+sessions list and bare attach show saved local sessions. Existing local names
+work offline; --local selects them explicitly, and --remote selects online chat.
+send prints a receipt. wait prints actual final replies: --any waits for one,
+--all/--gather for all, and --count N for N distinct input results. Progress and
+delivery acknowledgements are not completion. --json prints result JSONL.
+Input is delivered on the recipient's next eligible native call; no model is
+started. Stopping attach or wait never cancels the remaining work.
+Chat I/O requires an upgraded relay and recipient client. Requests and outputs
+have bounded live-server-memory retention of at most 1 hour; a server restart
+loses pending requests and retained replies.
 Redirected stdout (or jsonl mode) emits one connection JSON object. Add its URL to
 an MCP client and sign in as an allowed account. --allow cannot use --list-tools.
 Live input, output and native tool events appear on stderr as readable blocks.
@@ -2278,6 +2300,7 @@ async fn connect_inner(
         management,
     )
     .and_then(|runtime| {
+        runtime.bind_client_id(&client_id)?;
         runtime.configure_timing(time_observation_supported, wait_display_supported)?;
         runtime.enable_default_skill_sources()?;
         Ok(runtime)

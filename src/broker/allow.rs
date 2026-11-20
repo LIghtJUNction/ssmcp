@@ -152,6 +152,7 @@ impl Broker {
 #[cfg(test)]
 mod tests {
     mod native_messages;
+    mod session_io;
     use super::*;
     use crate::{
         broker::{Authorization, IDENTITY_RESOURCE, Session},

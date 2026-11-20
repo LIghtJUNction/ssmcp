@@ -56,26 +56,98 @@ ssmcp whoami --server https://relay.example --json
 
 ## 控制端：登录后查看与调用
 
-控制者可以在 CLI 登录后操作：
+控制者登录后，可以按真实的进程或线程身份连接对话。这里的进程指一条在线客户端连接；线程指该连接中经 `collab.join` 登记的成员。主接收入口（main）接收未绑定成员的调用，使用 `client:CLIENT_ID` 标识；它不是另一个模型实例。[目录来源](../src/broker/session_io.rs) · [目标解析](../src/client/account/directory.rs)
 
 ~~~sh
 ssmcp list --server https://relay.example
 ssmcp list --server https://relay.example --json
-ssmcp -i --server https://relay.example --client SESSION_ID
-ssmcp attach --server https://relay.example SESSION_ID
-ssmcp attach --remote UNIQUE_DEVICE_NAME
-ssmcp attach 2
-ssmcp attach --remote SESSION_ID --read-only
+ssmcp attach process PROCESS_ID
+ssmcp attach thread THREAD_ID
+ssmcp attach thread THREAD_NUMBER --read-only
+ssmcp attach thread client:CLIENT_ID
 ssmcp attach --local workstation
 ~~~
 
-ChatGPT 等 MCP 应用使用该服务器的 `/mcp` OAuth 入口。CLI 登录和 MCP 应用授权分别管理，二者都需要真实账号身份。`list` 只返回当前账号有权控制的在线设备；知道设备 ID、伪造显示名称或填写 `--allow` 字符串都不能替代控制端认证。[HTTP 控制接口](../src/device.rs) · [MCP 授权](../src/http.rs)
+ChatGPT 等 MCP 应用使用该服务器的 `/mcp` OAuth 入口。CLI 登录和 MCP 应用授权分别管理，二者都需要真实账号身份。`list` 只返回当前账号有权控制的在线连接及其真实登记成员；知道 ID、修改显示名称或填写 `--allow` 字符串都不能替代控制端认证。[HTTP 控制接口](../src/device.rs) · [MCP 授权](../src/http.rs)
 
-`ssmcp attach ID` 和 `ssmcp attach UNIQUE_NAME` 可直接连接列表中的获授权在线设备。完整客户端 ID 不受显示名称重复影响；远端重名时必须使用 ID。远程 attach 打开该设备的 PTY，不恢复原聊天面板；Ctrl-] 分离后设备进程与 PTY 继续运行。普通模式下 Ctrl-C 发给远端终端，`--read-only` 则不发送输入，也不修改远端终端尺寸。
+### 选择进程与线程
 
-序号只引用最近一次 `ssmcp list` 的快照，保存 5 分钟，并绑定服务器 origin 和登录身份。连接前仍按原客户端 ID 检查在线状态与授权；对象离线或快照失效时会要求重新 list，不能因为列表顺序变化而连接到另一台设备。快照不保存访问凭据。
+`ssmcp list` 的树形目录把进程、主接收入口和已登记线程分别编号。进程可用完整客户端 ID、确切且唯一的进程名称或列表序号选择；线程使用列表给出的完整成员 ID、唯一的 `agent_…` ID 或序号。名称只是显示信息，同名线程不能互相替代。[目录与选择实现](../src/client/account/directory.rs)
 
-`ssmcp sessions list` 与裸 `ssmcp attach` 查看本机保存的后台会话。已有合法本地名称优先使用本地连接，无须登录或访问网络；`--remote` 明确选择在线设备，`--local` 明确选择本地保存会话（包括数字名称）。本地 manifest 损坏、权限错误或会话停止均按本地错误报告，不改投远端。
+数字绑定最近一次显示的列表快照，保留 5 分钟，并绑定服务器 origin 和登录身份。列表重新排序不会改变数字原来指向的对象；对象或成员消失、类型不符、快照过期时会要求重新选择。用数字选择进程时，接收集合固定为那次列表中的主接收入口和成员；后来加入的成员不会被悄悄加入本次发送。[快照校验](../src/client/account/directory.rs)
+
+远程 `attach` 默认连接聊天输入与输出。按 Enter 提交输入；进程输入发给所选目录中的主接收入口及已登记线程，线程输入只发给确切的目标。Ctrl-] 或 Ctrl-C 退出观察，已经提交的工作继续运行。`--read-only` 仅查看，不发送聊天输入、终端输入或终端尺寸变更。[聊天连接](../src/client/account/chat.rs) · [attach 路由](../src/client/account/attach.rs)
+
+原有 Shell PTY 需要显式选择。使用 `ssmcp -i` 打开终端选择器，或指定进程与已存在的终端 ID；普通 PTY 模式的 Ctrl-C 发给远端 Shell，Ctrl-] 分离。这里的终端编号属于即时终端选择器，不会改写 `ssmcp list` 保存的聊天目录编号。[PTY 连接](../src/client/account.rs)
+
+~~~sh
+ssmcp -i --server https://relay.example --client PROCESS_ID
+ssmcp attach process PROCESS_ID --terminal main
+ssmcp attach process PROCESS_ID --terminal main --read-only
+~~~
+
+本地保存会话仍可离线连接。`ssmcp sessions list` 与裸 `ssmcp attach` 查看本机保存的会话；已有的普通本地名称优先走本地路径，`--remote` 明确选择在线对象，`--local` 明确选择本地保存会话。数字或 `process`、`thread` 等有语法含义的本地名称可用 `ssmcp attach --local -- NAME`。本地定义损坏、权限错误或会话停止均报告本地错误。[本地与远程选择](../src/client/account/attach.rs)
+
+### 发送输入与等待实际回复
+
+`send` 提交一条输入，并把请求回执 JSON 写到 stdout。回执包含请求 ID 和本次固定的接收集合；进程发送最多覆盖 32 个主入口及成员，线程发送只有一个接收者。输入可以是一个带引号的参数，也可以从 UTF-8 stdin 读取；进度提示写到 stderr，便于管道传递回执。[发送实现](../src/client/account/send.rs)
+
+~~~sh
+ssmcp send thread THREAD_ID '检查失败用例'
+ssmcp send process PROCESS_ID --stdin < request.txt
+ssmcp send thread THREAD_ID '检查失败用例' --request-id io_review_01
+~~~
+
+回执确认输入已入队，实际交付要等接收者下一次符合身份条件的原生调用响应。主接收入口只交给匹配账号的未绑定调用，成员输入只交给匹配的已认证成员；`send`、`wait` 和 `attach` 不启动模型或新 agent。重试同一个请求 ID 必须保持文字和完整接收集合一致；只得到入队或交付确认，还不能当作任务完成。[交付边界](../src/http/session_io.rs) · [请求与身份检查](../src/broker/session_io.rs)
+
+`wait` 只把 `result/done` 或 `result/error` 当成最终回复。默认等待全部输入；`--any` / `--any-of` / `--anyof` 等待任意一个，`--all` / `--gather` 等待全部，`--count N` / `--n-of N` 等待 N 个不同输入的结果。同一个线程回答两条不同请求可以计为两个结果，每个 `input_id` 只计一次；交付确认和 `progress/running` 不计入数量。[等待与计数](../src/client/account/wait.rs)
+
+~~~sh
+# 输出实际回复文字；请求回执通过管道进入 wait。
+ssmcp send process PROCESS_ID '检查当前改动' | ssmcp wait --any
+
+# 所选进程至少有两个接收者时，等待其中两个结果。
+ssmcp send process PROCESS_ID '检查当前改动' |
+  ssmcp wait --count 2 --timeout 120
+
+# 把实际回复交给另一个已登记线程。
+ssmcp send thread THREAD_ID '整理当前结论' |
+  ssmcp wait --gather |
+  ssmcp send thread NEXT_THREAD_ID --stdin
+
+# 已有请求可再次读取；--json 输出每行一个最终回复对象。
+ssmcp wait io_review_01 --all --json
+ssmcp send thread THREAD_ID '检查失败用例' --wait --json
+~~~
+
+等待结束只结束本地等待，未完成的工作继续运行。`--any` 或 `--count N` 最多输出所需数量的结果；其他结果保留在服务端，可在保留期内再次 `wait`。重复等待会重新读取已保留的结果，不是从共享队列取走结果。输出的最终回复包含错误，或等待超时，都会使命令以非零状态退出；已经写到 stdout 的真实回复仍可被下一条管道命令读取。[等待循环](../src/client/account/wait.rs)
+
+管道输入不能改变命令选用的服务器或账号。`wait` 接受回执 JSON、JSONL 或请求 ID，并核对服务器 origin、账号和固定接收身份；需要其他服务器时显式传 `--server`。`--timeout` 限制 stdin 到达 EOF 之后的回复等待，不限制上游写 stdin 的时长。下游 `send` 的单条输入仍限 16 KiB，多个回复拼接后超过限制时需要显式拆分或缩减。[输入与回执校验](../src/client/account/wait.rs) · [输入大小限制](../src/client/account/send.rs)
+
+### 查看线程历史
+
+成员列表中的右键操作按实际点击行的身份打开历史。进程视图显示当前进程保留的事件，成员视图只显示能够核对该成员 ID 的事件；没有先左键选中也不会误读另一行。Esc 或再次右键返回成员页，其他对话页仍可用右键切换日志。[界面选择](../src/client/terminal/conversation/history.rs) · [鼠标路由](../src/client/terminal/conversation.rs)
+
+线程归属来自真正调用时冻结的账号、连接和成员信息。更新后的事件可以按这个来源筛选；旧记录、未带身份的记录以及已经离开保留窗口的内容不会被补造为某个成员的聊天。无法归属的保留记录留在进程视图，本机界面也不会把自己的日志标成另一个客户端的历史。[来源记录与分页](../src/session/attach/thread_history.rs) · [调用身份](../src/runtime/call_scope.rs)
+
+这份线程历史是当前进程的有界事件窗口。它最多保留 4096 个事件和 2 MiB 预算，重启进程会失去该窗口；原有 JSONL 历史和 `/resume` 保持各自的会话恢复用途。远程 `attach --read-only` 读取所选客户端的身份筛选历史及本账号的已确认回复，不会恢复模型内部对话状态。[窗口限制](../src/session/attach.rs) · [远程观察](../src/client/account/chat.rs)
+
+### 聊天接口的兼容与保留边界
+
+聊天收发需要命令所在客户端、接收端客户端和中继都支持相应接口。中继提供 `/api/client/io`、线程目录、定向输入交付和回复确认；接收端提供真实的 `ssmcp.ui.reply` 与线程历史。仅更新本机客户端不会给旧中继增加这些能力；旧接收端不能在未支持回复接口时被加入聊天队列，原有显式 PTY 入口仍可使用。[HTTP 接口](../src/device/session_io.rs) · [原生回复确认](../src/http/session_io.rs)
+
+请求和回复最多保留 1 小时，保留期从请求创建时计算。状态位于服务端内存，服务端重启会丢失未完成请求及已保留回复；容量满时拒绝新的请求或进度，最终回复预留所需空间。连接或成员失效后，待处理输入标为过期，不会改投同名对象或新连接。这套接口不提供跨服务端重启的持久任务队列。[保留与容量实现](../src/broker/session_io.rs)
+
+| 范围 | 限制 |
+| --- | --- |
+| 单次发送 | 1–32 个确切接收者；输入最多 16 KiB UTF-8，控制字符仅允许换行和 Tab |
+| 单次等待 | 最多 32 个请求 ID；`--count N` 支持 1–1024，不能超过这些请求中的输入总数 |
+| 等待超时 | 0.001–86400 秒；不取消接收者工作 |
+| 服务端请求保留 | 全局最多 1024 条、每账号最多 128 条，最长 1 小时 |
+| 服务端输出预算 | 总预算 16 MiB；每请求最多 2 MiB、256 条进度与最终输出 |
+| 客户端线程历史 | 进程内最多 4096 个事件、2 MiB 预算；不补造旧记录身份 |
+
+这些限制分别来自[输入解析](../src/client/account/send.rs)、[等待解析](../src/client/account/wait.rs)、[服务端账本](../src/broker/session_io.rs)和[事件窗口](../src/session/attach.rs)。版本号或显示名称不能替代真实工具目录和接口检查。
 
 ## 修改名单与连接生命周期
 
@@ -114,3 +186,16 @@ cargo test --locked --offline --test allow_account
 ~~~
 
 这些测试使用隔离账号存储、loopback HTTP / WebSocket 和假登录凭据，覆盖名单解析、实际控制端认证、请求与结果计费、共享账号隔离及 CLI 输出；不向真实账号授权，也不部署服务器。
+
+聊天收发、身份筛选与 CLI 管道有独立的本地回归入口：
+
+~~~sh
+cargo test --locked --offline --lib broker::session_io::tests
+cargo test --locked --offline --lib broker::allow::tests::session_io
+cargo test --locked --offline --lib http::session_io::tests
+cargo test --locked --offline --lib client::account::
+cargo test --locked --offline --lib session::attach::thread_history::tests
+python3 scripts/e2e_account_interactive.py --bin-dir /path/to/candidate-binaries
+~~~
+
+CLI 脚本只需要候选 `ssmcp`，使用自己的 loopback HTTP 接口和真实 PTY Shell；Rust 回归另行检查真实服务端路由、WebSocket 连接和回复归属。[CLI 夹具](../scripts/e2e_account_interactive.py) · [服务端夹具](../src/broker/allow/tests/session_io.rs)
