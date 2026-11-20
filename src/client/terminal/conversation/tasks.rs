@@ -1057,7 +1057,7 @@ mod tests {
 
         // Exercise the real completion channel and parser with native manager
         // results. A Backend/Runtime constructor would also discover providers.
-        async fn refresh_native(panel: &mut TaskPanel, shell: &Arc<Shell>) {
+        async fn refresh_native(panel: &mut TaskPanel, shell: &Arc<Shell>) -> bool {
             let shell = shell.clone();
             let selected = panel
                 .position
@@ -1090,10 +1090,11 @@ mod tests {
             .await
             .expect("native metadata refresh timed out")
             .expect("native metadata worker failed");
-            assert!(panel.poll());
+            let changed = panel.poll();
             assert!(!panel.loading);
             assert!(panel.snapshot()["error"].is_null());
             assert!(panel.snapshot()["detail_error"].is_null());
+            changed
         }
 
         let root = Root(std::env::temp_dir().join(format!(
@@ -1127,7 +1128,7 @@ mod tests {
         let id = started["job_id"].as_str().unwrap().to_owned();
 
         let mut panel = TaskPanel::default();
-        refresh_native(&mut panel, &shell).await;
+        assert!(refresh_native(&mut panel, &shell).await);
         let snapshot = panel.snapshot();
         assert_eq!(snapshot["source"], "native");
         assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1);
@@ -1145,6 +1146,8 @@ mod tests {
         assert!(!list.contains("fictional"), "{list}");
 
         assert!(panel.open());
+        // Opening details may read the same native snapshot within one clock
+        // tick. Completion need not request another redraw.
         refresh_native(&mut panel, &shell).await;
         assert_eq!(panel.snapshot()["selected_job"]["stdin"]["open"], true);
 
@@ -1159,7 +1162,7 @@ mod tests {
             .unwrap();
         assert_eq!(done["running"], false, "{done}");
         assert_eq!(done["exit_code"], 0, "{done}");
-        refresh_native(&mut panel, &shell).await;
+        assert!(refresh_native(&mut panel, &shell).await);
         let snapshot = panel.snapshot();
         assert_eq!(snapshot["selected_id"], id);
         assert_eq!(snapshot["detail"], true);
