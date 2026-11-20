@@ -1272,10 +1272,16 @@ pub(super) fn snapshot() -> Value {
     with(|manager| manager.snapshot())
 }
 pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String> {
-    with(|manager| manager.submit(text, target))
+    let id = with(|manager| manager.submit(text, target))?;
+    super::interface::questions::user_input(target);
+    Ok(id)
 }
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
-    with(|manager| manager.publish_edit(id, text, target))
+    with(|manager| manager.publish_edit(id, text, target))?;
+    // An omitted edit target preserves its stored recipient; conservatively
+    // invalidate approvals rather than reuse one across a changed requirement.
+    super::interface::questions::user_input(target);
+    Ok(())
 }
 pub(super) fn take_back_latest() -> Result<Option<String>, String> {
     with(|manager| manager.take_back_latest())
@@ -1324,12 +1330,14 @@ pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport>
     let transport = with(|manager| manager.connect(room_id, protocol));
     super::interface::listener::connect(room_id);
     super::interface::user_wait::connect(room_id);
+    super::interface::questions::connect(room_id);
     transport
 }
 pub(super) fn disconnect() {
     with(Manager::disconnect);
     super::interface::listener::disconnect();
     super::interface::user_wait::disconnect();
+    super::interface::questions::disconnect();
     // Display invalidation happens only after releasing the request manager lock.
     super::terminal::callers_disconnected();
 }
