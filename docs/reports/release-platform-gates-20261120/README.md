@@ -13,6 +13,14 @@
 
 失败命令为 cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings。上述诊断来自实际任务日志，不是从 Linux 检查推断的平台结果。
 
+## 最终工作流结果
+
+GitHub API 读回确认运行在 2026-11-20 02:44:05 UTC 已完成，结论为 failure。完整任务回执见 [formal-run.json](formal-run.json)。
+
+六个平台的优化构建、打包和安装验证任务全部成功；Linux x86_64 与 ARM64 两项安装后服务运行检查也成功。六个检查任务失败：四个 Windows/macOS 客户端严格 Clippy，以及两个 Linux workspace 测试任务。两种 Linux 架构的配置测试错误相同。
+
+finalize、publish_crates、publish_release 和 deploy_server 四个下游任务均被跳过。本轮留下可复核的 Actions 构建产物，但没有发布新的正式资产、crate 或生产服务。新候选将合入修复，并在固定下一个标签前运行跨平台正式预检。
+
 ## 修改与边界
 
 Local 由 Linux 的内核对端凭据传输创建；其他平台的生产构建只使用 Remote。共用的所有者模型也服务于跨平台作用域单元测试，因此仅对非 Linux、非测试构建中的这个枚举项标注允许未构造。

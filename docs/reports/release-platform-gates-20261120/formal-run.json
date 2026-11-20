@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "kind": "formal_release_gate_receipt",
+  "observed_via": "GitHub API readback",
+  "repository": "LIghtJUNction/ssmcp",
+  "tag": "v0.10.14",
+  "tag_object": "ac8e7443437775e0c4cc298f1ee6629e9abfba54",
+  "commit": "0713001875c472f7c1cd0686330b76e3d919463c",
+  "run": {
+    "id": 44661834953,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44661834953",
+    "event": "workflow_dispatch",
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "completed_at": "2026-11-20T02:44:05Z"
+  },
+  "requested": {
+    "tag": "v0.10.14",
+    "deploy_server": false
+  },
+  "validation_log_receipt": {
+    "job_id": 136041662009,
+    "publish": true,
+    "build_only": false,
+    "deploy_server": false
+  },
+  "jobs": [
+    {
+      "id": 136041662009,
+      "name": "validate",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887096,
+      "name": "Build x86_64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887142,
+      "name": "Build x86_64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887144,
+      "name": "Build aarch64-pc-windows-msvc",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887191,
+      "name": "Build aarch64-apple-darwin",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887254,
+      "name": "Build aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887307,
+      "name": "Build x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136041887535,
+      "name": "checks / Client (windows-11-arm)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings"
+      ]
+    },
+    {
+      "id": 136041887639,
+      "name": "checks / Client (macos-15)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings"
+      ]
+    },
+    {
+      "id": 136041887655,
+      "name": "checks / Client (windows-2025)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings"
+      ]
+    },
+    {
+      "id": 136041887656,
+      "name": "checks / linux (ubuntu-24.04-arm)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo test --workspace --locked"
+      ]
+    },
+    {
+      "id": 136041887665,
+      "name": "checks / Client (macos-15-intel)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings"
+      ]
+    },
+    {
+      "id": 136041887677,
+      "name": "checks / linux (ubuntu-24.04)",
+      "status": "completed",
+      "conclusion": "failure",
+      "failed_steps": [
+        "Run cargo test --workspace --locked"
+      ]
+    },
+    {
+      "id": 136044644332,
+      "name": "Verify installed server x86_64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136044644365,
+      "name": "Verify installed server aarch64-unknown-linux-gnu",
+      "status": "completed",
+      "conclusion": "success",
+      "failed_steps": []
+    },
+    {
+      "id": 136045080869,
+      "name": "finalize",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 136045081713,
+      "name": "publish_crates",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 136045082154,
+      "name": "publish_release",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    },
+    {
+      "id": 136045082250,
+      "name": "deploy_server",
+      "status": "completed",
+      "conclusion": "skipped",
+      "failed_steps": []
+    }
+  ],
+  "result": "Publication and deployment skipped because required checks failed. Six platform builds and both Linux runtime validations passed; these are Actions artifacts, not an official release."
+}
