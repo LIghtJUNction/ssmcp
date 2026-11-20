@@ -4,6 +4,8 @@
 
 ## 账号与设备接入
 
+已认证的旧普通客户端仍可使用与自身身份完全一致的默认 GitHub principal 完成握手；该兼容分支只授权已验证的账号自身，匿名或混合名单仍拒绝。旧客户端不能借此修改新版访问名单，相关操作会提示升级。
+
 设备通过 HTTPS/WSS 连接中继，使用 `--allow 用户名@服务器` 明确允许控制者。被控设备可以不保存登录；控制者必须在该服务器完成真实账号认证。显式名单只授权列出的人，已登录设备省略名单时只允许自己。启动阶段即收到撤权通知的未登录设备会正确退出，并停止自动重连。
 
 ~~~sh
@@ -46,9 +48,11 @@ ssmcp -i --server https://relay.example --client SESSION_ID
 
 zuse-computer 0.1.0 以 git 子模块固定到 `c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41`，由受管工作进程直接调用 Rust Desktop API。父进程跟踪取消、输入释放和退出，并清理自己的截图临时目录。现有 MCP Schema、隔离桌面默认选择与主机桌面授权检查保持一致。Windows/macOS 输入与状态、明确请求光标的截图路径及显示器拓扑继续使用既有兼容适配器。
 
+Linux 私有桌面改用显式高位 X11 显示号，在启动时核对实际子进程、套接字与 ready 回执，并使用私有认证 cookie。分配和取消清理保留同 UID 排他锁，避免私有桌面抢占宿主显示号；测试夹具采用同样的隔离边界。
+
 终端基础库改用独立发布的 ztuio 0.1.0，固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，保留原内嵌 0.1.2 的公共接口和绘制优化。应用仓库不再保存另一份终端核心，正式发布只发布 ssmcp；独立依赖分别维护和发布。
 
-本版继续使用经过配对的 zharness 0.5.0 与 zplugin 0.3.0。zharness 0.5.1、zplugin/macros 0.3.1 与 zuse-computer 0.2.0 的组合升级单独验证，未包含在本版中。[依赖与构建](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/dependencies.md)
+本版继续使用经过配对的 zharness 0.5.0 与 zplugin 0.3.0。zharness 0.5.1、zplugin/macros 0.3.1 与 zuse-computer 0.2.1 的组合升级单独验证，未包含在本版中。[依赖与构建](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/dependencies.md)
 
 ## 安装与验证
 
