@@ -7,9 +7,11 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 | `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
 | `crates/zharness` | `zharness = 0.5.1` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
 | `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
-| `crates/zuse` | `zuse-computer = 0.2.1`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
+| `crates/zuse` | `zuse-computer = 0.2.2`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
 
 四个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
+
+zuse-computer 0.2.2 固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`。Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，保留原有聚焦身份检查；各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
 
 ## 获取与构建
 

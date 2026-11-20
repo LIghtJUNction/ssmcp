@@ -486,6 +486,9 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
         );
     }
     let mut metadata = metadata.unwrap_or_else(|| native["result"].clone());
+    if operation == "windows" {
+        normalize_window_identities(native["backend"].as_str().unwrap_or(""), &mut metadata)?;
+    }
     if let Some(object) = metadata.as_object_mut() {
         object.insert("engine".into(), json!("zuse"));
         object.insert("engine_version".into(), json!(zuse::VERSION));
@@ -960,6 +963,22 @@ fn with_button<T>(
     outcome
 }
 
+// Normalize only the public adapter boundary. Internal worker focus continues
+// to use zuse's native handle, while the Windows host adapter verifies HWND+PID.
+fn normalize_window_identities(backend: &str, metadata: &mut Value) -> Result<(), String> {
+    if backend != "win32" {
+        return Ok(());
+    }
+    let windows = metadata["windows"]
+        .as_array_mut()
+        .ok_or("zuse returned no Windows window list")?;
+    for window in windows {
+        let id = super::windows_identity::from_zuse(&window["window_id"], &window["pid"])?;
+        window["window_id"] = json!(id);
+    }
+    Ok(())
+}
+
 fn windows_value(desktop: &zuse::platform::Desktop) -> Result<Value, String> {
     let raw = desktop.windows()?;
     if raw.len() > 4 * 1024 * 1024 {
@@ -1118,6 +1137,26 @@ mod wayland_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_enumeration_issues_the_identity_required_by_native_focus() {
+        let native = json!({"windows":[{"window_id":"0x1a2b","pid":42,"title":"Editor"}]});
+        let mut value = native.clone();
+        normalize_window_identities("win32", &mut value).unwrap();
+        let id = value["windows"][0]["window_id"].as_str().unwrap();
+        assert_eq!(
+            super::super::windows_identity::parse(id).unwrap(),
+            (0x1a2b, 42)
+        );
+        assert_eq!(value["windows"][0]["pid"], 42);
+        assert!(
+            normalize_window_identities("win32", &mut json!({"windows":[{"window_id":"0x1a2b"}]}))
+                .is_err()
+        );
+        let mut x11 = native.clone();
+        normalize_window_identities("x11", &mut x11).unwrap();
+        assert_eq!(x11, native, "other backends retain their native window IDs");
+    }
 
     #[test]
     #[ignore = "selected explicitly by the native worker transport in unit-test builds"]

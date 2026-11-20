@@ -1,6 +1,7 @@
 //! Windows desktop control through User32, GDI and the system GDI+ JPEG codec.
 //! Coordinates are physical pixels in the virtual desktop. DPI awareness is
 //! scoped to synchronous calls on the current thread and is always restored.
+use super::windows_identity::{encode as window_id, parse as parse_window_id};
 use super::*;
 use std::{ffi::c_void, mem::size_of, path::Path, ptr};
 use windows_sys::{
@@ -375,32 +376,6 @@ unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> i32 {
     1
 }
 
-fn window_id(handle: usize, pid: u32) -> String {
-    format!("hwnd:{handle:x}:{pid}")
-}
-fn parse_window_id(id: &str) -> Result<(usize, u32), String> {
-    let parts: Vec<_> = id.split(':').collect();
-    if parts.len() != 3
-        || parts[0] != "hwnd"
-        || parts[1].is_empty()
-        || parts[1].len() > size_of::<usize>() * 2
-    {
-        return Err("window_id must be copied from computer.windows".into());
-    }
-    if !parts[1].bytes().all(|b| b.is_ascii_hexdigit())
-        || !parts[2].bytes().all(|b| b.is_ascii_digit())
-    {
-        return Err("invalid Windows window identity".into());
-    }
-    let handle = usize::from_str_radix(parts[1], 16).map_err(|_| "invalid Windows handle")?;
-    let pid = parts[2]
-        .parse::<u32>()
-        .map_err(|_| "invalid window process identity")?;
-    if handle == 0 || pid == 0 {
-        return Err("window identity cannot be zero".into());
-    }
-    Ok((handle, pid))
-}
 fn windows() -> Result<Value, String> {
     let _dpi = DpiScope::new()?;
     let mut output = WindowEnumeration::default();
