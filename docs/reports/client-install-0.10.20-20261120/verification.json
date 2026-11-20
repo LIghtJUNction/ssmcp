@@ -162,12 +162,30 @@
     "sample_scope": "initial native-path checkpoint before Cargo target authorization"
   },
   "acceptance": {
-    "zero_argument_probe": "connected_live_private_pty",
+    "zero_argument_probe": "completed_and_cleaned",
     "legacy_self_fallback": "terminal_notice_observed",
+    "legacy_self_fallback_notice": "Older relay: reconnecting once with the same verified account and self-only access.",
     "relay_listing_exact_workspace_match": true,
     "terminal_connected_marker_observed": false,
-    "native_printf": "pending_coordinator_receipt",
-    "probe_cleanup": "pending_coordinator_receipt"
+    "native_printf": {
+      "executable": "/usr/bin/printf",
+      "stdout": "ssmcp-0.10.20-native-probe-ok\n",
+      "stdout_bytes": 30,
+      "stderr_bytes": 0,
+      "exit_code": 0,
+      "state": "completed",
+      "cancelled": false,
+      "timed_out": false,
+      "verified_via": "coordinator live-client listing, native exec schema and completed job receipt"
+    },
+    "probe_cleanup": {
+      "status": "complete",
+      "exit_code": 0,
+      "graceful_signal": "SIGINT to verified probe pidfd",
+      "runner_exited_naturally": true,
+      "owned_scope_processes_gone": 4,
+      "scope_unloaded": true
+    }
   },
   "cargo_path_install": {
     "destination": "$HOME/.cargo/bin/ssmcp",
@@ -261,6 +279,104 @@
     "historical_start_ticks_match": null,
     "admission_fence_verified": false,
     "switch_permitted": false,
-    "reason": "The current daemon has no verified atomic admission fence or drain lease."
+    "reason": "The current daemon has no verified atomic admission fence or drain lease.",
+    "receipt_reused_for_final_acceptance": true
+  },
+  "final_readback": {
+    "sample_at": "2026-11-20T10:03:28.782729+00:00",
+    "installed": {
+      "path": "$HOME/.cargo/bin/ssmcp",
+      "version": "0.10.20",
+      "sha256": "434b6158bbb8e1ff12ffceb6bc0d703f20d368653c37b59ede2333a128bbfe2e",
+      "matches_swapped_inode": true,
+      "private_rollback_copy_reverified": true
+    },
+    "path_resolution": {
+      "login_interactive_zsh": {
+        "path": "$HOME/.cargo/bin/ssmcp",
+        "version": "0.10.20"
+      },
+      "native_execution": {
+        "path": "$HOME/.local/bin/ssmcp",
+        "version": "0.10.10"
+      },
+      "systemd_user_manager_path": {
+        "path": "$HOME/.local/share/mise/shims/ssmcp",
+        "version": "0.10.10"
+      }
+    },
+    "native_path_unchanged": false,
+    "systemd_manager_path_unchanged": true,
+    "login_zsh_path_unchanged": false,
+    "zsh_startup_and_history_unchanged_during_final_sample": true,
+    "opaque_user_state_hashes_unchanged": true,
+    "cargo_records_byte_identical": true,
+    "other_package_records_per_file": {
+      ".crates.toml": 37,
+      ".crates2.json": 37
+    },
+    "native_bundle_sample_identical": true,
+    "native_symlink_payload_matches_recorded_path": true,
+    "service_observations_match_replacement_baseline": true,
+    "service_observations_match_pre_cleanup": true,
+    "process_counts_across_replacement_to_final": {
+      "loaded_service_main": {
+        "retained": 5
+      },
+      "persistent_candidate": {
+        "retained": 24,
+        "absent": 2
+      }
+    },
+    "process_counts_from_previous_probe_checkpoint_to_final_excluding_owned_scope": {
+      "loaded_service_main": {
+        "retained": 5
+      },
+      "persistent_candidate": {
+        "retained": 24,
+        "absent": 2
+      },
+      "short_lived_or_unclassified": {
+        "absent": 1
+      }
+    },
+    "read_limitations_count": 0,
+    "process_identity_basis": "PID, start ticks, executable device and inode",
+    "existing_process_signals": 0,
+    "existing_service_mutations": 0,
+    "path_comparison": {
+      "native_execution": {
+        "exact_match": false,
+        "equal_excluding_worker_arg0_paths": true,
+        "observed_redacted_diff": [
+          {
+            "op": "replace",
+            "old": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ],
+            "new": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ]
+          }
+        ]
+      },
+      "login_zsh": {
+        "exact_match": false,
+        "equal_excluding_worker_arg0_paths": true,
+        "observed_redacted_diff": [
+          {
+            "op": "replace",
+            "old": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ],
+            "new": [
+              "$HOME/.codex/tmp/arg0-linux/<worker-specific>"
+            ]
+          }
+        ]
+      },
+      "startup_and_history_back_to_initial_sample_match": true,
+      "final_and_initial_native_survey_absent_pids_distinct": true
+    }
   }
 }
