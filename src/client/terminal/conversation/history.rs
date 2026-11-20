@@ -366,13 +366,16 @@ mod archive_tests {
             }
         }
 
-        let root = Scratch(
-            std::env::temp_dir()
-                .canonicalize()
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "ssmcp-history-picker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .join(format!("ssmcp-history-picker-{}", std::process::id(),)),
-        );
-        std::fs::create_dir(&root.0).unwrap();
+                .as_nanos(),
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let root = Scratch(path);
         history::with_test_history(root.0.join("history"), async {
             let mut state = State::new(24, 120, &Ui::default());
             state.canvas_focus(View::History);
