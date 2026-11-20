@@ -1,0 +1,2123 @@
+{
+  "schema": "ssmcp.shared-cohort.incremental-validation.v1",
+  "recorded_utc": "2026-11-20T04:13:32Z",
+  "last_covered_gate_ended_utc": "2026-11-20T04:08:22Z",
+  "status": "passed_for_the_explicitly_listed_linux_scopes",
+  "functional_source": {
+    "repository": "https://github.com/LIghtJUNction/ssmcp",
+    "branch": "coord/shared-cohort-verified-20261120",
+    "commit": "785e6b00440b048d00d9da626a33defa99108afe",
+    "tree": "b910d88ca479ee65ecc0ce7f0fca4457abd7d556",
+    "development_package_version": "0.10.14",
+    "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+    "gitlinks": {
+      "crates/zharness": {
+        "version": "0.5.1",
+        "commit": "e3580c01c7252da090d04e59b59762bc561777d1"
+      },
+      "crates/zplugin": {
+        "version": "0.3.1",
+        "commit": "00d566eedcff7b2932e90b9dfeb44910c783d305"
+      },
+      "crates/ztuio": {
+        "version": "0.1.0",
+        "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+      },
+      "crates/zuse": {
+        "package": "zuse-computer",
+        "version": "0.2.1",
+        "commit": "d930769005d307c42639e8abedc81ab039427e40"
+      }
+    },
+    "formal_release": false,
+    "installed_runtime_changed": false
+  },
+  "source_ranges": {
+    "original_compiled_source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+    "original_to_final_changed_paths": [
+      "docs/reports/shared-cohort-20261120/cloud-validation.json",
+      "docs/reports/shared-cohort-20261120/local-preflight.json",
+      "scripts/e2e_x11_text.py",
+      "src/computer/isolated.rs"
+    ],
+    "original_to_final_rust_production_change": "Only src/computer/isolated.rs: private child Environment selects the supported AT-SPI daemon preference and suppresses that child session FUSE bridge; the existing parent-environment test is extended.",
+    "cargo_inputs_lock_and_all_gitlinks_byte_identical": true,
+    "remaining_rust_production_byte_identical": true,
+    "aggregate_baseline": "ecc450f17012f8120d7d49470ce9599ada65456f",
+    "aggregate_to_final_additional_production_scope": [
+      "Preserved reviewed upstream Wayland/display allocation/ownership and E0509 fixes.",
+      "Whole-string X11 dispatch and strict pre-input versus uncertain failure classification.",
+      "Private app/worker removal of inherited AT_SPI_BUS_ADDRESS and AT_SPI_DISPLAY.",
+      "src/client.rs retains final authorization rejection for all Account transports, including explicit --allow without an account token, when the relay child exits first."
+    ]
+  },
+  "validation_map": [
+    {
+      "source": "785e6b00440b048d00d9da626a33defa99108afe",
+      "environment": "cloud Linux",
+      "scope": "fmt; workspace/all-targets Clippy -D warnings; bins/example and test-artifact compilation; exact private environment unit test",
+      "result": "passed",
+      "evidence": "cloud_build"
+    },
+    {
+      "source": "785e6b00440b048d00d9da626a33defa99108afe",
+      "environment": "developer Linux; frozen cloud-built ELF",
+      "scope": "two native private lifecycle lib cases and 35 real private-desktop MCP checks",
+      "result": "passed",
+      "evidence": "native_evidence.new_native; native_evidence.new_private_mcp"
+    },
+    {
+      "source": "785e6b00440b048d00d9da626a33defa99108afe",
+      "environment": "developer Linux; same frozen client ELF",
+      "scope": "47 existing account/relay checks, including unsigned explicit allow revocation during active session and immediately after Ready",
+      "result": "passed",
+      "evidence": "account_relay"
+    },
+    {
+      "source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+      "environment": "cloud Linux plus two exact developer Linux socket cases",
+      "scope": "44 cloud computer unit cases plus 2 native socket/Wayland cases; cloud run separately listed 9 ignored cases",
+      "result": "46 nonignored cases passed across the stated environments; ignored cases are not counted as passes",
+      "evidence": "cloud-validation.json; native_evidence.old_native_stages"
+    },
+    {
+      "source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+      "environment": "cloud Linux",
+      "scope": "4 real PTY cases",
+      "result": "passed",
+      "evidence": "cloud-validation.json"
+    },
+    {
+      "source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+      "fixture_source": "ddaf62a5276c658a4358cbfebb3f6bf3a7644516",
+      "environment": "developer Linux",
+      "scope": "client and daemon worker: six real GTK whole-string cases each; 125 base MCP checks after completing the tracked JS runtime layout",
+      "result": "passed in the original ELF; reused by unchanged source, not rerun or relabeled as the final ELF",
+      "evidence": "native_evidence.old_worker_suites; native_evidence.old_baseline_mcp"
+    }
+  ],
+  "cloud_build": {
+    "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+    "source_tree": "b910d88ca479ee65ecc0ce7f0fca4457abd7d556",
+    "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+    "status": "passed",
+    "resource_mechanism": "userspace process-group RSS and MemAvailable polling; no cgroup hard limit",
+    "cgroup_mounted": false,
+    "rss_stop_bytes": 4294967296,
+    "host_floor_bytes": 3221225472,
+    "poll_seconds": 0.25,
+    "cargo_jobs": 1,
+    "nice": 19,
+    "initial_available_bytes": 9381650432,
+    "minimum_available_bytes": 6605586432,
+    "maximum_group_rss_bytes": 3094396928,
+    "maximum_group_swap_bytes": 0,
+    "supervisor_sha256": "860685d64b0b14c69d1677e0eb51c57115a6d4d43dbf853ebc8e058ca06f8cb4",
+    "supervisor_components": {},
+    "started_utc": "2026-11-20T03:47:29Z",
+    "source_unchanged": true,
+    "artifacts_unchanged": true,
+    "ended_utc": "2026-11-20T03:49:49Z",
+    "steps": [
+      {
+        "name": "format",
+        "argv": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "status": "passed",
+        "peak_group_rss_bytes": 194383872,
+        "peak_group_swap_bytes": 0,
+        "minimum_available_bytes": 9227489280,
+        "samples": 18,
+        "exit_code": 0,
+        "duration_seconds": 4.525
+      },
+      {
+        "name": "clippy",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--workspace",
+          "--all-targets",
+          "--locked",
+          "--offline",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "status": "passed",
+        "peak_group_rss_bytes": 1893265408,
+        "peak_group_swap_bytes": 0,
+        "minimum_available_bytes": 7749001216,
+        "samples": 148,
+        "exit_code": 0,
+        "duration_seconds": 37.346
+      },
+      {
+        "name": "test-artifacts",
+        "argv": [
+          "cargo",
+          "test",
+          "--lib",
+          "--test",
+          "zuse_worker_entry",
+          "--no-run",
+          "--locked",
+          "--offline",
+          "--message-format=json"
+        ],
+        "status": "passed",
+        "peak_group_rss_bytes": 3094396928,
+        "peak_group_swap_bytes": 0,
+        "minimum_available_bytes": 6605586432,
+        "samples": 380,
+        "exit_code": 0,
+        "duration_seconds": 96.589
+      },
+      {
+        "name": "application-artifacts",
+        "argv": [
+          "cargo",
+          "build",
+          "--bins",
+          "--example",
+          "native_plugin_fixture",
+          "--locked",
+          "--offline",
+          "--message-format=json"
+        ],
+        "status": "passed",
+        "peak_group_rss_bytes": 159186944,
+        "peak_group_swap_bytes": 0,
+        "minimum_available_bytes": 9211064320,
+        "samples": 5,
+        "exit_code": 0,
+        "duration_seconds": 1.31
+      },
+      {
+        "name": "private-environment-test",
+        "argv": [
+          "cargo",
+          "test",
+          "--lib",
+          "--locked",
+          "--offline",
+          "--",
+          "--exact",
+          "computer::isolated::tests::private_command_removes_session_overrides_without_changing_parent",
+          "--test-threads=1"
+        ],
+        "status": "passed",
+        "peak_group_rss_bytes": 85266432,
+        "peak_group_swap_bytes": 0,
+        "minimum_available_bytes": 9216364544,
+        "samples": 2,
+        "exit_code": 0,
+        "duration_seconds": 0.508
+      }
+    ],
+    "unit_result": {
+      "test": "computer::isolated::tests::private_command_removes_session_overrides_without_changing_parent",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "raw_evidence_sha256": {
+      "build-785e6b0/application-artifacts.stderr.log": "be7e62827bab014461588f4822727cef4a9d390bb998ae6c307afa52eafa977d",
+      "build-785e6b0/application-artifacts.stdout.log": "1979cdca7c5c8c5c0e204527c9c2b316db4c10b607b9f9111b785b48d6f6f0e8",
+      "build-785e6b0/clippy.stderr.log": "4b9de80ac9eb6df2cd34801272a2bc104a26358424550f68e79cea67e56f9ddc",
+      "build-785e6b0/clippy.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "build-785e6b0/format.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "build-785e6b0/format.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "build-785e6b0/gates.json": "5bf7b675bb5f8ba2b6ab1253bbedc88ea468d02c4c88fccadf1f2d86855dc59a",
+      "build-785e6b0/private-environment-test.stderr.log": "89d2ec8e4f1d3df386f7dd554fad2a779231029ba67611427e262ad19c1a2d99",
+      "build-785e6b0/private-environment-test.stdout.log": "92cbebd4747505328beab2ed5df38b324e9f52b43633377dcb49f3ef87b9b54b",
+      "build-785e6b0/test-artifacts.stderr.log": "7c033f08fc6329d29567ebcb2c1c692e1559007d0eb2dcc9c115de9ae61da2a9",
+      "build-785e6b0/test-artifacts.stdout.log": "69cde545cccd49989f6ae2e7231f49dbd5b7e27a1bc5f5b46f005b3e466fbd2e"
+    }
+  },
+  "build_environment": {
+    "build_and_cloud_runtime": "Debian GNU/Linux 13.6 (trixie), x86_64, glibc 2.41",
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "rustc_commit": "0ef1bc386059596dada8fb65b50425aab2ea637a",
+    "cargo": "1.100.0 (3acc79c0c 2026-11-05)",
+    "profile": "repository dev/test profiles; no release-profile claim",
+    "cloud_resource_mechanism": "userspace RSS and MemAvailable watchdog; no cgroup hard limit",
+    "cargo_jobs": 1,
+    "nice": 19,
+    "cloud_host_reserve_bytes": 3221225472,
+    "source_and_lock_unchanged": true
+  },
+  "artifact_identity": {
+    "strip": "GNU strip (GNU Binutils for Debian) 2.44",
+    "artifacts": [
+      {
+        "name": "ssmcp-frontend",
+        "original_sha256": "543b408bd506b082944e2929afb2c2cd0dc3e0c3bef279c9171daefd36922c1c",
+        "original_bytes": 7692024,
+        "sha256": "d604de52cca7b3a8fc9a19cb1dcb8c329d1e8b2f9938c6daa28cd8cd9438015a",
+        "bytes": 4809288,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      },
+      {
+        "name": "zuse_worker_entry",
+        "original_sha256": "bffc7a3145a282f378ea9ee16127750211798935b94eec2f1ac21bee828040ba",
+        "original_bytes": 8892384,
+        "sha256": "8063d8c228ad08e790ad27f5f1b2f305747ee69d955b13878a0acfecec0b8b65",
+        "bytes": 5398200,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      },
+      {
+        "name": "ssmcp",
+        "original_sha256": "431dafb9f746debb5dff456878eac8704f4dacbccda00a68c77b9b5a37642bd4",
+        "original_bytes": 79614160,
+        "sha256": "59ca27630c17fd73f027f271c1f752fcc7bacb60125de84aed276e39e1141e19",
+        "bytes": 47702520,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      },
+      {
+        "name": "ssmcpd",
+        "original_sha256": "108af7e440400b499fc9a845b4ffcf5b7b5aac97f6dc77039460c68432f0b49f",
+        "original_bytes": 47615928,
+        "sha256": "1fdb2d509992c52e48266a53f3dd579c91107ff1cf08c76b70516d7927fc77ca",
+        "bytes": 27683672,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      },
+      {
+        "name": "ssmcp-tests",
+        "original_sha256": "27b07c2fccf96ec80f81f588e2a9875634b71e732ee7217eb6845c86189b4d8e",
+        "original_bytes": 131103688,
+        "sha256": "d7cb9c11715cbc5b61d33de51daedd1122d8b5a2f10de7a563d28b456650a0b4",
+        "bytes": 73687088,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      },
+      {
+        "name": "libnative_plugin_fixture.so",
+        "original_sha256": "18f7b5f5219e2801a24a106cb40e76db22b771274c0852c8bd355e3727114254",
+        "original_bytes": 1048192,
+        "sha256": "69a9b801a7edd82f4f6b5cb88975d9faffb64270cc9c72558cebba6b9d464653",
+        "bytes": 726640,
+        "transformation": "GNU strip --strip-unneeded on a separate copy; compiler output preserved"
+      }
+    ],
+    "code_mode_runner": {
+      "sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+      "bytes": 41662
+    },
+    "original_compiler_outputs_preserved": true,
+    "transformation": "GNU strip --strip-unneeded on separate copies; no rebuilding during native acceptance"
+  },
+  "native_evidence": {
+    "old_native_stages": {
+      "native-socket-owner": {
+        "resources": {
+          "started_utc": "2026-11-20T03:09:18Z",
+          "status": "resource_not_started",
+          "initial_available_bytes": 3190042624,
+          "admission_bytes": 3388997632,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 3190042624,
+          "maximum_cgroup_peak_bytes": 0,
+          "floor_stopped": false
+        }
+      },
+      "native-socket-owner-next": {
+        "gates": {
+          "source_commit": "2e1fee53fde40bac7fc6ace71415eca35e1a3638",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "498a5c4d62f827c6687d7da0b6cc2ac82eb5c4c1",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "passed",
+          "source_unchanged": true,
+          "steps": [
+            {
+              "name": "socket-owner",
+              "exit_code": 0,
+              "seconds": 0.065,
+              "cgroup": {
+                "memory.current": "91066368",
+                "memory.peak": "93585408",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:20:56Z",
+          "ended_utc": "2026-11-20T03:20:57Z",
+          "status": "passed",
+          "systemd_exit_code": 0,
+          "initial_available_bytes": 4981055488,
+          "admission_bytes": 3388997632,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 4981055488,
+          "maximum_cgroup_peak_bytes": 93585408,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "91082752",
+            "memory.peak": "93585408",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success"
+        },
+        "limits": {
+          "memory.max": "134217728",
+          "memory.high": "100663296",
+          "memory.swap.max": "0",
+          "cpu.max": "50000 100000"
+        }
+      },
+      "native-wayland-preflight": {
+        "gates": {
+          "source_commit": "2e1fee53fde40bac7fc6ace71415eca35e1a3638",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "498a5c4d62f827c6687d7da0b6cc2ac82eb5c4c1",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "passed",
+          "source_unchanged": true,
+          "steps": [
+            {
+              "name": "wayland-preflight",
+              "exit_code": 0,
+              "seconds": 0.235,
+              "cgroup": {
+                "memory.current": "15265792",
+                "memory.peak": "24784896",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:21:47Z",
+          "ended_utc": "2026-11-20T03:21:48Z",
+          "status": "passed",
+          "systemd_exit_code": 0,
+          "initial_available_bytes": 5278978048,
+          "admission_bytes": 3388997632,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5247627264,
+          "maximum_cgroup_peak_bytes": 24784896,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "15265792",
+            "memory.peak": "24784896",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success"
+        },
+        "limits": {
+          "memory.max": "134217728",
+          "memory.high": "100663296",
+          "memory.swap.max": "0",
+          "cpu.max": "50000 100000"
+        }
+      },
+      "native-full-gate": {
+        "gates": {
+          "source_commit": "2e1fee53fde40bac7fc6ace71415eca35e1a3638",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "498a5c4d62f827c6687d7da0b6cc2ac82eb5c4c1",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "display-concurrent",
+              "exit_code": 0,
+              "seconds": 0.338,
+              "cgroup": {
+                "memory.current": "217423872",
+                "memory.peak": "255655936",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "display-alias-ownership",
+              "exit_code": 0,
+              "seconds": 0.064,
+              "cgroup": {
+                "memory.current": "217673728",
+                "memory.peak": "255655936",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "desktop-app-autostart",
+              "exit_code": 0,
+              "seconds": 0.114,
+              "cgroup": {
+                "memory.current": "218447872",
+                "memory.peak": "255655936",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "desktop-private-input",
+              "exit_code": 0,
+              "seconds": 0.515,
+              "cgroup": {
+                "memory.current": "233717760",
+                "memory.peak": "261664768",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "worker-entry",
+              "exit_code": 0,
+              "seconds": 0.114,
+              "cgroup": {
+                "memory.current": "233181184",
+                "memory.peak": "261664768",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "client-x11-worker",
+              "exit_code": 1,
+              "seconds": 1.667,
+              "cgroup": {
+                "memory.current": "337981440",
+                "memory.peak": "459554816",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:25:33Z",
+          "ended_utc": "2026-11-20T03:25:36Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 6001840128,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5978877952,
+          "maximum_cgroup_peak_bytes": 459554816,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "337981440",
+            "memory.peak": "459554816",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-full-gate-ddaf": {
+        "gates": {
+          "source_commit": "ddaf62a5276c658a4358cbfebb3f6bf3a7644516",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "8bfb93a991df1f650805254941dcb04fd7f447bc",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "client-x11-worker",
+              "exit_code": 0,
+              "seconds": 2.228,
+              "cgroup": {
+                "memory.current": "389160960",
+                "memory.peak": "498548736",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "daemon-x11-worker",
+              "exit_code": 0,
+              "seconds": 1.969,
+              "cgroup": {
+                "memory.current": "388718592",
+                "memory.peak": "536702976",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "mcp-base",
+              "exit_code": 1,
+              "seconds": 5.076,
+              "cgroup": {
+                "memory.current": "389775360",
+                "memory.peak": "536702976",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:32:33Z",
+          "ended_utc": "2026-11-20T03:32:42Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 5332000768,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5281165312,
+          "maximum_cgroup_peak_bytes": 536702976,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "413990912",
+            "memory.peak": "536702976",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-mcp-gate-ddaf": {
+        "gates": {
+          "source_commit": "ddaf62a5276c658a4358cbfebb3f6bf3a7644516",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "8bfb93a991df1f650805254941dcb04fd7f447bc",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "mcp-base",
+              "exit_code": 1,
+              "seconds": 4.599,
+              "cgroup": {
+                "memory.current": "13234176",
+                "memory.peak": "63123456",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:33:48Z",
+          "ended_utc": "2026-11-20T03:33:53Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 5269827584,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5203480576,
+          "maximum_cgroup_peak_bytes": 63123456,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "12726272",
+            "memory.peak": "63123456",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-mcp-layout-gate-ddaf": {
+        "gates": {
+          "source_commit": "ddaf62a5276c658a4358cbfebb3f6bf3a7644516",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "8bfb93a991df1f650805254941dcb04fd7f447bc",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "mcp-base",
+              "exit_code": 0,
+              "seconds": 10.641,
+              "cgroup": {
+                "memory.current": "14245888",
+                "memory.peak": "87818240",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            },
+            {
+              "name": "mcp-private-desktop",
+              "exit_code": 1,
+              "seconds": 9.207,
+              "cgroup": {
+                "memory.current": "19689472",
+                "memory.peak": "144650240",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:34:48Z",
+          "ended_utc": "2026-11-20T03:35:08Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 5197066240,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5049663488,
+          "maximum_cgroup_peak_bytes": 144650240,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "19775488",
+            "memory.peak": "144650240",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-private-registration-gate-32bf": {
+        "gates": {
+          "source_commit": "32bf2cf6c0eb319a4a5f38ddb21907bd45fc72f5",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "250d6f8c26a980e3c654f3084348fb441a8182d3",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "mcp-private-desktop",
+              "exit_code": 1,
+              "seconds": 9.014,
+              "cgroup": {
+                "memory.current": "235651072",
+                "memory.peak": "323956736",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:37:16Z",
+          "ended_utc": "2026-11-20T03:37:26Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 5233692672,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5102911488,
+          "maximum_cgroup_peak_bytes": 323956736,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "235577344",
+            "memory.peak": "323956736",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-private-daemon-probe-gate-32bf": {
+        "gates": {
+          "source_commit": "32bf2cf6c0eb319a4a5f38ddb21907bd45fc72f5",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "250d6f8c26a980e3c654f3084348fb441a8182d3",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "mcp-private-desktop",
+              "exit_code": 1,
+              "seconds": 4.303,
+              "cgroup": {
+                "memory.current": "407523328",
+                "memory.peak": "502276096",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:40:15Z",
+          "ended_utc": "2026-11-20T03:40:20Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 5266972672,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 5214605312,
+          "maximum_cgroup_peak_bytes": 502276096,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "408215552",
+            "memory.peak": "502276096",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-private-daemon-probe-gate-9cb": {
+        "gates": {
+          "source_commit": "9cb44c7c56447334e23f36645a26916e84733dc8",
+          "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+          "source_tree": "3d7a035daebfc4e4299409edb028e33547c7bc1d",
+          "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+          "status": "failed",
+          "source_unchanged": true,
+          "artifacts_unchanged": true,
+          "steps": [
+            {
+              "name": "mcp-private-desktop",
+              "exit_code": 1,
+              "seconds": 14.745,
+              "cgroup": {
+                "memory.current": "244953088",
+                "memory.peak": "358535168",
+                "memory.swap.current": "0",
+                "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              }
+            }
+          ]
+        },
+        "resources": {
+          "started_utc": "2026-11-20T03:42:14Z",
+          "ended_utc": "2026-11-20T03:42:29Z",
+          "status": "failed",
+          "systemd_exit_code": 1,
+          "initial_available_bytes": 4857466880,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 4823437312,
+          "maximum_cgroup_peak_bytes": 358535168,
+          "floor_stopped": false,
+          "last_cgroup": {
+            "memory.current": "246611968",
+            "memory.peak": "358535168",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          },
+          "owned_cgroup_empty": true,
+          "unit_after": "LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=exit-code"
+        },
+        "limits": {
+          "memory.max": "805306368",
+          "memory.high": "536870912",
+          "memory.swap.max": "0",
+          "cpu.max": "75000 100000"
+        }
+      },
+      "native-private-no-fuse-probe-gate-9cb": {
+        "resources": {
+          "started_utc": "2026-11-20T03:44:58Z",
+          "status": "resource_not_started",
+          "initial_available_bytes": 2768666624,
+          "admission_bytes": 4294967296,
+          "host_floor_bytes": 3221225472,
+          "minimum_available_bytes": 2768666624,
+          "maximum_cgroup_peak_bytes": 0,
+          "floor_stopped": false
+        }
+      }
+    },
+    "new_native": {
+      "gates": {
+        "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+        "compiled_source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+        "source_tree": "b910d88ca479ee65ecc0ce7f0fca4457abd7d556",
+        "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+        "status": "passed",
+        "source_unchanged": true,
+        "artifacts_unchanged": true,
+        "steps": [
+          {
+            "name": "desktop-app-autostart",
+            "exit_code": 0,
+            "seconds": 0.114,
+            "cgroup": {
+              "memory.current": "168611840",
+              "memory.peak": "186970112",
+              "memory.swap.current": "0",
+              "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+            }
+          },
+          {
+            "name": "desktop-private-input",
+            "exit_code": 0,
+            "seconds": 0.465,
+            "cgroup": {
+              "memory.current": "185143296",
+              "memory.peak": "212869120",
+              "memory.swap.current": "0",
+              "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+            }
+          },
+          {
+            "name": "mcp-private-desktop",
+            "exit_code": 0,
+            "seconds": 5.791,
+            "cgroup": {
+              "memory.current": "369119232",
+              "memory.peak": "494096384",
+              "memory.swap.current": "0",
+              "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 15"
+            }
+          }
+        ]
+      },
+      "resources": {
+        "started_utc": "2026-11-20T03:54:58Z",
+        "ended_utc": "2026-11-20T03:55:05Z",
+        "status": "passed",
+        "systemd_exit_code": 0,
+        "initial_available_bytes": 4409679872,
+        "admission_bytes": 4294967296,
+        "host_floor_bytes": 3221225472,
+        "minimum_available_bytes": 4313755648,
+        "maximum_cgroup_peak_bytes": 494096384,
+        "floor_stopped": false,
+        "last_cgroup": {
+          "memory.current": "388657152",
+          "memory.peak": "494096384",
+          "memory.swap.current": "0",
+          "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 15"
+        },
+        "owned_cgroup_empty": true,
+        "unit_after": "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success"
+      },
+      "limits": {
+        "memory.max": "805306368",
+        "memory.high": "536870912",
+        "memory.swap.max": "0",
+        "cpu.max": "75000 100000"
+      }
+    },
+    "new_delivery": {
+      "recorded_utc": "2026-11-20T03:53:34Z",
+      "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+      "archive_sha256": "dc7bc7537faf1f472980c9b25c402eb0868241aa35a6d76ea8db916df300da38",
+      "archive_bytes": 46746386,
+      "transfer_and_extraction_seconds": 10.157,
+      "artifacts": [
+        {
+          "name": "ssmcp",
+          "sha256": "59ca27630c17fd73f027f271c1f752fcc7bacb60125de84aed276e39e1141e19",
+          "bytes": 47702520,
+          "ldd_exit_code": 0,
+          "dynamic_link_check": "passed"
+        },
+        {
+          "name": "ssmcpd",
+          "sha256": "1fdb2d509992c52e48266a53f3dd579c91107ff1cf08c76b70516d7927fc77ca",
+          "bytes": 27683672,
+          "ldd_exit_code": 0,
+          "dynamic_link_check": "passed"
+        },
+        {
+          "name": "ssmcp-tests",
+          "sha256": "d7cb9c11715cbc5b61d33de51daedd1122d8b5a2f10de7a563d28b456650a0b4",
+          "bytes": 73687088,
+          "ldd_exit_code": 0,
+          "dynamic_link_check": "passed"
+        },
+        {
+          "name": "zuse_worker_entry",
+          "sha256": "8063d8c228ad08e790ad27f5f1b2f305747ee69d955b13878a0acfecec0b8b65",
+          "bytes": 5398200,
+          "ldd_exit_code": 0,
+          "dynamic_link_check": "passed"
+        },
+        {
+          "name": "libnative_plugin_fixture.so",
+          "sha256": "69a9b801a7edd82f4f6b5cb88975d9faffb64270cc9c72558cebba6b9d464653",
+          "bytes": 726640,
+          "ldd_exit_code": 0,
+          "dynamic_link_check": "passed"
+        }
+      ],
+      "code_mode_runner_sha256": "6e169387073dfb5919f6714658ac28781cfe04c7e5800ada690c0c67fed3d4d0",
+      "installed_runtime_changed": false,
+      "native_libc": "glibc 2.44"
+    },
+    "new_plan": {
+      "test_boundary": "No inherited GVFS_DISABLE_FUSE; force broker and retain GVfs on the outer test process. The production private Environment must select its daemon preference and suppress its own FUSE bridge. No GTK fixture bus address injection.",
+      "reuse_boundary": {
+        "c44_source": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+        "production_diff": [
+          "src/computer/isolated.rs: Environment.apply and its existing unit test"
+        ],
+        "unchanged_code_prior_evidence": [
+          "display allocator/socket ownership",
+          "X11 whole-string client/daemon worker",
+          "Wayland preflight",
+          "base MCP/PTY/account protocols"
+        ],
+        "note": "Those remain historical c44 binary results; they are not relabeled as runs of this new ELF."
+      },
+      "memory_max": 805306368,
+      "memory_high": 536870912,
+      "host_floor": 3221225472,
+      "admission_buffer": 268435456
+    },
+    "old_baseline_mcp": {
+      "status": "passed",
+      "checks": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "the account API rejects missing or incorrect device credentials",
+        "the account API rejects missing or incorrect device credentials",
+        "the owned account credential resolves its stable provider identity",
+        "the real WebSocket Ready connection belongs to the authenticated account",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "OAuth never redirects to an unregistered callback",
+        "OAuth rejects a PKCE downgrade to plain",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "provider login rejects a missing browser binding cookie",
+        "provider login rejects a cross-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "authorization code rejects an incorrect PKCE verifier",
+        "authorization code cannot be exchanged for another resource",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "the account connection advertises its shared MCP endpoint",
+        "missing Bearer is rejected",
+        "incorrect Bearer is rejected",
+        "an identity token cannot select an unrelated protected resource",
+        "foreign Origin is rejected",
+        "legacy initialize negotiates 2025-03-26",
+        "legacy initialize negotiates 2025-06-18",
+        "legacy initialize negotiates 2025-11-25",
+        "initialized notification returns empty 202",
+        "legacy tools/list exposes list, code_mode and collab",
+        "list returns client identity, display name, launch cwd, backend type and code API",
+        "list discovers exact native capability names and schemas for code_mode: missing=[], extra=[], duplicates=0, invalid_schemas=[]",
+        "MCP responses cannot be stored by caches",
+        "configured Origin is accepted",
+        "unsupported GET and DELETE return 405",
+        "malformed JSON is rejected",
+        "JSON-RPC batches are rejected",
+        "unsupported protocol version is rejected",
+        "oversize HTTP body is rejected",
+        "modern server/discover completes",
+        "modern tools/list exposes the same public tools",
+        "modern method header must match body",
+        "modern version header must match metadata",
+        "modern tool name header must match body",
+        "modern encoded tool name is decoded",
+        "unknown modern method returns 404",
+        "tool notification is acknowledged without a response",
+        "native terminal tools cannot bypass code_mode through public tools/call",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "multiple same-user clients with duplicate display names retain distinct IDs and directories",
+        "code_mode routes terminal calls to the selected client ID",
+        "shell sibling: fs.stat identifies the account client's exact shared root",
+        "shell sibling: fs.mkdir/write/read/stat preserve binary bytes through the account relay",
+        "shell sibling: native UTF-8 read/write preserves BOM, Unicode and CRLF",
+        "shell sibling: native text edit enforces SHA-256 preconditions through the account relay",
+        "shell sibling: context roots identify the actual account client directory",
+        "shell sibling: skill discovery generates summaries without loading body text into the view",
+        "shell sibling: complete skill contents are read on demand with provenance",
+        "shell sibling: AGENTS resolution keeps parent-to-target order and exact text",
+        "shell sibling: dynamic skills resource preserves source metadata and binds content links to the exact client and root",
+        "shell sibling: dynamic agents resource preserves source metadata and binds content links to the exact client and root",
+        "shell sibling: the instruction resource preserves the native chain length",
+        "shell sibling: instruction readUri names the exact client, root and file",
+        "shell sibling: instruction readUri names the exact client, root and file",
+        "shell sibling: every instruction readUri returns the exact original text through the account relay",
+        "shell sibling: dynamic resources preserve all native fields beside their verified readUri",
+        "code_mode executes JavaScript loops, conditions, awaited native calls and logs",
+        "code_mode discovers native capability schemas through tools(client_id)",
+        "unknown client IDs fail without selecting a fallback",
+        "JavaScript exceptions are returned as tool errors",
+        "JavaScript CPU loops stop at the requested deadline",
+        "runtime failures leave the original client usable",
+        "shell is the default backend",
+        "local stderr receives shell output without any MCP read",
+        "local transcript shows PTY output once and respects disabled input echo",
+        "tool notifications never execute terminal operations",
+        "resize and tty commands run in a real local PTY",
+        "UTF-8 output and persistent working directory round-trip",
+        "Ctrl-C interrupts the foreground process",
+        "waiting reads allow concurrent writes",
+        "device disconnect preserves the identity-scoped MCP grant for sibling clients",
+        "disconnect removes only its client and preserves the sibling connection and credential",
+        "disconnect cleans up shell and terminal jobs",
+        "the existing account grant sees its replacement device without a fabricated login code",
+        "reconnect creates a fresh ID and stale IDs cannot target the replacement",
+        "reconnect creates a usable new terminal",
+        "refresh tokens cannot switch the protected resource",
+        "account refresh authority survives device replacement and rotates its refresh token",
+        "a refreshed OAuth access token can control the same client",
+        "a reused refresh token is rejected",
+        "refresh-token replay revokes the token family",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "an OAuth authorization code is single use",
+        "authorization-code replay revokes its issued token family"
+      ],
+      "duration_seconds": 10.422,
+      "transport": "production Broker/router fixture + loopback account HTTP/WS + owned local PTY",
+      "oauth": "real discovery/DCR/PKCE/consent with a synthetic upstream GitHub provider",
+      "tls_verified": false,
+      "real_github_account": false,
+      "models_started": false,
+      "fixture_exit_code": 0
+    },
+    "old_worker_suites": {
+      "client": {
+        "schema": "ssmcp.x11.whole-text.v1",
+        "status": "passed",
+        "cases": [
+          {
+            "name": "whole-string rejection for wrong machine",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "",
+            "observed": {
+              "text": "",
+              "other": "other window untouched",
+              "caret": 0,
+              "selection": [
+                0,
+                0
+              ],
+              "changes": 0
+            },
+            "status": "passed"
+          },
+          {
+            "name": "fresh worker after corrected machine",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+            "observed": {
+              "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+              "other": "other window untouched",
+              "caret": 24,
+              "selection": [
+                24,
+                24
+              ],
+              "changes": 1
+            },
+            "status": "passed"
+          },
+          {
+            "name": "whole-string rejection for wrong pid",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "",
+            "observed": {
+              "text": "",
+              "other": "other window untouched",
+              "caret": 0,
+              "selection": [
+                0,
+                0
+              ],
+              "changes": 0
+            },
+            "status": "passed"
+          },
+          {
+            "name": "fresh worker after corrected pid",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "恢复🙂",
+            "observed": {
+              "text": "恢复🙂",
+              "other": "other window untouched",
+              "caret": 3,
+              "selection": [
+                3,
+                3
+              ],
+              "changes": 1
+            },
+            "status": "passed"
+          },
+          {
+            "name": "whole UTF-8 replaces a character selection",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "左🙂नमé右",
+            "observed": {
+              "text": "左🙂नमé右",
+              "other": "other window untouched",
+              "caret": 6,
+              "selection": [
+                6,
+                6
+              ],
+              "changes": 2
+            },
+            "status": "passed"
+          },
+          {
+            "name": "cancel after native dispatch does not resend or roll back",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "zuse operation cancelled after X11 text dispatch; text may have changed; do not retry",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "取消🙂é",
+            "observed": {
+              "text": "取消🙂é",
+              "other": "other window untouched",
+              "caret": 5,
+              "selection": [
+                5,
+                5
+              ],
+              "changes": 1
+            },
+            "status": "passed",
+            "barrier": {
+              "gtk_changed_callback": true,
+              "worker_stdin_monitor_exited": true,
+              "sender_exited": true
+            },
+            "native_before": {
+              "x": 480,
+              "y": 180,
+              "focus": 4194319,
+              "mask": 0,
+              "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+            },
+            "native_after": {
+              "x": 480,
+              "y": 180,
+              "focus": 4194319,
+              "mask": 0,
+              "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+            }
+          }
+        ],
+        "scope": "real internal worker and real GTK; persistent Computer recovery is a separate MCP case",
+        "binary_sha256": "7f6555313b8de524075e2b3730e8aa090a6121e4bbf9f9d7a7675185656a0b9a",
+        "script_sha256": "44ad6c0700e00c45dd38ecbf08f846a885fc0c14aef9d7ff8cb468462ce75bb4",
+        "receiver_source_sha256": "f573758eae4d1ab7c6d16729961edb82169fb2ca802ed553570223c7557ebccc",
+        "private_xvfb_sha256": "45f9872a97ac81b5e0a9441dfce01fc5181c3c82fe4e339ba7058e9b94659dd7",
+        "state_probe_script_sha256": "903863628d79b7041352536608b8f37e9a9302f212aea48ddba99309283f52be",
+        "setup_focus": [
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          }
+        ],
+        "owned_process_cleanup": "passed",
+        "duration_seconds": 1.081
+      },
+      "daemon": {
+        "schema": "ssmcp.x11.whole-text.v1",
+        "status": "passed",
+        "cases": [
+          {
+            "name": "whole-string rejection for wrong machine",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "",
+            "observed": {
+              "text": "",
+              "other": "other window untouched",
+              "caret": 0,
+              "selection": [
+                0,
+                0
+              ],
+              "changes": 0
+            },
+            "status": "passed"
+          },
+          {
+            "name": "fresh worker after corrected machine",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+            "observed": {
+              "text": "Z 你好こんにちは مرحبا नमस्ते 🙂",
+              "other": "other window untouched",
+              "caret": 24,
+              "selection": [
+                24,
+                24
+              ],
+              "changes": 1
+            },
+            "status": "passed"
+          },
+          {
+            "name": "whole-string rejection for wrong pid",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "",
+            "observed": {
+              "text": "",
+              "other": "other window untouched",
+              "caret": 0,
+              "selection": [
+                0,
+                0
+              ],
+              "changes": 0
+            },
+            "status": "passed"
+          },
+          {
+            "name": "fresh worker after corrected pid",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "恢复🙂",
+            "observed": {
+              "text": "恢复🙂",
+              "other": "other window untouched",
+              "caret": 3,
+              "selection": [
+                3,
+                3
+              ],
+              "changes": 1
+            },
+            "status": "passed"
+          },
+          {
+            "name": "whole UTF-8 replaces a character selection",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {}
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "左🙂नमé右",
+            "observed": {
+              "text": "左🙂नमé右",
+              "other": "other window untouched",
+              "caret": 6,
+              "selection": [
+                6,
+                6
+              ],
+              "changes": 2
+            },
+            "status": "passed"
+          },
+          {
+            "name": "cancel after native dispatch does not resend or roll back",
+            "worker": {
+              "reply": {
+                "value": null,
+                "error": "zuse operation cancelled after X11 text dispatch; text may have changed; do not retry",
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            },
+            "expected": "取消🙂é",
+            "observed": {
+              "text": "取消🙂é",
+              "other": "other window untouched",
+              "caret": 5,
+              "selection": [
+                5,
+                5
+              ],
+              "changes": 1
+            },
+            "status": "passed",
+            "barrier": {
+              "gtk_changed_callback": true,
+              "worker_stdin_monitor_exited": true,
+              "sender_exited": true
+            },
+            "native_before": {
+              "x": 480,
+              "y": 180,
+              "focus": 4194319,
+              "mask": 0,
+              "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+            },
+            "native_after": {
+              "x": 480,
+              "y": 180,
+              "focus": 4194319,
+              "mask": 0,
+              "keymap_sha256": "7a6a92ab14fc49766fb03b38df5f53da5c73f552f9d609064536b21976f8bde9"
+            }
+          }
+        ],
+        "scope": "real internal worker and real GTK; persistent Computer recovery is a separate MCP case",
+        "binary_sha256": "14805dd9ee25e8b86f2d9196f5611f1baeebdd3b4299073c2852a4a55d803e30",
+        "script_sha256": "44ad6c0700e00c45dd38ecbf08f846a885fc0c14aef9d7ff8cb468462ce75bb4",
+        "receiver_source_sha256": "f573758eae4d1ab7c6d16729961edb82169fb2ca802ed553570223c7557ebccc",
+        "private_xvfb_sha256": "45f9872a97ac81b5e0a9441dfce01fc5181c3c82fe4e339ba7058e9b94659dd7",
+        "state_probe_script_sha256": "903863628d79b7041352536608b8f37e9a9302f212aea48ddba99309283f52be",
+        "setup_focus": [
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          },
+          {
+            "window_id": "0x40000f",
+            "worker": {
+              "reply": {
+                "value": {
+                  "backend": "x11",
+                  "result": {
+                    "focused": "0x40000f"
+                  }
+                },
+                "error": null,
+                "cleanup_ok": true
+              },
+              "exit_code": 0,
+              "stderr": ""
+            }
+          }
+        ],
+        "owned_process_cleanup": "passed",
+        "duration_seconds": 0.906
+      }
+    },
+    "new_private_mcp": {
+      "status": "passed",
+      "checks": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "test host display is privately allocated in the high range",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "capability inspection leaves the private desktop stopped",
+        "input without an explicit surface cannot use the host desktop",
+        "owned desktop uses a different display from the test host",
+        "desktop_start reuses the owned display",
+        "unsupported native keys return an ordinary input error",
+        "Computer dispatch reaches the linked zuse library after a rejected key",
+        "native typing reaches the private application",
+        "native click reaches the private button",
+        "the same owned Computer rejects mixed text before input and recovers after both identity refusals",
+        "ssmcp.computer.screenshot returns a visible MCP image (modern=True)",
+        "image is bounded valid JPEG bytes",
+        "image payload is absent from structured metadata and text",
+        "private screenshot reports its own surface and coordinates",
+        "native input and screenshots preserve the test host cursor and focus",
+        "desktop_stop reaps applications and X server before removing owned state",
+        "stopping the private display never falls back to host input",
+        "host pointer and focus remain unchanged after shutdown"
+      ],
+      "duration_seconds": 5.614,
+      "gtk_text_cases": [
+        {
+          "name": "same Computer rejects then recovers from machine",
+          "status": "passed",
+          "rejection_is_error": true,
+          "rejection_text": "Unsupported X11 Unicode text: the focused client is not identified as local; no input was sent",
+          "rejected_state": {
+            "text": "",
+            "other": "other window untouched",
+            "caret": 0,
+            "selection": [
+              0,
+              0
+            ],
+            "changes": 0
+          },
+          "recovered_state": {
+            "text": "同一实例🙂",
+            "other": "other window untouched",
+            "caret": 5,
+            "selection": [
+              5,
+              5
+            ],
+            "changes": 1
+          }
+        },
+        {
+          "name": "same Computer rejects then recovers from pid",
+          "status": "passed",
+          "rejection_is_error": true,
+          "rejection_text": "Unsupported X11 Unicode text: focused window has no local process identity; no input was sent",
+          "rejected_state": {
+            "text": "",
+            "other": "other window untouched",
+            "caret": 0,
+            "selection": [
+              0,
+              0
+            ],
+            "changes": 0
+          },
+          "recovered_state": {
+            "text": "同一实例🙂",
+            "other": "other window untouched",
+            "caret": 5,
+            "selection": [
+              5,
+              5
+            ],
+            "changes": 1
+          }
+        }
+      ],
+      "input_unchanged": true,
+      "display_scope": "two private displays; no input sent to the operator's desktop"
+    },
+    "old_atspi_failure": {
+      "registration": {
+        "exit_code": 1,
+        "stdout": "",
+        "stderr": "错误：GDBus.Error:org.freedesktop.DBus.Error.NameHasNoOwner: Could not activate remote peer 'org.a11y.atspi.Registry': unit failed\n"
+      },
+      "private_session_bus_observed": true,
+      "private_root_bus_observed": true,
+      "inherited_bus_override_absent": true,
+      "inherited_display_override_absent": true
+    },
+    "daemon_probe_registration": {
+      "registration": {
+        "exit_code": 0,
+        "stdout": "([(':1.1', objectpath '/org/a11y/atspi/accessible/root')],)\n",
+        "stderr": ""
+      },
+      "private_session_bus_observed": true,
+      "private_root_bus_observed": true,
+      "inherited_bus_override_absent": true,
+      "inherited_display_override_absent": true
+    },
+    "new_atspi_registration": {
+      "registration": {
+        "exit_code": 0,
+        "stdout": "([(':1.1', objectpath '/org/a11y/atspi/accessible/root')],)\n",
+        "stderr": ""
+      },
+      "private_session_bus_observed": true,
+      "private_root_bus_observed": true,
+      "inherited_bus_override_absent": true,
+      "inherited_display_override_absent": true
+    },
+    "fixture_source_equivalence": {
+      "compiled_source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+      "fixture_source_commit": "ddaf62a5276c658a4358cbfebb3f6bf3a7644516",
+      "changed_paths": [
+        "docs/reports/shared-cohort-20261120/cloud-validation.json",
+        "docs/reports/shared-cohort-20261120/local-preflight.json",
+        "scripts/e2e_x11_text.py"
+      ],
+      "rust_cargo_and_submodule_gitlinks_byte_identical": true,
+      "source_clean": true,
+      "source_tree": "8bfb93a991df1f650805254941dcb04fd7f447bc",
+      "fixture_sha256": "44ad6c0700e00c45dd38ecbf08f846a885fc0c14aef9d7ff8cb468462ce75bb4",
+      "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba"
+    },
+    "new_autostart": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "new_input_cleanup": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    "evidence_sha256": {
+      "cloud-c44c2cf/native-socket-owner/resources.json": "4dcc4cd98db39b6f04df9e5fa2ea534dde442e68727a08a339c0179ab63b22aa",
+      "cloud-c44c2cf/native-socket-owner-next/gates.json": "e84c09d72e56fa7741e5e16db4d5293e778853c15a89c2df5790e875aaef4007",
+      "cloud-c44c2cf/native-socket-owner-next/socket-owner.stdout.log": "ab853e140bdedd990cd722b9d2fb5599e14fa18753ebe30040982ae738f0fd66",
+      "cloud-c44c2cf/native-socket-owner-next/socket-owner.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-socket-owner-next/resources.json": "45f65a8bcb8447389399a3fe01657d7998a6588153219a74b7515a60c5f68797",
+      "cloud-c44c2cf/native-socket-owner-next/enforced-limits.json": "92ae145d0217c5aadab70ad6c7ebe8fd6fff3538559cd101346cc4423232ca5f",
+      "cloud-c44c2cf/native-wayland-preflight/gates.json": "529af78733250876292ce710aaf8c959589f682eac6443ef822f0fec23f43942",
+      "cloud-c44c2cf/native-wayland-preflight/wayland-preflight.stdout.log": "5005ae65853d37d43eb642d574a5864e0ba249625721c2a65c86aa2550a54798",
+      "cloud-c44c2cf/native-wayland-preflight/wayland-preflight.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-wayland-preflight/resources.json": "0f62adb161ff5aff187489a04b7af12588d2e80b66bc6c1a853fd06611eee07f",
+      "cloud-c44c2cf/native-wayland-preflight/enforced-limits.json": "7419e5d6b91b1f7eff3728d6af6bf144660b6618e3fe10a954344ed968961e5c",
+      "cloud-c44c2cf/native-full-gate/gates.json": "724575214975599a9d0c90bc3ae769ffffbb561be88ad5aa0ae962ed889e941d",
+      "cloud-c44c2cf/native-full-gate/display-concurrent.stdout.log": "cf7ddbf6bd3f546b73e760cf330dec35cbdb8190a6cccbf875607823a416f510",
+      "cloud-c44c2cf/native-full-gate/display-concurrent.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/display-alias-ownership.stdout.log": "69311eeeede2583299c213f98c8b81c20930b202b6d321c663a1b7de631e8f49",
+      "cloud-c44c2cf/native-full-gate/display-alias-ownership.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/desktop-app-autostart.stdout.log": "a03fa3c1260e925ed239d788ea5d221c9ee33b357b98469a5eeac464a17da8da",
+      "cloud-c44c2cf/native-full-gate/desktop-app-autostart.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/desktop-private-input.stdout.log": "533e0213895848c17746509fe3799121b6ea78391bec4e731982f1d4d3b7bb14",
+      "cloud-c44c2cf/native-full-gate/desktop-private-input.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/worker-entry.stdout.log": "cd5c3cc4056684ff58854b2febb648550f0d8ca513fd7c754a34616fdfeb69bf",
+      "cloud-c44c2cf/native-full-gate/worker-entry.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/client-x11-worker.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate/client-x11-worker.stderr.log": "9de3bc8a9b2ccf52bef47055b4675048622a964d779b61709ccc539afe02b6cc",
+      "cloud-c44c2cf/native-full-gate/resources.json": "5e8aef8f91c924e0a249410007fd9071e81266e2608e46e9acb5ba41aec2f759",
+      "cloud-c44c2cf/native-full-gate/enforced-limits.json": "9f1d622274e7c7cf48a91ca442c0a83bdad07505e77a5b95d36af76ecfc7ffcd",
+      "cloud-c44c2cf/native-full-gate-ddaf/gates.json": "cec3aca5633bb4272e6e97845a789c4e0c532fa69c4fff8e0f607543b9535075",
+      "cloud-c44c2cf/native-full-gate-ddaf/client-x11-worker.stdout.log": "f068c0dd5a7d3a7793ee0f3e6fb8299270023db58d04d34a650a9b32e50590e4",
+      "cloud-c44c2cf/native-full-gate-ddaf/client-x11-worker.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate-ddaf/daemon-x11-worker.stdout.log": "208dc08fbee3dae5eac58839dd4770e04ea6f26415d73a2ebbe54bc9b7ac2630",
+      "cloud-c44c2cf/native-full-gate-ddaf/daemon-x11-worker.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-full-gate-ddaf/mcp-base.stdout.log": "6f2b256c23dc1b529dc4f5b583e28bbcde3305e277222250207a1114b3fa16be",
+      "cloud-c44c2cf/native-full-gate-ddaf/mcp-base.stderr.log": "eb239067c4eb1cd132a9e2914308d8e03351be50264bb1dfe06c6cd4a9aa2346",
+      "cloud-c44c2cf/native-full-gate-ddaf/resources.json": "ac06e18b0499566fb0c4f4df8e4b3eb801a4ecb983a425e64301e1621c8f9d43",
+      "cloud-c44c2cf/native-full-gate-ddaf/enforced-limits.json": "e05373bbd9044cdf7c4604eaa8338577c73c5d869b6fc054c35cd8c4696cc944",
+      "cloud-c44c2cf/native-mcp-gate-ddaf/gates.json": "ceb8caea40effb93b4f3ad30d58c6a3308e8ddd5ee471bb156392905f6156758",
+      "cloud-c44c2cf/native-mcp-gate-ddaf/mcp-base.stdout.log": "4ab585923c8190c43363ec8ec089f9538dd4b8d2eb654232edc48310de754321",
+      "cloud-c44c2cf/native-mcp-gate-ddaf/mcp-base.stderr.log": "eb239067c4eb1cd132a9e2914308d8e03351be50264bb1dfe06c6cd4a9aa2346",
+      "cloud-c44c2cf/native-mcp-gate-ddaf/resources.json": "17ec07fbb29f4727bea99cd64e42266a630fc2de721b96d04f24c3963312407a",
+      "cloud-c44c2cf/native-mcp-gate-ddaf/enforced-limits.json": "8b47e88abb5b48ad1e8c3359301a4f0a371d7e57a789b3da31f0af63a45e6c69",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/gates.json": "43e83303f1716d36251edd1b30c930cac7e960a583d37c85fe212ec8cc9ecd5c",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/mcp-base.stdout.log": "35022e46178074a080e5e059118e65804fa44efcaf44c2d4dcd1674417977a9b",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/mcp-base.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/mcp-private-desktop.stdout.log": "65cbaf5e91aac94059065fd325046a03523885f375180791843546200146db2c",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/mcp-private-desktop.stderr.log": "27eddb29f8088228145ecad800d5aee4a9d0e41044c83e11bcc3fe5cf475221d",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/resources.json": "5b2ddabec79ad5f3a8f2fa7858fc1947e91b5169a4a5072d10aa4eb99ec2619d",
+      "cloud-c44c2cf/native-mcp-layout-gate-ddaf/enforced-limits.json": "7bf2aff39812f5116094f603bf2b16ac75d6b475829a583d7e0c765b82522870",
+      "cloud-c44c2cf/native-private-registration-gate-32bf/gates.json": "a212bf1c773cb89a1f2d438719b24b1b99716733e7b43b8198e0cb3de0c97b43",
+      "cloud-c44c2cf/native-private-registration-gate-32bf/mcp-private-desktop.stdout.log": "637f7028ccc5cb4e5fe322eb3b8e7c6fca287d3b9b6ac5eb1c03c2793b450636",
+      "cloud-c44c2cf/native-private-registration-gate-32bf/mcp-private-desktop.stderr.log": "2869e64e894c43d1864aca7a0ef34758649955c7876d6880e9d6e44a2ce54fcc",
+      "cloud-c44c2cf/native-private-registration-gate-32bf/resources.json": "2a1df7fc37efa0a794732da2bb464d19e67c60dec98be5969eacc5454c9a0e42",
+      "cloud-c44c2cf/native-private-registration-gate-32bf/enforced-limits.json": "1aa3112de24e8ceb9686332457e69512409abe2732893287351ab6fd78563617",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-32bf/gates.json": "d71399d0671a056583bb7ee58e6744dca580f8512856aaffcc0f313913db2294",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-32bf/mcp-private-desktop.stdout.log": "ec67a9e40e1c7ee6c5ccc76970366dfcab394fca25ed08faaa62c4eb1397e3cb",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-32bf/mcp-private-desktop.stderr.log": "6fc2ce88b7ed808271b0604060441129445201dc5a6194663002eb263f9d86e6",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-32bf/resources.json": "107c7677913da10b5f21f054d003fde40cf288ebe52143183837b6139c5ff415",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-32bf/enforced-limits.json": "46e2c43b6c225f1060377564b56d7058d6a9e3bc44e136ccc94026e5f444ba2c",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-9cb/gates.json": "6a97b10462c4436a857c135fbaa68622902bb29179a095219321798dee0deab6",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-9cb/mcp-private-desktop.stdout.log": "b24ccd14c0f3bb78f64bc4e10cec2184f93bb3c67b389c203b681eedcc29070a",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-9cb/mcp-private-desktop.stderr.log": "3fb433334db82a5e3819a9b37b94d670be0fa2924b0df523db9391de83cbd3ed",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-9cb/resources.json": "bac7c4273e8baad34c76a19d996af6e5018efe8b650152b121f52d394860e066",
+      "cloud-c44c2cf/native-private-daemon-probe-gate-9cb/enforced-limits.json": "2acc472242997c3a28b1cb238463438abc3fbf2ad8bffb73cc00fb6c1f2e6654",
+      "cloud-c44c2cf/native-private-no-fuse-probe-gate-9cb/resources.json": "d3f66eac80e6a60005dfda898df35dd8c860b129dda97887281a0e74e20ccfd9",
+      "cloud-785e6b0/native-affected-gate/gates.json": "ee85c08c623c0ad3a8fa1907d667bad100d1a4dc906919bc9bb79f0c85f73be8",
+      "cloud-785e6b0/native-affected-gate/desktop-app-autostart.stdout.log": "5960476cdc97a9392519e9f73a7ae58f673abe4c54bc637728d564cea4e347f1",
+      "cloud-785e6b0/native-affected-gate/desktop-app-autostart.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-785e6b0/native-affected-gate/desktop-private-input.stdout.log": "fe72039550a36ac66a5e4d17c85768d6eee74a4c86d6171b339e8ef89ac9f119",
+      "cloud-785e6b0/native-affected-gate/desktop-private-input.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-785e6b0/native-affected-gate/mcp-private-desktop.stdout.log": "94d939846a2c91103983b0545964aedf3c23f699da6062c00a2ea76dd2b71090",
+      "cloud-785e6b0/native-affected-gate/mcp-private-desktop.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cloud-785e6b0/native-affected-gate/resources.json": "312bc0862304ee4de3eabd7cd4b2823734e6f5b19d2cf0adeb1c1558a477d540",
+      "cloud-785e6b0/native-affected-gate/enforced-limits.json": "497c06c1a5f499a3bb281e97c23f7d8a275d321a64e56f6373918adf20d0a642",
+      "cloud-785e6b0/delivery-receipt.json": "03ecb0738aa8811f447aae8c47f80077948c178e25ab574d9616521eb8f5d157",
+      "cloud-785e6b0/native-affected-plan.json": "34dca722dcaece895f6300f273f1614375134a683b449bfe0d6e98c61d1a546f",
+      "cloud-c44c2cf/native-mcp-layout-ddaf/base-mcp.json": "6d03769087d9b155f802cf37c3ecea58bf0c8548b2885dac8b7e09aa0e3125ec",
+      "cloud-c44c2cf/native-full-ddaf/client-worker/whole-text.json": "e2866d3fe9bdfabcf5e894d5167fcc38cadc7b3c15595d79476878962b082033",
+      "cloud-c44c2cf/native-full-ddaf/daemon-worker/whole-text.json": "c1c13a79c32304b9e1e37a672d2e0d9e3c235fe1be38012d1dc47fc6605f2ab7",
+      "cloud-785e6b0/native-affected/private-desktop.json": "21ba950ac8d1c571ef0ff63cabcbf60d799ff33b9362b802db59d382c6f19418",
+      "cloud-c44c2cf/native-private-32bf/private-desktop/gtk-text/accessibility-registration.json": "a85ea919817d7a4278eabecfdf2aa9bcf11127d8cafc448bbfb7104f9ba731f0",
+      "cloud-c44c2cf/native-private-daemon-probe-9cb/private-desktop/gtk-text/accessibility-registration.json": "c54cb920df2af610372d7a6e875e0ddb629c1fdac2e9e3428b415bcb40313370",
+      "cloud-785e6b0/native-affected/private-desktop/gtk-text/accessibility-registration.json": "9557e098980fb817e8a03caee35d742f6abe1f596d3835e97369d97f4ee9c76c",
+      "cloud-c44c2cf/fixture-ddaf-source-equivalence.json": "ed312f6397deb4f1dc75bd3f63f0aaf2613fc61417fc953cf79f9b5fc264e381"
+    }
+  },
+  "account_relay": {
+    "native-account-relay.json": {
+      "status": "passed",
+      "checks": 47,
+      "passed_checks": [
+        "A --ssh exits as expected",
+        "legacy SSH stops before any transport starts",
+        "A invite exits as expected",
+        "retired invite cannot enter a nonexistent invitation flow",
+        "A join exits as expected",
+        "retired join cannot enter a nonexistent invitation flow",
+        "retired commands never contact the relay",
+        "A login exits as expected",
+        "device login stores the verified identity and registered server username",
+        "login output excludes account and polling credentials",
+        "account credentials have owner-only file permissions",
+        "A whoami exits as expected",
+        "whoami verifies identity without exposing the login token",
+        "B --server exits as expected",
+        "an allow target from another relay is rejected before network access",
+        "B --server exits as expected",
+        "provider-style allow labels cannot replace a same-origin account target",
+        "A whoami exits as expected",
+        "selecting another origin never borrows the saved account credential",
+        "A whoami exits as expected",
+        "account API redirects never forward credentials to another origin",
+        "A --no-watchdog exits as expected",
+        "a changed stable identity cannot connect or replace the saved credential",
+        "A other@http://127.0.0.1:<fixture-port> exits as expected",
+        "a requested username must match the account registered on this relay",
+        "signed-in A binds its own username and origin with its saved account token",
+        "controlled session exits cleanly",
+        "unsigned B uses explicit same-origin allow and a supported WebSocket protocol",
+        "unsigned B never saves or receives A's account credential",
+        "A list exits as expected",
+        "A lists its currently controllable unsigned B session",
+        "B exposes a real terminal through the relay",
+        "real shell round-trip succeeds without relay credentials reaching native tools",
+        "watchdog reconnects the unsigned device without acquiring a credential",
+        "server access revocation terminates B with an error",
+        "revoked active sessions stop watchdog retries",
+        "revocation immediately after Ready also stops startup retries",
+        "HTTP 401 policy failures stop default watchdog retries",
+        "HTTP 403 policy failures stop default watchdog retries",
+        "controlled session exits cleanly",
+        "Ctrl-C cleans up an unsigned session without leaving credentials on B",
+        "the current lifecycle never depends on invitation or enrollment endpoints",
+        "A logout exits as expected",
+        "logout revokes its live session and declined authorization cannot reconnect it",
+        "a foreground account session offers at most one fresh authorization after revocation",
+        "logout revokes and removes the selected origin's account credential",
+        "gateways observed no malformed client protocol frames"
+      ],
+      "transport": "loopback WebSocket",
+      "oauth": "synthetic GitHub provider",
+      "device": "unsigned explicit same-origin allow",
+      "ssh": false,
+      "models_started": false,
+      "binary_sha256": "59ca27630c17fd73f027f271c1f752fcc7bacb60125de84aed276e39e1141e19",
+      "script_sha256": "1e103edafd58d6e6fcb1307df4406891b6ff6abe3279b8b67db5c113e0d9de8b"
+    },
+    "native-account-relay-gate/resources.json": {
+      "started_utc": "2026-11-20T04:07:25Z",
+      "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+      "initial_available_bytes": 4257132544,
+      "admission_bytes": 4294967296,
+      "host_floor_bytes": 3221225472,
+      "minimum_available_bytes": 4257132544,
+      "maximum_cgroup_peak_bytes": 0,
+      "floor_stopped": false,
+      "status": "resource_not_started"
+    },
+    "native-account-relay-512-gate/gates.json": {
+      "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+      "source_tree": "b910d88ca479ee65ecc0ce7f0fca4457abd7d556",
+      "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+      "steps": [
+        {
+          "name": "account-relay",
+          "exit_code": 0,
+          "seconds": 19.252,
+          "cgroup": {
+            "memory.current": "65257472",
+            "memory.peak": "92499968",
+            "memory.swap.current": "0",
+            "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+          }
+        }
+      ],
+      "status": "passed",
+      "compiled_source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+      "scope": "frozen ELF native runtime checks; no Rust compilation",
+      "artifacts_unchanged": true,
+      "final_cgroup": {
+        "memory.current": "65253376",
+        "memory.peak": "92499968",
+        "memory.swap.current": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      },
+      "source_unchanged": true
+    },
+    "native-account-relay-512-gate/resources.json": {
+      "started_utc": "2026-11-20T04:08:02Z",
+      "source_commit": "785e6b00440b048d00d9da626a33defa99108afe",
+      "initial_available_bytes": 4323913728,
+      "admission_bytes": 4026531840,
+      "host_floor_bytes": 3221225472,
+      "minimum_available_bytes": 4293472256,
+      "maximum_cgroup_peak_bytes": 92499968,
+      "floor_stopped": false,
+      "last_cgroup": {
+        "memory.current": "65253376",
+        "memory.peak": "92499968",
+        "memory.swap.current": "0",
+        "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+      },
+      "systemd_exit_code": 0,
+      "ended_utc": "2026-11-20T04:08:22Z",
+      "status": "passed",
+      "owned_cgroup_empty": true,
+      "unit_after": "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success"
+    },
+    "native-account-relay-512-gate/enforced-limits.json": {
+      "memory.max": "536870912",
+      "memory.high": "402653184",
+      "memory.swap.max": "0",
+      "cpu.max": "75000 100000"
+    },
+    "sha256": {
+      "native-account-relay.json": "e9e68649b889ec4680ca4b7b4af6aefb85a141a0fe90946bf4020e56d195e777",
+      "native-account-relay-gate/resources.json": "44ce17b3365fe013c157be7dfc238c5d94c54bfdf86913f124ced483f978703d",
+      "native-account-relay-512-gate/gates.json": "4d1cf1849616b9d5dd9c1f08f30dbd77381b4f84c6430ddf4cda01ed2e4e0281",
+      "native-account-relay-512-gate/resources.json": "415a238ccb16a97da350622f5572c5f9d3df423b67630a75dc357643bd839da3",
+      "native-account-relay-512-gate/enforced-limits.json": "a7171638996bec6f1b2c780a29058e2cd90e5cb79a7321eefb9de71d3e553724",
+      "native-account-relay-512-gate/account-relay.stdout.log": "72b504dd1f78b7a7c1e93dae580f3fe26bb92549fd0a91c173f9eb7a67b8cb25",
+      "native-account-relay-512-gate/account-relay.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "account_relay_budget": {
+    "first_attempt": "768 MiB max admission not met; exit 75 before starting a unit or test. Original receipt preserved.",
+    "bounded_retry": "Task cap tightened to 512 MiB / high 384 MiB because this fixture has one sustained client+relay/PTY and short CLI calls, no compositor/GTK/libtest router/compiler. The 3 GiB host reserve and 256 MiB admission buffer stayed unchanged.",
+    "source_changes_for_test": false,
+    "exact_new_coverage": [
+      "server access revocation terminates B with an error",
+      "revoked active sessions stop watchdog retries",
+      "revocation immediately after Ready also stops startup retries",
+      "HTTP 401 policy failures stop default watchdog retries",
+      "HTTP 403 policy failures stop default watchdog retries"
+    ],
+    "earlier_125_check_scope": "The earlier 125 MCP checks did not establish these exact no-token Account transport branches. The separate 47-check run closes that gap."
+  },
+  "retained_failures": [
+    {
+      "stage": "c44 cloud socket and MCP runs",
+      "observation": "UnixListener::bind and bubblewrap NETLINK_ROUTE returned EPERM in the cloud. Original failures remain; socket and base MCP scopes were later run on developer Linux."
+    },
+    {
+      "stage": "c44 first native GTK setup",
+      "observation": "Decimal READY XID did not match canonical hexadecimal window membership; cases remained empty. ddaf changes both fixture readiness readers and preserves production focus verification."
+    },
+    {
+      "stage": "c44 native base MCP deployment layout",
+      "observation": "Missing tracked code-mode.js stopped two attempts after 69 checks. The private runtime bundle then used the exact tracked script in its installed layout; the subsequent 125-check run passed."
+    },
+    {
+      "stage": "32bf default private accessibility registration",
+      "observation": "The private bus was reachable but org.a11y.atspi.Registry activation failed with NameHasNoOwner/unit failed."
+    },
+    {
+      "stage": "32bf forced-daemon diagnostic",
+      "observation": "Registration succeeded, then a success-only fixture wrapper incorrectly rejected the expected tool error; 9cb preserves and checks the actual MCP error envelope."
+    },
+    {
+      "stage": "9cb forced-daemon diagnostic",
+      "observation": "32 checks including same-Computer refusal/recovery passed, but lifecycle cleanup failed on a dead private GVfs FUSE mount. This was not an overall pass."
+    },
+    {
+      "stage": "9cb planned no-FUSE diagnostic",
+      "observation": "Fresh memory admission failed; exit 75 and no test/unit started. No production pass was inferred from this unexecuted diagnostic."
+    },
+    {
+      "stage": "785 production correction",
+      "observation": "Only private child Environment gains ATSPI_DBUS_IMPLEMENTATION=dbus-daemon and GVFS_DISABLE_FUSE=1. GIO_USE_VFS and the host parent environment stay unchanged. New compiled ELF passes the default private lifecycle with deliberately conflicting outer broker/GVfs environment."
+    }
+  ],
+  "platform_and_release_limits": [
+    "These are source-bound Linux development acceptance results, not a complete Windows/macOS application matrix.",
+    "The cloud build uses userspace RSS/MemAvailable polling, not a cgroup hard limit; native runtime gates verify actual systemd cgroup limits.",
+    "Loopback synthetic OAuth/relay checks do not establish public TLS or a real GitHub account login.",
+    "No installed SSMCP, host desktop, authentication file contents, or production server was changed.",
+    "No models were started by these fixtures.",
+    "The development package still says 0.10.14. These private acceptance ELFs are not official release assets and must not overwrite the existing publisher tag or artifacts.",
+    "The sole publisher must integrate the final delta into its current v0.10.15 candidate, validate that combined source, and provide official source/version/asset checksums before oh-my-ztty or zrc artifact propagation."
+  ],
+  "publication_handoff_observation": {
+    "observed_utc": "2026-11-20T04:08:40Z",
+    "existing_candidate": "https://github.com/LIghtJUNction/ssmcp/pull/109",
+    "candidate_title": "Prepare v0.10.15 interactions and Project Z application integration",
+    "public_pr_updated_at": "2026-11-20T03:05:31Z",
+    "public_pr_status": "open draft; describes ec718 Project Z integration, not a final 785 combined acceptance",
+    "final_source_coordination_queue": "queued; delivery not acknowledged at the observation",
+    "downstream_formal_artifact_propagation": "pending; no private test binary is represented as an official asset"
+  },
+  "upstream_contracts": [
+    "https://github.com/GNOME/at-spi2-core/blob/e021608a1c485c9d024275c12c20210ff7a11bab/bus/at-spi-bus-launcher.c",
+    "https://docs.gtk.org/gio/overview.html"
+  ],
+  "sanitization": {
+    "method": "Explicit evidence allowlist, then reject private paths, session-bus URLs, tokens, download URLs and client-id value fields. Raw receipts remain private and are identified by SHA-256.",
+    "normalized_fields": [
+      "The ephemeral numeric loopback HTTP port in an account fixture check description becomes <fixture-port>."
+    ],
+    "public_input_sha256": {
+      "native": "82e9b4497b7e57c1fd946522dd1dc5afeb2f871693995aa52d55a9061c676c82",
+      "account": "ba2b5ad5604e178c9617da99818a4df2f36cc9d44a10e1306704f78b4d0199bb"
+    }
+  }
+}
