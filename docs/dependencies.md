@@ -43,6 +43,8 @@ zuse-computer 0.2.2 固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`。Windo
 
 `zcall 0.3.0` 暂由 `zuse-computer 0.2.2 → zmcpio 0.4.0` 保留；[zmcpio 当前发布源码](https://github.com/LIghtJUNction/zmcpio/blob/bc89d7fa3b0249b3a9037748e2113b31615e8c89/Cargo.toml) 精确要求 `=0.3.0`。新的 zharness 路径使用 0.4.0，两条调用链由 Cargo 分别解析。关闭这个例外需要 zmcpio 维护者先发布兼容 0.4.0 的版本，随后由 zuse 维护者发布新的精确依赖版本，再由 SSMCP 同步消费并验证。每轮核对都应重新检查该例外。
 
+本次消费者验证已通过锁定依赖解析、原生插件 fixture 构建及真实动态库调用契约（1 项通过），并通过 91 项发布规则测试；完整命令、源码提交和最终版本复核时间保存在上述核对记录中。
+
 ## 获取与构建
 
 ```sh
