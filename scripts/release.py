@@ -206,19 +206,7 @@ def event_mode(event_name, ref, event):
     raise ValueError("this event is not an authorized release or main preflight trigger")
 
 
-def deployment_requested(event_name, event):
-    """A manual publication can defer the separate production switch."""
-    if event_name != "workflow_dispatch":
-        return True
-    requested = (event.get("inputs") or {}).get("deploy_server", True)
-    if type(requested) is bool:
-        return requested
-    if isinstance(requested, str) and requested in ("true", "false"):
-        return requested == "true"
-    raise ValueError("the deploy_server input must be a boolean")
-
-
-def validate_tag(tag, root=None, *, build_only=False, deploy_server=True):
+def validate_tag(tag, root=None, *, build_only=False):
     root = root or ROOT
     if build_only and tag is not None:
         raise ValueError("build-only validation cannot select a release tag")
@@ -233,8 +221,7 @@ def validate_tag(tag, root=None, *, build_only=False, deploy_server=True):
     return emit({"tag": tag or "", "version": actual, "sha": sha, "submodule_count": len(modules),
                  "prerelease": str("-" in actual).lower(),
                  "publish": str(not build_only).lower(), "create_tag": "false",
-                 "build_only": str(build_only).lower(),
-                 "deploy_server": str(not build_only and deploy_server).lower()})
+                 "build_only": str(build_only).lower()})
 
 
 def prepare(tag=None, automatic=False, root=None):
@@ -613,8 +600,7 @@ def main():
             with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
                 event = json.load(stream)
             tag, build_only = event_mode(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"], event)
-            validate_tag(tag, build_only=build_only,
-                         deploy_server=deployment_requested(os.environ["GITHUB_EVENT_NAME"], event))
+            validate_tag(tag, build_only=build_only)
         else:
             validate_tag(args.tag, build_only=args.build_only)
     elif args.command in {"package", "pack"}:
