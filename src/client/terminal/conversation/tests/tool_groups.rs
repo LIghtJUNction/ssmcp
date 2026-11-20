@@ -217,6 +217,20 @@ fn reload_tool_group_frame_preserves_display_fold_and_draft_without_native_repla
         for expanded in [false, true] {
             let mut before = fixture(cols);
             let first = display(&mut before).screen().contents();
+            if !expanded {
+                let y = first
+                    .lines()
+                    .position(|row| row.contains("Tools · 5 calls"))
+                    .unwrap() as u16;
+                before.chat_key(Key::Mouse {
+                    button: 0,
+                    x: 8,
+                    y,
+                    release: false,
+                });
+                display(&mut before);
+                input(&mut before, b"\r");
+            }
             if expanded {
                 let y = first
                     .lines()
