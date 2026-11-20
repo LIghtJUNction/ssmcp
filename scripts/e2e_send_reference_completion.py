@@ -100,7 +100,8 @@ class SendReferenceCompletion(ForceSend, MessageReferences):
         front = self.start_front("send-reference-completion")
         front.resize(32, 120)
         front.until(lambda shot: shot["size"] == [32, 120], "the owned completion viewport")
-        self.agents(front)
+        self.focus_input(front)
+        self.activate_column(front, "sessions")
         front.send(HOME + ENTER)
         self.wait_state(front, lambda state: state["target"] is None
                         and state["native_recipient"] is None
