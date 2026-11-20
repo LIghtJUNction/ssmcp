@@ -379,7 +379,7 @@ mod archive_tests {
         history::with_test_history(root.0.join("history"), async {
             let mut state = State::new(24, 120, &Ui::default());
             state.canvas_focus(View::History);
-            let column = state.conversation.canvas.active;
+            let canvas = state.conversation.canvas.snapshot();
             for (command, archived) in [("/resume", false), ("/archived", true), ("/resume", false)]
             {
                 for character in command.chars() {
@@ -390,7 +390,7 @@ mod archive_tests {
 
                 state.chat_character('\r');
 
-                assert_eq!(state.conversation.canvas.active, column);
+                assert_eq!(state.conversation.canvas.snapshot(), canvas);
                 assert_eq!(state.conversation.view, View::History);
                 assert!(state.conversation.content_focus, "{command}");
                 assert_eq!(state.conversation.history_archived, archived);
