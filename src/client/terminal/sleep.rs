@@ -355,11 +355,12 @@ mod tests {
             sleep.visible,
             "another connection owns another visual episode"
         );
-        for episode in 0..40 {
+        for episode in 0..DISMISSED_LIMIT + 8 {
             sleep.refresh(&Snapshot::from(&snapshot("b", episode, episode)));
             sleep.dismiss();
         }
         assert_eq!(sleep.dismissed.len(), DISMISSED_LIMIT);
+        assert_eq!(sleep.dismissed.front(), Some(&format!("{:064x}", 8)));
         sleep.refresh(&Snapshot::from(&user_wait::Snapshot::default()));
         assert!(!sleep.visible);
         assert!(sleep.dismissed.is_empty());

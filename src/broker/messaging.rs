@@ -1,4 +1,5 @@
 //! Authenticated native messages across explicitly selected client mailboxes.
+mod broadcast;
 use super::{Authorization, Broker, IDENTITY_RESOURCE, Session};
 use crate::{
     identity::Identity,
@@ -8,6 +9,7 @@ use crate::{
         messages::{self, Command, Origin, Recipient, RecipientKind, Reply, Sender},
     },
 };
+use broadcast::{PreparedMessage, Request};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -84,6 +86,7 @@ impl Session {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Admission<'a> {
     OAuth { user: &'a str, token: &'a str },
     Device(&'a crate::device::Registration),
@@ -249,9 +252,7 @@ impl Broker {
             .ok_or("messages requires client_id from list")?;
         let supplied_id = fields.remove("agent_id");
         let supplied_token = fields.remove("agent_token");
-        let command: Command = serde_json::from_value(Value::Object(fields))
-            .map_err(|_| "invalid native message action or arguments")?;
-        command.validate()?;
+        let request = Request::parse(fields)?;
         let authorization = self
             .authenticate(user, access_token)
             .await
@@ -305,24 +306,40 @@ impl Broker {
             account: account(&caller),
             agent,
         };
-        let result = self
-            .dispatch_message(
-                &source,
-                authorization,
-                sender,
-                binding.as_ref(),
-                command,
-                Admission::OAuth {
-                    user,
-                    token: access_token,
-                },
+        let admission = Admission::OAuth {
+            user,
+            token: access_token,
+        };
+        let result = match request {
+            Request::Single(command) => serde_json::to_value(
+                self.dispatch_message(
+                    &source,
+                    authorization,
+                    sender,
+                    binding.as_ref(),
+                    command.into(),
+                    admission,
+                )
+                .await?,
             )
-            .await?;
+            .map_err(|e| e.to_string())?,
+            Request::Broadcast(prepared) => {
+                self.dispatch_broadcast(
+                    &source,
+                    authorization,
+                    sender,
+                    binding.as_ref(),
+                    prepared,
+                    admission,
+                )
+                .await?
+            }
+        };
         if let Some(run) = &run {
             run.question_delivery_server_action(&client_id);
             run.dispatched(&client_id);
         }
-        serde_json::to_value(result).map_err(|e| e.to_string())
+        Ok(result)
     }
 
     pub(super) async fn local_message_command(
@@ -354,7 +371,7 @@ impl Broker {
             Authorization::Identity(registration.identity.clone()),
             sender,
             None,
-            command,
+            command.into(),
             Admission::Device(registration),
         )
         .await
@@ -366,9 +383,10 @@ impl Broker {
         authorization: Authorization,
         sender: Sender,
         binding: Option<&crate::code_mode::RunBinding>,
-        command: Command,
+        prepared: PreparedMessage<'_>,
         admission: Admission<'_>,
     ) -> Result<Reply, String> {
+        let PreparedMessage { command, broadcast } = prepared;
         let resource = match &admission {
             Admission::OAuth { user, .. } => *user,
             Admission::Device(_) => IDENTITY_RESOURCE,
@@ -438,17 +456,20 @@ impl Broker {
                 if !self.message_recipient_live(target, &recipient) {
                     return Err("recipient account is unavailable or no longer authorized".into());
                 }
-                reply.receipts.push(self.native_messages.enqueue(
-                    Proof {
-                        connection: Arc::downgrade(source),
-                        destination: Arc::downgrade(target),
-                        identity: caller.clone(),
-                        sender,
-                    },
-                    recipient,
-                    text,
-                    request_id,
-                )?);
+                let proof = Proof {
+                    connection: Arc::downgrade(source),
+                    destination: Arc::downgrade(target),
+                    identity: caller.clone(),
+                    sender,
+                };
+                reply.receipts.push(match broadcast {
+                    Some(broadcast) => self
+                        .native_messages
+                        .enqueue_broadcast(proof, recipient, text, broadcast)?,
+                    None => self
+                        .native_messages
+                        .enqueue(proof, recipient, text, request_id)?,
+                });
             }
             Command::Status { message_id } => {
                 let receipt = self

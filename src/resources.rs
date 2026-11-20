@@ -325,7 +325,7 @@ fn limits() -> Value {
                 "context.roots","skills.list","skills.read","skills.view",
                 "agents.list","agents.read","agents.resolve",
                 "collab.join","collab.list","collab.update","collab.send","collab.receive","collab.ack","collab.leave",
-                "messages.list","messages.send","messages.inbox","messages.ack","messages.status",
+                "messages.list","messages.send","messages.broadcast","messages.inbox","messages.ack","messages.status",
                 "rsync","sync","jobs","ports","resources","reload","outputs",
                 "cua","cua.browser","terminal.open","terminal.list","terminal.select","terminal.close",
                 "terminal.read","terminal.write","terminal.status","terminal.resize",

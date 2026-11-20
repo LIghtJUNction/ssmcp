@@ -1727,9 +1727,11 @@ async fn send_steering(
     let Some(command) = steering::pending_command(id) else {
         return Ok(());
     };
-    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command {
-        let prepared = match timeout(Duration::from_secs(5), backend.expand_references(text)).await {
-            Ok(Ok(text)) => steering::prepare_publish(id, text),
+    let command = if let crate::wire::SteeringCommand::Publish { text, .. } = &command
+        && steering::needs_preparation(id)
+    {
+        let prepared = match timeout(Duration::from_secs(5), backend.prepare_references(text)).await {
+            Ok(Ok(prepared)) => steering::prepare_publish(id, prepared),
             Ok(Err(error)) => Err(error),
             Err(_) => Err("Preparing the file or skill references timed out. The request was not sent; review the retained draft and retry.".into()),
         };

@@ -36,8 +36,18 @@ impl Files {
         self.context.enable_default_skill_sources()
     }
 
+    pub(crate) async fn prepare_references(
+        &self,
+        text: &str,
+    ) -> Result<references::PreparedReferences, String> {
+        references::prepare(text, &self.workspace, &self.context).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
-        references::expand(text, &self.workspace, &self.context).await
+        self.prepare_references(text)
+            .await
+            .map(|prepared| prepared.text)
     }
 
     pub(crate) async fn reference_completions(

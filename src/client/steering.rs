@@ -26,9 +26,19 @@ static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum UiEvent {
-    Accepted { id: String, text: String },
-    Editable { id: String, text: String },
-    Failed { id: String, message: String },
+    Accepted {
+        id: String,
+        text: String,
+        reference_warnings: Vec<String>,
+    },
+    Editable {
+        id: String,
+        text: String,
+    },
+    Failed {
+        id: String,
+        message: String,
+    },
 }
 
 pub(super) enum Transport {
@@ -66,6 +76,8 @@ struct Record {
     resume_after_reload: bool,
     pending: Option<Mutation>,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    reference_warnings: Vec<String>,
 }
 
 impl Record {
@@ -250,6 +262,7 @@ impl Outbox {
                 return Err("invalid client outbox record".into());
             }
             validate_text(&message.text)?;
+            validate_reference_warnings(&record.reference_warnings)?;
         }
         Ok(())
     }
@@ -260,6 +273,7 @@ struct Request {
     queued_at: Instant,
     sent: bool,
     prepared: bool,
+    reference_warnings: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -338,6 +352,20 @@ pub(super) fn validate_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_reference_warnings(warnings: &[String]) -> Result<(), String> {
+    if warnings.len() > 8
+        || warnings.iter().any(|warning| {
+            warning.len() > 512
+                || warning
+                    .chars()
+                    .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
+        })
+    {
+        return Err("invalid or oversized reference notices".into());
+    }
+    Ok(())
+}
+
 impl Manager {
     fn event(&mut self, event: UiEvent) {
         if self.events.len() == 256 {
@@ -363,6 +391,7 @@ impl Manager {
                 "revision":record.message.revision,"status":record.status(self.connected),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
+                "reference_warnings":record.reference_warnings,
                 "source":if record.message.id.starts_with("webhook_") {"webhook"} else {"client_user"},
                 "retarget_required":record.retarget_required,"uncertain":record.uncertain
             })).collect::<Vec<_>>(),
@@ -481,6 +510,7 @@ impl Manager {
             resume_after_reload: false,
             pending: None,
             error: None,
+            reference_warnings: Vec::new(),
         });
         let index = self.outbox.records.len() - 1;
         if self.connected
@@ -522,6 +552,7 @@ impl Manager {
         }
         let record = &mut self.outbox.records[index];
         record.message.text = text.into();
+        record.reference_warnings.clear();
         record.message.target = target;
         record.message.state = SteeringState::Queued;
         record.message.updated_at_ms = now_ms();
@@ -651,13 +682,20 @@ impl Manager {
             .try_send(Transport::Wire { id })
             .map_err(|_| "request transport is busy; the draft has been retained")?;
         self.next_request = id;
+        let reference_warnings = command_message(&command)
+            .and_then(|message_id| self.outbox.records.iter().find(|record| record.message.id == message_id))
+            .filter(|record| matches!(&command, SteeringCommand::Publish { text, .. } if *text == record.message.text))
+            .map(|record| record.reference_warnings.clone())
+            .unwrap_or_default();
+        let prepared = !reference_warnings.is_empty();
         self.requests.insert(
             id,
             Request {
                 command,
                 queued_at: Instant::now(),
                 sent: false,
-                prepared: false,
+                prepared,
+                reference_warnings,
             },
         );
         Ok(id)
@@ -788,10 +826,16 @@ impl Manager {
             .map(|request| request.command.clone())
     }
 
+    fn needs_preparation(&self, id: u64) -> bool {
+        self.requests
+            .get(&id)
+            .is_some_and(|request| !request.sent && !request.prepared)
+    }
+
     fn prepare_publish(
         &mut self,
         id: u64,
-        expanded: String,
+        prepared: super::references::PreparedReferences,
     ) -> Result<Option<SteeringCommand>, String> {
         let Some(request) = self.requests.get(&id).filter(|request| !request.sent) else {
             return Ok(None);
@@ -808,7 +852,12 @@ impl Manager {
         else {
             return Ok(Some(request.command.clone()));
         };
+        let super::references::PreparedReferences {
+            text: expanded,
+            warnings,
+        } = prepared;
         validate_text(&expanded)?;
+        validate_reference_warnings(&warnings)?;
         let index = self.index(message_id)?;
         let record = &self.outbox.records[index];
         if record.room_id != self.outbox.room_id
@@ -839,7 +888,9 @@ impl Manager {
         };
         text.clone_from(&expanded);
         request.prepared = true;
+        request.reference_warnings.clone_from(&warnings);
         self.outbox.records[index].message.text = expanded;
+        self.outbox.records[index].reference_warnings = warnings;
         Ok(Some(request.command.clone()))
     }
 
@@ -879,6 +930,7 @@ impl Manager {
         let error = bounded_error(error);
         if editable {
             record.message.text.clone_from(&text);
+            record.reference_warnings.clear();
             record.message.target = target;
             record.message.state = SteeringState::Editing;
             record.safe_to_publish = true;
@@ -1032,6 +1084,7 @@ impl Manager {
                         resume_after_reload: false,
                         pending: None,
                         error: None,
+                        reference_warnings: Vec::new(),
                     });
                 }
             }
@@ -1112,6 +1165,7 @@ impl Manager {
                             self.event(UiEvent::Accepted {
                                 id: message_id,
                                 text,
+                                reference_warnings: request.reference_warnings,
                             });
                         }
                         (MutationKind::Takeback, Some(message))
@@ -1361,8 +1415,14 @@ pub(super) fn disconnect() {
 pub(super) fn pending_command(id: u64) -> Option<SteeringCommand> {
     with(|manager| manager.pending_command(id))
 }
-pub(super) fn prepare_publish(id: u64, text: String) -> Result<Option<SteeringCommand>, String> {
-    with(|manager| manager.prepare_publish(id, text))
+pub(super) fn needs_preparation(id: u64) -> bool {
+    with(|manager| manager.needs_preparation(id))
+}
+pub(super) fn prepare_publish(
+    id: u64,
+    prepared: super::references::PreparedReferences,
+) -> Result<Option<SteeringCommand>, String> {
+    with(|manager| manager.prepare_publish(id, prepared))
 }
 pub(super) fn fail_unsent(id: u64, error: &str) {
     with(|manager| manager.fail_unsent(id, error));
@@ -1669,7 +1729,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Accepted {
                 id: message.id.clone(),
-                text: text.into()
+                text: text.into(),
+                reference_warnings: Vec::new(),
             })
         );
         message
@@ -1915,6 +1976,152 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn full_budget_missing_reference_reaches_real_queue_once_with_ack_notice() {
+        let root = std::env::temp_dir().join(format!("ssmcp-full-budget-{}", random_id().unwrap()));
+        std::fs::create_dir(&root).unwrap();
+        let workspace = crate::workspace::Workspace::new(root.clone()).unwrap();
+        let context = crate::context::Context::new(root.clone(), vec![]).unwrap();
+        let tail = " @missing.txt";
+        let draft = format!("{}{tail}", "x".repeat(MAX_USER_MESSAGE_BYTES - tail.len()));
+        let prepared = super::super::references::prepare(&draft, &workspace, &context)
+            .await
+            .unwrap();
+        assert_eq!(prepared.text, draft);
+        let notices = prepared.warnings.clone();
+        assert_eq!(notices.len(), 1);
+
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message_id = manager.submit(&draft, None).unwrap();
+        let Transport::Wire { id } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        let frozen = manager.prepare_publish(id, prepared).unwrap().unwrap();
+        assert!(!manager.needs_preparation(id));
+        assert!(
+            manager.events.is_empty(),
+            "warnings wait for the actual ACK"
+        );
+
+        std::fs::write(root.join("missing.txt"), "created after preparation").unwrap();
+        let changed = super::super::references::prepare("@missing.txt", &workspace, &context)
+            .await
+            .unwrap();
+        assert!(changed.warnings.is_empty());
+        assert_eq!(
+            manager.prepare_publish(id, changed).unwrap(),
+            Some(frozen.clone())
+        );
+        assert_eq!(manager.outbox.records[0].reference_warnings, notices);
+
+        assert!(manager.sent(id));
+        let server = crate::steering::Queue::default();
+        let accepted = server.command("room_one", vec![], frozen.clone()).unwrap();
+        let duplicate = server.command("room_one", vec![], frozen).unwrap();
+        assert_eq!(accepted.messages.len(), 1);
+        assert_eq!(duplicate.messages.len(), 1);
+        assert_eq!(accepted.messages[0].text, draft);
+        manager.reply(id, Ok(accepted)).unwrap();
+        assert_eq!(
+            manager.events.pop_front(),
+            Some(UiEvent::Accepted {
+                id: message_id,
+                text: draft.clone(),
+                reference_warnings: notices,
+            })
+        );
+        assert!(manager.events.is_empty());
+        let delivered = server.claim("room_one", "first", None, 8, 64 * 1024);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0]["text"], draft);
+        assert!(
+            server
+                .claim("room_one", "second", None, 8, 64 * 1024)
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn raw_reference_notices_survive_reload_and_only_explicit_edits_reprepare() {
+        let tail = " @missing.txt";
+        let draft = format!("{}{tail}", "x".repeat(MAX_USER_MESSAGE_BYTES - tail.len()));
+        let warnings = vec!["@missing.txt: not found at preparation time".to_owned()];
+        let mut manager = Manager::default();
+        let mut receiver = manager.connect("room_one", crate::wire::VERSION);
+        ready(&mut manager, &mut receiver, "room_one");
+        let message_id = manager.submit(&draft, None).unwrap();
+        let Transport::Wire { id } = receiver.try_recv().unwrap() else {
+            panic!("publish required");
+        };
+        manager
+            .prepare_publish(
+                id,
+                super::super::references::PreparedReferences {
+                    text: draft.clone(),
+                    warnings: warnings.clone(),
+                },
+            )
+            .unwrap();
+        manager.disconnect();
+        let outbox: Outbox =
+            serde_json::from_slice(&serde_json::to_vec(&manager.outbox).unwrap()).unwrap();
+        outbox.validate().unwrap();
+        let mut restored = Manager {
+            outbox,
+            ..Manager::default()
+        };
+        let mut receiver = restored.connect("room_two", crate::wire::VERSION);
+        ready(&mut restored, &mut receiver, "room_two");
+        restored.poll().unwrap();
+        let Transport::Wire { id } = receiver.try_recv().unwrap() else {
+            panic!("restored publish required");
+        };
+        assert!(!restored.needs_preparation(id));
+        assert_eq!(restored.requests[&id].reference_warnings, warnings);
+        let frozen = restored.pending_command(id).unwrap();
+        assert!(matches!(&frozen, SteeringCommand::Publish { text, .. } if *text == draft));
+        assert!(restored.sent(id));
+        let server = crate::steering::Queue::default();
+        let accepted = server.command("room_two", vec![], frozen).unwrap();
+        restored.reply(id, Ok(accepted)).unwrap();
+        assert!(matches!(
+            restored.events.pop_front(),
+            Some(UiEvent::Accepted { reference_warnings, text, .. })
+                if reference_warnings == warnings && text == draft
+        ));
+
+        // Poll also queued a snapshot after the restored publication. Drive it
+        // before takeback, in the same FIFO order as the real transport.
+        let (snapshot_id, snapshot) = command(&mut restored, &mut receiver);
+        assert!(matches!(snapshot, SteeringCommand::Snapshot {}));
+        restored
+            .reply(
+                snapshot_id,
+                Ok(server.command("room_two", vec![], snapshot).unwrap()),
+            )
+            .unwrap();
+        restored.take_back(&message_id).unwrap();
+        let (takeback_id, takeback) = command(&mut restored, &mut receiver);
+        assert!(matches!(takeback, SteeringCommand::Takeback { .. }));
+        restored
+            .reply(
+                takeback_id,
+                Ok(server.command("room_two", vec![], takeback).unwrap()),
+            )
+            .unwrap();
+        restored.events.clear();
+        restored.publish_edit(&message_id, &draft, None).unwrap();
+        let Transport::Wire { id } = receiver.try_recv().unwrap() else {
+            panic!("edited publish required");
+        };
+        assert!(restored.needs_preparation(id));
+        assert!(restored.requests[&id].reference_warnings.is_empty());
+        assert!(restored.outbox.records[0].reference_warnings.is_empty());
+    }
+
     #[test]
     fn prepared_publish_freezes_command_payload_and_ui_events_keep_the_source() {
         let mut manager = Manager::default();
@@ -1940,12 +2147,12 @@ mod tests {
 
         let expanded = expanded_reference_fixture(draft, "first file contents");
         let prepared_command = manager
-            .prepare_publish(id, expanded.clone())
+            .prepare_publish(id, expanded.clone().into())
             .unwrap()
             .unwrap();
         let second = expanded_reference_fixture(draft, "changed file contents");
         assert_eq!(
-            manager.prepare_publish(id, second).unwrap(),
+            manager.prepare_publish(id, second.into()).unwrap(),
             Some(prepared_command.clone())
         );
         assert_eq!(manager.pending_command(id), Some(prepared_command));
@@ -1963,7 +2170,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Accepted {
                 id: message_id.clone(),
-                text: expanded.clone()
+                text: expanded.clone(),
+                reference_warnings: Vec::new(),
             })
         );
         manager.take_back(&message_id).unwrap();
@@ -1994,14 +2202,14 @@ mod tests {
         };
         let frozen = expanded_reference_fixture(draft, "contents when first prepared");
         manager
-            .prepare_publish(id, frozen.clone())
+            .prepare_publish(id, frozen.clone().into())
             .unwrap()
             .unwrap();
         manager.disconnect();
         assert!(manager.pending_command(id).is_none());
         assert!(
             manager
-                .prepare_publish(id, "late completion".into())
+                .prepare_publish(id, String::from("late completion").into())
                 .unwrap()
                 .is_none()
         );
@@ -2205,7 +2413,8 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Accepted {
                 id: message.id,
-                text: message.text
+                text: message.text,
+                reference_warnings: Vec::new(),
             })
         );
     }

@@ -702,11 +702,14 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
                     .get("action")
                     .and_then(Value::as_str)
                     .is_some_and(|action| {
-                        matches!(action, "list" | "send" | "inbox" | "ack" | "status")
+                        matches!(
+                            action,
+                            "list" | "send" | "broadcast" | "inbox" | "ack" | "status"
+                        )
                     })
             {
                 return Err(Fault::params(
-                    "messages requires an authorized client_id and list/send/inbox/ack/status action",
+                    "messages requires an authorized client_id and list/send/broadcast/inbox/ack/status action",
                 ));
             }
             Ok(Action::Messages(arguments))
@@ -1876,21 +1879,23 @@ pub(crate) fn tool_definitions() -> Value {
 
 fn native_messages_tool() -> Value {
     json!({"name":"messages",
-        "description":"Send and receive native messages using explicit stable recipient IDs from list. Actions list/send/inbox/ack/status operate in the selected authorized client and account. Account inbox recipients are explicitly labeled; verified agent recipients require their own binding. Supply agent_id and agent_token together for an existing participant. Display names never prove identity; refresh and choose exact IDs when names are ambiguous. Messages preserve local_user or agent origin and never masquerade as USER REQUIREMENTS. Plain text including @names is not file expansion. Idempotent send receipts distinguish queued, included, acknowledged and expired; none proves reading or execution. No model is started.",
+        "description":"Send and receive native messages using explicit stable recipient IDs from list. Actions list/send/broadcast/inbox/ack/status operate in the selected authorized client and account. Account inbox recipients are explicitly labeled; verified agent recipients require their own binding. Supply agent_id and agent_token together for an existing participant. Display names never prove identity; refresh and choose exact IDs when names are ambiguous. Messages preserve local_user or agent origin and never masquerade as USER REQUIREMENTS. Plain text including @names is not file expansion. Broadcast selects 1..32 distinct exact recipient IDs and returns individual outcomes; retry with the same request_id, recipient set and text. Idempotent send receipts distinguish queued, included, acknowledged and expired; none proves reading or execution. No model is started.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["action","client_id"],"properties":{
-            "action":{"enum":["list","send","inbox","ack","status"]},
+            "action":{"enum":["list","send","broadcast","inbox","ack","status"]},
             "client_id":{"type":"string","minLength":1,"maxLength":64},
             "agent_id":{"type":"string","minLength":1,"maxLength":64},
             "agent_token":{"type":"string","minLength":64,"maxLength":64},
             "recipient_id":{"type":"string","minLength":1,"maxLength":128},
+            "recipient_ids":{"type":"array","minItems":1,"maxItems":crate::messaging::MAX_BROADCAST_RECIPIENTS,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":128}},
             "text":{"type":"string","minLength":1,"maxLength":crate::wire::MAX_USER_MESSAGE_BYTES},
             "request_id":{"type":"string","minLength":1,"maxLength":128},
             "message_id":{"type":"string","minLength":1,"maxLength":128}},
             "dependentRequired":{"agent_id":["agent_token"],"agent_token":["agent_id"]},
             "oneOf":[
-                {"properties":{"action":{"enum":["list","inbox"]}},"not":{"anyOf":[{"required":["recipient_id"]},{"required":["text"]},{"required":["request_id"]},{"required":["message_id"]}]}},
-                {"properties":{"action":{"const":"send"}},"required":["recipient_id","text","request_id"],"not":{"required":["message_id"]}},
-                {"properties":{"action":{"enum":["ack","status"]}},"required":["message_id"],"not":{"anyOf":[{"required":["recipient_id"]},{"required":["text"]},{"required":["request_id"]}]}}
+                {"properties":{"action":{"enum":["list","inbox"]}},"not":{"anyOf":[{"required":["recipient_id"]},{"required":["recipient_ids"]},{"required":["text"]},{"required":["request_id"]},{"required":["message_id"]}]}},
+                {"properties":{"action":{"const":"send"}},"required":["recipient_id","text","request_id"],"not":{"anyOf":[{"required":["message_id"]},{"required":["recipient_ids"]}]}},
+                {"properties":{"action":{"const":"broadcast"}},"required":["recipient_ids","text","request_id"],"not":{"anyOf":[{"required":["message_id"]},{"required":["recipient_id"]}]}},
+                {"properties":{"action":{"enum":["ack","status"]}},"required":["message_id"],"not":{"anyOf":[{"required":["recipient_id"]},{"required":["recipient_ids"]},{"required":["text"]},{"required":["request_id"]}]}}
             ]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false,"openWorldHint":false}})
 }

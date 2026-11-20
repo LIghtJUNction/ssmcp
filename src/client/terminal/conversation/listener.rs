@@ -41,9 +41,9 @@ impl Task {
         let task_source = source.clone();
         let task = handle.spawn(async move {
             let outcome = async {
-                let text = runtime.expand_references(&task_source).await?;
-                let reference_warnings = references::warnings(&text);
-                let ticket = receiver::submit(target, task_source.clone(), text)?;
+                let prepared = runtime.prepare_references(&task_source).await?;
+                let reference_warnings = prepared.warnings;
+                let ticket = receiver::submit(target, task_source.clone(), prepared.text)?;
                 let receipt = ticket.wait().await?;
                 let history_error = if receipt.status == Status::Accepted {
                     let id = receipt.delivery_id.clone();

@@ -439,6 +439,14 @@ impl Runtime {
     ) -> Result<(), String> {
         self.code_audit.finish(completion)
     }
+    pub(crate) async fn prepare_references(
+        &self,
+        text: &str,
+    ) -> Result<crate::client::references::PreparedReferences, String> {
+        self.files.prepare_references(text).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn expand_references(&self, text: &str) -> Result<String, String> {
         self.files.expand_references(text).await
     }

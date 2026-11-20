@@ -292,8 +292,7 @@ impl State {
         self.dirty = true;
     }
 
-    fn chat_accepted(&mut self, id: String, text: String) {
-        let warnings = references::warnings(&text);
+    fn chat_accepted(&mut self, id: String, text: String, warnings: Vec<String>) {
         let text = references::source(&text).to_owned();
         self.conversation.composer.remember(&text);
         if self.conversation.view == View::History {
@@ -386,8 +385,12 @@ impl State {
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
-                steering::UiEvent::Accepted { id, text } => {
-                    self.chat_accepted(id, text);
+                steering::UiEvent::Accepted {
+                    id,
+                    text,
+                    reference_warnings,
+                } => {
+                    self.chat_accepted(id, text, reference_warnings);
                 }
                 steering::UiEvent::Editable { id, text } => {
                     let data = steering::snapshot();
@@ -3120,12 +3123,40 @@ mod tests {
         assert_eq!(state.conversation.composer.text(), "next draft");
         input(&mut state, b" stays");
         let next = state.chat_saved_draft();
-        state.chat_accepted("held".into(), "amended".into());
+        state.chat_accepted("held".into(), "amended".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), next);
         assert!(state.conversation.submitting.is_none());
         let divider = mode_divider(&mut state);
         assert!(divider.trim_start().starts_with("Edit"));
         assert!(!divider.contains("pending") && !divider.contains("Enter sends"));
+    }
+
+    #[test]
+    fn full_budget_raw_reference_ack_shows_notice_without_rewriting_source_or_new_draft() {
+        let tail = " @missing.txt";
+        let source = format!(
+            "{}{tail}",
+            "x".repeat(crate::wire::MAX_USER_MESSAGE_BYTES - tail.len())
+        );
+        let mut state = preview(32, 120);
+        state.conversation.composer.set_text("newer unsent draft");
+        state.chat_accepted(
+            "full_budget_request".into(),
+            source.clone(),
+            vec!["@missing.txt: file not found".into()],
+        );
+        assert_eq!(state.conversation.composer.text(), "newer unsent draft");
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .starts_with("Queued · reference notice:")
+        );
+        assert!(state.notice.as_deref().unwrap().contains("@missing.txt"));
+        assert_eq!(references::source(&source), source);
+        let rendered = display(&mut state).screen().contents();
+        assert!(rendered.contains("reference notice") || rendered.contains("Reference notice"));
     }
 
     #[test]
@@ -4361,7 +4392,11 @@ mod tests {
                 state.conversation.composer.set_text("下一条 draft");
                 state.conversation.composer.left();
                 let draft = state.chat_saved_draft();
-                state.chat_accepted("follow-request".into(), "newly sent request".into());
+                state.chat_accepted(
+                    "follow-request".into(),
+                    "newly sent request".into(),
+                    Vec::new(),
+                );
                 display(&mut state);
                 assert_eq!(state.events.snapshot()["rows_below"], 0);
                 state.log_message("assistant", &"New assistant reply 中文 ".repeat(30), b"");
@@ -4402,7 +4437,7 @@ mod tests {
             state.conversation.composer.set_text("保留 this draft");
             state.conversation.composer.left();
             let draft = state.chat_saved_draft();
-            state.chat_accepted("follow-request".into(), "send then read".into());
+            state.chat_accepted("follow-request".into(), "send then read".into(), Vec::new());
             state.log_message("assistant", &"A later reply 中文 ".repeat(40), b"");
             state.log_event(
                 "fixture",
@@ -4442,7 +4477,7 @@ mod tests {
             assert!(state.conversation.composer.is_empty());
             input(&mut state, next.as_bytes());
             assert_eq!(state.conversation.composer.text(), next);
-            state.chat_accepted("request_one".into(), "first".into());
+            state.chat_accepted("request_one".into(), "first".into(), Vec::new());
             assert_eq!(
                 state.conversation.composer.text(),
                 next,
@@ -4470,7 +4505,7 @@ mod tests {
         assert!(state.conversation.parked.is_none());
         input(&mut state, b"next");
         let following = state.chat_saved_draft();
-        state.chat_accepted("request_b".into(), "edited B".into());
+        state.chat_accepted("request_b".into(), "edited B".into(), Vec::new());
         assert_eq!(state.chat_saved_draft(), following);
     }
 
