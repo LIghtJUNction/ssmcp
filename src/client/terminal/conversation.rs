@@ -3448,7 +3448,19 @@ mod tests {
         state.chat_character('\r');
         assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
         let screen = display(&mut state).screen().contents();
-        assert!(screen.contains("cargo test --lib"), "{screen}");
+        for expected in [
+            "Job: preview-task-test",
+            "Command · complete argv · read only",
+            "argv[0]: \"cargo\"",
+            "argv[1]: \"test\"",
+            "argv[2]: \"--lib\"",
+        ] {
+            assert!(screen.contains(expected), "{screen}");
+        }
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_job"]["command"],
+            json!(["cargo", "test", "--lib"])
+        );
         state.chat_key(Key::Escape);
         assert_eq!(state.conversation.tasks.snapshot()["detail"], false);
         assert!(state.conversation.content_focus);

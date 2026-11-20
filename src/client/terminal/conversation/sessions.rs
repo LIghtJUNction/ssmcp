@@ -264,10 +264,13 @@ impl State {
                 "   "
             };
             let indent = if process { "" } else { "  " };
-            let title = format!(
-                " {marker} {indent}{check} {}",
-                panel::safe_text(field(entry, "name"))
-            );
+            let name = panel::safe_text(field(entry, "name"));
+            let model = panel::safe_text(field(entry, "model"));
+            let title = if observed && !model.is_empty() {
+                format!(" {marker} {indent}{check} {name} · {model}")
+            } else {
+                format!(" {marker} {indent}{check} {name}")
+            };
             let id = if process {
                 field(entry, "client_id")
             } else if observed {
@@ -282,15 +285,38 @@ impl State {
             } else {
                 "thread"
             };
+            let identity = if !process
+                && !observed
+                && entries
+                    .iter()
+                    .filter(|other| {
+                        field(other, "kind") != "observed"
+                            && field(other, "name") == field(entry, "name")
+                    })
+                    .count()
+                    > 1
+            {
+                // Keep same-name threads distinguishable even when their IDs share a prefix.
+                let suffix: String = id
+                    .chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                format!("…{suffix}")
+            } else {
+                short_id(id)
+            };
             let subtitle = if observed {
                 format!(
-                    "     {indent}{} · {} calls · {}",
-                    short_id(id),
+                    "     {indent}{identity} · {} calls · {}",
                     entry["calls"],
                     field(entry, "status")
                 )
             } else {
-                format!("     {indent}{} · {role}", short_id(id))
+                format!("     {indent}{identity} · {role}")
             };
             rows.push(self.chat_line(
                 &title,

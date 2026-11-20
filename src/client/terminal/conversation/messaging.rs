@@ -216,8 +216,9 @@ impl State {
             .find(|entry| sessions::group_id(entry) == Some(id.as_str()))
             .map(agent_key)
             .unwrap_or_else(|| format!("native:{id}"));
-        self.conversation.native_picker = true;
         self.chat_change_view(View::Agents);
+        // A new session column initializes its local target while being opened.
+        self.conversation.native_picker = true;
         self.conversation.content_focus = true;
         self.conversation.detail = false;
         self.conversation.selected_agent = Some(selected);
