@@ -391,7 +391,7 @@ impl Process {
                 .call_scoped(
                     &native_name,
                     arguments,
-                    crate::runtime::call_scope::current(),
+                    crate::runtime::call_scope::current_source(),
                 )
                 .await
                 .map(result),

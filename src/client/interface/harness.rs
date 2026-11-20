@@ -488,7 +488,8 @@ pub(crate) fn submit(provider_name: &str, raw: &str) -> Result<(), String> {
         .ok_or("the live client async runtime is not available")?;
     let slot = Slot::acquire()?;
     let call_id = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
-    handle.spawn(async move {
+    let source = crate::runtime::call_scope::Source::capture();
+    handle.spawn(source.scope(async move {
         let _slot = slot;
         if let Err(error) = execute(runtime, provider, action, call_id).await {
             super::super::render::message(&format!(
@@ -497,7 +498,7 @@ pub(crate) fn submit(provider_name: &str, raw: &str) -> Result<(), String> {
                 bounded(&error, 4096)
             ));
         }
-    });
+    }));
     Ok(())
 }
 
@@ -577,7 +578,8 @@ pub(crate) fn submit_tasks(raw: &str) -> Result<(), String> {
     let handle = binding
         .handle
         .ok_or("The live client async runtime is not available")?;
-    handle.spawn(async move {
+    let source = crate::runtime::call_scope::Source::capture();
+    handle.spawn(source.scope(async move {
         let message = match runtime
             .perform(Operation::CallTool {
                 name: name.into(),
@@ -589,7 +591,7 @@ pub(crate) fn submit_tasks(raw: &str) -> Result<(), String> {
             Err(error) => format!("## Local tasks\n\n{}", bounded(&error, 4096)),
         };
         super::super::render::message(&message);
-    });
+    }));
     Ok(())
 }
 
@@ -699,7 +701,8 @@ pub(crate) fn submit_shell(raw: &str) -> Result<(), String> {
         .ok_or("The live client async runtime is not available")?;
     let slot = Slot::acquire()?;
     let raw = raw.trim().to_owned();
-    handle.spawn(async move {
+    let source = crate::runtime::call_scope::Source::capture();
+    handle.spawn(source.scope(async move {
         let _slot = slot;
         if let Err(error) = execute_shell(runtime, raw, arguments).await {
             super::super::render::message(&format!(
@@ -707,7 +710,7 @@ pub(crate) fn submit_shell(raw: &str) -> Result<(), String> {
                 bounded(&error, 4096)
             ));
         }
-    });
+    }));
     Ok(())
 }
 

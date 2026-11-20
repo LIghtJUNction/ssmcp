@@ -179,6 +179,7 @@ impl State {
                     if unchanged {
                         self.conversation.composer.take_text();
                     }
+                    self.sync_history_owner();
                     self.chat_show_force_send_input(
                         &completed.receipt.connection_id,
                         &completed.receipt.delivery_id,
@@ -232,7 +233,9 @@ impl State {
             "type":"ssmcp.message", "role":"user", "text":source,
             "connection_id":connection, "delivery_id":delivery,
         });
-        self.log_event("message", &event, record.as_bytes());
+        // The fast result path holds the history guard and already selected its owner.
+        self.events.ingest_event("message", &event, record.as_bytes());
+        self.log_raw(record.as_bytes());
         crate::session::attach::record_event("message", &event);
     }
 
@@ -247,7 +250,8 @@ impl State {
         bytes: &[u8],
     ) {
         self.chat_show_force_send_input(connection, delivery, source);
-        self.log_event("listener", event, bytes);
+        self.events.ingest_event("listener", event, bytes);
+        self.log_raw(bytes);
     }
 
     pub(super) fn chat_restore_interrupted_force_send(&mut self) {

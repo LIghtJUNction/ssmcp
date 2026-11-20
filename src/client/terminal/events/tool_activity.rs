@@ -44,10 +44,10 @@ pub(super) fn stats(events: &VecDeque<Event>, group: &Group) -> Stats {
 /// Retained logical calls count once; stdout/lifecycle updates are already
 /// correlated into those events. Native discovery bookkeeping is transparent.
 /// Conversation, images and other diagnostics retain their original boundaries.
-pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
+pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -> Vec<Group> {
     let eligible = |index: usize| {
         let event = &events[index];
-        event.meta.kind == Kind::Tool && event.image.is_none() && !event.reload_boundary
+        owned(event) && event.meta.kind == Kind::Tool && event.image.is_none() && !event.reload_boundary
     };
     let mut result = Vec::new();
     let mut start = 0;
@@ -61,7 +61,8 @@ pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
         while end < events.len() {
             if eligible(end) && events[end].historical == events[start].historical {
                 members.push(end);
-            } else if !(events[end].meta.kind == Kind::Log
+            } else if !(owned(&events[end])
+                && events[end].meta.kind == Kind::Log
                 && events[end].meta.read_bookkeeping
                 && events[end].image.is_none()
                 && !matches!(events[end].tone, "error" | "warning"))

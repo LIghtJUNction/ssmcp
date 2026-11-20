@@ -142,7 +142,7 @@ struct State {
 }
 struct Job {
     /// Bound once after successful native spawn; observers cannot retag it.
-    creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    creator: crate::runtime::call_scope::Source,
     id: String,
     pid: u32,
     command: Vec<String>,
@@ -336,7 +336,8 @@ impl Shell {
         ]
     }
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
-        self.call_scoped(name, args, None).await
+        self.call_scoped(name, args, crate::runtime::call_scope::Source::capture())
+            .await
     }
 
     /// Only the native host's validated Exec route supplies a creator. The
@@ -345,7 +346,7 @@ impl Shell {
         &self,
         name: &str,
         args: Value,
-        creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
+        creator: crate::runtime::call_scope::Source,
     ) -> Result<Value, String> {
         match name {
             "ssmcp.exec.start" => self.start(args, creator).await,
@@ -533,7 +534,7 @@ impl Shell {
     async fn start(
         &self,
         args: Value,
-        creator: Option<Arc<crate::runtime::call_scope::CallScope>>,
+        creator: crate::runtime::call_scope::Source,
     ) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]

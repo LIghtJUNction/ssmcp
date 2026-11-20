@@ -512,9 +512,9 @@ pub(crate) async fn call(
     // a blocking worker; no mutex is held across an await.
     if matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present") {
         let presentation = name == "ssmcp.ui.present";
-        let scope = crate::runtime::call_scope::current();
+        let source = crate::runtime::call_scope::Source::capture();
         return tokio::task::spawn_blocking(move || {
-            crate::runtime::call_scope::blocking(scope, || {
+            source.blocking(|| {
                 let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
                 if presentation {
                     super::presentation::send(arguments)
@@ -532,9 +532,15 @@ pub(crate) async fn call(
             .map_err(|_| "history description worker stopped".to_owned())?;
     }
     if name == "ssmcp.ui.history_archive" {
-        return tokio::task::spawn_blocking(move || history::archive::call(arguments))
-            .await
-            .map_err(|_| "history archive worker stopped".to_owned())?;
+        return tokio::task::spawn_blocking(move || {
+            let result = history::archive::call(arguments);
+            if result.is_ok() {
+                terminal::refresh_history_owner();
+            }
+            result
+        })
+        .await
+        .map_err(|_| "history archive worker stopped".to_owned())?;
     }
     if name == "ssmcp.ui.history" {
         // Search may inspect retained files; it must not hold the display lock

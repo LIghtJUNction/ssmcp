@@ -54,6 +54,7 @@ impl State {
         }
         let archived = command == "/archive";
         let result = history::archive::change((!id.is_empty()).then_some(id), archived)?;
+        self.sync_history_owner();
         self.chat_history_list(false);
         self.notice = Some(if archived {
             format!(
@@ -115,33 +116,7 @@ impl State {
                 for session in &mut self.conversation.sessions {
                     session.current = session.id == id;
                 }
-                // Restore retained visible context without publishing or recording it again.
-                self.events.clear();
-                self.logs = vt100::Parser::new(
-                    nonzero(self.geometry.log_rows),
-                    nonzero(self.geometry.left),
-                    SCROLLBACK_ROWS,
-                );
-                for message in &conversation.messages {
-                    let label = if message.role == "assistant" {
-                        "AGENT"
-                    } else if message.role == "user" {
-                        "USER"
-                    } else {
-                        "HISTORY"
-                    };
-                    let mut record = format!("\n[{label}]\n");
-                    for row in markdown::rows(&message.content, self.geometry.left, &self.ui) {
-                        let _ = writeln!(record, "{row}");
-                    }
-                    record.push('\n');
-                    self.log_identified_message(
-                        &message.id,
-                        &message.role,
-                        &message.content,
-                        record.as_bytes(),
-                    );
-                }
+                self.chat_rehydrate_history(&conversation);
                 self.conversation.history = Some(conversation.into());
                 self.conversation.history_width = 0;
                 self.conversation.history_rows.clear();
@@ -154,6 +129,28 @@ impl State {
             Err(error) => self.notice = Some(format!("Could not resume: {error}")),
         }
         self.dirty = true;
+    }
+
+    #[cfg(test)]
+    pub(in crate::client::terminal) fn resume_history_for_test(&mut self, id: &str) {
+        self.chat_resume();
+        self.conversation.selected = self
+            .conversation
+            .sessions
+            .iter()
+            .position(|session| session.id == id)
+            .expect("fixture history must be selectable");
+        self.chat_resume_selected();
+        assert_eq!(
+            self.conversation
+                .history
+                .as_ref()
+                .map(|history| history.metadata.id.as_str()),
+            Some(id),
+            "{:?}",
+            self.notice
+        );
+        self.chat_change_view(View::Activity);
     }
 
     pub(super) fn chat_history_rows(&mut self, height: u16) -> Vec<String> {

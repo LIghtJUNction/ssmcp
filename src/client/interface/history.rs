@@ -2,8 +2,14 @@
 pub(crate) mod archive;
 pub(crate) mod descriptions;
 mod listener;
+mod ownership;
 pub(crate) use listener::{
     ensure_current_id, record_listener_result, record_request_in, with_listener_conversation,
+};
+#[cfg(test)]
+pub(crate) use ownership::with_test_history;
+pub(crate) use ownership::{
+    HistoryOwner, capture, current_owner, record_owned_agent, remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -196,6 +202,7 @@ struct History {
     directory: SafeDirectory,
     workspace: String,
     active: Option<Active>,
+    ownership: ownership::Ownership,
 }
 
 fn now_ms() -> u64 {
@@ -321,6 +328,11 @@ pub(crate) fn workspace() -> Result<String, String> {
 }
 
 fn with<T>(operation: impl FnOnce(&mut History) -> Result<T, String>) -> Result<T, String> {
+    #[cfg(test)]
+    if let Ok(store) = ownership::TEST_HISTORY.try_with(std::sync::Arc::clone) {
+        let mut state = store.lock().unwrap_or_else(|error| error.into_inner());
+        return operation(state.as_mut().expect("fixture history was initialized"));
+    }
     let mut state = HISTORY
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -341,6 +353,7 @@ impl History {
             directory: SafeDirectory::at(path)?,
             workspace,
             active: None,
+            ownership: ownership::Ownership::default(),
         })
     }
 
@@ -653,33 +666,56 @@ impl History {
         text: &str,
         identity: Option<String>,
     ) -> Result<Option<Committed>, String> {
+        let owner = self.capture_owner()?;
+        self.record_owned(&owner, role, text, identity)
+    }
+
+    fn record_owned(
+        &mut self,
+        owner: &HistoryOwner,
+        role: &str,
+        text: &str,
+        identity: Option<String>,
+    ) -> Result<Option<Committed>, String> {
         let (role, kind) = role_and_kind(role)?;
         validate_content(text)?;
         let _lock = self.directory.lock()?;
-        let mut new_active = None;
-        let mut conversation = if let Some(active) = &self.active {
-            if self.archive_index()?.contains(&active.metadata.id) {
-                return Err("current conversation is archived; restore it before appending".into());
+        let pending = self.ownership.pending(owner)?;
+        let current = self.ownership.current.as_ref() == Some(owner);
+        let id = owner.id();
+        if self.archive_index()?.contains(id) {
+            return Err("history_owner_archived: the original conversation is archived".into());
+        }
+        let mut conversation = if pending {
+            let name = session_name(id)?;
+            if self.directory.names()?.contains(&name) {
+                return Err("history_owner_conflict: reserved conversation already exists".into());
             }
-            self.load(&active.metadata.id)?
-        } else {
-            let metadata = SessionMetadata {
-                schema: SCHEMA.into(),
-                schema_version: 1,
-                id: random_id("conversation")?,
-                workspace: self.workspace.clone(),
-                created_at_ms: now_ms(),
-                truncated_messages: 0,
-            };
-            let lease = self.lease(&metadata.id)?;
-            new_active = Some(Active {
-                metadata: metadata.clone(),
-                _lease: lease,
-            });
             Conversation {
-                metadata,
+                metadata: SessionMetadata {
+                    schema: SCHEMA.into(),
+                    schema_version: 1,
+                    id: id.to_owned(),
+                    workspace: self.workspace.clone(),
+                    created_at_ms: now_ms(),
+                    truncated_messages: 0,
+                },
                 messages: Vec::new(),
             }
+        } else {
+            self.load(id)
+                .map_err(|error| format!("history_owner_unavailable: {error}"))?
+        };
+        // A switch releases the active lease as before. An inactive append
+        // must take its own lease under the directory lock and cannot use it
+        // to replace the selected conversation.
+        let lease = if current && !pending {
+            None
+        } else {
+            Some(
+                self.lease(id)
+                    .map_err(|error| format!("history_owner_unavailable: {error}"))?,
+            )
         };
         let mut content = safe_text(text);
         let truncated = content.len() > MAX_CONTENT;
@@ -738,11 +774,16 @@ impl History {
             });
         self.directory
             .write_atomic(&session_name(&conversation.metadata.id)?, &bytes)?;
-        if let Some(active) = new_active {
-            self.active = Some(active);
-        }
-        if let Some(active) = &mut self.active {
-            active.metadata = conversation.metadata;
+        self.ownership.materialized(owner);
+        if current {
+            if let Some(lease) = lease {
+                self.active = Some(Active {
+                    metadata: conversation.metadata,
+                    _lease: lease,
+                });
+            } else if let Some(active) = &mut self.active {
+                active.metadata = conversation.metadata;
+            }
         }
         Ok(committed)
     }
@@ -909,6 +950,7 @@ impl History {
                 _lease: lease,
             });
         }
+        self.ownership.select(id, false);
         Ok(conversation)
     }
 }
@@ -938,11 +980,6 @@ fn remember_committed(committed: Option<Committed>) {
 
 pub(crate) fn record(role: &str, text: &str) -> Result<(), String> {
     let committed = with(|history| history.record(role, text))?;
-    remember_committed(committed);
-    Ok(())
-}
-pub(crate) fn record_agent(id: &str, text: &str) -> Result<(), String> {
-    let committed = with(|history| history.record_agent(id, text))?;
     remember_committed(committed);
     Ok(())
 }
@@ -986,6 +1023,7 @@ pub(crate) fn current() -> Result<Option<Conversation>, String> {
 impl History {
     fn release_current(&mut self) {
         self.active = None;
+        self.ownership.release();
     }
 }
 
@@ -994,6 +1032,7 @@ impl History {
 pub(crate) fn release_current() -> Result<(), String> {
     with(|history| {
         history.release_current();
+        super::messages::restore_copy(&[]);
         Ok(())
     })
 }
@@ -1004,10 +1043,13 @@ pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
 pub(crate) fn resume(id: &str) -> Result<Conversation, String> {
-    let conversation = with(|history| history.resume(id))?;
-    // Update copy state after releasing the history lock, without display or record hooks.
-    super::messages::restore_copy(&conversation.messages);
-    Ok(conversation)
+    with(|history| {
+        let conversation = history.resume(id)?;
+        // The directory lock has been released. Publish the copy cache in
+        // selection order, without acquiring the terminal or running display hooks.
+        super::messages::restore_copy(&conversation.messages);
+        Ok(conversation)
+    })
 }
 
 pub(crate) struct SafeDirectory {

@@ -146,7 +146,7 @@ impl State {
         }
         if pending.restore_history {
             match history_store::current() {
-                Ok(Some(history)) => self.chat_rehydrate_reload_history(&history),
+                Ok(Some(history)) => self.chat_rehydrate_history(&history),
                 Ok(None) => {}
                 Err(error) => {
                     pending.notice = Some(format!(
@@ -169,26 +169,11 @@ impl State {
         }
     }
 
-    fn chat_rehydrate_reload_history(&mut self, history: &history_store::Conversation) {
-        self.events.clear();
-        self.logs = vt100::Parser::new(
-            nonzero(self.geometry.log_rows),
-            nonzero(self.geometry.left),
-            SCROLLBACK_ROWS,
-        );
-        self.previous_cr = false;
-        for message in &history.messages {
-            let label = match message.role.as_str() {
-                "assistant" | "agent" => "AGENT",
-                "user" => "USER",
-                _ => "HISTORY",
-            };
-            let mut record = format!("\n[{label}]\n");
-            for row in markdown::rows(&message.content, self.geometry.left, &self.ui) {
-                let _ = writeln!(record, "{row}");
-            }
-            record.push('\n');
-            self.log_message(&message.role, &message.content, record.as_bytes());
+    pub(super) fn chat_rehydrate_history(&mut self, history: &history_store::Conversation) {
+        if let Some(owner) = history_store::current_owner()
+            && owner.id() == history.metadata.id
+        {
+            self.events.rehydrate_history(owner, &history.messages);
         }
     }
 

@@ -170,40 +170,27 @@ fn color_enabled(tty: bool, no_color: bool) -> bool {
 }
 
 pub(crate) fn message(text: &str) {
-    let _ = agent_message(text, super::interface::messages::Kind::Progress, None, None);
+    if let Err(error) = agent_message(
+        text,
+        super::interface::messages::Kind::Progress,
+        None,
+        None,
+        crate::runtime::call_scope::Source::capture(),
+    ) {
+        super::terminal::notice(&format!("Message history could not be saved: {error}"));
+    }
 }
 
-/// An identified API reply is persisted once in the existing JSONL conversation.
-pub(crate) fn message_identified(
-    text: &str,
-    kind: super::interface::messages::Kind,
-    id: &str,
-) -> Result<(), String> {
-    agent_message(text, kind, Some(id), None)
-}
-
-pub(crate) fn presentation_identified(
-    text: &str,
-    kind: super::interface::messages::Kind,
-    id: &str,
-    presentation: &super::presentation::Presentation,
-) -> Result<(), String> {
-    agent_message(text, kind, Some(id), Some(presentation))
-}
-
-fn agent_message(
+/// Save to the admitted owner before publishing the corresponding local event.
+pub(crate) fn agent_message(
     text: &str,
     kind: super::interface::messages::Kind,
     id: Option<&str>,
     presentation: Option<&super::presentation::Presentation>,
-) -> Result<(), String> {
-    let saved = match id {
-        Some(id) => super::interface::history::record_agent(id, text),
-        None => super::interface::history::record("assistant", text),
-    };
-    if let Err(error) = &saved {
-        super::terminal::notice(&format!("Message history could not be saved: {error}"));
-    }
+    source: crate::runtime::call_scope::Source,
+) -> Result<bool, String> {
+    let owner = source.require_owner()?.clone();
+    super::interface::history::record_owned_agent(&owner, id, text)?;
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     let mut event = json!({"type":"ssmcp.message","format":"markdown","text":text,"kind":kind});
     if let Some(id) = id {
@@ -254,10 +241,10 @@ fn agent_message(
         }
         let _ = writeln!(bytes);
     }
-    publish_event("agent", &event, &bytes, None, None);
-    // No terminal or history lock is held while the /copy cache is updated.
-    super::interface::messages::remember_last(text);
-    saved
+    publish_event("agent", &event, &bytes, None, source);
+    Ok(super::interface::history::remember_visible_reply(
+        &owner, text,
+    ))
 }
 
 /// Sanitize a diagnostic without changing native consumers or event archives.
@@ -276,7 +263,7 @@ pub(crate) fn event(label: &str, value: &Value) {
     if reserved_control_event(value) {
         return;
     }
-    emit_event(label, value, false, None);
+    emit_event(label, value, false, Default::default());
 }
 
 pub(crate) fn reserved_control_event(value: &Value) -> bool {
@@ -286,17 +273,13 @@ pub(crate) fn reserved_control_event(value: &Value) -> bool {
 }
 
 pub(crate) fn trusted_event(label: &str, value: &Value) {
-    emit_event(label, value, true, None);
+    emit_event(label, value, true, Default::default());
 }
 
 /// The metadata is supplied by native code, never recovered from event JSON.
-pub(crate) fn scoped_event(
-    label: &str,
-    value: &Value,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
-) {
+pub(crate) fn scoped_event(label: &str, value: &Value, source: crate::runtime::call_scope::Source) {
     if !reserved_control_event(value) {
-        emit_event(label, value, false, scope);
+        emit_event(label, value, false, source);
     }
 }
 
@@ -304,7 +287,7 @@ fn emit_event(
     label: &str,
     value: &Value,
     trusted_control: bool,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::Source,
 ) {
     if value["type"] == "ssmcp.code_mode" {
         super::terminal::audit(value);
@@ -324,7 +307,7 @@ fn emit_event(
             .then(|| renderer.panel_snapshot(Instant::now()));
         (snapshot, renderer.auth_diagnostics.take_updates())
     };
-    publish_event(label, value, &bytes, snapshot, scope);
+    publish_event(label, value, &bytes, snapshot, source);
     super::terminal::diagnostics(&diagnostics);
 }
 
@@ -392,9 +375,9 @@ fn publish_event(
     value: &Value,
     bytes: &[u8],
     snapshot: Option<PanelSnapshot>,
-    scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::Source,
 ) {
-    if !super::terminal::log_event(label, value, bytes, scope) && !bytes.is_empty() {
+    if !super::terminal::log_event(label, value, bytes, source) && !bytes.is_empty() {
         let mut out = io::stderr().lock();
         let _ = out.write_all(bytes);
         let _ = out.flush();

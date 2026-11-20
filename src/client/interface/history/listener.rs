@@ -7,11 +7,12 @@ impl History {
             self.check_listener_conversation(&active.metadata.id)?;
             return Ok(active.metadata.id.clone());
         }
+        let owner = self.capture_owner()?;
         let _lock = self.directory.lock()?;
         let metadata = SessionMetadata {
             schema: SCHEMA.into(),
             schema_version: 1,
-            id: random_id("conversation")?,
+            id: owner.id().to_owned(),
             workspace: self.workspace.clone(),
             created_at_ms: now_ms(),
             truncated_messages: 0,
@@ -25,6 +26,7 @@ impl History {
         self.retain(&metadata.id, bytes.len())?;
         self.directory
             .write_atomic(&session_name(&metadata.id)?, &bytes)?;
+        self.ownership.materialized(&owner);
         let id = metadata.id.clone();
         self.active = Some(Active {
             metadata,

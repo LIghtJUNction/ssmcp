@@ -325,11 +325,9 @@ impl Workspace {
         if name.starts_with("ssmcp.fs.") {
             let root = self.root.clone();
             let name = name.to_owned();
-            let scope = crate::runtime::call_scope::current();
+            let source = crate::runtime::call_scope::Source::capture();
             return tokio::task::spawn_blocking(move || {
-                crate::runtime::call_scope::blocking(scope, || {
-                    root.perform_audited(&name, arguments)
-                })
+                source.blocking(|| root.perform_audited(&name, arguments))
             })
             .await
             .map_err(|e| e.to_string())?;

@@ -200,11 +200,11 @@ fn read(event: &Event) -> Option<&Read> {
         .filter(|read| read.boundary.is_some())
 }
 
-pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
+pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -> Vec<Group> {
     let mut groups = Vec::new();
     let mut start = 0;
     while start < events.len() {
-        let Some(first) = read(&events[start]) else {
+        let Some(first) = read(&events[start]).filter(|_| owned(&events[start])) else {
             start += 1;
             continue;
         };
@@ -212,11 +212,15 @@ pub(super) fn groups(events: &VecDeque<Event>) -> Vec<Group> {
         let mut end = start + 1;
         while end < events.len() {
             let event = &events[end];
-            if read(event).is_some_and(|next| {
-                first.identity == next.identity && first.boundary == next.boundary
-            }) {
+            let visible_owner = owned(event);
+            if visible_owner
+                && read(event).is_some_and(|next| {
+                    first.identity == next.identity && first.boundary == next.boundary
+                })
+            {
                 members.push(end);
-            } else if !(event.meta.read_bookkeeping
+            } else if !((visible_owner || event.meta.owner.is_none())
+                && event.meta.read_bookkeeping
                 && event.meta.kind == Kind::Log
                 && !event.meta.command
                 && !event.meta.diff

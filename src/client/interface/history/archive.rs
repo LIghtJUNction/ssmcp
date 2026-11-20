@@ -118,6 +118,9 @@ impl History {
                 .map_err(|_| "cannot encode conversation archive index")?;
             self.directory.write_atomic(INDEX_NAME, &bytes)?;
         }
+        if archived {
+            self.ownership.revoke(&id);
+        }
         if archived && current {
             // New messages start a new history, leaving the archived JSONL intact.
             self.active = None;
@@ -131,7 +134,14 @@ impl History {
 }
 
 pub(crate) fn change(id: Option<&str>, archived: bool) -> Result<Value, String> {
-    with(|history| history.archive_change(id, archived))
+    with(|history| {
+        let selected = history.ownership.current.is_some();
+        let result = history.archive_change(id, archived)?;
+        if selected && history.ownership.current.is_none() {
+            super::super::messages::restore_copy(&[]);
+        }
+        Ok(result)
+    })
 }
 
 pub(crate) fn sessions(filter: Filter) -> Result<Vec<SessionSummary>, String> {

@@ -425,7 +425,7 @@ pub(super) fn log_event(
     label: &str,
     value: &serde_json::Value,
     bytes: &[u8],
-    scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+    source: crate::runtime::call_scope::Source,
 ) -> bool {
     let Some(shared) = shared() else {
         return false;
@@ -434,7 +434,7 @@ pub(super) fn log_event(
         return false;
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-    state.log_scoped_event(label, value, bytes, scope);
+    state.log_scoped_event(label, value, bytes, source);
     true
 }
 
@@ -457,8 +457,7 @@ pub(crate) fn listener_result(
         "\n[LISTENER] {label} · {}\n",
         receipt.execution_state.as_str()
     );
-    let shown = if let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire))
-    {
+    if let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut bytes = header.into_bytes();
         for row in markdown::rows(text, state.geometry.left.max(1), &state.ui) {
@@ -466,6 +465,7 @@ pub(crate) fn listener_result(
             bytes.push(b'\n');
         }
         bytes.push(b'\n');
+        state.sync_history_owner();
         super::interface::listener::with_current_reply(receipt, || {
             if !shared.alive.load(Ordering::Acquire) {
                 return false;
@@ -478,22 +478,23 @@ pub(crate) fn listener_result(
                 &bytes,
             );
             crate::session::attach::record_event("listener", &event);
+            super::interface::messages::remember_last(text);
             true
         })
         .unwrap_or(false)
     } else {
         super::interface::listener::with_current_reply(receipt, || {
             let mut output = io::stderr().lock();
-            write!(output, "{header}{text}\n\n")
+            let shown = write!(output, "{header}{text}\n\n")
                 .and_then(|()| output.flush())
-                .is_ok()
+                .is_ok();
+            if shown {
+                super::interface::messages::remember_last(text);
+            }
+            shown
         })
         .unwrap_or(false)
-    };
-    if shown {
-        super::interface::messages::remember_last(text);
     }
-    shown
 }
 
 /// The renderer releases its lock before publishing these display-only updates.
@@ -712,6 +713,17 @@ pub(crate) fn notice(message: &str) {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.notice = Some(panel::safe_text(message).chars().take(240).collect());
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn refresh_history_owner() {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.sync_history_owner();
         state.dirty = true;
     }
 }
@@ -1550,6 +1562,13 @@ impl State {
         self.events.ingest(bytes);
         self.log_raw(bytes);
     }
+    fn sync_history_owner(&mut self) {
+        if !self.preview {
+            self.events
+                .set_history_owner(super::interface::history::current_owner());
+        }
+    }
+
     fn log_message(&mut self, role: &str, text: &str, bytes: &[u8]) {
         self.log_event(
             "message",
@@ -1558,10 +1577,15 @@ impl State {
         );
     }
     fn log_identified_message(&mut self, id: &str, role: &str, text: &str, bytes: &[u8]) {
+        self.sync_history_owner();
         self.events.ingest_identified_message(id, role, text, bytes);
         self.log_raw(bytes);
     }
     fn log_event(&mut self, label: &str, value: &serde_json::Value, bytes: &[u8]) {
+        if !self.preview {
+            let owner = super::interface::history::capture(None).ok();
+            self.events.set_history_owner(owner);
+        }
         self.events.ingest_event(label, value, bytes);
         self.log_raw(bytes);
     }
@@ -1570,9 +1594,10 @@ impl State {
         label: &str,
         value: &serde_json::Value,
         bytes: &[u8],
-        scope: Option<Arc<crate::runtime::call_scope::CallScope>>,
+        source: crate::runtime::call_scope::Source,
     ) {
-        self.events.ingest_scoped_event(label, value, bytes, scope);
+        self.sync_history_owner();
+        self.events.ingest_scoped_event(label, value, bytes, source);
         self.log_raw(bytes);
     }
     fn log_raw(&mut self, bytes: &[u8]) {
