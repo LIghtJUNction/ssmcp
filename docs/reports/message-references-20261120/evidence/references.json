@@ -1,0 +1,297 @@
+{
+  "status": "passed",
+  "source_revision": "b39a8e96c7234b6fb097d388e97614a2102b9810",
+  "checks": [
+    "the owned account router keeps its credentials in a private ready record",
+    "the isolated account has the expected stable provider identity and handle",
+    "the real production account router is healthy",
+    "the account connection advertises its exact identity-scoped MCP resource",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact account endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "the account OAuth endpoint requires provider consent instead of a connection login code",
+    "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+    "OAuth pages cannot be cached and bind same-origin form submission",
+    "real identity exchange validates provider PKCE and requires explicit consent",
+    "OAuth consent preserves the registered callback, state and issuer",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the account relay credential cannot authenticate as an MCP access token",
+    "the exact user draft is present before submission",
+    "missing-accepted is tied to the exact accepted queue ID and its warning",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "delivery preserves the user's text and includes explicit reference data",
+    "delivered references identify the exact UTF-8 source",
+    "Enter after a no-match file search delivers the exact source with one warning",
+    "referencing a missing file neither creates it nor fabricates its contents",
+    "the exact user draft is present before submission",
+    "mixed-accepted is tied to the exact accepted queue ID and its warning",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "delivery preserves the user's text and includes explicit reference data",
+    "delivered references identify the exact UTF-8 source",
+    "Chinese punctuation separates valid and unavailable files and skills",
+    "unavailable references expose no attachment contents or read actions",
+    "the delivered valid file and skill actions retrieve complete real fixture contents",
+    "the first Enter only accepts the selected skill",
+    "the exact user draft is present before submission",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "delivery preserves the user's text and includes explicit reference data",
+    "delivered references identify the exact UTF-8 source",
+    "the second Enter delivers the selected skill exactly once",
+    "the complete maximum-size draft matches every original byte",
+    "the exact new queue identity contains every submitted byte",
+    "maximum-size missing-reference requests retain their local warning",
+    "only the expected queued identity is included in the tool response",
+    "delivery retains the exact revised text and authenticated recipient",
+    "the tool response contains a conspicuous separate user-requirements text block",
+    "all 16384 original bytes are delivered when warning metadata will not fit",
+    "the exact full-budget queue ID is marked delivered",
+    "the complete native queue artifact confirms the delivered identity and body"
+  ],
+  "frames": [
+    "message-references-missing-before-send-120.json",
+    "message-references-missing-before-send-48.json",
+    "message-references-missing-accepted-120.json",
+    "message-references-missing-accepted-48.json",
+    "message-references-mixed-accepted-120.json",
+    "message-references-mixed-accepted-48.json",
+    "message-references-skill-picker-120.json",
+    "message-references-skill-picker-48.json"
+  ],
+  "receipts": [
+    {
+      "message_id": "ccae720236a68a96dd1203524c0da121",
+      "source": "MISSING_DIRECT 请创建 @future-missing.txt",
+      "status": "delivered",
+      "references": [
+        {
+          "kind": "file",
+          "path": "future-missing.txt",
+          "status": "unavailable",
+          "warning": "@future-missing.txt: No such file or directory (os error 2)"
+        }
+      ]
+    },
+    {
+      "message_id": "e873b3129003e59f8a850bb45c2e8624",
+      "source": "MIXED @missing-later.txt，@\"资料/说明.txt\"；$reference-fixture，$unavailable-fixture。 done",
+      "status": "delivered",
+      "references": [
+        {
+          "kind": "file",
+          "path": "missing-later.txt",
+          "status": "unavailable",
+          "warning": "@missing-later.txt: No such file or directory (os error 2)"
+        },
+        {
+          "continuation": "Follow next_offset until eof; offsets are UTF-8 byte positions.",
+          "kind": "text",
+          "mime_type": "text/plain",
+          "path": "资料/说明.txt",
+          "preview": "REAL_REFERENCE_FILE\nUTF-8 内容 preserved.\n",
+          "preview_bytes": 44,
+          "preview_truncated": false,
+          "read": {
+            "arguments": {
+              "max_bytes": 65536,
+              "offset": 0,
+              "path": "资料/说明.txt"
+            },
+            "tool": "ssmcp.fs.read_text"
+          },
+          "size": 44
+        },
+        {
+          "description": "Local keyboard reference fixture.",
+          "description_truncated": false,
+          "kind": "skill",
+          "name": "reference-fixture",
+          "origin": {
+            "aliases": [],
+            "id": "workspace",
+            "kind": "workspace",
+            "path": "/var/tmp/ssmcp-message-references-20261120/candidate-acceptance-1/ssmcp-reference-pty-ax6j_aaz/workspace",
+            "read_only": true,
+            "scope": "project",
+            "skills_only": false
+          },
+          "path": ".agents/skills/reference-fixture/SKILL.md",
+          "read": {
+            "arguments": {
+              "max_bytes": 262144,
+              "path": ".agents/skills/reference-fixture/SKILL.md",
+              "root": "workspace"
+            },
+            "tool": "ssmcp.skills.read"
+          },
+          "root": "workspace",
+          "scope": "project",
+          "search_path": ".agents/skills",
+          "sha256": "351a2a3f4a8fe9e172b6188a464faaa41677d01628956dd7cad0f1820b66f6fb",
+          "shadowed_count": 0,
+          "size": 147,
+          "source": "/var/tmp/ssmcp-message-references-20261120/candidate-acceptance-1/ssmcp-reference-pty-ax6j_aaz/workspace/.agents/skills/reference-fixture/SKILL.md",
+          "usage": "Read the complete content field before applying this skill; no partial skill instructions are embedded."
+        },
+        {
+          "kind": "skill",
+          "name": "unavailable-fixture",
+          "status": "unavailable",
+          "warning": "$unavailable-fixture: skill not found in the configured directories."
+        }
+      ]
+    },
+    {
+      "message_id": "e54a8cdc7a54d9278f17c53c188978ac",
+      "source": "$reference-fixture ",
+      "status": "delivered",
+      "references": [
+        {
+          "description": "Local keyboard reference fixture.",
+          "description_truncated": false,
+          "kind": "skill",
+          "name": "reference-fixture",
+          "origin": {
+            "aliases": [],
+            "id": "workspace",
+            "kind": "workspace",
+            "path": "/var/tmp/ssmcp-message-references-20261120/candidate-acceptance-1/ssmcp-reference-pty-ax6j_aaz/workspace",
+            "read_only": true,
+            "scope": "project",
+            "skills_only": false
+          },
+          "path": ".agents/skills/reference-fixture/SKILL.md",
+          "read": {
+            "arguments": {
+              "max_bytes": 262144,
+              "path": ".agents/skills/reference-fixture/SKILL.md",
+              "root": "workspace"
+            },
+            "tool": "ssmcp.skills.read"
+          },
+          "root": "workspace",
+          "scope": "project",
+          "search_path": ".agents/skills",
+          "sha256": "351a2a3f4a8fe9e172b6188a464faaa41677d01628956dd7cad0f1820b66f6fb",
+          "shadowed_count": 0,
+          "size": 147,
+          "source": "/var/tmp/ssmcp-message-references-20261120/candidate-acceptance-1/ssmcp-reference-pty-ax6j_aaz/workspace/.agents/skills/reference-fixture/SKILL.md",
+          "usage": "Read the complete content field before applying this skill; no partial skill instructions are embedded."
+        }
+      ]
+    },
+    {
+      "message_id": "f29225cf79a61639ae8ab9045009395c",
+      "source_bytes": 16384,
+      "source_sha256": "d78e7d5e73742bfd751d49d21e793b0f321516ece4131673b1a6d3c00aae8ccf",
+      "reference_warnings": [
+        "@missing-large.txt: No such file or directory (os error 2)"
+      ],
+      "status": "delivered",
+      "wire_metadata_omitted": true
+    }
+  ],
+  "frame_receipts": [
+    {
+      "frame": "message-references-missing-accepted-120.json",
+      "message_id": "ccae720236a68a96dd1203524c0da121",
+      "queue_status": "queued",
+      "body_marker": "MISSING_DIRECT",
+      "warning_marker": "@future-",
+      "queue_text_sha256": "d74145b045fdf484ac970152869b53f3d24a705e085a30d32742c6dc7d0800ed",
+      "reference_warnings": [
+        "@future-missing.txt: No such file or directory (os error 2)"
+      ]
+    },
+    {
+      "frame": "message-references-missing-accepted-48.json",
+      "message_id": "ccae720236a68a96dd1203524c0da121",
+      "queue_status": "queued",
+      "body_marker": "MISSING_DIRECT",
+      "warning_marker": "@future-",
+      "queue_text_sha256": "d74145b045fdf484ac970152869b53f3d24a705e085a30d32742c6dc7d0800ed",
+      "reference_warnings": [
+        "@future-missing.txt: No such file or directory (os error 2)"
+      ]
+    },
+    {
+      "frame": "message-references-mixed-accepted-120.json",
+      "message_id": "e873b3129003e59f8a850bb45c2e8624",
+      "queue_status": "queued",
+      "body_marker": "MIXED",
+      "warning_marker": "@missing-l",
+      "queue_text_sha256": "c69006454897c1c1994a0c32669959bc1ef8359402d8c8b311b4caec35860d85",
+      "reference_warnings": [
+        "@missing-later.txt: No such file or directory (os error 2)",
+        "$unavailable-fixture: skill not found in the configured directories."
+      ]
+    },
+    {
+      "frame": "message-references-mixed-accepted-48.json",
+      "message_id": "e873b3129003e59f8a850bb45c2e8624",
+      "queue_status": "queued",
+      "body_marker": "MIXED",
+      "warning_marker": "@missing-l",
+      "queue_text_sha256": "c69006454897c1c1994a0c32669959bc1ef8359402d8c8b311b4caec35860d85",
+      "reference_warnings": [
+        "@missing-later.txt: No such file or directory (os error 2)",
+        "$unavailable-fixture: skill not found in the configured directories."
+      ]
+    }
+  ],
+  "queue_artifacts": [
+    {
+      "id": "6131adfca00f603d672b26d3a683199e",
+      "bytes": 47796,
+      "sha256": "c954373517bddd9636ec59e75658e7b006c7455c277e499da3ef303dea204e3c",
+      "complete": true,
+      "chunks": 6,
+      "format": "mcp_tool_result_json"
+    },
+    {
+      "id": "e1f9180f10e36e381e3fba8079d16820",
+      "bytes": 48926,
+      "sha256": "380f32723e3949f3e042d7387dfb19f99acda3abed4661b2bdb1fe6fa68cd298",
+      "complete": true,
+      "chunks": 6,
+      "format": "mcp_tool_result_json"
+    }
+  ],
+  "transport": "real account router, authenticated WebSocket, native queue and owned PTY",
+  "upstream_provider": "synthetic GitHub fixture",
+  "models_started": false,
+  "existing_services_touched": false,
+  "real_user_credentials_used": false,
+  "source_of_images": "actual owned PTY decoded by the independent VT fixture",
+  "elapsed_seconds": 14.765,
+  "binaries_sha256_before": {
+    "ssmcp": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+    "ssmcpd": "a825d2eacc01fafcd459aa795605a80647664059bc4604ffcbcfe0395e6fa223",
+    "decoder": "d5d27919eaf2754433158467b84abcdd6259208de874396e846867f388c1577a",
+    "fixture": "8b61c925b20e6491c6b7155cb4d3f6a80f480bfd8e637ac0a9d5407dfbc72c41"
+  },
+  "binaries_sha256_after": {
+    "ssmcp": "7c85be94be7abe3adece1adb5787b2337be967feb9f5f842dec68df278f94c20",
+    "ssmcpd": "a825d2eacc01fafcd459aa795605a80647664059bc4604ffcbcfe0395e6fa223",
+    "decoder": "d5d27919eaf2754433158467b84abcdd6259208de874396e846867f388c1577a",
+    "fixture": "8b61c925b20e6491c6b7155cb4d3f6a80f480bfd8e637ac0a9d5407dfbc72c41"
+  },
+  "inputs_unchanged": true,
+  "source_sha256": {
+    "e2e_message_references.py": "a1f1dcb659782757ea7b838bdf78a8af5ab6be8c4f34e2e8eb18cf90e59200f9",
+    "e2e_input_history.py": "886fffbf4a1aac5f52d1109f746f924b0075ff3ad3c671af2957cb0e93774770",
+    "e2e_composer.py": "8b5cb7428477351aac52f6559703bf5b61577112c1cd5519b26c1a38cc3b17c1",
+    "e2e_dashboard.py": "fc69e1c18377e1556878ba13db081e3ea347bca6c46213aa782be66143361203",
+    "e2e_client_ui.py": "12e13bc300607286da9f5a2505a5ca66ee45afa76764145582544de3fc085be8",
+    "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+    "e2e.py": "2f3b1fbf7124932e4830b2b6117e601913e19b6af19df5e74d236d2a32fe4ad4"
+  }
+}
