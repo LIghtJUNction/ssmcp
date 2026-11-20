@@ -520,7 +520,9 @@ async fn replacing_real_worker_preserves_core_oauth_and_same_device_websocket() 
         .parse()
         .unwrap(),
     );
-    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let (mut socket, _) = tokio_tungstenite::connect_async(request.clone())
+        .await
+        .unwrap();
     let hello = wire::Frame::Hello {
         version: wire::VERSION,
         mode: wire::Mode::Shell,
@@ -542,6 +544,19 @@ async fn replacing_real_worker_preserves_core_oauth_and_same_device_websocket() 
         .timeout(Duration::from_secs(4))
         .build()
         .unwrap();
+    assert_eq!(broker.set_draining(true), 1);
+    let blocked = tokio_tungstenite::connect_async(request).await.unwrap_err();
+    assert!(matches!(
+        blocked,
+        tokio_tungstenite::tungstenite::Error::Http(response)
+            if response.status() == StatusCode::SERVICE_UNAVAILABLE
+    ));
+    ping(&mut socket).await;
+    assert_eq!(
+        authorized_initialize(&client, &base, &token).await,
+        StatusCode::OK
+    );
+    assert_eq!(broker.set_draining(false), 1);
     let mut first = worker_process(&directory, 1).await;
     let first_pid = first.0.id();
     assert_eq!(
