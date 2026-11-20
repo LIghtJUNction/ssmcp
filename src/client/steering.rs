@@ -1631,7 +1631,7 @@ pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
 pub(super) fn take_events() -> Vec<UiEvent> {
     with(|manager| manager.events.drain(..).collect())
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
     connect_with_chat(room_id, protocol, true)
 }
