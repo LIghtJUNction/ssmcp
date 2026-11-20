@@ -561,9 +561,11 @@ class Harness:
         self.cli("A", "logout", "--json")
         live.wait(timeout=8)
         wait_for(lambda: all(not process_running(pid) for pid in owned), "logout process cleanup")
+        after = self.state.connect_attempts[self.state.account_token]
         self.check(live.returncode != 0
-                   and self.state.connect_attempts[self.state.account_token] == before,
-                   "logout revokes its live session and declined authorization cannot reconnect it")
+                   and after == before,
+                   "logout revokes its live session and declined authorization cannot reconnect it"
+                   f" (exit={live.returncode}, connect_attempts_before={before}, connect_attempts_after={after})")
         self.check(self.state.requests.count(("POST", "/api/client/login/start")) == authorizations + 1,
                    "a foreground account session offers at most one fresh authorization after revocation")
         self.check(not credential_file.exists() and self.state.logged_out,
