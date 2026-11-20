@@ -1,6 +1,6 @@
 //! Typed, bounded observation outside the JavaScript worker pool.
 //! Cancelling an observer never cancels its job, acknowledges its inbox, or
-//! changes a finish decision. Completion permission remains a separate gate.
+//! changes the observed work. Completion approval targets are retired.
 use super::*;
 use crate::code_mode::user_wait::{Outcome, Recipient};
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -29,7 +29,7 @@ pub(crate) fn limits() -> Value {
         "min_wait_ms":1000,"max_wait_ms":25000,"max_records":MAX_RECORDS,
         "max_records_per_actor":MAX_ACTOR_RECORDS,"retention_ms":RETAIN_FOR.as_millis(),
         "max_active_per_member":MAX_ACTIVE_PER_MEMBER,"max_active_per_connection":MAX_ACTIVE_PER_CONNECTION,
-        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","user_input","finish"],
+        "modes":["any","all"],"targets":["exec","job","agent_status","agent_messages","user_input"],
         "server_issued_wait_id":true,"cancel_changes_target":false,"acknowledges_inbox":false,
         "grants_completion_permission":false,"public_wait_uses_javascript_slot":false,
         "helper_uses_enclosing_javascript_slot":true})
@@ -162,7 +162,7 @@ impl Arguments {
                     match target {
                         Target::Exec { job_id } if !identifier(job_id, 128) => return Err("invalid execution job_id".into()),
                         Target::Job { id } if !identifier(id, 128) => return Err("invalid relay job id".into()),
-                        Target::Finish { request_id } if !identifier(request_id, 128) => return Err("invalid finish request_id".into()),
+                        Target::Finish { .. } => return Err("tool_retired: await finish targets are disabled".into()),
                         Target::AgentStatus { agent_id, statuses } if !identifier(agent_id, 64)
                             || statuses.is_empty() || statuses.len() > 16
                             || statuses.iter().any(|s| s.trim().is_empty() || s.len() > 128 || s.chars().any(char::is_control)) => return Err("agent_status requires a registered agent_id and 1..=16 status strings".into()),
@@ -173,8 +173,8 @@ impl Arguments {
                         _ => {},
                     }
                 }
-                if targets.len() != 1 && targets.iter().any(|target| matches!(target, Target::UserInput { .. } | Target::Finish { .. })) {
-                    return Err("user_input and finish are separate single-target transactions".into());
+                if targets.len() != 1 && targets.iter().any(|target| matches!(target, Target::UserInput { .. })) {
+                    return Err("user_input is a separate single-target transaction".into());
                 }
                 if targets.iter().filter(|target| matches!(target, Target::AgentMessages { .. })).count() > 1 {
                     return Err("one inbox observation is allowed per await".into());
@@ -657,15 +657,7 @@ async fn observe(
                 )
                 .await
         }
-        Target::Finish { request_id } => {
-            scope
-                .native(
-                    "ssmcp.ui.finish",
-                    json!({"op":"wait","request_id":request_id,"timeout_ms":timeout_ms}),
-                    controller,
-                )
-                .await
-        }
+        Target::Finish { .. } => Err("tool_retired: await finish targets are disabled".into()),
         Target::UserInput { reason, notify } => {
             user_wait::wait_observed(
                 scope.broker.clone(),
@@ -732,27 +724,13 @@ async fn observe(
                 Status::TimedOut
             }
         }
-        Target::Finish { request_id } => {
-            if let Err(error) = finish_request::accepted_native_data(
-                &json!({"structuredContent":data}),
-                &scope.binding.agent_id,
-                Some(request_id),
-            ) {
-                return TargetResult::failed(
-                    target,
-                    Status::Unavailable,
-                    "await_invalid_finish_response",
-                    error,
-                );
-            }
-            let finish = &data["request"]["finish"];
-            match finish["status"].as_str() {
-                Some("pending") => Status::TimedOut,
-                Some("approved" | "denied" | "cancelled" | "invalidated" | "completed") => {
-                    Status::Ready
-                }
-                _ => Status::Unavailable,
-            }
+        Target::Finish { .. } => {
+            return TargetResult::failed(
+                target,
+                Status::Unavailable,
+                "tool_retired",
+                "await finish targets are disabled",
+            );
         }
         Target::UserInput { .. } => match data["status"].as_str() {
             Some("ready" | "received") => Status::Ready,
@@ -1195,7 +1173,7 @@ pub(super) fn abandon_user_delivery(report: &CodeRunReport) {
 }
 
 pub(super) fn tool() -> Value {
-    json!({"name":"await","description":"Wait on typed execution jobs, relay jobs, agent status or inbox messages, user input, or an existing finish request without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout 1000..25000ms never approves completion. Cancellation stops observation only: it never kills a job, acknowledges messages, or changes a finish decision. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. user_input and finish must be single-target waits. Only outer user_wait received plus matching user_messages proves user-input delivery. An agent status or message never substitutes for the local user's finish approval.",
+    json!({"name":"await","description":"Wait on typed execution jobs, relay jobs, agent status or inbox messages, or user input without occupying a JavaScript worker. Authenticate the current participant with collab credentials. Create with targets; resume/cancel with the server-issued wait_id only. Timeout is bounded to 1000..25000ms. Cancellation stops observation only: it never kills a job or acknowledges messages. any returns when one target is ready; all requires all ready; explicit target failures return immediately with every target represented. Pending entries in an any response were not resolved. user_input must be a single-target wait. Only outer user_wait received plus matching user_messages proves user-input delivery.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id"],"properties":{
             "client_id":{"type":"string","minLength":1,"maxLength":64},"op":{"enum":["wait","cancel"],"default":"wait"},
             "wait_id":{"type":"string","minLength":1,"maxLength":128},"mode":{"enum":["any","all"],"default":"any"},
@@ -1207,7 +1185,6 @@ pub(super) fn tool() -> Value {
                 {"type":"object","additionalProperties":false,"required":["type","agent_id","statuses"],"properties":{"type":{"const":"agent_status"},"agent_id":{"type":"string","minLength":1,"maxLength":64},"statuses":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"agent_messages"},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":64,"default":32}}},
                 {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"user_input"},"reason":{"type":"string","minLength":1,"maxLength":512},"notify":{"type":"boolean","default":true}}},
-                {"type":"object","additionalProperties":false,"required":["type","request_id"],"properties":{"type":{"const":"finish"},"request_id":{"type":"string","minLength":1,"maxLength":128}}}
             ]}}},"oneOf":[{"properties":{"op":{"const":"wait"}},"required":["targets"],"not":{"required":["wait_id"]}},
                 {"required":["wait_id"],"not":{"anyOf":[{"required":["targets"]},{"required":["mode"]}]}}]},
         "annotations":{"readOnlyHint":false,"destructiveHint":false}})

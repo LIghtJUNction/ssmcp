@@ -891,7 +891,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.questions",
-            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. Ordinary questions may be answered by the local user or another verified agent in the same client/account; actor origin is retained. Only the local user can approve a finish request. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
+            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. The local user answers questions; agent-authored answers and finish requests are retired. Historical actor origin is retained. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,
                 "properties":{
@@ -909,7 +909,6 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         super::messages::tool(),
     ];
-    tools.extend(workflow::tools());
     tools.push(delivery::tool());
     tools.push(delivery::peek_tool());
     tools

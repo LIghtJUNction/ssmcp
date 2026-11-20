@@ -1113,6 +1113,6 @@ async fn tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_cons
 }
 
 mod await_capacity;
-mod finish_receipts;
+mod retired_hooks;
 mod time_primitives;
 mod wait_display;

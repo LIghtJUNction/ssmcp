@@ -185,9 +185,6 @@ fn send_with_presentation(
     request.scope = super::questions::message_scope();
     let source = crate::runtime::call_scope::Source::capture();
     request.owner = Some(source.require_owner()?.clone());
-    if request.kind == Kind::Answer && request.scope.is_none() {
-        return Err("finish_thread_required: bind a verified collab agent and obtain request_finish approval before an explicit final reply".into());
-    }
     let previous = cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -196,13 +193,6 @@ fn send_with_presentation(
         return Ok(response(&receipt, true));
     }
     let id = message_id()?;
-    // The local queue lock linearizes this one-use completion with new input.
-    // A duplicate receipt above does not consume a second approval.
-    let finish_request_id = if request.kind == Kind::Answer {
-        Some(super::questions::authorize_completion()?)
-    } else {
-        None
-    };
     let shown = crate::client::render::agent_message(
         &request.text,
         request.kind,
@@ -215,7 +205,7 @@ fn send_with_presentation(
         kind: request.kind,
         history_saved: true,
         shown,
-        finish_request_id,
+        finish_request_id: None,
     };
     cache().lock().unwrap_or_else(|e| e.into_inner()).remember(
         &request,
@@ -248,7 +238,7 @@ pub(super) fn restore_copy(messages: &[super::history::Message]) {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.message",
-        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Explicit answer requires a verified thread and one request_finish decision approved by the local human with explicit Yes; it consumes that approval once. Agents cannot approve completion. Progress does not require completion approval. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text and kind within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
+        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner; no completion approval is required. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text and kind within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
         "inputSchema":{
             "type":"object","required":["text"],"additionalProperties":false,
             "properties":{
@@ -400,5 +390,59 @@ mod tests {
             cache.last_copy.is_none(),
             "an oversized latest reply must not restore stale copy text"
         );
+    }
+
+    #[tokio::test]
+    async fn final_messages_and_presentations_need_owner_but_no_finish_approval() {
+        use crate::client::interface::history;
+        use crate::runtime::call_scope::Source;
+        let path = std::env::temp_dir().join(format!(
+            "ssmcp-retired-hooks-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        history::with_test_history(path.clone(), async {
+            history::record("user", "Original conversation").unwrap();
+            let source = Source::capture();
+            let owner = source.require_owner().unwrap().id().to_owned();
+            assert!(super::super::questions::message_scope().is_none());
+            let arguments = json!({"text":"Final result","kind":"answer","idempotency_key":"final-without-permission"});
+            let first = source.clone().blocking(|| send(arguments.clone())).unwrap();
+            assert_eq!(first["accepted"], true);
+            assert_eq!(first["duplicate"], false);
+            assert_eq!(first["history_saved"], true);
+            assert!(first["finish_request_id"].is_null());
+            let retry = source.clone().blocking(|| send(arguments.clone())).unwrap();
+            assert_eq!(retry["duplicate"], true);
+            assert_eq!(retry["message_id"], first["message_id"]);
+            let changed = json!({"text":"Different result","kind":"answer","idempotency_key":"final-without-permission"});
+            assert!(source.clone().blocking(|| send(changed)).unwrap_err().contains("idempotency_key"));
+            assert!(Source::default().blocking(|| send(arguments)).unwrap_err()
+                .starts_with("history_owner_missing:"));
+
+            history::release_current().unwrap();
+            history::record("user", "Other conversation").unwrap();
+            let other = history::current().unwrap().unwrap().metadata.id;
+            let document: Presentation = serde_json::from_value(json!({
+                "title":"Result", "blocks":[{"type":"text","text":"Final panel"}]
+            })).unwrap();
+            let panel = source.blocking(|| send_presentation(
+                json!({"text":"Final panel","kind":"answer","idempotency_key":"final-panel"}),
+                document,
+            )).unwrap();
+            assert_eq!(panel["accepted"], true);
+            assert_eq!(panel["history_saved"], true);
+            assert!(panel["finish_request_id"].is_null());
+            let original = history::read(&owner).unwrap();
+            assert_eq!(original.messages.iter().filter(|message| message.role == "assistant").count(), 2);
+            assert_eq!(original.messages.last().unwrap().content, "Final panel");
+            let other = history::read(&other).unwrap();
+            assert_eq!(other.messages.len(), 1);
+            assert_eq!(other.messages[0].role, "user");
+        }).await;
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

@@ -270,6 +270,6 @@ return await collab.update("CLIENT_ID_FROM_LIST", {
 
 # 结束决定与原生消息
 
-下一轮交互接口复用当前参与者绑定，不启动额外模型。结束申请由公共 `request_finish` 接收必填理由，默认 No、待决定时为 null；请求者不能批准自己。同一客户端与账户的其他已验证 agent 可通过 `ssmcp.ui.answer` 提交显式 yes/no 决定，普通文本和 controller 显示名称不能授权。普通问题答案在独立 `question_answers` 中保留 human/agent actor，不伪装成用户要求。
+交互接口复用当前参与者绑定，不启动额外模型。真实用户通过 `ssmcp.ui.ask` 的本机问题队列回答；agent 代答与结束审批入口已退役，正常进度、最终消息和 `ui.reply` 线程结果仍保留来源。问题答案独立放在 `question_answers`，不会伪装成用户要求。[当前交互协议](finish-and-questions.md)
 
 跨客户端原生消息使用 `messages` 的 list/send/inbox/ack/status。必须选择列出的完整稳定收件人 ID；同名显示标签不能代替身份。设备账户收件箱表示该账户下一次合格调用收取，agent 收件箱则要求精确绑定。独立 `native_messages` 保留实际来源，送达与确认不等于已读。完整边界与当前尚未完成的运行验收见[结束申请、异步问题与原生消息](finish-and-questions.md)。

@@ -5,12 +5,11 @@ use crate::steering::Reservation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 20_000;
 pub(crate) const MAX_TIMEOUT_MS: u64 = 25_000;
 pub(crate) const ENVELOPE_RESERVE_BYTES: usize = 32 * 1024;
-pub(crate) const CONTINUE_INSTRUCTION: &str = "Continue the authorized task unless the user has explicitly agreed to end. When user input is required, call ui.wait(client_id,{timeout_ms:20000,intent:'need_user'}). If it times out, wait again; do not treat timeout as permission to stop. Before ending, use request_finish or the registered native ssmcp.ui.finish with a verified collab binding, then wait for the local user's explicit Yes. Pending timeout requires another wait on the same request ID. ui.wait intent:'finish' only waits for continued user guidance and never grants completion permission. A tool argument or agent-authored field cannot grant user consent. This reminder observes explicit wait intents and accepted native kind:'answer' messages; it cannot intercept arbitrary external assistant final responses.";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -43,10 +42,7 @@ fn default_notify() -> bool {
 impl Arguments {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1_000..=MAX_TIMEOUT_MS).contains(&self.timeout_ms) {
-            return Err(
-                "user wait timeout_ms must be 1000..=25000; retry another wait after timeout"
-                    .into(),
-            );
+            return Err("user wait timeout_ms must be 1000..=25000".into());
         }
         if self.reason.as_ref().is_some_and(|reason| {
             reason.trim().is_empty() || reason.len() > 512 || reason.chars().any(char::is_control)
@@ -106,7 +102,6 @@ struct Record {
 #[derive(Default)]
 pub(super) struct State {
     records: BTreeMap<String, Record>,
-    ending: BTreeSet<String>,
 }
 
 impl Record {
@@ -114,8 +109,7 @@ impl Record {
         json!({"schema_version":1,"client_id":self.client_id,"wait_id":self.wait_id,
             "recipient":self.recipient.agent_id().unwrap_or("next"),"intent":self.intent,
             "status":self.outcome,"reason":self.reason,"notification":self.notification,
-            "messages":self.messages,"continue_wait":self.outcome == Outcome::TimedOut,
-            "user_consent_to_end":null})
+            "messages":self.messages,"continue_wait":self.outcome == Outcome::TimedOut})
     }
 }
 
@@ -128,7 +122,7 @@ impl AuditRun {
     ) -> Result<String, String> {
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
         if waits.records.contains_key(client_id) {
-            return Err("one user wait per client is allowed in a code_mode run; repeat in a new call after timeout".into());
+            return Err("one user wait per client is allowed in a code_mode run".into());
         }
         if waits.records.len() >= 8 {
             return Err("a code_mode run can wait on at most eight clients".into());
@@ -236,24 +230,24 @@ impl AuditRun {
 
     pub(crate) fn commit_user_wait(
         &self,
-        response: super::reminders::Response<'_>,
+        response: crate::steering::Response<'_>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> (Vec<Value>, Option<super::reminders::Notice>) {
+    ) -> Vec<Value> {
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
         let Some(record) = waits.records.get_mut(response.client_id) else {
-            return (Vec::new(), None);
+            return Vec::new();
         };
         if record.outcome != Outcome::Ready
             || record.recipient.owner != response.owner
             || record.recipient.agent_id() != response.agent_id
         {
-            return (Vec::new(), None);
+            return Vec::new();
         }
         let Some(mut reservation) = record.reservation.take() else {
-            return (Vec::new(), None);
+            return Vec::new();
         };
-        let (claimed, notice) = reservation.commit(response, max_messages, max_bytes);
+        let claimed = reservation.commit(response, max_messages, max_bytes);
         record.outcome = if claimed.is_empty() {
             Outcome::Superseded
         } else {
@@ -269,7 +263,7 @@ impl AuditRun {
             "revision":message["revision"]})
             })
             .collect();
-        (claimed, notice)
+        claimed
     }
 
     /// Synchronous release precedes any best-effort native cancellation RPC.
@@ -302,57 +296,21 @@ impl AuditRun {
 
     pub(crate) fn user_wait_reserve_bytes(&self) -> usize {
         let waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
-        if waits.records.is_empty() && waits.ending.is_empty() {
+        if waits.records.is_empty() {
             0
         } else {
             ENVELOPE_RESERVE_BYTES
         }
     }
 
-    pub(crate) fn native_ending_intent(&self, client_id: &str, result: &Value) {
-        if result
-            .get("isError")
-            .is_some_and(|value| value != &Value::Bool(false))
-            || result["structuredContent"]["accepted"] != true
-            || result["structuredContent"]["duplicate"] != false
-            || !result["structuredContent"]["message_id"]
-                .as_str()
-                .is_some_and(|id| {
-                    !id.is_empty()
-                        && id.len() <= 128
-                        && id
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-                })
-        {
-            return;
-        }
-        let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
-        if waits.ending.len() < 8 {
-            waits.ending.insert(client_id.into());
-        }
-    }
-
     pub(crate) fn user_wait_addition(&self) -> Value {
         let waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
         let receipts: Vec<_> = waits.records.values().map(Record::receipt).collect();
-        let remind = !waits.ending.is_empty()
-            || waits.records.values().any(|record| {
-                record.intent == Intent::Finish || record.outcome == Outcome::TimedOut
-            });
         let mut fields = serde_json::Map::new();
         let mut content = Vec::new();
         if !receipts.is_empty() {
             fields.insert("user_wait".into(), json!(receipts));
             content.push(json!({"type":"text","text":format!("USER WAIT\n{}\nOnly status received with matching user_messages confirms delivery.", json!(receipts))}));
-        }
-        if remind {
-            fields.insert(
-                "continuation_reminder".into(),
-                json!({"instruction":CONTINUE_INSTRUCTION,
-                "observed_native_answer_clients":waits.ending,"user_consent_to_end":null}),
-            );
-            content.push(json!({"type":"text","text":format!("CONTINUATION REMINDER\n{CONTINUE_INSTRUCTION}")}));
         }
         json!({"structuredContent":fields,"content":content})
     }
@@ -430,14 +388,12 @@ mod tests {
         );
         assert_eq!(run.user_wait_receipt("room")["status"], "ready");
         assert_eq!(run.user_wait_receipt("room")["messages"], json!([]));
-        let (messages, _) = run.commit_user_wait(
-            super::super::reminders::Response {
+        let messages = run.commit_user_wait(
+            crate::steering::Response {
                 client_id: "room",
                 run_id: &run.context.run_id,
                 owner: "verified-owner",
                 agent_id: None,
-                replies: &[],
-                notice_budget: 0,
             },
             8,
             crate::steering::MAX_DELIVERY_BYTES,
@@ -450,7 +406,7 @@ mod tests {
             messages[0]["message_id"]
         );
         assert_eq!(receipt["messages"][0]["revision"], messages[0]["revision"]);
-        assert!(receipt["user_consent_to_end"].is_null());
+        assert!(receipt.get("user_consent_to_end").is_none());
         assert!(!receipt.to_string().contains("actual local user input"));
     }
 
@@ -485,43 +441,26 @@ mod tests {
     }
 
     #[test]
-    fn user_wait_prompt_hook_requires_explicit_native_reply_evidence() {
-        let run = AuditRun::new("return {kind:'answer'};", None).unwrap();
-        assert!(
-            run.user_wait_addition()["structuredContent"]
-                .as_object()
-                .unwrap()
-                .is_empty()
-        );
-        for value in [
-            json!({"kind":"answer"}),
-            json!({"structuredContent":{"accepted":true}}),
-            json!({"structuredContent":{"accepted":true,"duplicate":true,"message_id":"old"}}),
-        ] {
-            run.native_ending_intent("room", &value);
+    fn user_wait_receipts_never_inject_continuation_or_consent_hooks() {
+        let plain = AuditRun::new("return {kind:'answer'};", None).unwrap();
+        assert_eq!(plain.user_wait_addition()["content"], json!([]));
+        assert_eq!(plain.user_wait_reserve_bytes(), 0);
+        for intent in [Intent::NeedUser, Intent::Finish] {
+            for outcome in [Outcome::TimedOut, Outcome::Cancelled, Outcome::Received] {
+                let run = AuditRun::new("return await ui.wait('room');", None).unwrap();
+                run.begin_user_wait("room", recipient(), intent).unwrap();
+                run.finish_wait_state("room", outcome, "test");
+                let addition = run.user_wait_addition();
+                let fields = &addition["structuredContent"];
+                assert_eq!(fields.as_object().unwrap().len(), 1);
+                assert!(fields.get("continuation_reminder").is_none());
+                assert!(fields["user_wait"][0].get("user_consent_to_end").is_none());
+                assert!(!addition.to_string().contains("CONTINUATION REMINDER"));
+                assert_eq!(
+                    fields["user_wait"][0]["continue_wait"],
+                    outcome == Outcome::TimedOut
+                );
+            }
         }
-        assert!(
-            run.user_wait_addition()["structuredContent"]
-                .as_object()
-                .unwrap()
-                .is_empty()
-        );
-        run.native_ending_intent(
-            "room",
-            &json!({"structuredContent":{
-            "accepted":true,"duplicate":false,"message_id":"new_reply"}}),
-        );
-        assert!(
-            run.user_wait_addition()["structuredContent"]["continuation_reminder"]["instruction"]
-                .is_string()
-        );
-        assert!(run.user_wait_addition()["structuredContent"]["continuation_reminder"]["user_consent_to_end"].is_null());
-        let waiting = AuditRun::new("return await ui.wait('room');", None).unwrap();
-        waiting
-            .begin_user_wait("room", recipient(), Intent::NeedUser)
-            .unwrap();
-        waiting.finish_wait_state("room", Outcome::TimedOut, "deadline");
-        assert_eq!(waiting.user_wait_receipt("room")["continue_wait"], true);
-        assert!(waiting.user_wait_addition()["structuredContent"]["continuation_reminder"]["instruction"].is_string());
     }
 }

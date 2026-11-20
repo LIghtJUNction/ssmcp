@@ -217,7 +217,7 @@ fn native_limits() -> Value {
             "audit_max_runs":128,
             "audit_max_bytes":2097152,
             "audit_source_max_bytes":65536,
-            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.answer","ssmcp.ui.finish","ssmcp.ui.question_ack","ssmcp.ui.question_delivery","ssmcp.ui.history","ssmcp.ui.history_archive","ssmcp.ui.history_update","ssmcp.ui.tool_summary","ssmcp.ui.harness"],
+            "native_tools":["ssmcp.ui.get","ssmcp.ui.set","ssmcp.ui.filter","ssmcp.ui.action","ssmcp.ui.queue","ssmcp.ui.message","ssmcp.ui.present","ssmcp.ui.reply","ssmcp.ui.wait","ssmcp.ui.listener","ssmcp.ui.ask","ssmcp.ui.questions","ssmcp.ui.question_ack","ssmcp.ui.question_delivery","ssmcp.ui.history","ssmcp.ui.history_archive","ssmcp.ui.history_update","ssmcp.ui.tool_summary","ssmcp.ui.harness"],
             "get_projection_max_bytes":8192,
             "queue_message_max_bytes":crate::wire::MAX_USER_MESSAGE_BYTES,
             "queue_pending_max":crate::wire::MAX_USER_MESSAGES,
@@ -528,7 +528,7 @@ terminal, file and output calls retain their normal delivery behavior. Source au
 native queries. Queue and source lifecycle support require the current wire protocol v7; other wire versions are rejected.\n\n\
 To communicate in the user's ssmcp terminal, call(clientId,'ssmcp.ui.message',{text}) with your Markdown reply; \
 the client renders it locally and records the assistant message. Use ssmcp.ui.ask for a nonblocking question, \
-receive typed question_answers on the next verified native call, or read without consuming via ssmcp.ui.questions; the user opens the queue with Shift+Up. Before an explicit final answer, obtain the local user's explicit Yes through request_finish with a reason and verified thread; pending timeout never approves. When that public tool is absent, bind this participant's collab credentials and call the registered native ssmcp.ui.finish. Agent answers cannot approve completion. The public await tool observes typed jobs, agents, messages, user input or an existing finish request without a JavaScript worker; waitFor(clientId,args) uses the same server coordinator inside its existing code_mode worker. Resume timed-out observations with the server-issued wait_id. Cancellation only stops observation. ui.wait intent:finish is continuation, not permission. ssmcp.ui.history lists or reads versioned JSONL conversations; /resume \
+receive typed question_answers on the next verified native call, or read without consuming via ssmcp.ui.questions; the user opens the queue with Shift+Up. Final replies with kind answer do not require completion approval. The local user answers questions; agent-authored question answers are disabled. The public await tool observes typed jobs, agents, messages or user input without a JavaScript worker; waitFor(clientId,args) uses the same server coordinator inside its existing code_mode worker. A timed-out observation can be resumed with the server-issued wait_id. Cancellation only stops observation. ssmcp.ui.history lists or reads versioned JSONL conversations; /resume \
 continues one locally without replaying tools or restoring a remote model thread. The composer accepts \
 @file and $skill references. Read images with ssmcp.fs.read_image, then image(result); do not print base64.\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \

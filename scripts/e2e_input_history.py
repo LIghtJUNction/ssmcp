@@ -424,7 +424,7 @@ class InputHistory(Composer):
 
         reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
         # This is copy/handoff source material, not an attempt to finish a task.
-        # Explicit completion approval is exercised by e2e_interactions.py.
+        # Final display without completion approval is exercised by e2e_interactions.py.
         request = {"text": reply, "kind": "progress", "idempotency_key": "handoff-reply-once"}
         receipt = self.observe("ssmcp.ui.message", request)
         duplicate = self.observe("ssmcp.ui.message", request)

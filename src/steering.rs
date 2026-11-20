@@ -13,6 +13,14 @@ use std::{
 };
 pub(crate) use waiting::Reservation;
 
+/// The authenticated recipient of an atomic user-message delivery.
+pub(crate) struct Response<'a> {
+    pub(crate) client_id: &'a str,
+    pub(crate) run_id: &'a str,
+    pub(crate) owner: &'a str,
+    pub(crate) agent_id: Option<&'a str>,
+}
+
 const MAX_HISTORY: usize = 64;
 const MAX_RETAINED_BYTES: usize = 512 * 1024;
 const MAX_COMMANDS: usize = 128;
@@ -43,7 +51,6 @@ struct State {
     revision: u64,
     messages: VecDeque<SteeringMessage>,
     commands: VecDeque<(String, [u8; 32])>,
-    reminders: crate::code_mode::reminders::State,
     reservations: Vec<waiting::Reserved>,
     closed: bool,
 }
@@ -369,15 +376,15 @@ impl Queue {
         Ok(snapshot)
     }
 
-    /// Claims, CAS edits and reminder lifecycle share one lock after HTTP
+    /// Claims and CAS edits share one lock after HTTP
     /// authorization. A later takeback cannot withdraw the returned revision.
     /// Zero message budget observes a response without consuming a requirement.
     pub(crate) fn finish_response(
         &self,
-        response: crate::code_mode::reminders::Response<'_>,
+        response: Response<'_>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> (Vec<Value>, Option<crate::code_mode::reminders::Notice>) {
+    ) -> Vec<Value> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let claimed = state.claim(
             response.client_id,
@@ -386,11 +393,7 @@ impl Queue {
             max_messages,
             max_bytes,
         );
-        let notice =
-            state
-                .reminders
-                .finish(&response, !claimed.is_empty(), std::time::Instant::now());
-        (claimed, notice)
+        claimed
     }
 
     #[cfg(test)]
@@ -434,37 +437,33 @@ mod tests {
     }
 
     #[test]
-    fn response_reminders_follow_actual_claims_without_adding_queue_records() {
-        use crate::code_mode::reminders;
+    fn response_delivery_claims_only_real_user_messages() {
         let queue = Queue::default();
         queue
             .command("room", vec![], publish("one", "m", 0, "用户需求", "next"))
             .unwrap();
         let finish = |run_id, max_bytes| {
             queue.finish_response(
-                reminders::Response {
+                Response {
                     client_id: "room",
                     run_id,
                     owner: "owner",
                     agent_id: None,
-                    replies: &[],
-                    notice_budget: reminders::MAX_NOTICE_BYTES,
                 },
                 8,
                 max_bytes,
             )
         };
         for run in ["blocked", "blocked1", "blocked2"] {
-            let (messages, notice) = finish(run, 0);
+            let messages = finish(run, 0);
             assert!(messages.is_empty());
-            assert!(notice.is_none());
         }
         assert_eq!(snapshot(&queue).messages[0].state, SteeringState::Queued);
-        let (messages, notice) = finish("n", MAX_DELIVERY_BYTES);
+        let messages = finish("n", MAX_DELIVERY_BYTES);
         assert_eq!(messages.len(), 1);
-        assert!(notice.is_none());
-        assert!(finish("n1", MAX_DELIVERY_BYTES).1.is_none());
-        assert!(finish("n2", MAX_DELIVERY_BYTES).1.is_some());
+        for run in ["n1", "n2", "n3", "n4"] {
+            assert!(finish(run, MAX_DELIVERY_BYTES).is_empty());
+        }
         let snapshot = snapshot(&queue);
         assert_eq!(snapshot.messages.len(), 1);
         assert_eq!(snapshot.messages[0].text, "用户需求");
