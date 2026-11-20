@@ -113,18 +113,19 @@ class DeploymentPolicyTests(unittest.TestCase):
         events.extend(("workflow_dispatch", {"inputs": inputs}) for inputs in (
             {}, {"deploy_server": True}, {"deploy_server": "true"},
             {"deploy_server": False}, {"deploy_server": "false"}))
-        for name, event in events:
-            with self.subTest(name=name, event=event):
-                result, output = self.run_policy(event, name=name, version="0.10.15")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(output, "deploy_server=false\n")
-                report = json.loads(result.stdout)
-                self.assertEqual(report["publish"], "true")
-                self.assertEqual(report["version"], "0.10.15")
-                self.assertIn("active relay sessions", report["deployment_deferred"])
+        for version in ("0.10.15", "0.10.16"):
+            for name, event in events:
+                with self.subTest(version=version, name=name, event=event):
+                    result, output = self.run_policy(event, name=name, version=version)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(output, "deploy_server=false\n")
+                    report = json.loads(result.stdout)
+                    self.assertEqual(report["publish"], "true")
+                    self.assertEqual(report["version"], version)
+                    self.assertIn("active relay sessions", report["deployment_deferred"])
 
     def test_other_versions_keep_existing_deployment_selection(self):
-        for version in ("0.10.16", "0.10.16-rc.1"):
+        for version in ("0.10.17", "0.10.17-rc.1"):
             with self.subTest(version=version):
                 self.assert_policy({}, "true", name="push", version=version)
                 self.assert_policy({"inputs": {"deploy_server": False}}, "false", version=version)

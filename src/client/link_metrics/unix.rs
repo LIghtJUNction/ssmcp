@@ -118,7 +118,15 @@ fn claim_reporter(fd: RawFd) -> io::Result<Reporter> {
 
 impl Reporter {
     pub(super) fn send(&self, bytes: &[u8; 32]) -> io::Result<()> {
-        self.0.send(bytes).map(|_| ())
+        self.0.send(bytes).map(|_| ()).map_err(|error| {
+            // Darwin can report a full datagram queue as ENOBUFS. Keep the
+            // reporter alive and drop this sample, as with EWOULDBLOCK.
+            if error.raw_os_error() == Some(libc::ENOBUFS) {
+                io::Error::new(io::ErrorKind::WouldBlock, error)
+            } else {
+                error
+            }
+        })
     }
 }
 
