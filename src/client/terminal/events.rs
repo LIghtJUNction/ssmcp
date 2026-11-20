@@ -11,6 +11,7 @@ mod diff;
 mod read_activity;
 #[cfg(all(test, unix))]
 mod source_tests;
+mod tool_activity;
 use correlation::{Kind, Meta, Status};
 pub(crate) use diff::DiffMode;
 
@@ -44,6 +45,7 @@ struct Event {
     expanded: bool,
     chat_expanded: bool,
     panel: CommandPanel,
+    group_panel: CommandPanel,
     truncated: bool,
     tone: &'static str,
     cache: Option<(usize, String, Vec<String>)>,
@@ -80,6 +82,7 @@ struct CommandPanel {
 #[derive(Clone, Copy, Debug, Default)]
 struct CommandPosition {
     scroll: Option<usize>,
+    group_scroll: Option<usize>,
     folded_scroll: Option<Option<usize>>,
 }
 
@@ -491,6 +494,7 @@ pub(crate) struct EventView {
     dropped: usize,
     hit_rows: Vec<Option<u64>>,
     panel_hit_rows: Vec<Option<u64>>,
+    group_hit_rows: Vec<Option<u64>>,
     total_rows: usize,
     page_rows: usize,
     image_cells: Option<images::CellSize>,
@@ -521,6 +525,20 @@ impl EventView {
             group.expanded = self.read_expanded.contains(&group.head);
         }
         groups
+    }
+
+    fn tool_groups(&self) -> Vec<tool_activity::Group> {
+        if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
+            return Vec::new();
+        }
+        tool_activity::groups(&self.events, &self.read_groups())
+    }
+
+    fn tool_group_for(&self, id: u64) -> Option<tool_activity::Group> {
+        let index = self.events.iter().position(|event| event.id == id)?;
+        self.tool_groups()
+            .into_iter()
+            .find(|group| group.contains(index))
     }
 
     fn visible_ids(&self) -> Vec<u64> {
@@ -572,6 +590,7 @@ impl EventView {
         self.reveal = true;
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.placements.clear();
         true
     }
@@ -592,6 +611,7 @@ impl EventView {
         }
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.placements.clear();
         self.reveal = !self.follow;
     }
@@ -611,6 +631,7 @@ impl EventView {
         self.new_image = None;
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.placements.clear();
         self.total_rows = 0;
         self.page_rows = 0;
@@ -665,6 +686,7 @@ impl EventView {
                         event.id,
                         CommandPosition {
                             scroll: event.panel.scroll,
+                            group_scroll: event.group_panel.scroll,
                             folded_scroll: event.panel.folded_scroll,
                         },
                     )
@@ -693,6 +715,7 @@ impl EventView {
                 .map(|(_, panel)| *panel)
                 .unwrap_or_default();
             event.panel.scroll = panel.scroll;
+            event.group_panel.scroll = panel.group_scroll;
             event.panel.folded_scroll = panel.folded_scroll;
         }
         self.read_expanded = position
@@ -716,6 +739,7 @@ impl EventView {
         });
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.placements.clear();
         self.preserve_read_selection();
         let visible = self.visible_ids();
@@ -979,6 +1003,7 @@ impl EventView {
                 expanded,
                 chat_expanded: false,
                 panel: CommandPanel::default(),
+                group_panel: CommandPanel::default(),
                 truncated,
                 tone,
                 meta,
@@ -1139,17 +1164,47 @@ impl EventView {
         self.follow = self.scroll == self.total_rows.saturating_sub(self.page_rows);
     }
 
-    /// Consume wheel input only inside a command window from the last frame.
-    /// Reaching an edge does not send the wheel to the conversation underneath.
+    /// Expanded details own their inner viewport; folded items and group chrome
+    /// own the shared tool window. An edge never scrolls the conversation below.
     pub(crate) fn scroll_panel_at(&mut self, row: u16, delta: isize) -> bool {
-        let Some(id) = self.panel_hit_rows.get(usize::from(row)).copied().flatten() else {
-            return false;
-        };
-        self.scroll_panel(id, delta)
+        let row = usize::from(row);
+        if let Some(id) = self.panel_hit_rows.get(row).copied().flatten() {
+            return self.scroll_panel(id, delta);
+        }
+        self.group_hit_rows
+            .get(row)
+            .copied()
+            .flatten()
+            .is_some_and(|id| self.scroll_tool_group(id, delta))
     }
 
     pub(crate) fn scroll_selected_panel(&mut self, delta: isize) -> bool {
-        self.selected.is_some_and(|id| self.scroll_panel(id, delta))
+        let Some(id) = self.selected else {
+            return false;
+        };
+        if self.tool_group_for(id).is_some() {
+            if self
+                .events
+                .iter()
+                .any(|event| event.id == id && event.chat_expanded)
+                && self.scroll_panel(id, delta)
+            {
+                return true;
+            }
+            return self.scroll_tool_group(id, delta);
+        }
+        self.scroll_panel(id, delta)
+    }
+
+    fn scroll_tool_group(&mut self, id: u64, delta: isize) -> bool {
+        let Some(group) = self.tool_group_for(id) else {
+            return false;
+        };
+        self.events[group.start].group_panel.scroll_by(delta);
+        self.new_image = None;
+        self.follow = false;
+        self.reveal = false;
+        true
     }
 
     fn scroll_panel(&mut self, id: u64, delta: isize) -> bool {
@@ -1177,6 +1232,9 @@ impl EventView {
         self.follow = true;
         self.reveal = false;
         self.selected = self.visible_ids().last().copied();
+        if let Some(group) = self.selected.and_then(|id| self.tool_group_for(id)) {
+            self.events[group.start].group_panel.scroll = None;
+        }
     }
 
     pub(crate) fn toggle(&mut self) -> bool {
@@ -1274,6 +1332,7 @@ impl EventView {
         self.dropped = 0;
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.total_rows = 0;
         self.page_rows = 0;
         self.placements.clear();
@@ -1302,6 +1361,15 @@ impl EventView {
                 "id":group.head,"count":group.members.len(),"expanded":group.expanded,
                 "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>()
             })).collect::<Vec<_>>(),
+            "tool_groups":self.tool_groups().iter().map(|group| {
+                let panel = &self.events[group.start].group_panel;
+                json!({
+                    "id":group.head,"count":group.end-group.start,
+                    "members":(group.start..group.end).map(|index|self.events[index].id).collect::<Vec<_>>(),
+                    "scroll":panel.offset(),"rows":panel.rows,"visible_rows":panel.page,
+                    "following":panel.scroll.is_none()
+                })
+            }).collect::<Vec<_>>(),
             "max_events":MAX_EVENTS,"max_bytes":MAX_BYTES,"dropped_events":self.dropped,
             "selected":self.selected,"scroll":self.scroll,
             "rows_below":self.rows_below(),"following":self.follow,
@@ -1324,8 +1392,10 @@ impl EventView {
             self.selected = Some(group.head);
         }
         let groups = self.read_groups();
+        let tool_groups = self.tool_groups();
         self.hit_rows.clear();
         self.panel_hit_rows.clear();
+        self.group_hit_rows.clear();
         self.placements.clear();
         if width == 0 || height == 0 {
             self.page_rows = 0;
@@ -1342,6 +1412,7 @@ impl EventView {
         let mut selected_row = None;
         let mut image_spans = Vec::new();
         let mut panel_spans = Vec::new();
+        let mut group_spans = Vec::new();
         let new_image = self.new_image.take();
         let mut new_images = false;
         let mut image_anchor = None;
@@ -1352,7 +1423,44 @@ impl EventView {
             self.scope.label(),
             self.diff_mode.name()
         );
-        for (index, event) in self.events.iter_mut().enumerate() {
+        for index in 0..self.events.len() {
+            if let Some(group) = tool_groups.iter().find(|group| group.contains(index)) {
+                if index != group.start {
+                    continue;
+                }
+                if !rows.is_empty() {
+                    rows.push((group.head, String::new()));
+                }
+                let start = rows.len();
+                let block = tool_activity::render(
+                    &mut self.events,
+                    group,
+                    tool_activity::Options {
+                        width,
+                        page,
+                        palette: &palette,
+                        ui,
+                        selected: self.selected,
+                        focused,
+                        reveal: self.reveal,
+                    },
+                );
+                if let Some(row) = block.selected_row {
+                    selected_row = Some(start + row);
+                }
+                panel_spans.extend(
+                    block
+                        .panels
+                        .into_iter()
+                        .map(|(id, from, to)| (id, start + from, start + to)),
+                );
+                group_spans.push((group.head, start, start + block.rows.len()));
+                rows.extend(block.rows);
+                previous_compact_tool = false;
+                visible_events += group.end - group.start;
+                continue;
+            }
+            let event = &mut self.events[index];
             if !event.matches(&self.query, self.level, self.scope) {
                 continue;
             }
@@ -1884,6 +1992,12 @@ impl EventView {
                 )
             {
                 self.placements.push(placement);
+            }
+        }
+        self.group_hit_rows.resize(page, None);
+        for (id, start, end) in group_spans {
+            for row in start.max(self.scroll)..end.min(self.scroll + page) {
+                self.group_hit_rows[row - self.scroll] = Some(id);
             }
         }
         self.panel_hit_rows.resize(page, None);
@@ -2608,11 +2722,12 @@ mod tests {
             .unwrap();
         let answer = rows.iter().position(|row| row.contains("Ada")).unwrap();
         assert_eq!(second, first + 1, "folded tools share a compact group");
-        assert!(rows[first - 1].is_empty(), "{rows:?}");
+        assert!(rows[first - 1].contains("Tools · 2 calls"), "{rows:?}");
+        assert!(rows[first - 2].is_empty(), "{rows:?}");
         assert_eq!(
             answer,
-            second + 2,
-            "assistant prose starts a separate paragraph"
+            second + 3,
+            "assistant prose starts after the shared footer and a paragraph gap"
         );
         assert_eq!(view.hit_rows[first], Some(view.events[1].id));
         assert_eq!(view.hit_rows[second], Some(view.events[2].id));
@@ -2634,7 +2749,13 @@ mod tests {
         assert_eq!(view.hit_rows[result_row], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 1], Some(view.events[2].id));
         assert_eq!(view.hit_rows[result_row + 2], Some(view.events[2].id));
-        assert!(rows[result_row + 3].contains("1–3/3"), "{rows:?}");
+        assert!(rows[result_row + 3].contains("1–8/8"), "{rows:?}");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.contains("scroll tools"))
+                .count(),
+            1
+        );
         let collapsed = rows.join("\n");
         assert!(collapsed.contains("first-result") && collapsed.contains("second-context"));
         assert!(collapsed.contains("first-tail") && collapsed.contains("second-tail"));
@@ -2667,10 +2788,13 @@ mod tests {
                     .collect::<String>()
                     .as_bytes(),
             );
+            if id == "build" {
+                view.ingest(b"separating diagnostic\n");
+            }
         }
         view.set_scope(EventScope::Conversation);
         let rows = view.render(100, 24, &plain_ui(), false);
-        assert_eq!(view.events.len(), 2);
+        assert_eq!(view.events.len(), 3);
         assert_eq!(
             view.total_rows, 11,
             "two bounded windows and one paragraph gap"
@@ -2683,11 +2807,11 @@ mod tests {
         let before = view.scroll;
         assert!(view.scroll_panel_at(first as u16, -9));
         assert_eq!(view.events[0].panel.offset(), 18);
-        assert_eq!(view.events[1].panel.offset(), 27);
+        assert_eq!(view.events[2].panel.offset(), 27);
         assert_eq!(view.scroll, before);
         assert!(view.scroll_panel_at(second as u16, -3));
         assert_eq!(view.events[0].panel.offset(), 18);
-        assert_eq!(view.events[1].panel.offset(), 24);
+        assert_eq!(view.events[2].panel.offset(), 24);
         for id in ["build", "test"] {
             view.ingest_event(
                 "shell",
@@ -2698,11 +2822,11 @@ mod tests {
         let rows = view.render(100, 24, &plain_ui(), false);
         assert_eq!(
             view.events.len(),
-            2,
+            3,
             "each stream remains in its original command"
         );
         assert_eq!(view.events[0].panel.offset(), 18);
-        assert_eq!(view.events[1].panel.offset(), 24);
+        assert_eq!(view.events[2].panel.offset(), 24);
         assert!(rows.iter().any(|row| row.contains("build-18")));
         assert!(!rows.iter().any(|row| row.contains("build-30")));
         assert!(view.scroll_panel_at(first as u16, isize::MAX));
@@ -2714,7 +2838,7 @@ mod tests {
         );
         let rows = view.render(100, 24, &plain_ui(), false);
         assert!(rows.iter().any(|row| row.contains("build-31")));
-        assert_eq!(view.events[1].panel.offset(), 24);
+        assert_eq!(view.events[2].panel.offset(), 24);
         assert!(
             !view.scroll_panel_at(5, -3),
             "the paragraph gap is outside either window"
