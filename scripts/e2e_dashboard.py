@@ -203,10 +203,19 @@ class Frontend:
     def disconnect(self):
         self.send(b"\x03")
         deadline = time.monotonic() + 8
+        answered = set()
         while self.process.poll() is None and time.monotonic() < deadline:
             self.pump(0.05)
+            if self.process.poll() is not None:
+                break
+            footer = self.snapshot()["rows"][-1]
+            for notice in ("cleared · queued requests kept", "Press Ctrl+C again to exit"):
+                if notice in footer and notice not in answered:
+                    answered.add(notice)
+                    self.send(b"\x03")
+                    break
         if self.process.poll() is None:
-            raise AssertionError("Ctrl-C did not disconnect this owned frontend")
+            raise AssertionError(f"Ctrl-C did not disconnect this owned frontend\n{self.failure_detail()}")
         self.pump(0.1)
         return self.snapshot(), termios.tcgetattr(self.slave)
 
