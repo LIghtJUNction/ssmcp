@@ -69,6 +69,52 @@ try {
     Assert-Fixture (($actual | ConvertTo-Json -Compress) -ceq ($wanted | ConvertTo-Json -Compress)) 'Native argv preserves Unicode, spaces, embedded quotes, trailing backslashes and shell metacharacters'
     Assert-FixtureFailure { & $realInvoke $pwsh @('-NoProfile', '-NonInteractive', '-Command', 'exit 23') | Out-Null } 'exit 23' 'Nonzero native exit cannot be reported as success'
 
+    # Import only the report formatter: these real exceptions do not start the
+    # Windows smoke worker or install any browser dependencies.
+    $smokeSource = [IO.File]::ReadAllText((Join-Path $repository 'scripts/smoke_windows_browser.ps1'))
+    $smokeAst = [Management.Automation.Language.Parser]::ParseInput($smokeSource, [ref]$tokens, [ref]$errors)
+    Assert-Fixture ($errors.Count -eq 0) 'The real Windows smoke script parses'
+    $formatters = @($smokeAst.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Get-SmokeFailure' })
+    Assert-Fixture ($formatters.Count -eq 1) 'The smoke failure formatter is unambiguous'
+    . ([ScriptBlock]::Create($formatters[0].Extent.Text))
+    function Get-FixtureSmokeFailure([scriptblock]$Action) {
+        try { & $Action | Out-Null }
+        catch { return Get-SmokeFailure 'fixture_failure' $_ }
+        throw 'The smoke diagnostic fixture expected a real exception.'
+    }
+    $privateMarker = 'ssmcp-private-diagnostic-fixture'
+    $diagnosticZip = Join-Path $root ($privateMarker + '.zip')
+    $diagnosticDirectory = Join-Path $root $privateMarker
+    Write-NodeZip $diagnosticZip 'node-diagnostic-fixture'
+    Expand-SsmcpNodeArchive $diagnosticZip $diagnosticDirectory 'node-diagnostic-fixture'
+    $failure = Get-FixtureSmokeFailure { Expand-SsmcpNodeArchive $diagnosticZip $diagnosticDirectory 'node-diagnostic-fixture' }
+    Assert-Fixture ($failure.exception_type -ceq 'MethodInvocationException' -and $failure.phase -ceq 'fixture_failure') 'A real archive file collision retains the outer method exception and phase'
+    Assert-Fixture (@($failure.exception_chain | Where-Object { $_.type -ceq 'System.IO.IOException' -and $_.hresult -ne 0 }).Count -eq 1) 'The real archive failure retains its underlying I/O type and numeric error code'
+    Assert-Fixture (@($failure.frames | Where-Object { $_.function -ceq 'Expand-SsmcpNodeArchive' -and $_.source -ceq 'browser_dependency_block' -and $_.line -gt 0 }).Count -eq 1) 'The archive failure identifies the production helper and source line'
+    Assert-Fixture (@($failure.frames | Where-Object { $_.function -ceq 'Get-FixtureSmokeFailure' }).Count -eq 0) 'Unlisted caller frames and their paths are omitted'
+    Assert-Fixture (-not ($failure | ConvertTo-Json -Depth 10 -Compress).Contains($privateMarker)) 'Archive diagnostics omit the private path embedded in the real error message'
+    $failure = Get-FixtureSmokeFailure { & $realInvoke (Join-Path $root "$privateMarker/missing.exe") @('private argument') }
+    Assert-Fixture (@($failure.exception_chain | Where-Object { $_.type -ceq 'System.ComponentModel.Win32Exception' -and $_.native_error_code -ne 0 }).Count -eq 1) 'A real process start failure retains the native system error code'
+    Assert-Fixture (-not ($failure | ConvertTo-Json -Depth 10 -Compress).Contains($privateMarker)) 'Process diagnostics omit executable paths and invocation arguments'
+    $failure = Get-FixtureSmokeFailure { & $realInvoke $pwsh @('-NoProfile', '-NonInteractive', '-Command', "[Console]::Error.WriteLine('$privateMarker'); exit 23") }
+    Assert-Fixture ($failure.exception_type -ceq 'RuntimeException' -and -not ($failure | ConvertTo-Json -Depth 10 -Compress).Contains($privateMarker)) 'A real nonzero process exit remains a failure without retaining stderr'
+    $failure = Get-FixtureSmokeFailure {
+        $inner = [Exception]::new($privateMarker)
+        for ($i = 0; $i -lt 12; $i++) { $inner = [Exception]::new($privateMarker, $inner) }
+        throw $inner
+    }
+    Assert-Fixture ($failure.exception_chain.Count -eq 6) 'Exception chains have a fixed six-entry bound'
+    $failure = Get-FixtureSmokeFailure {
+        function Invoke-SmokeWorker([int]$Depth) {
+            if ($Depth -gt 0) { Invoke-SmokeWorker ($Depth - 1) }
+            else { throw [IO.IOException]::new($privateMarker) }
+        }
+        Invoke-SmokeWorker 12
+    }
+    Assert-Fixture ($failure.frames.Count -eq 8) 'Allowed stack frames have a fixed eight-entry bound'
+    Assert-Fixture ((($failure | ConvertTo-Json -Depth 10 -Compress).Length -lt 4096) -and
+        -not ($failure | ConvertTo-Json -Depth 10 -Compress).Contains($privateMarker)) 'Bounded diagnostics never copy exception messages'
+
     $script:client = Join-Path $root 'ssmcp.exe'
     $script:nodeFile = Join-Path $root 'existing node/node.exe'
     Write-NativeFixture $script:nodeFile
