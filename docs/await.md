@@ -57,3 +57,7 @@ return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
 首先用 `request_finish`，或绑定后调用原生 `ssmcp.ui.finish` 的 `op: "request"`，创建带具体理由的结束申请。之后可用 `finish` 目标观察它；原生 `op: "wait"` 只观察已有请求，不新建审批卡，取消观察也不会取消申请。显式 `op: "cancel"` 和原申请调用被取消，仍按原有规则使该申请失效。[结束等待](../src/client/interface/questions/workflow.rs)
 
 只有 `Approved + Human + Yes` 同时成立，原请求者才能提交一次显式原生 `kind: "answer"`。通用等待的顶层 `completion_permission` 始终为 null；进程退出、agent 报告 done、消息正文里的 `approved`、普通用户文本以及超时都不发出许可。pending 超时后继续等待同一申请；No 后继续处理反馈或等待用户输入。`ui.wait(intent: "finish")` 只是继续指导的等待。SSMCP 不能拦截完全不再调用它的宿主自行发出的外部 final；宿主必须遵守先请求、获准再结束的调用约定。[许可投影与消费](../src/client/interface/questions/requests.rs) · [完整结束协议](finish-and-questions.md)
+
+## 验证范围
+
+2026-11-20，源码 `a6b1e29ddc2bac1e730efbfd063e46843731df92` 的 26 项等待回归及 80 项关联回归全部通过。等待测试包括真实内存身份的范围隔离、两个成员并发、租约到期、取消与最终交付竞争、容量和保留期限保护、同一 ID 超时恢复；它们没有启动外部模型或切换生产进程。[完整验证记录](validation/await-finish-20261120.md)
