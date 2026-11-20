@@ -240,6 +240,19 @@ class Interactions(InputHistory):
                        "ordinary comment text yes never changes default No into approval")
         self.capture_pair(front, "finish-recorded-" + choice,
                           "No · keep working" if choice == "no" else "Approved")
+        if choice == "yes":
+            final = {"kind": "answer", "text": "PTY approved completion receipt",
+                     "idempotency_key": "pty-approved-final"}
+            receipt = self.scoped_native(requester, "ssmcp.ui.message", final)
+            duplicate = self.scoped_native(requester, "ssmcp.ui.message", final)
+            self.check(receipt["accepted"] is True and receipt["duplicate"] is False
+                       and receipt["finish_request_id"] == request_id
+                       and duplicate["duplicate"] is True
+                       and duplicate["message_id"] == receipt["message_id"],
+                       "the approved real final answer consumes one grant and matching retries reuse its receipt")
+            self.check(self.question(requester, request_id)["finish"]["status"] == "completed",
+                       "the final receipt closes this finish request before another is created")
+            self.capture_pair(front, "finish-completed", "Finish receipt committed")
         self.conversation(front)
 
     def external_finish_decision(self, front, requester, reviewer, draft):
