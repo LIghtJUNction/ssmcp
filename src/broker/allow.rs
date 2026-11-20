@@ -461,6 +461,292 @@ mod tests {
         let _ = socket.close(None).await;
     }
 
+    fn legacy_self_hello(allow: Vec<String>) -> Frame {
+        Frame::Hello {
+            version: wire::VERSION,
+            mode: Mode::Shell,
+            metadata: ClientMetadata {
+                name: "legacy account self fixture".into(),
+                title: None,
+                cwd: "/fixture".into(),
+                hostname: "localhost".into(),
+                allow,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_account_self_default_preserves_subject_and_negotiated_wire_shape() {
+        let fixture = Fixture::new().await;
+        let token = fixture.token("42").await;
+        // No offer, the old access-only offer, and a peer with attribution support.
+        for offered in 0..3 {
+            let mut request = fixture.request(Some(&token), offered == 2);
+            if offered == 1 {
+                request.headers_mut().insert(
+                    wire::CAPABILITIES_HEADER,
+                    wire::SESSION_ACCESS_CAPABILITY.parse().unwrap(),
+                );
+            }
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            send(
+                &mut socket,
+                legacy_self_hello(vec!["octocat@github".into()]),
+            )
+            .await;
+            let ready = receive(&mut socket).await;
+            if offered != 2 {
+                assert!(
+                    serde_json::to_value(&ready)
+                        .unwrap()
+                        .get("capabilities")
+                        .is_none()
+                );
+            }
+            let Frame::Ready {
+                client_id,
+                login_code,
+                login_expires_in,
+                capabilities,
+                ..
+            } = ready
+            else {
+                panic!("self-only authenticated account must connect")
+            };
+            assert!(login_code.is_empty());
+            assert_eq!(login_expires_in, 0);
+            assert!(
+                !capabilities
+                    .iter()
+                    .any(|c| c == wire::SESSION_ACCESS_CAPABILITY)
+            );
+            assert_eq!(
+                capabilities
+                    .iter()
+                    .any(|c| c == wire::CONTROL_ATTRIBUTION_CAPABILITY),
+                offered == 2
+            );
+            let session = fixture
+                .broker
+                .sessions
+                .read()
+                .await
+                .values()
+                .find_map(|sessions| sessions.get(&client_id))
+                .unwrap()
+                .clone();
+            assert!(session.identity_required);
+            assert_eq!(session.owner_subject.as_deref(), Some("42"));
+            assert_eq!(session.allowed().as_slice(), &[identity("42", "octocat")]);
+            assert!(Authorization::Identity(identity("42", "renamed-display")).permits(&session));
+            // The relay handle alice belongs to 42, while the GitHub login alice belongs to 7.
+            assert!(!Authorization::Identity(identity("7", "octocat")).permits(&session));
+            assert!(!Authorization::Identity(identity("999", "octocat")).permits(&session));
+
+            for after_access_attempt in [false, true] {
+                if after_access_attempt {
+                    for command in [
+                        AccessCommand::List {},
+                        AccessCommand::Add {
+                            principal: "alice@github".into(),
+                        },
+                        AccessCommand::Add {
+                            principal: "colleague@ssmcp.test".into(),
+                        },
+                        AccessCommand::Remove {
+                            principal: "octocat@github".into(),
+                        },
+                    ] {
+                        send(&mut socket, Frame::Access { id: 90, command }).await;
+                        let Frame::AccessReply {
+                            id: 90,
+                            result: Err(message),
+                        } = receive(&mut socket).await
+                        else {
+                            panic!("legacy access commands must not edit the ACL")
+                        };
+                        assert!(message.contains("update the ssmcp client"), "{message}");
+                        assert_eq!(session.allowed().as_slice(), &[identity("42", "octocat")]);
+                    }
+                }
+                let pending = call(&session, "42");
+                let frame = receive(&mut socket).await;
+                assert_eq!(
+                    serde_json::to_value(&frame)
+                        .unwrap()
+                        .get("attribution")
+                        .is_some(),
+                    offered == 2
+                );
+                let Frame::Call {
+                    id, attribution, ..
+                } = frame
+                else {
+                    panic!("native call required")
+                };
+                if let Some(attribution) = attribution {
+                    assert_eq!(attribution.account.subject, "42");
+                    assert_eq!(attribution.owner.unwrap().subject, "42");
+                }
+                send(
+                    &mut socket,
+                    Frame::Reply {
+                        id,
+                        result: Ok(json!({"ok": true})),
+                    },
+                )
+                .await;
+                assert_eq!(pending.await.unwrap().unwrap(), json!({"ok": true}));
+                assert!(session.is_alive());
+            }
+            close(socket).await;
+        }
+
+        // Current empty and explicit server-scoped policies still negotiate both capabilities.
+        for targets in [vec![], names(&["alice"])] {
+            let (mut socket, session) = fixture.ready(Some(&token), targets).await;
+            send(
+                &mut socket,
+                Frame::Access {
+                    id: 1,
+                    command: AccessCommand::List {},
+                },
+            )
+            .await;
+            let Frame::AccessReply {
+                id: 1,
+                result: Ok(snapshot),
+            } = receive(&mut socket).await
+            else {
+                panic!("modern access controls must remain available")
+            };
+            assert_eq!(snapshot.entries.len(), 1);
+            assert_eq!(snapshot.entries[0].principal, "alice@ssmcp.test");
+            assert_eq!(snapshot.entries[0].subject, "42");
+            assert!(snapshot.entries[0].owner);
+            assert_eq!(session.allowed().as_slice(), &[identity("42", "octocat")]);
+            close(socket).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_account_self_rejects_foreign_ambiguous_noncanonical_and_anonymous_policies() {
+        let fixture = Fixture::new().await;
+        let token = fixture.token("42").await;
+        for targets in [
+            vec!["alice@github".into()],
+            vec!["owner@github".into()],
+            vec!["octocat@github".into(), "octocat@github".into()],
+            vec!["octocat@github".into(), "alice@github".into()],
+            vec!["octocat@github".into(), "alice@ssmcp.test".into()],
+            vec!["OctoCat@github".into()],
+            vec!["octocat@GitHub".into()],
+            vec![" octocat@github".into()],
+            vec!["octocat@github ".into()],
+        ] {
+            let mut socket = fixture.socket(Some(&token), targets.clone()).await;
+            assert!(
+                matches!(receive(&mut socket).await, Frame::Reject { .. }),
+                "authenticated policy {targets:?}"
+            );
+            close(socket).await;
+        }
+        let mut socket = fixture.socket(None, vec!["octocat@github".into()]).await;
+        assert!(matches!(receive(&mut socket).await, Frame::Reject { .. }));
+        close(socket).await;
+        assert!(fixture.broker.sessions.read().await.is_empty());
+        // The generic resolver remains strict even for a principal recognized at the account boundary.
+        assert!(
+            fixture
+                .broker
+                .resolve_initial_allow(&["octocat@github".into()])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_account_self_still_validates_other_hello_metadata() {
+        let fixture = Fixture::new().await;
+        let token = fixture.token("42").await;
+        for invalid_field in ["name", "cwd", "hostname", "title"] {
+            let (mut socket, _) =
+                tokio_tungstenite::connect_async(fixture.request(Some(&token), true))
+                    .await
+                    .unwrap();
+            let mut hello = legacy_self_hello(vec!["octocat@github".into()]);
+            let Frame::Hello {
+                ref mut metadata, ..
+            } = hello
+            else {
+                unreachable!()
+            };
+            match invalid_field {
+                "name" => metadata.name.clear(),
+                "cwd" => metadata.cwd = "relative/path".into(),
+                "hostname" => metadata.hostname = "host\ninjection".into(),
+                "title" => metadata.title = Some("title\ninjection".into()),
+                _ => unreachable!(),
+            }
+            send(&mut socket, hello).await;
+            let Frame::Reject { message } = receive(&mut socket).await else {
+                panic!("invalid {invalid_field} must still be rejected")
+            };
+            assert!(message.contains(invalid_field), "{message}");
+            close(socket).await;
+        }
+        assert!(fixture.broker.sessions.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_account_self_cannot_bypass_logout_or_ban_between_upgrade_and_hello() {
+        for banned in [false, true] {
+            let fixture = Fixture::new().await;
+            let token = fixture.token("42").await;
+            let (mut socket, _) =
+                tokio_tungstenite::connect_async(fixture.request(Some(&token), false))
+                    .await
+                    .unwrap();
+            // Authentication succeeded at HTTP upgrade; revoke before the Hello is accepted.
+            if banned {
+                fixture.ban("42", true).await;
+            } else {
+                let response = reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .unwrap()
+                    .post(format!("{}/api/client/logout", fixture.base))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                    .unwrap();
+                assert!(response.status().is_success());
+            }
+            send(
+                &mut socket,
+                legacy_self_hello(vec!["octocat@github".into()]),
+            )
+            .await;
+            let Frame::Reject { message } = receive(&mut socket).await else {
+                panic!("revoked registration must not become a self-only session")
+            };
+            assert!(
+                message.contains("authorization expired or revoked"),
+                "{message}"
+            );
+            close(socket).await;
+            assert!(fixture.broker.sessions.read().await.is_empty());
+
+            let error = tokio_tungstenite::connect_async(fixture.request(Some(&token), false))
+                .await
+                .unwrap_err();
+            let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+                panic!("revoked bearer must fail HTTP authentication: {error}")
+            };
+            assert_eq!(response.status().as_u16(), 401);
+        }
+    }
+
     #[tokio::test]
     async fn anonymous_allow_resolves_only_existing_handles_to_stable_subjects() {
         let fixture = Fixture::new().await;
