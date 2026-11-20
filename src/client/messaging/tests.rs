@@ -490,3 +490,166 @@ fn conflicting_message_identity_ends_an_explicit_retry_without_claiming_delivery
     assert_eq!(manager.outgoing[0].text, "original body");
     assert!(next.try_recv().is_err());
 }
+
+fn full_outgoing_history() -> (Manager, mpsc::Receiver<Request>, Recipient) {
+    let (mut manager, mut receiver, one, _) = ready();
+    for index in 0..128 {
+        let request_id = format!("history-{index}");
+        let text = format!("retained message {index}");
+        manager.send(&one.id, &text, &request_id).unwrap();
+        let request = receiver.try_recv().unwrap();
+        let status = if index == 0 {
+            Status::Queued
+        } else {
+            Status::Acknowledged
+        };
+        let mut confirmed = receipt(&one, &request_id, status);
+        confirmed.message_id = format!("native_{index:032x}");
+        confirmed.updated_at_ms = 20 + index;
+        manager.reply(
+            request.id,
+            Ok(Reply {
+                receipts: vec![confirmed],
+                ..Default::default()
+            }),
+        );
+    }
+    assert_eq!(manager.outgoing.len(), 128);
+    assert!(manager.pending.is_empty());
+    (manager, receiver, one)
+}
+
+fn retained_history(manager: &Manager) -> Vec<(Value, Option<Status>, u64)> {
+    manager
+        .outgoing
+        .iter()
+        .map(|message| {
+            (
+                serde_json::to_value(message).unwrap(),
+                message.confirmed_status,
+                message.receipt_updated_at_ms,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn full_outgoing_history_retry_preserves_confirmed_message_identity() {
+    let (mut manager, _old_receiver, one) = full_outgoing_history();
+    let mut receiver = manager.connect(true);
+    let refresh = receiver.try_recv().unwrap();
+    manager.reply(
+        refresh.id,
+        Ok(Reply {
+            recipients: vec![one.clone()],
+            ..Default::default()
+        }),
+    );
+    let original = manager.outgoing[0].clone();
+    assert_eq!(original.status, "failed");
+    assert_eq!(original.confirmed_status, Some(Status::Queued));
+    let retained = retained_history(&manager);
+    manager
+        .send(&one.id, &original.text, &original.request_id)
+        .unwrap();
+    let retry = receiver.try_recv().unwrap();
+    assert_eq!(manager.outgoing.len(), 128);
+    assert_eq!(manager.outgoing[0].request_id, original.request_id);
+    assert_eq!(manager.outgoing[0].message_id, original.message_id);
+    assert_eq!(
+        manager.outgoing[0].confirmed_status,
+        original.confirmed_status
+    );
+    assert_eq!(
+        manager.outgoing[0].receipt_updated_at_ms,
+        original.receipt_updated_at_ms
+    );
+    assert_eq!(manager.outgoing[0].status, "submitting");
+    assert_eq!(&retained_history(&manager)[1..], &retained[1..]);
+
+    let mut conflicting = receipt(&one, &original.request_id, Status::Queued);
+    conflicting.message_id = format!("native_{}", "f".repeat(32));
+    manager.reply(
+        retry.id,
+        Ok(Reply {
+            receipts: vec![conflicting],
+            ..Default::default()
+        }),
+    );
+    assert_eq!(manager.outgoing[0].status, "failed");
+    assert_eq!(manager.outgoing[0].message_id, original.message_id);
+    assert_eq!(
+        manager.outgoing[0].confirmed_status,
+        original.confirmed_status
+    );
+    assert_eq!(
+        manager.outgoing[0].receipt_updated_at_ms,
+        original.receipt_updated_at_ms
+    );
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn full_outgoing_history_rejected_admission_preserves_every_record() {
+    for close_channel in [false, true] {
+        let (mut manager, mut receiver, one) = full_outgoing_history();
+        if close_channel {
+            receiver.close();
+        } else {
+            for _ in 0..16 {
+                manager.request(Command::List {}).unwrap();
+                assert!(matches!(
+                    receiver.try_recv().unwrap().command,
+                    Command::List {}
+                ));
+            }
+            assert_eq!(manager.pending.len(), 16);
+        }
+        let retained = retained_history(&manager);
+        let pending = manager.pending.len();
+        let revision = manager.revision;
+        assert!(
+            manager
+                .send(&one.id, "not admitted", "rejected-new-request")
+                .is_err()
+        );
+        assert_eq!(retained_history(&manager), retained);
+        assert_eq!(manager.pending.len(), pending);
+        assert_eq!(manager.revision, revision);
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[test]
+fn full_outgoing_history_new_send_evicts_only_oldest_completed_record() {
+    let (mut manager, mut receiver, one) = full_outgoing_history();
+    let retained = retained_history(&manager);
+    let pending_id = manager.outgoing[0].request_id.clone();
+    let completed_id = manager.outgoing[1].request_id.clone();
+    manager
+        .send(&one.id, "new message", "fresh-after-capacity")
+        .unwrap();
+    let request = receiver.try_recv().unwrap();
+    assert!(matches!(
+        request.command,
+        Command::Send { ref request_id, ref text, .. }
+            if request_id == "fresh-after-capacity" && text == "new message"
+    ));
+    assert_eq!(manager.outgoing.len(), 128);
+    assert_eq!(manager.outgoing[0].request_id, pending_id);
+    assert!(
+        manager
+            .outgoing
+            .iter()
+            .all(|message| message.request_id != completed_id)
+    );
+    let current = retained_history(&manager);
+    assert_eq!(current[0], retained[0]);
+    assert_eq!(&current[1..127], &retained[2..]);
+    let newest = manager.outgoing.last().unwrap();
+    assert_eq!(newest.request_id, "fresh-after-capacity");
+    assert_eq!(newest.status, "submitting");
+    assert!(newest.message_id.is_none());
+    assert!(newest.confirmed_status.is_none());
+    assert!(receiver.try_recv().is_err());
+}

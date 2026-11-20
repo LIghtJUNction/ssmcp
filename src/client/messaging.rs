@@ -144,11 +144,12 @@ impl Manager {
         {
             return Err("请刷新并明确选择当前收件人；不会把名称或文件路径自动转换为收件人".into());
         }
-        if let Some(previous) = self
+        let retry = self
             .outgoing
             .iter()
-            .find(|message| message.request_id == request_id)
-        {
+            .position(|message| message.request_id == request_id);
+        if let Some(index) = retry {
+            let previous = &self.outgoing[index];
             if previous.recipient_id != recipient_id || previous.text != text {
                 return Err("同一发送请求编号不能改为不同正文或收件人".into());
             }
@@ -156,7 +157,9 @@ impl Manager {
                 return self.refresh();
             }
         }
-        if self.outgoing.len() >= 128 {
+        // Retrying updates the existing record, including its confirmed identity.
+        // A new request may evict history only after transport admission succeeds.
+        let evict = if retry.is_none() && self.outgoing.len() >= 128 {
             let Some(index) = self.outgoing.iter().position(|message| {
                 message.connection_closed
                     || matches!(
@@ -166,14 +169,16 @@ impl Manager {
             }) else {
                 return Err("发送记录已满，请先等待现有消息回执".into());
             };
+            Some(index)
+        } else {
+            None
+        };
+        self.request(command)?;
+        if let Some(index) = evict {
             self.outgoing.remove(index);
         }
-        self.request(command)?;
-        if let Some(previous) = self
-            .outgoing
-            .iter_mut()
-            .find(|message| message.request_id == request_id)
-        {
+        if let Some(index) = retry {
+            let previous = &mut self.outgoing[index];
             previous.status = "submitting".into();
             previous.error = None;
             previous.connection_closed = false;
