@@ -1,7 +1,7 @@
 use super::*;
 use crate::client::terminal::{Layout, Ui, preview_state};
 
-fn recipient(client: u64, thread: bool) -> Recipient {
+pub(super) fn recipient(client: u64, thread: bool) -> Recipient {
     let client_id = format!("{client:064x}");
     let agent_id = thread.then(|| format!("agent_{client:032x}"));
     Recipient {
@@ -27,7 +27,7 @@ fn recipient(client: u64, thread: bool) -> Recipient {
     }
 }
 
-fn state() -> State {
+pub(super) fn state() -> State {
     let mut state = preview_state(
         28,
         120,
