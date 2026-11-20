@@ -393,7 +393,7 @@ fn send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send(
                 Some(&ControlAttribution {
                     account: ControlAccount {
                         provider: "github".into(),
-                        subject: "send-reference-fixture".into(),
+                        subject: "424242".into(),
                         login: "fixture".into(),
                     },
                     owner: None,
