@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "base_commit": "23eaf6b70d4382a915bbbf812727b7d334b5f6e3",
+  "scope": "source formatting and patch checks only; Rust runtime validation pending integration",
+  "rust_tests_executed": false,
+  "cargo_started": false,
+  "service_installed_or_reloaded": false,
+  "checks": [
+    {
+      "command": [
+        "rustfmt",
+        "--check",
+        "--edition",
+        "2024",
+        "--config",
+        "skip_children=true",
+        "src/client/context_memory.rs",
+        "src/runtime.rs"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "source_sha256": {
+    "src/client/context_memory.rs": "fe5a8981f9599b07ba7974023a4999ac12ac81413adf501bd646775e35964e7a",
+    "src/runtime.rs": "4c34cd2d2e77726f6132777daa01fce387eabd2518e66ca9eeefdb209154ff81"
+  },
+  "new_runtime_regressions_pending": [
+    "client::context_memory::tests::snapshot_budget_preserves_fresh_user_and_state_before_old_summary_and_sources",
+    "client::context_memory::tests::snapshot_budget_keeps_latest_user_when_escaped_assistant_updates_fill_view",
+    "runtime::tests::provider_context_metadata_cannot_spoof_or_mask_local_memory"
+  ],
+  "completed_at_unix": 1795132711,
+  "candidate_commit": "4f42a94be2fa54e6f1ef816ae16e9876d08bb998",
+  "source_checks_passed": true,
+  "validation_state": "source_checked_runtime_pending",
+  "independent_review": {
+    "mode": "read_only_source_review",
+    "files": [
+      "src/client/context_memory.rs",
+      "src/runtime.rs"
+    ],
+    "blocking_findings": 0,
+    "tests_run": false,
+    "notes": [
+      "Protection applies to the latest user still retained in recent; checkpoint-only records are not extracted.",
+      "Non-object provider _meta keeps its prior compatibility behavior and is not accepted as context."
+    ]
+  }
+}
