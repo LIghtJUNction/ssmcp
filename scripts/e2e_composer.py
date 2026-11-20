@@ -231,29 +231,45 @@ class Composer(Dashboard):
         if draft["cursor"] != 0:
             raise AssertionError("agent panel helper requires the start of the current draft")
         front.send(LEFT)
-        front.until(lambda shot: column(shot) == ("agents", 1, 8) and shot["hide_cursor"],
-                    "Left entering the adjacent Agents column")
+        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"],
+                    "Left entering the adjacent Sessions column")
 
-    def recipient(self, front, member=None):
-        self.agents(front)
+    def highlight_recipient(self, front, member=None):
+        # Local steering recipients precede observed/native process threads.
+        # Verify the full highlighted key before Enter or horizontal navigation;
+        # a matching display name or stale flat-row index cannot choose a peer.
         roster = self.queue()["agents"]
         if member is None:
             index = 0
-            label = "next caller"
+            label = "This process · Next caller"
+            selected_key = "member:next"
         else:
             index = 1 + next(index for index, agent in enumerate(roster)
                              if agent["agent_id"] == member["agent_id"])
             label = roster[index - 1]["name"]
-        front.send(HOME + DOWN * index + ENTER)
-        # The default recipient is shown in the compact footer; exact agents
-        # retain the explicit recipient label above the input.
-        visible_recipient = "To Next caller" if member is None else f"To {label}"
+            selected_key = "member:" + member["agent_id"]
+        front.send(HOME + DOWN * index)
+        front.until(
+            lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"]
+            and self.ui("/display/conversation")["selected_agent"] == selected_key,
+            "the exact local recipient highlighted in Sessions",
+        )
+        return label
+
+    def recipient(self, front, member=None):
+        self.agents(front)
+        label = self.highlight_recipient(front, member)
+        front.send(ENTER)
+        # The process row names the ordinary Next caller queue; exact members
+        # retain their explicit recipient label above the input.
+        visible_recipient = f"To {label}"
         front.until(lambda shot: visible_recipient in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
-        self.check(self.ui("/display/conversation")["target"]
-                   == (None if member is None else member["agent_id"]),
-                   "Enter selects the exact member and closes the agent panel")
+        selected = self.ui("/display/conversation")
+        self.check(selected["target"] == (None if member is None else member["agent_id"])
+                   and selected["native_recipient"] is None,
+                   "Enter selects the exact steering recipient and closes Sessions")
         self.command(front, "/queue")
 
     def expect_delivery(self, response, record, request_text=None, agent_id=None):
@@ -431,7 +447,7 @@ class Composer(Dashboard):
                                                 "cursor": len(navigation_draft.encode()) - len("界".encode())},
                    "Left within nonempty UTF-8 input moves the cursor without opening agents")
         front.send(b"\x01" + LEFT)
-        front.until(lambda shot: column(shot) == ("agents", 1, 8) and navigation_draft in input_text(shot),
+        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and navigation_draft in input_text(shot),
                     "Left at the start of a draft opening the agent panel")
         before_choice = self.ui("/display/conversation")
         self.check(before_choice["draft"] == {"text": navigation_draft, "cursor": 0}
@@ -444,9 +460,8 @@ class Composer(Dashboard):
         self.check(after_escape["draft"] == before_choice["draft"] and after_escape["target"] is None,
                    "Escape restores the conversation with exactly the same UTF-8 cursor and recipient")
         self.agents(front)
-        selected_index = 1 + next(index for index, item in enumerate(self.queue()["agents"])
-                                  if item["agent_id"] == members[0]["agent_id"])
-        front.send(HOME + DOWN * selected_index + RIGHT)
+        self.highlight_recipient(front, members[0])
+        front.send(RIGHT)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8)
                                  and navigation_draft in input_text(shot) and not shot["hide_cursor"],
                     "Right moving to the conversation without choosing a member")
