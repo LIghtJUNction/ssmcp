@@ -55,8 +55,10 @@ pub(crate) fn enqueue_for_test(finish: bool, text: &str, key: &str) -> QuestionV
 
 #[tokio::test]
 async fn retrying_question_from_another_history_keeps_its_first_owner() {
-    let directory =
-        std::env::temp_dir().join(format!("ssmcp-question-owner-{}", random_id().unwrap()));
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("ssmcp-question-owner-{}", random_id().unwrap()));
     crate::platform::private_directory(&directory).unwrap();
     saved::with_test_history(
         directory.join("history"),
