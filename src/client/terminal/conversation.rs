@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use steering::receipt::Receipt;
 mod access;
 mod canvas;
+mod goals;
 mod groups;
 mod hints;
 mod history;
@@ -88,6 +89,7 @@ pub(super) struct Conversation {
     pub(super) process_id: String,
     pub(super) process_generation: u64,
     groups: groups::Selection,
+    goal: goals::Goal,
     // The roster can outlive its use as the current /send destination.
     send_to_group: bool,
     recipient_revision: u64,
@@ -167,6 +169,7 @@ impl Conversation {
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
             "force_pending":self.force_task.is_some(),"history_archived":self.history_archived,
+            "goal":self.goal.snapshot(),
             "process_id":self.process_id,"group_selected":self.groups.selected.keys().collect::<Vec<_>>(),
             "retained_paste_bytes":self.paste_recovery.as_ref().map(String::len),
             "canvas":self.canvas.snapshot(),"logs_open":self.view == View::Logs,"tasks":self.tasks.snapshot(),
@@ -465,6 +468,7 @@ impl State {
         self.chat_poll_login();
         self.chat_poll_access();
         self.chat_poll_logout();
+        self.chat_poll_goal();
         self.chat_poll_force_send();
         let mut failed_notice = None;
         for event in steering::take_events() {
@@ -645,6 +649,7 @@ impl State {
                 self.conversation.exit_requested = true;
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
+            "/goal" => self.chat_goal(rest)?,
             "/help" => {
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -864,6 +869,11 @@ impl State {
                 }
                 if self.preview {
                     return Err("Preview has no connected session to restart".into());
+                }
+                if self.conversation.goal.saving() {
+                    return Err(
+                        "Wait for the conversation goal to be saved before restarting".into(),
+                    );
                 }
                 // Preserve the parked request before the restart worker can run.
                 // The command itself should never reappear as a user requirement.
@@ -2890,7 +2900,11 @@ impl State {
                     && !self.help
                     && self.conversation.canvas.is_default_conversation()
                 {
-                    format!("conversation{suffix}")
+                    self.conversation
+                        .goal
+                        .current_text()
+                        .map(|goal| format!("Goal · {goal}"))
+                        .unwrap_or_else(|| format!("conversation{suffix}"))
                 } else {
                     format!("{}{suffix}", self.conversation.canvas.label(g.left))
                 };

@@ -1,6 +1,7 @@
 //! Versioned JSONL conversation history. It never restores tools or delivery state.
 pub(crate) mod archive;
 pub(crate) mod descriptions;
+pub(crate) mod goals;
 mod listener;
 mod ownership;
 pub(crate) use listener::{
@@ -341,11 +342,17 @@ pub(crate) fn workspace() -> Result<String, String> {
 fn with<T>(operation: impl FnOnce(&mut History) -> Result<T, String>) -> Result<T, String> {
     #[cfg(test)]
     if let Ok(store) = ownership::TEST_HISTORY.try_with(std::sync::Arc::clone) {
-        let mut state = store.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = store
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         return operation(state.as_mut().expect("fixture history was initialized"));
     }
     let store = HISTORY.get_or_init(HistoryStore::default);
-    let mut state = store.state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = store
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     if state.is_none() {
         let mut history = History::at(default_directory()?)?;
         history.ownership.current = store.current.clone();
@@ -570,6 +577,7 @@ impl History {
         }
         for (id, _lease) in reclaim {
             self.remove_description(&id, &names)?;
+            self.remove_goal(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }
