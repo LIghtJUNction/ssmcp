@@ -80,6 +80,12 @@ impl SessionState {
         Ok(())
     }
 
+    pub(super) fn discard_display(&mut self) {
+        if let Some(terminal) = &mut self.terminal {
+            terminal.discard_display();
+        }
+    }
+
     pub(super) fn restore(self) {
         let (restored, notice) = match self.conversation_id.as_deref() {
             Some(id) => match super::interface::history::resume(id) {

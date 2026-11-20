@@ -9,6 +9,8 @@ mod command_visibility_tests;
 mod correlation;
 mod diff;
 mod read_activity;
+mod reload_display;
+pub(super) use reload_display::{ReloadPosition, Snapshot as ReloadDisplay};
 #[cfg(all(test, unix))]
 mod source_tests;
 mod tool_activity;
@@ -53,6 +55,10 @@ struct Event {
     meta: Meta,
     image: Option<images::Preview>,
     diagnostic: Option<(u64, u64)>,
+    historical: bool,
+    interrupted: bool,
+    reload_index: Option<usize>,
+    reload_boundary: bool,
 }
 
 /// Independently bounded display metadata never becomes native output or log text.
@@ -80,7 +86,8 @@ struct CommandPanel {
     page: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 struct CommandPosition {
     scroll: Option<usize>,
     group_scroll: Option<usize>,
@@ -206,11 +213,18 @@ impl Event {
 
     fn chat_title(&self) -> String {
         let heading = self.chat_heading();
-        match self.meta.status {
+        let mut title = match self.meta.status {
             Some(Status::Done | Status::Exit(0)) => format!("{heading} · done"),
             Some(status) => format!("{heading} · {}", status.label()),
             None => heading,
+        };
+        if self.historical {
+            title.push_str(" · history");
+            if self.interrupted {
+                title.push_str(" · connection ended");
+            }
         }
+        title
     }
 
     fn chat_tone(&self, selected: bool) -> &'static str {
@@ -378,11 +392,22 @@ impl Event {
     }
 
     fn command_detail_text(&self) -> String {
-        let Some(source) = &self.command_source else {
-            return self.text.trim_end().to_owned();
+        let detail = if let Some(source) = &self.command_source {
+            let (header, rest) = self.text.split_once('\n').unwrap_or((&self.text, ""));
+            format!("{header}\n{}{rest}", source.text)
+        } else {
+            self.text.trim_end().to_owned()
         };
-        let (header, rest) = self.text.split_once('\n').unwrap_or((&self.text, ""));
-        format!("{header}\n{}{rest}", source.text)
+        if self.historical {
+            let notice = if self.interrupted {
+                "connection ended · read-only display"
+            } else {
+                "read-only display"
+            };
+            format!("[HISTORY] {notice}\n{detail}")
+        } else {
+            detail
+        }
     }
 
     fn append(&mut self, text: String, truncated: bool) {
@@ -424,34 +449,6 @@ impl Event {
         match self.meta.status {
             Some(status) => format!("{} [{}]", self.summary, status.label()),
             None => self.summary.clone(),
-        }
-    }
-}
-
-/// Row offsets survive text rehydration; transient event IDs and call scopes do not.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ReloadPosition {
-    scroll: usize,
-    follow: bool,
-}
-
-impl ReloadPosition {
-    pub(super) fn position(&self) -> EventPosition {
-        EventPosition {
-            scroll: self.scroll,
-            follow: self.follow,
-            reveal: false,
-            ..EventPosition::default()
-        }
-    }
-}
-
-impl EventPosition {
-    pub(super) fn for_reload(&self) -> ReloadPosition {
-        ReloadPosition {
-            scroll: self.scroll,
-            follow: self.follow,
         }
     }
 }
@@ -1091,6 +1088,10 @@ impl EventView {
                 cache: None,
                 image: None,
                 diagnostic: None,
+                historical: false,
+                interrupted: false,
+                reload_index: None,
+                reload_boundary: false,
             });
         }
         self.prune();
@@ -1460,7 +1461,8 @@ impl EventView {
                 "status":event.meta.status.map(Status::label),"command":event.meta.command,
                 "kind":event.meta.kind.label(),
                 "panel":event.meta.command.then(|| json!({"scroll":event.panel.offset(),"rows":event.panel.rows,"visible_rows":event.panel.page,"following":event.panel.scroll.is_none()})),
-                "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count)
+                "diagnostic_occurrences":event.diagnostic.map(|(_, count)| count),
+                "historical":event.historical,"connection_ended":event.interrupted
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
@@ -3296,10 +3298,13 @@ mod tests {
         }
         let retained = (view.events.len(), view.bytes);
         let collapsed = view.position();
-        view.select(-1);
+        assert!(view.open());
+        view.select(1);
         assert!(view.open());
         let first_column = view.position();
         view.restore_position(&collapsed);
+        assert!(view.open());
+        view.select(2);
         assert!(view.open());
         let second_column = view.position();
 
