@@ -1,31 +1,31 @@
 # 选择中转服务器与固定服务器公钥
 
-客户端把服务器地址和信任配置保存在本机。设置默认地址后，登录、会话列表、邀请和普通 HTTPS / WSS 连接都会使用同一个选择规则；每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
+客户端把服务器地址和信任配置保存在本机。本文说明原有服务器回退和 HTTPS 公钥固定；命名 context 的优先级及本地／远程切换见[选择连接目标](connection-contexts.md)。登录、远程会话列表和新建 HTTPS / WSS 连接先解析显式目标或 context，再使用这里的服务器回退。每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
 
-## 设置默认服务器
+## 设置回退服务器
 
 用命令保存默认地址，再在该服务器登录：
 
 ~~~sh
 ssmcp config set server https://relay.example.com
 ssmcp config get server
-ssmcp login
-ssmcp invite
+ssmcp login --server https://relay.example.com
+ssmcp whoami --server https://relay.example.com
 ~~~
 
-`config set` 只修改 `[client].server`，保留已有 `[ui]` 设置与注释。`config get server` 输出当前生效的默认地址；`config path` 输出实际配置文件路径。移除显式设置使用 `ssmcp config unset server`，随后回退到最后登录的服务器；想明确恢复内置地址，可执行 `ssmcp config set server https://ssmcp.lmm.best`。
+`config set` 只修改 `[client].server`，保留已有 `[ui]` 设置与注释。`config get server` 输出原有服务器回退的结果；命名 context 生效时，用 `context show` 查看新连接的实际选择。`config path` 输出实际配置文件路径。移除显式设置使用 `ssmcp config unset server`，随后回退到最后登录的服务器；想明确恢复内置地址，可执行 `ssmcp config set server https://ssmcp.lmm.best`。
 
 单次命令可以指定另一个服务器：
 
 ~~~sh
 ssmcp login --server https://other.example.com
-ssmcp invite --server https://other.example.com
+ssmcp whoami --server https://other.example.com
 
 # --server 也可以放在账号子命令前。
-ssmcp --server https://other.example.com invite
+ssmcp --server https://other.example.com whoami
 ~~~
 
-`--server` 对本次命令生效，不改写 `[client].server`。`login` 成功后会更新登录记录中的默认服务器；配置文件里的显式设置仍优先。邀请的 API 请求、安装脚本 URL 和 `join --server` 都使用实际选中的地址。切换到另一台服务器时，先在该服务器登录，客户端不会借用其他服务器的令牌。
+`--server` 对本次命令生效，不改写 `[client].server`。`login` 成功后会更新登录记录中的默认服务器；配置文件里的显式设置仍优先。账号 API 与新建连接都使用实际选中的中继。切换到另一台服务器时，先在该服务器登录，客户端不会借用其他服务器的令牌。
 
 ### 直接编辑配置文件
 
@@ -41,11 +41,11 @@ theme = "minimal"
 
 已有 `[client]` 或 `[ui]` 表时，在原表中修改，保留自己的 UI 选项。地址须为完整 HTTPS origin，也就是协议、主机名和可选端口；例如 `https://relay.example.com:8443`。不填写 `/mcp`、其他路径、用户名、密码、查询参数或片段。HTTP 仅用于 `127.0.0.1`、`[::1]` 等字面量回环地址的本地测试。
 
-默认地址按以下顺序选择：
+没有命名 context 或其他显式连接目标时，服务器回退按以下顺序选择：
 
 | 优先级 | 来源 | 使用方式 |
 | --- | --- | --- |
-| 1 | 当前命令的 `--server` | `ssmcp invite --server https://relay.example.com` |
+| 1 | 当前命令的 `--server` | `ssmcp whoami --server https://relay.example.com` |
 | 2 | 配置文件的 `[client].server` | 编辑 TOML，或运行 `ssmcp config set server URL` |
 | 3 | 最后登录的服务器 | 由成功的 `ssmcp login` 更新账号存储中的 `default` |
 | 4 | 内置地址 | `https://ssmcp.lmm.best` |
@@ -59,7 +59,7 @@ theme = "minimal"
 | Linux / macOS 默认 | `$HOME/.config/ssmcp/config.toml` |
 | Windows 默认 | `%USERPROFILE%\.config\ssmcp\config.toml`；设置了 `HOME` 时优先使用 `HOME` |
 
-`--ui-config` 和 `SSMCP_UI_CONFIG` 只选择显示配置。要改变服务器设置所用的配置文件，使用 `SSMCP_CLIENT_CONFIG`。账号凭据目录由 `SSMCP_AUTH_HOME` 等账号设置管理，详见[账号存储](client-accounts.md#5-凭据与原有-ssh-用法)。
+`--ui-config` 和 `SSMCP_UI_CONFIG` 只选择显示配置。要改变服务器设置所用的配置文件，使用 `SSMCP_CLIENT_CONFIG`。账号凭据目录由 `SSMCP_AUTH_HOME` 等账号设置管理，详见[账号与凭据](client-accounts.md)。
 
 ## 信任公钥写到哪里
 
@@ -70,7 +70,7 @@ ssmcp trust path
 ssmcp trust list
 ~~~
 
-这里使用 HTTPS 入口证书中的 **SubjectPublicKeyInfo（SPKI）公钥**。TLS 由 Nginx、Caddy 或 CDN 终止时，应登记该入口向客户端提供的公钥。SSH 主机密钥由 `~/.ssh/known_hosts` 管理，SSH 用户登录公钥由服务器的 `authorized_keys` 等配置管理；它们与这里的 HTTPS 公钥分别使用。
+这里使用 HTTPS 入口证书中的 **SubjectPublicKeyInfo（SPKI）公钥**。TLS 由 Nginx、Caddy 或 CDN 终止时，应登记该入口向客户端提供的公钥。这些公钥用于 HTTPS / WSS 的 TLS 校验；现行客户端不通过 SSH 连接设备。
 
 ### 从可信渠道导入
 
@@ -127,17 +127,11 @@ pins = ["sha256//BuP9j9opu2CrWVV95h7bCuzbIxE0vjDnW0Vfjht5L6k="]
 
 ### 连接时怎样校验
 
-登记公钥后，客户端会在 TLS 握手阶段同时检查证书链、域名、有效期和公钥。HTTPS 账号 API 与 WSS 会话连接使用相同规则；公钥与保存的所有值都不匹配时，连接失败，不发送账号令牌或邀请令牌，也不自动退回普通证书校验。[账号 API](../src/client/account.rs) · [WSS 传输](../src/client/relay.rs)
+登记公钥后，客户端会在 TLS 握手阶段同时检查证书链、域名、有效期和公钥。HTTPS 账号 API 与 WSS 会话连接使用相同规则；公钥与保存的所有值都不匹配时，连接失败，不发送该服务器的账号令牌，也不自动退回普通证书校验。[账号 API](../src/client/account.rs) · [WSS 传输](../src/client/relay.rs)
 
 未登记公钥的服务器使用正常的 HTTPS 证书校验。公钥固定增加了一条身份条件：即使冒充者获得了该域名的另一张有效证书，仍需持有已登记公钥对应的私钥才能通过握手。它适用于 ssmcp CLI 的 HTTPS / WSS 连接；浏览器和其他 MCP 客户端各自管理连接校验。受信任服务器本身仍负责转发工具调用，应由可信操作者维护。
 
-## 公钥固定后的临时邀请
-
-对已登记公钥的服务器执行 `ssmcp invite`，会生成使用**已安装客户端**的命令。B 先从可信来源安装支持 `trust` 的新版 ssmcp；邀请命令随后把 A 的公钥指纹加入 B 的信任文件，再兑换邀请并连接。B 无须登录 GitHub。
-
-这条路径自动生效，也适用于 PowerShell；设置 `--no-bootstrap` 时行为一致。它让 B 在发送一次性邀请令牌前完成公钥校验，避免先下载执行尚未经过该校验的安装脚本。命令会保留写入 B 的公开信任记录；临时设备令牌仍只保存在进程内。
-
-未登记公钥时，`invite` 保持从所选服务器下载临时客户端的流程，脚本和二进制下载使用普通 HTTPS 校验。[临时接入与下载配置](client-accounts.md#3-从-a-生成-b-的临时接入命令)
+CLI 的临时 `invite` / `join` 已移除。被控设备使用显式 `--allow 用户名@中继服务器`；完整流程见[账号与被控设备](client-accounts.md)。
 
 ## 续签、换钥与撤销
 
