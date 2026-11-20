@@ -1,0 +1,96 @@
+{
+  "status": "passed",
+  "checks": 41,
+  "passed_checks": [
+    "the owned account router keeps its credentials in a private ready record",
+    "the isolated account has the expected stable provider identity and handle",
+    "the real production account router is healthy",
+    "the real router fixture has two independently registered identities",
+    "the second credential authenticates as a different real fixture account",
+    "official-v13-default-self: actual legacy client publishes its single provider-style self principal",
+    "official-v13-default-self: owner lists the real connected legacy client",
+    "official-v13-default-self: another verified account cannot list the owner's client",
+    "official-v13-default-self: another verified account cannot call the owner's native tools",
+    "official-v13-default-self: Ready is followed by a real native terminal response",
+    "official-v13-default-self: authenticated relay executes a real owned shell command",
+    "official-v13-default-self: the same connection remains live after the retry interval",
+    "official-v13-default-self: no abnormal watchdog retry occurred",
+    "official-v13-default-self: only the owned test connection is removed during cleanup",
+    "official-v13-explicit-self: actual legacy client publishes its single provider-style self principal",
+    "official-v13-explicit-self: owner lists the real connected legacy client",
+    "official-v13-explicit-self: another verified account cannot list the owner's client",
+    "official-v13-explicit-self: another verified account cannot call the owner's native tools",
+    "official-v13-explicit-self: Ready is followed by a real native terminal response",
+    "official-v13-explicit-self: authenticated relay executes a real owned shell command",
+    "official-v13-explicit-self: the same connection remains live after the retry interval",
+    "official-v13-explicit-self: no abnormal watchdog retry occurred",
+    "official-v13-explicit-self: only the owned test connection is removed during cleanup",
+    "observed-v12-default-self: actual legacy client publishes its single provider-style self principal",
+    "observed-v12-default-self: owner lists the real connected legacy client",
+    "observed-v12-default-self: another verified account cannot list the owner's client",
+    "observed-v12-default-self: another verified account cannot call the owner's native tools",
+    "observed-v12-default-self: Ready is followed by a real native terminal response",
+    "observed-v12-default-self: authenticated relay executes a real owned shell command",
+    "observed-v12-default-self: the same connection remains live after the retry interval",
+    "observed-v12-default-self: no abnormal watchdog retry occurred",
+    "observed-v12-default-self: only the owned test connection is removed during cleanup",
+    "observed-v12-explicit-self: actual legacy client publishes its single provider-style self principal",
+    "observed-v12-explicit-self: owner lists the real connected legacy client",
+    "observed-v12-explicit-self: another verified account cannot list the owner's client",
+    "observed-v12-explicit-self: another verified account cannot call the owner's native tools",
+    "observed-v12-explicit-self: Ready is followed by a real native terminal response",
+    "observed-v12-explicit-self: authenticated relay executes a real owned shell command",
+    "observed-v12-explicit-self: the same connection remains live after the retry interval",
+    "observed-v12-explicit-self: no abnormal watchdog retry occurred",
+    "observed-v12-explicit-self: only the owned test connection is removed during cleanup"
+  ],
+  "server_revision": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+  "fixture_sha256": "2af374c3234e3aed7aa5c2b3c0bb7e4c006a1057c316c3511bd0f3b8244c4bc3",
+  "clients": [
+    {
+      "label": "official-v13",
+      "version": "ssmcp 0.10.13",
+      "sha256": "5ad6682a2e63e865b9a0ada78ce0d1b9b7799cf95e6bdad15c4661ecc106a7aa",
+      "provenance": "verified official v0.10.13 release ELF; invoked only as a normal client"
+    },
+    {
+      "label": "observed-v12",
+      "version": "ssmcp 0.10.12",
+      "sha256": "0e2de0037d5ce6ee1c724f1530b171655b8c72e311077619a7903af8ebcde8e3",
+      "provenance": "observed running v0.10.12 ELF; official release provenance not asserted"
+    }
+  ],
+  "cases": [
+    {
+      "client": "official-v13",
+      "mode": "default-self",
+      "status": "passed"
+    },
+    {
+      "client": "official-v13",
+      "mode": "explicit-self",
+      "status": "passed"
+    },
+    {
+      "client": "observed-v12",
+      "mode": "default-self",
+      "status": "passed"
+    },
+    {
+      "client": "observed-v12",
+      "mode": "explicit-self",
+      "status": "passed"
+    }
+  ],
+  "transport": "real production Broker/router, account HTTP and WebSocket",
+  "upstream_provider": "synthetic GitHub fixture",
+  "real_user_credentials_used": false,
+  "models_started": false,
+  "existing_clients_reloaded": false,
+  "existing_services_touched": false,
+  "scope": "legacy self handshake, real native call, cross-identity denial and stable connection",
+  "not_claimed": "preserving native jobs across a server deployment or testing server rejection with CLI-prevalidated foreign allow lists",
+  "elapsed_seconds": 15.128,
+  "fixture_exit_code": 0,
+  "script_sha256": "50d2087b8b5b6d7e730fcd576a721f78b75d9e546f12d4bacfa3c10d8da3527c"
+}

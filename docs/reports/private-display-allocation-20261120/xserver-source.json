@@ -1,0 +1,15 @@
+{
+  "url": "https://www.x.org/releases/individual/xserver/xorg-server-21.1.26.tar.xz",
+  "archive_sha256": "c8609f9cdafde14de7ec7cb406dac9507add1d536df8d3c3e3d3d9c1cd864066",
+  "archive_bytes": 5091024,
+  "files": [
+    {
+      "path": "os/connection.c",
+      "sha256": "364193056d42a345e2529416806bf9ccdd6a5206d2d0d43139febba1d26488c2"
+    },
+    {
+      "path": "os/utils.c",
+      "sha256": "80b424efb494418f9b896cd07ba5cac91ad40e76447c7997f4aa79477f736181"
+    }
+  ]
+}

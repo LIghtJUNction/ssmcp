@@ -31,6 +31,8 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 
+mod cleanup;
+
 const SPEC_LIMIT: usize = 4 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
 const LINE_LIMIT: usize = 1024 * 1024;
@@ -84,6 +86,7 @@ pub struct OpenCode {
     events: Arc<EventLog>,
     readers: StdMutex<Vec<JoinHandle<()>>>,
     streams: StdMutex<BTreeMap<u64, JoinHandle<()>>>,
+    finalizers: Arc<cleanup::Finalizers>,
     sockets: StdMutex<BTreeMap<u64, mpsc::Sender<SocketInput>>>,
     next_stream: AtomicU64,
     closed: AtomicBool,
@@ -180,6 +183,7 @@ impl OpenCode {
             events,
             readers: StdMutex::new(vec![stderr_task, stdout_task]),
             streams: StdMutex::new(BTreeMap::new()),
+            finalizers: Arc::default(),
             sockets: StdMutex::new(BTreeMap::new()),
             next_stream: AtomicU64::new(1),
             closed: AtomicBool::new(false),
@@ -234,6 +238,7 @@ impl OpenCode {
             events,
             readers: StdMutex::new(Vec::new()),
             streams: StdMutex::new(BTreeMap::new()),
+            finalizers: Arc::default(),
             sockets: StdMutex::new(BTreeMap::new()),
             next_stream: AtomicU64::new(1),
             closed: AtomicBool::new(false),
@@ -772,11 +777,17 @@ impl OpenCode {
             })
             .await;
         }
-        let removed = self.streams.lock().unwrap().remove(&id);
-        let existed = removed.is_some();
-        if let Some(task) = removed {
-            task.abort();
-        }
+        let existed = {
+            let mut streams = self.streams.lock().unwrap();
+            if let Some(task) = streams.remove(&id) {
+                // Keep the cancelled handle until its destructor has registered
+                // any partial capture. Shutdown cannot race past this handoff.
+                self.finalizers.retire(task);
+                true
+            } else {
+                false
+            }
+        };
         let output = json!({"stream_id":id,"closed":existed});
         self.events
             .push(json!({"type":"ssmcp.response","tool":"opencode.stream_close","result":output}));
@@ -803,10 +814,11 @@ impl OpenCode {
         let base = self.base.clone();
         let password = self.password.clone();
         let output = self.output.clone();
+        let finalizers = self.finalizers.clone();
         streams.insert(id, tokio::spawn(async move {
             let mut response = response;
             loop {
-                let outcome = consume_sse(response, &events, &output, id, &path, &password).await;
+                let outcome = consume_sse(response, &events, &output, &finalizers, id, &path, &password).await;
                 if !reconnect {
                     events.push(json!({"type":"ssmcp.stream_closed","stream_id":id,"error":outcome.err()}));
                     return;
@@ -830,9 +842,12 @@ impl OpenCode {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        for (_, task) in std::mem::take(&mut *self.streams.lock().unwrap()) {
-            task.abort();
-        }
+        let streams = std::mem::take(&mut *self.streams.lock().unwrap());
+        let cleanup = cleanup::Shutdown::new(
+            streams.into_values(),
+            self.finalizers.clone(),
+            self.events.clone(),
+        );
         self.sockets.lock().unwrap().clear();
         if let Some(mut process) = self.process.lock().await.take() {
             // Keep the stdin lease until owned descendants are captured and stopped.
@@ -843,19 +858,24 @@ impl OpenCode {
         for task in self.readers.lock().unwrap().drain(..) {
             task.abort();
         }
-        self.events.close();
+        cleanup.finish().await;
     }
 }
 
 impl Drop for OpenCode {
     fn drop(&mut self) {
-        for (_, task) in std::mem::take(self.streams.get_mut().unwrap()) {
-            task.abort();
-        }
         for task in self.readers.get_mut().unwrap().drain(..) {
             task.abort();
         }
-        self.events.close();
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        cleanup::Shutdown::new(
+            std::mem::take(self.streams.get_mut().unwrap()).into_values(),
+            self.finalizers.clone(),
+            self.events.clone(),
+        )
+        .dispatch();
     }
 }
 
@@ -1731,6 +1751,11 @@ impl Sse {
 /// Retain the raw SSE byte stream as well as decoded EventLog records. The
 /// same store and quota apply when a malformed frame exceeds the parser limit.
 struct StreamArchive {
+    state: Option<StreamArchiveState>,
+    finalizers: Arc<cleanup::Finalizers>,
+}
+
+struct StreamArchiveState {
     capture: Capture,
     redactor: CredentialRedactor,
     events: Arc<EventLog>,
@@ -1740,17 +1765,40 @@ struct StreamArchive {
 }
 
 impl StreamArchive {
-    fn new(output: &Arc<OutputStore>, events: Arc<EventLog>, id: u64, password: &str) -> Self {
+    fn new(
+        output: &Arc<OutputStore>,
+        events: Arc<EventLog>,
+        finalizers: &Arc<cleanup::Finalizers>,
+        id: u64,
+        password: &str,
+    ) -> Self {
         Self {
-            capture: output.capture(format!("opencode.sse.{id}")),
-            redactor: CredentialRedactor::new(password),
-            events,
-            id,
-            announced: false,
-            finished: false,
+            state: Some(StreamArchiveState {
+                capture: output.capture(format!("opencode.sse.{id}")),
+                redactor: CredentialRedactor::new(password),
+                events,
+                id,
+                announced: false,
+                finished: false,
+            }),
+            finalizers: finalizers.clone(),
         }
     }
 
+    fn push(&mut self, bytes: &[u8]) {
+        self.state.as_mut().unwrap().push(bytes);
+    }
+
+    fn spill(&mut self) {
+        let _ = self.state.as_mut().unwrap().capture.spill();
+    }
+
+    fn finish(&mut self, failure: Option<&str>) {
+        self.state.as_mut().unwrap().finish(failure);
+    }
+}
+
+impl StreamArchiveState {
     fn push(&mut self, bytes: &[u8]) {
         let data = self.redactor.push(bytes, false);
         let _ = self.capture.push(&data);
@@ -1784,9 +1832,16 @@ impl StreamArchive {
 
 impl Drop for StreamArchive {
     fn drop(&mut self) {
-        self.finish(Some(
-            "SSE stream closed before EOF; captured bytes are a partial stream",
-        ));
+        let Some(mut state) = self.state.take().filter(|state| !state.finished) else {
+            return;
+        };
+        // Transfer only archival state, never Response or the stream task. A
+        // contended output lock must not delay dropping the live HTTP body.
+        self.finalizers.run(move || {
+            state.finish(Some(
+                "SSE stream closed before EOF; captured bytes are a partial stream",
+            ));
+        });
     }
 }
 
@@ -1794,12 +1849,13 @@ async fn consume_sse(
     mut response: Response,
     events: &Arc<EventLog>,
     output: &Arc<OutputStore>,
+    finalizers: &Arc<cleanup::Finalizers>,
     id: u64,
     path: &str,
     password: &str,
 ) -> Result<(), String> {
     let mut parser = Sse::default();
-    let mut archive = StreamArchive::new(output, events.clone(), id, password);
+    let mut archive = StreamArchive::new(output, events.clone(), finalizers, id, password);
     let mut decode_error = None;
     let transport_error = loop {
         match response.chunk().await {
@@ -1824,7 +1880,7 @@ async fn consume_sse(
     };
     if decode_error.is_none() && (!parser.line.is_empty() || !parser.data.is_empty()) {
         decode_error = Some("OpenCode SSE stream ended with an incomplete frame".into());
-        let _ = archive.capture.spill();
+        archive.spill();
     }
     // A decoding error does not make a fully captured wire stream incomplete.
     archive.finish(transport_error.as_deref());
@@ -2020,6 +2076,7 @@ mod tests {
             output,
             readers: StdMutex::new(Vec::new()),
             streams: StdMutex::new(BTreeMap::new()),
+            finalizers: Arc::default(),
             sockets: StdMutex::new(BTreeMap::new()),
             next_stream: AtomicU64::new(1),
             closed: AtomicBool::new(false),
@@ -2332,6 +2389,7 @@ mod tests {
             response,
             &backend.events,
             &backend.output,
+            &backend.finalizers,
             7,
             "/api/event",
             &backend.password,
@@ -2702,14 +2760,16 @@ mod tests {
                 server,
             }
         }
-        async fn disconnected(&self) {
+        async fn disconnected(&self, phase: &str) {
             timeout(Duration::from_secs(5), async {
                 while self.streams.load(Ordering::Acquire) != 0 {
                     sleep(Duration::from_millis(10)).await;
                 }
             })
             .await
-            .expect("attached subscriptions must close");
+            .unwrap_or_else(|error| {
+                panic!("attached subscriptions must close after {phase}: {error}")
+            });
         }
     }
 
@@ -2804,7 +2864,7 @@ mod tests {
                 .any(|tool| tool["name"] == "opencode.attach.replaced")
         );
         backend.shutdown().await;
-        fixture.disconnected().await;
+        fixture.disconnected("shutdown").await;
         assert!(backend.tools().await.is_err());
         // The external native service is still alive after our shutdown.
         fetch_server_info(&backend.client, &backend.base, &backend.password)
@@ -2819,10 +2879,241 @@ mod tests {
             .await
             .unwrap();
         drop(second);
-        fixture.disconnected().await;
+        fixture.disconnected("drop").await;
         fetch_server_info(&backend.client, &backend.base, &backend.password)
             .await
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    struct PrivateStreamOutput {
+        path: std::path::PathBuf,
+        store: Arc<OutputStore>,
+    }
+
+    #[cfg(unix)]
+    impl PrivateStreamOutput {
+        fn new() -> Self {
+            let mut random = [0_u8; 16];
+            crate::platform::random_bytes(&mut random).unwrap();
+            let path = std::env::temp_dir().join(format!(
+                "ssmcp-opencode-teardown-{}-{:032x}",
+                std::process::id(),
+                u128::from_ne_bytes(random)
+            ));
+            let store = OutputStore::at_for_test(path.clone()).unwrap();
+            Self { path, store }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PrivateStreamOutput {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[cfg(unix)]
+    struct HeldOutputLock {
+        release: Option<std::sync::mpsc::Sender<()>>,
+        worker: Option<std::thread::JoinHandle<()>>,
+        held: Arc<AtomicBool>,
+    }
+
+    #[cfg(unix)]
+    impl HeldOutputLock {
+        fn new(output: &PrivateStreamOutput) -> Self {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(output.path.join(".cleanup.lock"))
+                .unwrap();
+            file.lock().unwrap();
+            let (release, waiting) = std::sync::mpsc::channel();
+            let held = Arc::new(AtomicBool::new(true));
+            let state = held.clone();
+            let worker = std::thread::spawn(move || {
+                // Even the old synchronous destructor cannot hang the test process.
+                // Its delayed runtime must fail the held-lock/latency assertions.
+                let _ = waiting.recv_timeout(Duration::from_secs(10));
+                drop(file);
+                state.store(false, Ordering::Release);
+            });
+            Self {
+                release: Some(release),
+                worker: Some(worker),
+                held,
+            }
+        }
+
+        fn release(&mut self) {
+            if let Some(release) = self.release.take() {
+                let _ = release.send(());
+            }
+            if let Some(worker) = self.worker.take() {
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for HeldOutputLock {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum StopAttachedStream {
+        Shutdown,
+        Drop,
+        CancelShutdown,
+        DropOutsideRuntime,
+    }
+
+    #[cfg(unix)]
+    async fn blocked_archive_does_not_hold_attached_transport(mode: StopAttachedStream) {
+        let private = PrivateStreamOutput::new();
+        let fixture = AttachmentFixture::new().await;
+        let backend = OpenCode::attach_with_output(
+            &fixture.endpoint,
+            "attach-fixture-password",
+            private.store.clone(),
+        )
+        .await
+        .unwrap();
+        backend
+            .call("opencode.attach.echo", json!({}))
+            .await
+            .unwrap();
+        let events = backend.events.clone();
+        let page = events.read(json!({"max_events":256})).await.unwrap();
+        assert!(page["events"].as_array().unwrap().iter().any(|item| {
+            item["event"]["type"] == "opencode.event"
+                && item["event"]["event"]["type"] == "server.connected"
+        }));
+        assert_eq!(fixture.streams.load(Ordering::Acquire), 1);
+
+        let mut output_lock = HeldOutputLock::new(&private);
+        let started = Instant::now();
+        let heartbeat = tokio::spawn(async {
+            sleep(Duration::from_millis(20)).await;
+        });
+        let mut shutdown = match mode {
+            StopAttachedStream::Shutdown | StopAttachedStream::CancelShutdown => {
+                Some(tokio::spawn(async move { backend.shutdown().await }))
+            }
+            StopAttachedStream::Drop => {
+                drop(backend);
+                None
+            }
+            StopAttachedStream::DropOutsideRuntime => {
+                std::thread::spawn(move || drop(backend)).join().unwrap();
+                None
+            }
+        };
+        timeout(
+            Duration::from_secs(1),
+            fixture.disconnected("blocked archive"),
+        )
+        .await
+        .expect("transport must close while the private archive lock is held");
+        timeout(Duration::from_secs(1), heartbeat)
+            .await
+            .expect("archive finalization must not stall the async heartbeat")
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(output_lock.held.load(Ordering::Acquire));
+        if let Some(task) = &shutdown {
+            assert!(
+                !task.is_finished(),
+                "shutdown must await the durable partial archive"
+            );
+        }
+        let page = events.read(json!({"max_events":256})).await.unwrap();
+        assert_eq!(page["closed"], false);
+        assert!(
+            !page["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| { item["event"]["type"] == "ssmcp.stream_artifact" })
+        );
+        if matches!(mode, StopAttachedStream::CancelShutdown) {
+            let task = shutdown.take().unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        }
+        output_lock.release();
+        if let Some(task) = shutdown {
+            timeout(Duration::from_secs(2), task)
+                .await
+                .expect("shutdown must finish after the private lock is released")
+                .unwrap();
+        }
+        let page = timeout(Duration::from_secs(2), async {
+            loop {
+                let page = events.read(json!({"max_events":256})).await.unwrap();
+                if page["closed"] == true {
+                    break page;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Drop must retain cleanup ownership until the event archive is closed");
+        let artifact = page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| &item["event"])
+            .find(|event| event["type"] == "ssmcp.stream_artifact")
+            .expect("cancelled raw bytes must remain inspectable")["artifact"]
+            .clone();
+        assert_eq!(artifact["complete"], false);
+        // The audit projection omits response-like error text. The owner-only
+        // artifact stat is the source of its complete persisted failure record.
+        assert_eq!(artifact["error"]["message_omitted"], true);
+        let metadata = private
+            .store
+            .perform("ssmcp.output.stat", json!({"id":artifact["id"]}))
+            .await
+            .unwrap();
+        assert_eq!(metadata["complete"], false);
+        assert!(
+            metadata["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("before EOF")),
+            "{metadata}"
+        );
+        let saved = artifact_bytes(&private.store, artifact["id"].as_str().unwrap()).await;
+        assert_eq!(saved, b"data: {\"type\":\"server.connected\"}\n\n");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attached_shutdown_releases_transport_before_blocked_partial_archive() {
+        blocked_archive_does_not_hold_attached_transport(StopAttachedStream::Shutdown).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attached_drop_releases_transport_before_blocked_partial_archive() {
+        blocked_archive_does_not_hold_attached_transport(StopAttachedStream::Drop).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_shutdown_retains_partial_archive_and_event_close() {
+        blocked_archive_does_not_hold_attached_transport(StopAttachedStream::CancelShutdown).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn attached_drop_outside_runtime_retains_partial_archive_and_event_close() {
+        blocked_archive_does_not_hold_attached_transport(StopAttachedStream::DropOutsideRuntime)
+            .await;
     }
 
     #[tokio::test]
