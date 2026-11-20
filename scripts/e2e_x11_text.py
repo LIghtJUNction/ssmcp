@@ -601,15 +601,26 @@ def run_mcp_recovery(harness, fixture):
         restore = "MACHINE local" if field == "machine" else "PID " + fixture.receiver_pid
         require(fixture.command(wrong) == "OK", "set MCP receiver identity")
         try:
-            reply = harness.code("return await call(%s,%s,%s);" % (
+            code = "return await call(%s,%s,%s);" % (
                 json.dumps(client), json.dumps("ssmcp.computer.type"),
-                json.dumps({"text": "ASCII prefix🙂"})))
+                json.dumps({"text": "ASCII prefix🙂"}))
+            status, response, _ = harness.rpc("tools/call", {
+                "name": "code_mode", "arguments": {"code": code},
+            }, modern=True)
+            require(status == 200 and "error" not in response and "result" in response,
+                    "MCP rejection must be a real tool response")
+            reply = response["result"]
             state = fixture.state()
             row = {"name": "same Computer rejects then recovers from " + field,
                    "client_id": client, "focus_response": focused,
                    "rejection": reply, "rejected_state": state}
             rows.append(row)
             require(reply.get("isError") is True, "MCP must return a real native rejection")
+            message = "\n".join(block["text"] for block in reply.get("content", [])
+                                if block.get("type") == "text")
+            require(message.startswith("Unsupported X11 Unicode text: ") and
+                    message.endswith("; no input was sent"),
+                    "MCP must retain the shared library's pre-input refusal")
             require(state["text"] == "" and state["changes"] == 0, "MCP rejection sent an ASCII prefix")
         finally:
             require(fixture.command(restore) == "OK", "restore MCP receiver identity")
