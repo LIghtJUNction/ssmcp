@@ -156,7 +156,21 @@ return {failed,unexpected};""" % json.dumps(self.client_id)
         return response
 
     def visible_group(self, group_id):
-        events = self.ui("/display/events")
+        path = "/display/events/tool_groups"
+        projection = self.observe("ssmcp.ui.get", {"path": path, "limit": 32})
+        groups = projection.get("value")
+        if (projection.get("schema_version") != 1
+                or projection.get("path") != path
+                or not isinstance(groups, list)
+                or projection.get("next_offset") is not None
+                or projection.get("total") != len(groups)):
+            raise AssertionError(
+                "the bounded fixture must read every visible tool group")
+        events = {
+            "tool_groups": groups,
+            "scroll": self.ui("/display/events/scroll"),
+            "retained_events": self.ui("/display/events/retained_events"),
+        }
         matches = [item for item in events["tool_groups"] if item.get("group_id") == group_id]
         if len(matches) != 1:
             raise AssertionError("the real terminal must expose the same opaque group ID")
