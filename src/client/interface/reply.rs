@@ -79,7 +79,7 @@ pub(super) fn call(arguments: Value) -> Result<Value, String> {
 
 pub(super) fn tool() -> Value {
     json!({"name":TOOL,
-        "description":"Reply to one delivered thread_inputs request. Copy its request_id and input_id, and choose a new output_<32 hexadecimal characters> id; reuse that output_id only to retry identical text. progress/running streams an update. result/done or result/error completes only this input. The relay verifies the actual authenticated main or agent recipient and returns accepted:true only after recording it. This never grants human finish approval or ends the agent's other work.",
+        "description":"Reply to one delivered thread_inputs request. Copy its request_id and input_id, and choose a new output_<32 hexadecimal characters> id; reuse that output_id only to retry identical text. progress/running streams an update. result/done or result/error completes only this input. The relay verifies the actual authenticated main or agent recipient and returns accepted:true only after recording it. This result keeps its agent origin and completes only the addressed input.",
         "inputSchema":{"type":"object","additionalProperties":false,
             "required":["request_id","input_id","output_id","kind","state","text"],
             "properties":{
@@ -133,7 +133,7 @@ mod tests {
             tool()["description"]
                 .as_str()
                 .unwrap()
-                .contains("human finish")
+                .contains("agent origin")
         );
     }
 }

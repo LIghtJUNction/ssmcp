@@ -271,7 +271,21 @@ impl EventLog {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::Native, source);
+        self.push_inner(event, Presentation::Native, source, None);
+    }
+
+    /// Exact native job instants travel beside the redacted JSON. Neither
+    /// provider JSON nor attach replay can manufacture this local projection.
+    pub(crate) fn push_execution(
+        &self,
+        event: Value,
+        source: crate::runtime::call_scope::Source,
+        timing: crate::runtime::time::ExecutionTiming,
+    ) {
+        if event["type"] != "exec.started" {
+            return;
+        }
+        self.push_inner(event, Presentation::Native, source, Some(timing));
     }
 
     /// Only client-owned audit lifecycle code may publish these reserved events.
@@ -280,7 +294,7 @@ impl EventLog {
         if !crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::Control, Default::default());
+        self.push_inner(event, Presentation::Control, Default::default(), None);
     }
 
     /// Retain local picker reads in the security audit without publishing them
@@ -289,7 +303,12 @@ impl EventLog {
         if crate::client::render::reserved_control_event(&event) {
             return;
         }
-        self.push_inner(event, Presentation::LocalDiscovery, Default::default());
+        self.push_inner(
+            event,
+            Presentation::LocalDiscovery,
+            Default::default(),
+            None,
+        );
     }
 
     fn push_inner(
@@ -297,6 +316,7 @@ impl EventLog {
         event: Value,
         presentation: Presentation,
         source: crate::runtime::call_scope::Source,
+        timing: Option<crate::runtime::time::ExecutionTiming>,
     ) {
         let mut event = self.audit_mode.event(event);
         if let Some(pool) = self.observer.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -322,7 +342,7 @@ impl EventLog {
             if presentation == Presentation::Control {
                 crate::client::render::trusted_event(&self.label, &event);
             } else {
-                crate::client::render::scoped_event(&self.label, &event, source);
+                crate::client::render::scoped_timed_event(&self.label, &event, source, timing);
             }
         }
         // Codex command streaming carries bytes as base64. Keep the original event

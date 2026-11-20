@@ -1,0 +1,92 @@
+# 时间查询、计时与倒计时
+
+ssmcp 用 `ssmcp.time.now` 查询当前时间和时间间隔，用 `ssmcp.time.wait` 管理计时器。终端输入区旁显示运行时间或剩余时间，`/wait` 展开当前时间和详细状态。后台命令的执行时限由命令自身管理；计时器可以独立创建、查询和取消。
+
+## 先确认工具可用
+
+在 `code_mode` 中查询当前客户端的实际目录：
+
+```javascript
+return await tools.search(clientId, {
+  name_prefix: "ssmcp.time.",
+  include_schemas: true
+});
+```
+
+`clientId` 使用 `list` 返回的已授权客户端 ID。下文 JSON 是传给 `call(clientId, 工具名, 参数)` 的参数；原生工具结果位于返回值的 `structuredContent`，调用方同时检查 `isError`。
+
+同进程的私有本地入口直接启用时间工具。账户连接需要客户端提出 `time_observation_v1`，服务端在实际 Ready 握手中明确确认，并满足当前身份能力协商。未协商时，目录隐藏这两个工具；硬编码调用返回 `time_observation_not_negotiated`。工具目录和 schema 是可用性依据，版本号不替代握手。[能力门控](../src/client/relay.rs)
+
+## 查询当前时间和间隔
+
+`ssmcp.time.now` 默认接受 `{}`，也接受 `{"op":"now"}`。结果包含 UTC 字符串 `utc_rfc3339`、Unix 毫秒 `unix_ms`、Unix 秒 `unix_seconds`。`monotonic_ms` 是当前连接内的单调计时值，只在相同 `monotonic_scope` 下比较。
+
+计算两个明确时刻的间隔时，使用 `op: "interval"`：
+
+```json
+{
+  "op": "interval",
+  "start": {"rfc3339": "2026-11-20T23:59:59.999Z"},
+  "end": {"rfc3339": "2026-11-21T08:00:00.001+08:00"}
+}
+```
+
+每个时间点选择 `unix_ms` 整数或 `rfc3339` 字符串中的一种。省略 `end` 时，客户端在这次调用中采样当前时间作为终点，并返回 `end_was_now: true`。上例跨越日期和时区偏移，两个时刻实际相差 2 毫秒。
+
+| 结果字段 | 含义 |
+| --- | --- |
+| `start`、`end` | 归一化后的 Unix 毫秒和 UTC RFC3339 时间 |
+| `interval_ms` | `end - start`，保留正负号 |
+| `absolute_ms` | 间隔的绝对值 |
+| `direction` | 终点相对起点为 `before`、`same` 或 `after` |
+| `duration` | 绝对间隔拆成 `days/hours/minutes/seconds/milliseconds` |
+
+例如起点为 `{"unix_ms":2000}`、终点为 `{"unix_ms":500}`，返回 `interval_ms: -1500`、`absolute_ms: 1500`，拆分为 1 秒 500 毫秒。
+
+日期支持 UTC 年份 `0000..9999`，Unix 毫秒允许负值。RFC3339 需要 `Z` 或明确的数字时区偏移。输入精度到毫秒；无效日期、闰秒、缺少偏移以及非零的毫秒以下小数会返回参数错误。拆分结果中的一天固定为 `86400000` 毫秒；日历月、工作日和本地夏令时规则另行处理。[间隔实现](../src/runtime/time/civil.rs)
+
+## 创建和管理计时器
+
+创建一个 60 秒倒计时，调用 `ssmcp.time.wait`：
+
+```json
+{"op":"start","duration_ms":60000,"label":"检查构建结果"}
+```
+
+返回的 `timer_id` 用于后续查询。创建默认立即返回；界面和后续查询使用同一个计时器。
+
+| 操作 | 参数与作用 |
+| --- | --- |
+| `start` | `duration_ms` 指定持续毫秒数，或用 `deadline_unix_ms` 指定绝对时刻；两者互斥 |
+| `list` | `{"op":"list"}` 返回当前调用者的 `active` 和 `recent` |
+| `status` | 必填 `timer_id`；查询已有计时器 |
+| `cancel` | 必填 `timer_id`；停止这个计时器 |
+
+查询和取消使用创建结果中的完整 `timer_id`。`start` 和 `status` 可附带 `wait_ms`，范围 `0..25000`，默认 `0`。这只限制本次调用等待状态变化的时间；`wait_timed_out: true` 时，计时器继续运行，后续沿用同一个 ID。
+
+绝对截止时间也使用 Unix 毫秒。例如先读取 `ssmcp.time.now`，再把 `unix_ms + 60000` 作为 `deadline_unix_ms`。创建时，客户端把目标时刻与当时的系统时间做一次换算，之后用单调时钟计算已用和剩余时间。系统日期随后的调整不会移动这个计时器的截止时间。
+
+`duration_ms` 范围是 `0..86400000`，绝对时刻最多可在创建时刻之后 24 小时。零时长或已经过去的绝对时刻立即进入 `elapsed`。两个时间参数都省略时，创建只计算已用时间的计时器；它在 24 小时后进入 `expired`。主动取消进入 `cancelled`。
+
+计时器归属原始连接、账户、参与者和会话，`list/status/cancel` 使用同一归属校验。每个连接最多同时运行 32 个计时器；活动与近期记录合计上限为 128 条，结束后的记录最多保留 5 分钟。断开或重新加载会清空计时器，旧 ID 随之失效。[计时状态与边界](../src/runtime/time.rs)
+
+## 在终端查看时间
+
+输入区旁的一行时间优先显示最近的实际截止时间。没有截止时间的工作显示已用时间；到期提示短暂保留，完整状态可以通过 `/wait` 查看。
+
+| 显示 | 含义 |
+| --- | --- |
+| `剩余 00:12` | 已有真实截止时间，剩余 12 秒 |
+| `计时 01:05` | 无指定截止时间的计时器，已用 1 分 5 秒 |
+| `运行 00:12` | 任务仍在运行，已用 12 秒 |
+| `等待 00:12` | 正在观察等待状态 |
+| `运行·已到期` | 执行时限已到，任务仍在返回或收尾 |
+| `计时 已到期` | 计时器已经结束 |
+
+计时显示按秒变化，剩余时间向上取整、已用时间向下取整。`/wait` 显示当前 UTC 时间、完整计时编号、标签、已用时间和剩余时间；可取消的记录旁提供 `/wait cancel <完整编号>`。任务与仅用于展示的等待记录显示“仅显示”。
+
+后台命令使用同一份原生开始时刻和截止时刻驱动执行超时与终端显示。普通提供方 JSON 和历史重放不会获得这份原生时间投影；只有已知截止时间才显示倒计时。命令最终结果继续由 `exec.status/read/wait` 的实际状态、退出码或终止信号确认。计时到期不代表任务完成；取消计时不会停止任务。[终端显示](../src/client/terminal/conversation/timing.rs) · [命令计时](../src/backend/shell.rs)
+
+## 验证入口
+
+[时间单元测试](../src/runtime/time/tests.rs) 覆盖归属隔离、绝对时刻换算、到期和生命周期；[真实终端夹具](../scripts/e2e_time_primitives.py) 使用私有 HTTP/WebSocket 与控制终端，检查协商两侧、草稿保留、命令计时和到期显示。夹具接受已构建的 `--binary`、`--decoder` 和新的 `--report-dir`，自身不运行 Cargo。

@@ -21,6 +21,8 @@ ssmcp 默认只启用自己的原生工具。命令执行、文件、会话、�
 
 ## 只加载需要的一项
 
+启动时可以用 `--agent codex` 或 `--agent claude-code` 明确选择一个协议；`ssmcp --agent list` 显示真实支持的 provider、别名和 peer 参数。选择沿用同一个按需加载入口，先完成握手与工具枚举，后续任务再调用原生工具。完整语法和明确的 MCP peer 连接见 [`--agent` 用法](agent-entry.md)。
+
 通过现有 `call` 调用原生入口，不需要新增 relay helper：
 
 ```js
@@ -37,7 +39,7 @@ const loaded = await call(clientId, "ssmcp.harnesses.load", {
 return loaded;
 ```
 
-provider 只接受 `codex`、`claude`、`pi`、`opencode`、`playwright`。加载只处理选中的一项，不安装软件，不扫描其他 provider。成功后，再使用 `tools.search` 或客户端工具目录读取实际名称和完整 schema；不要预先编造工具名。
+provider 接受 `codex`、`claude`、`pi`、`opencode`、`playwright`，以及启动时已明确配置 endpoint 和认证变量的 `ssmcp` peer。加载只处理选中的一项，不安装软件，不扫描其他 provider。成功后，再使用 `tools.search` 或客户端工具目录读取实际名称和完整 schema；不要预先编造工具名。
 
 普通浏览器任务应先使用原生 `ssmcp.browser.*`。只有需要已明确选定的浏览器扩展会话等外部能力时，才加载 Playwright MCP；加载、原生审批与浏览器配对分别按该工具的真实协议进行。
 
@@ -60,4 +62,4 @@ return await call(clientId, "ssmcp.harnesses.load", {
 
 外部工具仍保留自己的 schema、会话和审批方式。加载协议桥不发起模型回合；显式调用模型接口时，才遵循该接口的原生行为。拼错工具名会明确拒绝，不会触发全量扫描或猜测另一个 harness。
 
-实现沿用现有工具 registry 与 wire 7，不另建代理、消息队列或会话历史。加载入口与并发控制见 [backend/lazy.rs](../src/backend/lazy.rs)，真实协议初始化和目录替换见 [backend.rs](../src/backend.rs)。
+实现沿用现有工具 registry 和连接协议。加载入口与并发控制见 [process/lazy.rs](../src/runtime/native_plugins/process/lazy.rs)，真实协议初始化和目录替换见 [process.rs](../src/runtime/native_plugins/process.rs)。

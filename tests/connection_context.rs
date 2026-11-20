@@ -439,3 +439,32 @@ fn context_saved_creation_does_not_treat_a_title_as_a_remote_selector() {
         );
     }
 }
+
+#[test]
+fn context_local_socket_options_follow_the_selected_endpoint() {
+    let home = Home::new();
+    home.contexts();
+    // Local options are parsed before the established foreground-only guard;
+    // no listener or real session is started by these negative CLI checks.
+    home.failure(
+        &[
+            "--context",
+            "here",
+            "--socket",
+            "/tmp/context-fixture/mcp.sock",
+            "--daemon",
+        ],
+        None,
+        "foreground OS-user session",
+    );
+    home.failure(
+        &[
+            "--context",
+            "work",
+            "--socket",
+            "/tmp/context-fixture/mcp.sock",
+        ],
+        None,
+        "--socket is only available with a local connection",
+    );
+}

@@ -82,12 +82,12 @@ class Interactions(InputHistory):
 
     def conversation(self, front):
         for _ in range(4):
-            state = self.ui("/display/conversation")
-            if state["view"] == "activity":
+            view = self.ui("/display/conversation/view")
+            if view == "activity":
                 self.focus_input(front)
                 return self.wait_state(
                     front, lambda item: item["view"] == "activity" and item["focus"] == "input",
-                    "return to the retained conversation draft")
+                    "return to the retained conversation draft", fields=("view", "focus"))
             front.send(ESC)
             front.pump(0.12)
         raise AssertionError("Escape did not return the owned UI to its conversation")
@@ -96,18 +96,18 @@ class Interactions(InputHistory):
         if len(value.encode()) > 4096 or len(value.splitlines()) >= 8:
             raise AssertionError("the synthetic draft helper only accepts inline input")
         self.conversation(front)
-        before = self.ui("/display/conversation")["draft"]
+        before = self.ui("/display/conversation/draft")
         raw = before["text"].encode()
         prefix = raw[:before["cursor"]].decode()
         suffix = raw[before["cursor"]:].decode()
         self.send_stream(front, b"\x7f" * len(prefix) + DELETE * len(suffix))
         self.wait_state(front, lambda item: item["draft"]["text"] == "",
-                        "clear only the owned synthetic draft")
+                        "clear only the owned synthetic draft", fields=("draft",))
         if value:
             self.send_stream(front, PASTE_START + value.encode() + PASTE_END)
         return self.wait_state(
             front, lambda item: item["draft"]["text"] == value,
-            "replace the owned short draft without changing its route")
+            "replace the owned short draft without changing its route", fields=("draft",))
 
     def open_picker(self, front, query=""):
         self.replace_short(front, "/message" + (" " + query if query else ""))
@@ -444,105 +444,30 @@ class Interactions(InputHistory):
         self.conversation(front)
         return draft
 
-    def create_finish(self, requester, suffix):
-        result = self.public_call("request_finish", {
-            "client_id": self.client_id, "reason": "PTY finish review " + suffix,
-            "timeout_ms": 1000, "idempotency_key": "pty-finish-" + suffix,
-            "agent": {"id": requester["agent_id"], "token": requester["token"]}})
-        self.check(result["timed_out"] is True and result["decision"] is None
-                   and result["approved"] is False and result["default_decision"] == "no",
-                   suffix + ": bounded waiting leaves an undecided request with default No")
-        return result
-
-    def finish_decision(self, front, requester, choice, comment, draft):
-        initial = self.create_finish(requester, choice)
-        request_id = initial["request_id"]
-        arguments = {
-            "client_id": self.client_id, "reason": "PTY finish review " + choice,
-            "timeout_ms": 15000, "request_id": request_id,
-            "agent": {"id": requester["agent_id"], "token": requester["token"]}}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            waiting = executor.submit(self.public_call, "request_finish", arguments)
-            front.until(lambda shot: "Click or type to wake" in text(shot),
-                        "a real native finish waiter sleeping the actual terminal")
-            if choice == "no":
-                self.capture_pair(front, "finish-sleep", "Click or type to wake")
-            # The complete real SGR gesture only dismisses sleep. It cannot choose
-            # a decision, edit a draft, or synthesize a human answer.
-            front.send(b"\x1b[<0;4;8M\x1b[<0;4;8m")
-            front.until(lambda shot: "Click or type to wake" not in text(shot),
-                        "the finish sleep overlay dismissed by one complete click")
-            self.check(not waiting.done()
-                       and self.question(requester, request_id)["finish"]["decision"] is None
-                       and self.ui("/display/conversation")["draft"]["text"] == draft,
-                       choice + ": sleep dismissal preserves the pending request and original draft")
-            self.open_question(front, request_id)
-            front.until(lambda shot: "● No" in text(shot), "the explicit default No choice")
-            if choice == "yes":
-                shot = front.snapshot()
-                row, line = next((index, line) for index, line in enumerate(shot["rows"])
-                                 if "○ Yes" in line)
-                column = line.index("Yes") + 1
-                front.send(("\x1b[<0;%d;%dM\x1b[<0;%d;%dm" %
-                            (column, row + 1, column, row + 1)).encode())
-                front.until(lambda shot: "● Yes" in text(shot),
-                            "a real mouse gesture explicitly selecting Yes")
-            front.send(b"\t")
-            self.send_stream(front, PASTE_START + comment.encode() + PASTE_END)
-            self.capture_pair(front, "finish-selected-" + choice,
-                              "● " + choice.capitalize())
-            front.send(ENTER)
-            result = waiting.result(timeout=8)
-        decision = result["decision"]
-        self.check(result["timed_out"] is False and result["approved"] is (choice == "yes")
-                   and decision["choice"] == choice and decision["comment"] == comment
-                   and decision["actor"]["origin"] == "human",
-                   choice + ": Enter records only the explicitly selected decision and separate comment")
+    def retired_hooks(self, front, requester, draft):
+        before = self.scoped_native(requester, "ssmcp.ui.questions", {})
+        for name in ("ssmcp.ui.finish", "ssmcp.ui.answer"):
+            code = "try { await call(%s,%s,{}); return {accepted:true}; } catch (error) { return {error:String(error)}; }" % (
+                json.dumps(self.client_id), json.dumps(name))
+            outer = self.response(code, agent=self.binding(requester))
+            result = outer["structuredContent"]["result"]
+            self.check("tool_retired:" in result.get("error", ""),
+                       name + " fails before dispatch with an explicit retirement result")
+            self.check("continuation_reminder" not in outer["structuredContent"]
+                       and "conversation_reminders" not in outer["structuredContent"],
+                       "a retired call does not inject continuation or conversation hooks")
+        after = self.scoped_native(requester, "ssmcp.ui.questions", {})
+        self.check(after == before, "retired tools create no approval cards or proxy answers")
+        receipt = self.scoped_native(requester, "ssmcp.ui.message", {
+            "text": "Final result without completion approval",
+            "kind": "answer", "idempotency_key": "retired-hooks-final",
+        })
+        self.check(receipt["accepted"] is True and receipt["history_saved"] is True
+                   and receipt.get("finish_request_id") is None,
+                   "a real final message commits without completion approval")
         self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
-                   choice + ": the real approval handler completes without losing the main draft")
-        if choice == "no":
-            self.check(comment == "yes" and result["approved"] is False,
-                       "ordinary comment text yes never changes default No into approval")
-        self.capture_pair(front, "finish-recorded-" + choice,
-                          "No · keep working" if choice == "no" else "Approved")
-        if choice == "yes":
-            final = {"kind": "answer", "text": "PTY approved completion receipt",
-                     "idempotency_key": "pty-approved-final"}
-            receipt = self.scoped_native(requester, "ssmcp.ui.message", final)
-            duplicate = self.scoped_native(requester, "ssmcp.ui.message", final)
-            self.check(receipt["accepted"] is True and receipt["duplicate"] is False
-                       and receipt["finish_request_id"] == request_id
-                       and duplicate["duplicate"] is True
-                       and duplicate["message_id"] == receipt["message_id"],
-                       "the approved real final answer consumes one grant and matching retries reuse its receipt")
-            self.check(self.question(requester, request_id)["finish"]["status"] == "completed",
-                       "the final receipt closes this finish request before another is created")
-            self.capture_pair(front, "finish-completed", "Finish receipt committed")
-        self.conversation(front)
-
-    def external_finish_decision(self, front, requester, reviewer, draft):
-        initial = self.create_finish(requester, "external")
-        request_id = initial["request_id"]
-        self.open_question(front, request_id)
-        front.send(b"\t")
-        self.send_stream(front, PASTE_START + "human note not sent".encode() + PASTE_END)
-        response = self.scoped_native(reviewer, "ssmcp.ui.answer", {
-            "id": request_id, "decision": "no", "comment": "reviewer asks for one more check"})
-        self.check(isinstance(response, dict), "a second verified agent returns a typed finish receipt")
-        self.quiet_until(
-            front, lambda shot: "Agent PTY reviewer" in text(shot)
-            and "Your unsent draft" in text(shot) and "human note not sent" in text(shot),
-            "another verified agent's decision appears while retaining the unsent local comment")
-        view = self.question(requester, request_id)
-        actor = view["finish"]["decision"]["actor"]
-        self.check(actor["origin"] == "agent"
-                   and actor["agent"]["thread_id"] == reviewer["agent_id"]
-                   and view["finish"]["decision"]["choice"] == "no",
-                   "the displayed external decision is bound to the real other agent identity")
-        self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
-                   "an external decision never replaces the main draft")
-        self.capture_pair(front, "finish-external", "Your unsent draft")
-        self.conversation(front)
+                   "retirement and final display preserve the user's unsent draft")
+        self.capture_pair(front, "final-without-approval", "Final result without completion approval")
 
     def native_message(self, front):
         self.replace_short(front, "")
@@ -661,14 +586,14 @@ class Interactions(InputHistory):
         boundary = "x" * 4093 + "中"
         self.replace_short(front, boundary)
         self.check(len(boundary.encode()) == 4096
-                   and self.ui("/display/conversation")["draft"]["text"] == boundary,
+                   and self.ui("/display/conversation/draft")["text"] == boundary,
                    "exactly 4 KiB remains inline without cutting a UTF-8 character")
         self.replace_short(front, "single-line byte limit")
         over = ("x" * 4094 + "中").encode()
         self.send_stream(front, PASTE_START + over + PASTE_END)
         stored = self.wait_state(
             front, lambda item: '@".ssmcp/inputs/' in item["draft"]["text"],
-            "a single UTF-8 line above 4 KiB becoming a private reference")
+            "a single UTF-8 line above 4 KiB becoming a private reference", fields=("draft",))
         byte_reference = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"',
                                    stored["draft"]["text"])
         self.check(len(over) == 4097 and byte_reference is not None
@@ -676,7 +601,7 @@ class Interactions(InputHistory):
                    "4 KiB plus one byte is stored whole even when it has only one logical line")
         seven = "\n".join("line " + str(index) for index in range(7))
         self.replace_short(front, seven)
-        self.check(self.ui("/display/conversation")["draft"]["text"] == seven,
+        self.check(self.ui("/display/conversation/draft")["text"] == seven,
                    "seven short logical lines remain inline with their newlines")
         self.replace_short(front, "paste prefix suffix")
         front.send(HOME + RIGHT * len("paste prefix"))
@@ -684,7 +609,8 @@ class Interactions(InputHistory):
         self.send_stream(front, PASTE_START + raw + PASTE_END)
         state = self.wait_state(
             front, lambda item: '@".ssmcp/inputs/' in item["draft"]["text"],
-            "eight or more logical lines becoming a private paste reference")
+            "eight or more logical lines becoming a private paste reference",
+            fields=("draft", "native_recipient"))
         match = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"', state["draft"]["text"])
         self.check(match is not None and state["draft"]["text"].startswith("paste prefix")
                    and state["draft"]["text"].endswith(" suffix")
@@ -696,7 +622,7 @@ class Interactions(InputHistory):
         self.capture_pair(front, "long-paste", ".ssmcp/inputs/")
 
         self.replace_short(front, "recoverable original draft")
-        before = self.ui("/display/conversation")
+        before = self.ui("/display/conversation/draft")
         inputs = self.workspace / ".ssmcp" / "inputs"
         held = self.workspace / ".ssmcp" / "inputs-owned-test-backup"
         self.check(inputs.is_dir() and not held.exists(),
@@ -709,11 +635,12 @@ class Interactions(InputHistory):
             self.send_stream(front, PASTE_START + original + PASTE_END)
             failed = self.wait_state(
                 front, lambda item: item["retained_paste_bytes"] == len(original),
-                "a failed private write retaining the original paste")
-            self.check(failed["draft"] == before["draft"]
+                "a failed private write retaining the original paste",
+                fields=("retained_paste_bytes", "draft", "native_recipient"))
+            self.check(failed["draft"] == before
                        and failed["native_recipient"] == recipient_id,
                        "a real storage error preserves the original draft, cursor and selected recipient")
-            self.capture_pair(front, "paste-retained", "Original paste retained")
+            self.capture_pair(front, "paste-retained", "Could not save the private input")
         finally:
             if inputs.is_file():
                 inputs.unlink()
@@ -726,7 +653,8 @@ class Interactions(InputHistory):
         restored = self.wait_state(
             front, lambda item: item["retained_paste_bytes"] is None
             and '@".ssmcp/inputs/' in item["draft"]["text"],
-            "the explicit keyboard retry storing the original retained bytes")
+            "the explicit keyboard retry storing the original retained bytes",
+            fields=("retained_paste_bytes", "draft", "native_recipient"))
         reference = re.search(r'@"(\.ssmcp/inputs/paste-[0-9a-f]+\.txt)"',
                               restored["draft"]["text"])
         self.check(reference is not None
@@ -750,14 +678,10 @@ class Interactions(InputHistory):
         recalled = self.pending_recall(front)
         requester = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY requester", "role": "requester"})
-        reviewer = self.public_call("collab", {
-            "action": "join", "client_id": self.client_id, "name": "PTY reviewer", "role": "reviewer"})
-        self.sensitive.extend([requester["token"], reviewer["token"]])
+        self.sensitive.append(requester["token"])
         self.command_details(front)
         draft = self.ordinary_question(front, requester)
-        self.finish_decision(front, requester, "no", "yes", draft)
-        self.finish_decision(front, requester, "yes", "ready after explicit review", draft)
-        self.external_finish_decision(front, requester, reviewer, draft)
+        self.retired_hooks(front, requester, draft)
         recipient_id = self.native_message(front)
         self.private_pastes(front, recipient_id)
         return {

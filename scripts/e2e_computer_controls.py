@@ -67,7 +67,7 @@ def render(snapshot, path, label):
 
 
 class Session:
-    def __init__(self, root, label, binary, decoder, report):
+    def __init__(self, root, label, binary, decoder, report, capabilities=None):
         self.root = root / label
         self.root.mkdir()
         self.label, self.report = label, report
@@ -76,7 +76,7 @@ class Session:
         workspace.mkdir()
         config = self.root / "config.toml"
         config.write_text("[ui]\ndashboard = true\n")
-        self.state = e2e_account_relay.State()
+        self.state = e2e_account_relay.State(capabilities=capabilities)
         self.server = e2e_account_relay.ThreadingHTTPServer(("127.0.0.1", 0), e2e_account_relay.Handler)
         self.server.daemon_threads = True
         self.server.state = self.state
@@ -195,7 +195,10 @@ def quiet(sessions, seconds=0.4):
 
 
 def badge(session):
-    return set(re.findall(r"foreground (on|off) · background on", session.screen))
+    # Read the current input divider, not a retained command receipt in the footer.
+    return {"on" if state in ("开启", "开") else "off"
+            for line in session.screen.splitlines() if "─" in line
+            for state in re.findall(r"(?:电脑控制：|键鼠：)(开启|关闭|开|关)", line)}
 
 
 def inside(args):
@@ -266,7 +269,7 @@ def inside(args):
             check("local_slash_on_updates_both_idle_badges")
             capture("slash-on")
             first.write(b"/computer status\r")
-            until(sessions, lambda: "Foreground on" in first.screen and "Super+Alt+C" in first.screen,
+            until(sessions, lambda: "电脑控制：开启" in first.screen and "Super+Alt+C" in first.screen,
                   "status command describes the state and shortcut")
             assert cli()["generation"] == on["generation"]
             check("slash_status_is_read_only_and_visible")

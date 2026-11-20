@@ -381,10 +381,7 @@ impl Hub {
                 return Ok(json!({"wait_id":spec.wait_id,"status":"disconnected"}));
             }
         };
-        let title = match spec.intent {
-            Intent::NeedUser => "ssmcp 正在等待你回复",
-            Intent::Finish => "ssmcp 正在等待你确认是否结束",
-        };
+        let title = "ssmcp 正在等待你回复";
         let recipient = if spec.recipient == "next" {
             "Next caller"
         } else {

@@ -703,7 +703,7 @@ impl Hub {
             }
             bytes += size;
             next = output["global_sequence"].as_u64().unwrap_or(next);
-            outputs.push(output.clone());
+            outputs.push(*output);
         }
         let more = outputs.len() < matching.len();
         if !more {

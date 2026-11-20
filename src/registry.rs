@@ -32,7 +32,18 @@ pub enum Provider {
     Pi,
     OpenCode,
     Playwright,
+    #[serde(rename = "ssmcp")]
+    Peer,
 }
+
+pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 6] = [
+    (Provider::Codex, "codex"),
+    (Provider::Claude, "claude"),
+    (Provider::Pi, "pi"),
+    (Provider::OpenCode, "opencode"),
+    (Provider::Playwright, "playwright"),
+    (Provider::Peer, "ssmcp"),
+];
 impl Provider {
     pub fn label(self) -> &'static str {
         match self {
@@ -58,6 +69,7 @@ impl Provider {
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
             Self::Playwright => "playwright",
+            Self::Peer => "ssmcp",
         }
     }
     pub fn is_harness(self) -> bool {
@@ -107,7 +119,9 @@ impl StoredTool {
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema: descriptor["inputSchema"].clone(),
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if self.provider.is_harness() || self.provider == Provider::Playwright {
+            approval: if self.provider.is_harness()
+                || matches!(self.provider, Provider::Playwright | Provider::Peer)
+            {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection
@@ -417,6 +431,7 @@ fn prepare(
             Provider::Playwright => {
                 id.starts_with("playwright.") || id.starts_with("ssmcp.playwright.")
             }
+            Provider::Peer => id.starts_with("peer."),
         };
         if !allowed
             || id.len() > 128
@@ -453,7 +468,7 @@ fn prepare(
     }
     Ok(result)
 }
-fn component(name: &str) -> String {
+pub(crate) fn component(name: &str) -> String {
     let mut encoded = String::new();
     for b in name.bytes() {
         if b.is_ascii_alphanumeric() || b == b'-' {

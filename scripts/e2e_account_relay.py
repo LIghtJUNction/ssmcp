@@ -110,14 +110,13 @@ class WebSocket:
             assert opcode in (1, 2), "unexpected websocket opcode"
             return json.loads(payload)
 
-    def call(self, name, arguments):
+    def request(self, operation):
         with self.state.lock:
             self.sequence += 1
             identifier = self.sequence
             result = queue.Queue(maxsize=1)
             self.pending[identifier] = result
-        self.send({"type": "call", "id": identifier,
-                   "operation": {"op": "call_tool", "name": name, "arguments": arguments}})
+        self.send({"type": "call", "id": identifier, "operation": operation})
         try:
             reply = result.get(timeout=10)
         finally:
@@ -125,7 +124,10 @@ class WebSocket:
                 self.pending.pop(identifier, None)
         if "Err" in reply:
             raise AssertionError("Native call failed: " + reply["Err"])
-        value = reply["Ok"]
+        return reply["Ok"]
+
+    def call(self, name, arguments):
+        value = self.request({"op": "call_tool", "name": name, "arguments": arguments})
         if value.get("isError"):
             raise AssertionError("Native tool reported an error: " + json.dumps(value))
         return value.get("structuredContent", value)
@@ -144,9 +146,10 @@ class WebSocket:
             assert self.hello["version"] in SUPPORTED_WIRE_VERSIONS
             assert self.hello["mode"] == "shell"
             assert self.hello["metadata"]["allow"] == [self.state.allow_principal]
-            self.send({"type": "ready", "url": self.state.origin + "/mcp",
+            self.ready = {"type": "ready", "url": self.state.origin + "/mcp",
                        "client_id": self.id, "login_code": "", "login_expires_in": 0,
-                       "capabilities": list(CAPABILITIES)})
+                          "capabilities": list(self.state.capabilities)}
+            self.send(self.ready)
             with self.state.lock:
                 self.state.sessions[self.id] = self
                 self.state.connections.setdefault(self.hello["metadata"]["name"], []).append(self)
@@ -195,7 +198,9 @@ class WebSocket:
                         result.put({"Err": "fixture connection closed"})
 
 class State:
-    def __init__(self):
+    def __init__(self, capabilities=None):
+        self.capabilities = CAPABILITIES if capabilities is None else tuple(capabilities)
+        self.capability_offers = []
         self.lock = threading.RLock()
         self.account_token = "cl_" + secrets.token_hex(32)
         self.device_code = secrets.token_hex(32)
@@ -252,6 +257,7 @@ class Handler(BaseHTTPRequestHandler):
             if not token and self.state.reject_connect is not None:
                 return self.respond(self.state.reject_connect, {"error": "not_allowed"})
             offered = {part.strip() for part in self.headers.get("ssmcp-capabilities", "").split(",")}
+            self.state.capability_offers.append(sorted(offered))
             if not set(CAPABILITIES).issubset(offered):
                 return self.respond(400, {"error": "anonymous_control_requires_current_client"})
             key = self.headers["Sec-WebSocket-Key"]

@@ -217,10 +217,10 @@ def pi_call(harness, command, arguments=None):
 
 def native_defaults(harness, label, context):
     rows = harness.call("ssmcp.harnesses.list")["harnesses"]
-    names = {"codex", "claude", "pi", "opencode", "playwright"}
+    names = {"codex", "claude", "pi", "opencode", "playwright", "ssmcp"}
     providers = {row["provider"]: row for row in rows}
-    harness.check(len(rows) == len(providers) == 5 and set(providers) == names,
-                  f"{context}: all five optional providers have distinct lazy state records")
+    harness.check(len(rows) == len(providers) == len(names) and set(providers) == names,
+                  f"{context}: all optional providers have distinct lazy state records")
     harness.check(all(row["status"] == "not_loaded" and row["tools"] == 0
                       and "executable" in row and row["executable"] is None
                       and "version" in row and row["version"] is None for row in rows),
@@ -250,8 +250,8 @@ def catalog(harness, mode, label):
                       for row in diagnostics if row["provider"] not in expected),
                   f"{mode}: unrelated providers remain unprobed after explicit loading")
     status, value, _ = harness.rpc("tools/list", modern=True)
-    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "request_finish", "await", "messages"],
-                  f"{mode}: public MCP catalog contains exactly list, code_mode, collab, request_finish, await and messages")
+    harness.check(status == 200 and [tool["name"] for tool in value["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
+                  f"{mode}: public MCP catalog contains exactly list, code_mode, collab, await and messages")
     inventory = harness.public_call("list")
     harness.check(len(inventory["clients"]) == 1
                   and inventory["clients"][0]["id"] == harness.client_id

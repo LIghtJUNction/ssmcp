@@ -52,6 +52,7 @@ fn deadlines_are_monotonic_and_expiry_stops_elapsed_at_the_deadline() {
     let wall = clock.now(json!({})).unwrap();
     assert_eq!(wall["deadline_clock"], "monotonic");
     assert_eq!(wall["wall_clock"], "UTC Unix epoch");
+    assert!(wall["utc_rfc3339"].as_str().unwrap().ends_with('Z'));
     assert!(wall["unix_ms"].as_u64().unwrap() >= 1_000_000_000_000);
     assert!(wall["monotonic_ms"].as_u64().unwrap() <= millis(clock.started.elapsed()));
     assert_eq!(receipt(late, false)["completion_permission"], false);
@@ -328,6 +329,10 @@ async fn malformed_time_requests_and_control_labels_never_admit_work() {
         json!({"duration_ms":1,"approved":true}),
         json!({"duration_ms":1,"label":"escape\u{1b}[2J"}),
         json!({"duration_ms":1,"label":"line\u{2028}break"}),
+        json!({"duration_ms":1,"deadline_unix_ms":0}),
+        json!({"op":"list","wait_ms":0}),
+        json!({"op":"list","timer_id":"timer_unknown"}),
+        json!({"op":"status","timer_id":"timer_unknown","deadline_unix_ms":0}),
     ] {
         assert!(clock.wait(arguments).await.is_err());
     }
@@ -461,4 +466,132 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
         .await;
     runtime.shutdown().await;
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn absolute_deadline_is_converted_once_and_owner_list_does_not_share_timers() {
+    let clock = Clock::new().unwrap();
+    let now = Instant::now();
+    let wall = 1_800_000_000_000;
+    let first = owner(7, "123", 'a');
+    let other = owner(7, "123", 'b');
+    let id = clock
+        .start_absolute(
+            first.clone(),
+            wall + 2500,
+            Some("deadline".into()),
+            now,
+            wall,
+        )
+        .unwrap();
+    clock
+        .start(other.clone(), None, Some("private other timer".into()), now)
+        .unwrap();
+    let value = clock
+        .list(&first, now + Duration::from_millis(1000))
+        .unwrap();
+    assert_eq!(value["active"].as_array().unwrap().len(), 1);
+    assert_eq!(value["active"][0]["timer_id"], id);
+    assert_eq!(value["active"][0]["remaining_ms"], 1500);
+    assert_eq!(value["active"][0]["deadline_unix_ms"], wall + 2500);
+    assert!(!value.to_string().contains("private other timer"));
+    assert_eq!(value["completion_permission"], false);
+    let value = clock
+        .list(&first, now + Duration::from_millis(3500))
+        .unwrap();
+    assert!(value["active"].as_array().unwrap().is_empty());
+    assert_eq!(value["recent"][0]["status"], "elapsed");
+    assert_eq!(value["recent"][0]["elapsed_ms"], 2500);
+    assert_eq!(value["recent"][0]["remaining_ms"], 0);
+    assert_eq!(
+        clock
+            .read(&first, &id, now + Duration::from_millis(3500))
+            .unwrap()
+            .0
+            .finished_age_ms,
+        Some(1000)
+    );
+    assert_eq!(
+        clock.list(&other, now).unwrap()["active"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        clock
+            .start_absolute(
+                first.clone(),
+                wall + MAX_DURATION_MS as i64 + 1,
+                None,
+                now,
+                wall
+            )
+            .is_err()
+    );
+    let past = clock
+        .start_absolute(first.clone(), wall - 5000, None, now, wall)
+        .unwrap();
+    assert_eq!(
+        clock.read(&first, &past, now).unwrap().0.status,
+        Status::Elapsed
+    );
+    // Neither later wall-clock corrections nor another timer's creation alter
+    // the retained deadline. Only the supplied monotonic observation advances it.
+    let later = clock
+        .start_absolute(first.clone(), wall + 10_000, None, now, wall - 1000)
+        .unwrap();
+    assert_eq!(
+        clock
+            .read(&first, &later, now + Duration::from_millis(1000))
+            .unwrap()
+            .0
+            .remaining_ms,
+        Some(10_000)
+    );
+    clock.close();
+    assert!(clock.list(&first, now).is_err());
+}
+
+#[tokio::test]
+async fn interval_and_timer_list_extend_the_existing_passive_tool_names() {
+    let clock = Clock::new().unwrap();
+    let value = clock
+        .now(
+            json!({"op":"interval", "start":{"rfc3339":"2026-11-20T23:59:59.999Z"},
+        "end":{"rfc3339":"2026-11-21T08:00:00.001+08:00"}}),
+        )
+        .unwrap();
+    assert_eq!(value["interval_ms"], 2);
+    assert_eq!(value["completion_permission"], false);
+    assert!(
+        clock
+            .now(json!({"op":"now","start":{"unix_ms":0}}))
+            .is_err()
+    );
+    assert!(clock.now(json!({"start":{"unix_ms":0}})).is_err());
+    assert!(
+        clock
+            .now(json!({"op":"interval","start":{"unix_ms":0},"timer_id":"forged"}))
+            .is_err()
+    );
+    let before = clock.wait(json!({"op":"list"})).await.unwrap();
+    assert!(before["active"].as_array().unwrap().is_empty());
+    let created = clock
+        .wait(json!({"op":"start","deadline_unix_ms":0,"label":"past deadline"}))
+        .await
+        .unwrap();
+    assert_eq!(created["status"], "elapsed");
+    let listed = clock.wait(json!({"op":"list"})).await.unwrap();
+    assert_eq!(listed["recent"][0]["timer_id"], created["timer_id"]);
+    assert_eq!(listed["recent"][0]["completion_permission"], false);
+    assert_eq!(
+        tools()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ssmcp.time.now", "ssmcp.time.wait"]
+    );
+    assert!(observation("ssmcp.time.now", &json!({"op":"interval"})).is_none());
+    assert!(observation("ssmcp.time.wait", &json!({"op":"list"})).is_none());
 }

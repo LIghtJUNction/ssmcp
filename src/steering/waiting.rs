@@ -116,10 +116,10 @@ impl Queue {
 impl Reservation {
     pub(crate) fn commit(
         &mut self,
-        response: crate::code_mode::reminders::Response<'_>,
+        response: super::Response<'_>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> (Vec<Value>, Option<crate::code_mode::reminders::Notice>) {
+    ) -> Vec<Value> {
         let mut state = self
             .queue
             .state
@@ -171,14 +171,10 @@ impl Reservation {
         } else {
             Vec::new()
         };
-        let notice =
-            state
-                .reminders
-                .finish(&response, !claimed.is_empty(), std::time::Instant::now());
         self.finished = true;
         drop(state);
         self.queue.wake_waiters();
-        (claimed, notice)
+        claimed
     }
 }
 
@@ -223,17 +219,12 @@ mod tests {
             .unwrap();
     }
 
-    fn response<'a>(
-        run: &'a str,
-        agent: Option<&'a str>,
-    ) -> crate::code_mode::reminders::Response<'a> {
-        crate::code_mode::reminders::Response {
+    fn response<'a>(run: &'a str, agent: Option<&'a str>) -> super::Response<'a> {
+        super::Response {
             client_id: "room",
             run_id: run,
             owner: "authenticated-owner",
             agent_id: agent,
-            replies: &[],
-            notice_budget: 0,
         }
     }
 
@@ -268,7 +259,7 @@ mod tests {
                 .is_empty()
         );
         let run = reservations[0].run_id.clone();
-        let (messages, _) = reservations[0].commit(response(&run, None), 8, MAX_DELIVERY_BYTES);
+        let messages = reservations[0].commit(response(&run, None), 8, MAX_DELIVERY_BYTES);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["text"], "real local request");
         assert!(
@@ -313,7 +304,6 @@ mod tests {
         assert!(
             reservation
                 .commit(response("old_wait", None), 8, MAX_DELIVERY_BYTES)
-                .0
                 .is_empty()
         );
         drop(replacement);
@@ -348,7 +338,6 @@ mod tests {
         assert!(
             reservation
                 .commit(response("bound", Some("agent_a")), 8, 0)
-                .0
                 .is_empty()
         );
         assert_eq!(
@@ -373,7 +362,6 @@ mod tests {
         assert!(
             reservation
                 .commit(response("waiting", None), 8, MAX_DELIVERY_BYTES)
-                .0
                 .is_empty()
         );
     }
