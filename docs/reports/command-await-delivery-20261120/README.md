@@ -2,7 +2,13 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-20 23:06 UTC）
+## 当前状态（截至 2026-11-20 23:41 UTC）
+
+固定 781、同一 `d2204375` build-only 回执的第四轮粘贴基线已通过：六场景和 Ctrl-V 步骤均退出 0，输入前后不变。每场景只有一次描述性观测；前三轮失败保留原归属。当前冻结工具为 R3，R2 作为历史保存。
+
+原作者正移植粘贴优化，尚无候选结果或 A/B；18 项定向验收、最终 P1 和正式发布继续待验证。[本次事实](paste-attempts-2333.json)引用[固定历史检查点](https://github.com/LIghtJUNction/ssmcp/blob/7b1ca2093a382b5bde5b7bbe288e39cd06276d6c/docs/reports/command-await-delivery-20261120/baseline-build-2253.json)。版本观察另列，不并入 PR #159 验收。
+
+## 历史状态（截至 2026-11-20 23:06 UTC）
 
 固定源码 [`781b87df`](https://github.com/LIghtJUNction/ssmcp/commit/781b87df1d364137b6885f17f631a3e9e991bd58) 的开发机五份构建产物已于 22:53:16.145 UTC 完成，回执状态为 `build_completed / build_only`；三个构建命令及产物保留、metadata、前后检查均完成。五项均为 Cargo `fresh=false`，回执中的实际链接输出、Cargo 对外产物和保留副本在字节数与 SHA256 上一致。此结论来自主审实际读取回执，未另行对五个二进制重算哈希。
 
@@ -472,3 +478,59 @@ Linux 完整原日志的独立复核确认了精确 checkout 与上述外层计�
 执行回执为 23,288 字节，SHA256 `23cf70065f3b4aa72beaeb45fefe0a6006da6fa5d5d1b4667249081db1348cb4`，进程退出 1；失败报告为 7,946 字节，SHA256 `510422922070d1e6c3d831c3a5d41e91812cfa980d21feb36c082baa194ffcd0`，错误为 `AssertionError: the real Next caller input is active`。17 条账户夹具前置断言已通过，但六场景步骤在前置等待失败，样本与帧数组均为空；Ctrl-V 未执行、Cargo 未调用，输入前后相同。这 17 条前置断言不计入尚未执行的 18 项定向验收。
 
 针对固定 781 源码和冻结六场景驱动 `1300d60939de4df574eb4c0d989bca1c2906a29873a8cd1e68cc7c1b3ae364c8` 的独立检查确认：explicit `member:next` 的 UI target 是 `next`，`native_recipient` 仍为 None。旧驱动要求 `target is None and native_recipient is None`，因此未通过前置判断。拟修正为 `target == 'next' and native_recipient is None`，同步派生 Ctrl-V 和相关哈希绑定；六场景、计时定义及时限保持，产品源码和本次五份产物无需重编。当前尚无后继驱动实际通过结论，也无粘贴基线、A/B、最终 P1 或正式发布结果。
+
+## 23:41 检查点：第四轮完整基线通过
+
+| 尝试 | 实际取得 | 停止点或完成范围 |
+| --- | --- | --- |
+| 1，退出 1 | 17 条账户夹具前置检查通过；0 样本、0 帧 | Next caller 就绪断言失败；Ctrl-V 未执行 |
+| 2，退出 1 | 前四场景 passed、4 帧；第五场景已 ready，状态仍为 running | 队列后检查收到 33,730 字节溢出产物；busy、Ctrl-V 未进入 |
+| 3，退出 1 | 前五场景 passed；63 条检查、5 帧 | busy 样本创建前 prefix 准备超时；Ctrl-V 未执行 |
+| 4，退出 0 | 六场景 passed，80 条检查、6 帧；Ctrl-V passed，31 条检查、1 帧 | 两步完成，输入不变；80/31 含账户夹具，不是单元测试数量 |
+
+四轮均未调用 Cargo，输入前后保持不变。第三轮只确认准备等待的完整标记与折叠预览未匹配，具体裁剪层未确认。R3 将同一 152 字节、2 ms 间隔输出行中的 marker 换序，并更新三个依赖哈希绑定；六场景、计时与时限不变。第四轮通过不改写前三失败，也不把静态核对算成执行。
+
+### 第四轮观测值
+
+| 场景 | 预期反馈 | ready_ms |
+| --- | --- | ---: |
+| 多行 2,738 B | 引用就绪 | 67.904495 |
+| 多行 64 KiB | 引用就绪 | 34.839222 |
+| 多行 4 MiB | 引用就绪 | 370.222459 |
+| 多行 4 MiB + 1 | 拒绝反馈 | 337.795869 |
+| 普通输入 16 KiB | 内联就绪 | 2439.160607 |
+| busy 多行 2,738 B | 引用就绪 | 43.186361 |
+| Ctrl-V 2,738 B | 引用就绪 | 50.066292 |
+
+每项 `n=1`，不是均值或 A/B。ready 从首次成功 PTY 写入前的时间点起，计入 VT 解码观察成本；4 MiB + 1 测的是拒绝反馈。busy 期间观察到 20 个输出 tick，前后 producer 均运行。Ctrl-V 使用 fake wl-paste 与真实单字节 `0x16`，同一构建的 identity 前后相等；其结果不代表 OS 剪贴板性能。未发送 Enter，也未测量 agent 递送。
+
+### 原回执与报告身份
+
+| 尝试 / 原件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| 1 / 回执 | 23,288 | `23cf70065f3b4aa72beaeb45fefe0a6006da6fa5d5d1b4667249081db1348cb4` |
+| 1 / 报告 | 7,946 | `510422922070d1e6c3d831c3a5d41e91812cfa980d21feb36c082baa194ffcd0` |
+| 2 / 回执 | 23,376 | `2af5fa2aa4548518480bfdb2bcdaa5954a7cab1db3ebbb6905dffe5cc7e50cf1` |
+| 2 / 报告 | 16,393 | `239b8156043699336cf4befe9cf07d3596b46d670c19aa66dd06c63244cca841` |
+| 3 / 回执 | 23,389 | `1e3428e06d9e4c178a13303aff02a59b912731c563283ea3aa84a55cd105bb17` |
+| 3 / 报告 | 18,666 | `ec4cdf40b88f80d2179922c20e5e20601f8a2c330087159c18eb965a02981adb` |
+| 4 / 回执 | 29,263 | `aefc6b8a20c8bec808057acae758c60fb44630c5912cb1851cced2a7dc2eef63` |
+| 4 / 六场景 | 19,660 | `7b7c9081616aca563d74efe883cd716e6be8da594e2671e283c904a7b096c64c` |
+| 4 / Ctrl-V | 13,333 | `df1d570ed1bbcf8e47d6a4e99c94d06357319ebc0ca22a9c5e9d3d82b05498d4` |
+
+### 当前 R3 冻结工具
+
+| 文件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| `e2e_paste_performance.py` | 32,716 | `ccdcc2fed932114125bf832be8370bc17ecfd082a18b95822dd2c3153190784e` |
+| `e2e_clipboard_paste_performance.py` | 14,624 | `d840813f8135dc5feece1f03e8daff1011726f1144f55ca0f92be271473cbe40` |
+| `run_frozen_paste.py` | 54,508 | `88b80f5dcf051d059439968b21443537152544bf33b84c44e0d1dbc9d49a3bfa` |
+| `manifest.json` | 3,538 | `4408cd67393d1f9e59cdb33637550e0874ff682d3669eb980757d19c999a3970` |
+
+R2 的完整历史 tuple 仍在 JSON；R3 为当前冻结组合。同源完整 queue 数组投影及 total、无 next_offset 检查，经[固定 781 接口](https://github.com/LIghtJUNction/ssmcp/blob/781b87df1d364137b6885f17f631a3e9e991bd58/src/client/interface.rs#L298-L339)静态核对，排除独立草稿正文；该审查不计作运行结果。
+
+### 版本观察（23:41 UTC）
+
+主审已读 v0.10.21 tag 对象 `30cd4949` 指向 [`147dae30`](https://github.com/LIghtJUNction/ssmcp/commit/147dae309cf37af578c0ac1d3aff2cb6008b0f48)，v0.10.22 的 create 事件指向 [`57d3f367`](https://github.com/LIghtJUNction/ssmcp/commit/57d3f36748f22996d3b161d7a0adf4757e0e4a4c)。另一条 [Release 44836598784](https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784) 通过 main 的 workflow_dispatch 运行；23:41 实读其 15 个已创建 job，其中 3 个检查失败、2 个仍运行，尚未取得完整发布结果。最新已发布版本仍为 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)。
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 的 781 仍为 draft；[781 与 57d 的比较](https://github.com/LIghtJUNction/ssmcp/compare/781b87df1d364137b6885f17f631a3e9e991bd58...57d3f36748f22996d3b161d7a0adf4757e0e4a4c)为 diverged（ahead 24、behind 22）。这些标签和另一候选的工作流不构成本轮验收或发布完成证明，最终版本及源码合并关系仍由原执行负责人协调。
