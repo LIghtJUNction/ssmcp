@@ -14,12 +14,15 @@ pub(in crate::client) struct Snapshot {
     help_scroll: usize,
     filter_editing: bool,
     filter_draft: String,
+    #[serde(default)]
+    groups: groups::ReloadGroups,
 }
 
 impl Snapshot {
     pub(in crate::client) fn validate(&self) -> Result<(), String> {
         self.canvas.validate()?;
         self.input_history.validate()?;
+        self.groups.validate()?;
         self.ui.validate()?;
         if self.filter_draft.len() > 4096 {
             return Err("reload log filter is too long".into());
@@ -72,6 +75,7 @@ impl State {
             help_scroll: self.conversation.help_scroll,
             filter_editing: self.filter_editing,
             filter_draft: self.filter_draft.clone(),
+            groups: self.conversation.groups.reload_snapshot(),
         }
     }
 
@@ -95,6 +99,9 @@ impl State {
         self.conversation.sessions = sessions;
         self.canvas_restore_reload(saved.canvas);
         self.conversation.reload_input_history = Some(saved.input_history);
+        if let Err(error) = self.conversation.groups.restore(saved.groups) {
+            self.notice = Some(error);
+        }
         self.help = saved.help;
         self.conversation.help_scroll = saved.help_scroll;
         self.filter_editing = saved.filter_editing;
@@ -237,6 +244,22 @@ mod tests {
         assert!(
             !after.conversation.restored,
             "the normal draft/receipt initialization must still run"
+        );
+    }
+
+    #[test]
+    fn reload_checkpoint_accepts_older_snapshots_without_group_configuration() {
+        let mut state = State::new(24, 80, &Ui::default());
+        let mut value = serde_json::to_value(state.chat_reload_snapshot()).unwrap();
+        value.as_object_mut().unwrap().remove("groups");
+        let restored: Snapshot = serde_json::from_value(value).unwrap();
+        restored.validate().unwrap();
+        let mut after = State::new(24, 80, &Ui::default());
+        after.chat_apply_reload_snapshot(restored, Vec::new());
+        assert!(after.conversation.groups.selected.is_empty());
+        assert_eq!(
+            serde_json::to_value(after.conversation.groups.reload_snapshot()).unwrap(),
+            serde_json::json!({"selected":[], "saved":{}})
         );
     }
 

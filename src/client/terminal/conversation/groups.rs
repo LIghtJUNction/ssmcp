@@ -3,10 +3,16 @@ use super::*;
 use crate::{client::messaging as transport, wire::messages::Recipient};
 use std::collections::BTreeMap;
 
+mod reload;
+pub(super) use reload::ReloadGroups;
+use reload::SavedRecipient;
+
 #[derive(Default)]
 pub(super) struct Selection {
     pub(super) selected: BTreeMap<String, Recipient>,
-    saved: BTreeMap<String, Vec<Recipient>>,
+    saved: BTreeMap<String, Vec<SavedRecipient>>,
+    restoring: Option<Vec<SavedRecipient>>,
+    restore_error: Option<String>,
     pending: Option<Pending>,
     retry: Option<Pending>,
     last: Option<String>,
@@ -95,6 +101,7 @@ impl State {
                 }
             }
         }
+        self.conversation.groups.cancel_restoration();
         self.notice = Some(format!(
             "{} selected · Space toggles · g composes · /group clear resets",
             self.conversation.groups.selected.len()
@@ -103,6 +110,11 @@ impl State {
     }
 
     pub(super) fn chat_group_compose(&mut self) {
+        if self.conversation.groups.restoring.is_some() {
+            self.notice =
+                Some("Saved selection is awaiting verification · /group list reviews it".into());
+            return;
+        }
         if self.conversation.groups.selected.is_empty() {
             self.notice = Some("Select process inboxes or threads with Space first".into());
             return;
@@ -152,6 +164,9 @@ impl State {
     }
 
     fn group_current_selection(&self) -> Result<Vec<Recipient>, String> {
+        if self.conversation.groups.restoring.is_some() {
+            return Err("Saved selection is awaiting current-directory verification · /group list reviews it".into());
+        }
         if self.conversation.groups.selected.is_empty() {
             return Err(
                 "The group is empty; open /sessions and use Space to select exact recipients"
@@ -299,8 +314,18 @@ impl State {
                 for recipient in self.conversation.groups.selected.values() {
                     let _ = writeln!(text, "{}\n{}\n", panel::safe_text(&recipient.display_name), recipient.id);
                 }
+                if let Some(restoring) = &self.conversation.groups.restoring {
+                    text.push_str("Saved selection waiting for current-directory verification:\n");
+                    for recipient in restoring {
+                        let _ = writeln!(text, "{}", recipient.id());
+                    }
+                    if let Some(error) = &self.conversation.groups.restore_error {
+                        let _ = writeln!(text, "\n{}", panel::safe_text(error));
+                    }
+                    text.push('\n');
+                }
                 if !self.conversation.groups.saved.is_empty() {
-                    text.push_str("Saved groups (this client session):\n");
+                    text.push_str("Saved groups (retained across reload):\n");
                     for (name, recipients) in &self.conversation.groups.saved {
                         let _ = writeln!(text, "{name} · {} recipients", recipients.len());
                     }
@@ -310,6 +335,7 @@ impl State {
             "clear" => {
                 if !rest.trim().is_empty() { return Err("Use /group clear without arguments".into()); }
                 self.conversation.groups.selected.clear();
+                self.conversation.groups.cancel_restoration();
                 self.notice = Some("Group selection cleared · submitted groups keep their original recipients".into());
             }
             "add" => {
@@ -324,13 +350,21 @@ impl State {
                     return Err("A group contains at most 32 exact recipients".into());
                 }
                 self.conversation.groups.selected = selected;
+                self.conversation.groups.cancel_restoration();
                 self.notice = Some(format!("{} exact recipients selected", self.conversation.groups.selected.len()));
             }
             "remove" => {
                 let ids: Vec<_> = rest.split_whitespace().collect();
                 if ids.is_empty() { return Err("Use /group remove EXACT_ID [EXACT_ID ...]".into()); }
                 for id in &ids { crate::wire::messages::parse_recipient(id)?; }
-                for id in ids { self.conversation.groups.selected.remove(id); }
+                if let Some(restoring) = &mut self.conversation.groups.restoring {
+                    restoring.retain(|recipient| !ids.contains(&recipient.id()));
+                    self.conversation.groups.restore_error = None;
+                    let snapshot = self.native_snapshot();
+                    self.chat_restore_group_selection(&snapshot);
+                } else {
+                    for id in ids { self.conversation.groups.selected.remove(id); }
+                }
                 self.notice = Some(format!("{} exact recipients selected", self.conversation.groups.selected.len()));
             }
             "save" | "use" => {
@@ -341,21 +375,19 @@ impl State {
                 if action == "save" {
                     let recipients = self.group_current_selection()?;
                     if !self.conversation.groups.saved.contains_key(name) && self.conversation.groups.saved.len() >= 16 {
-                        return Err("At most 16 named groups are retained in this client session".into());
+                        return Err("At most 16 named groups are retained".into());
                     }
-                    self.conversation.groups.saved.insert(name.into(), recipients);
-                    self.notice = Some(format!("Saved group {name} for this client session"));
+                    self.conversation.groups.saved.insert(name.into(), recipients.iter().map(SavedRecipient::from).collect());
+                    self.notice = Some(format!("Saved group {name} · retained across reload; identities rechecked before use"));
                 } else {
                     let recipients = self.conversation.groups.saved.get(name)
                         .ok_or("No saved group has that name")?.clone();
-                    for expected in &recipients {
-                        let current = self.group_recipient(&expected.id)?;
-                        if current.account.provider != expected.account.provider
-                            || current.account.subject != expected.account.subject {
-                            return Err("A saved recipient changed account; select it again explicitly".into());
-                        }
-                    }
-                    self.conversation.groups.selected = recipients.into_iter().map(|r| (r.id.clone(), r)).collect();
+                    let snapshot = self.native_snapshot();
+                    let selected = recipients.iter()
+                        .map(|expected| expected.resolve(&snapshot).map(|current| (current.id.clone(), current)))
+                        .collect::<Result<BTreeMap<_, _>, _>>()?;
+                    self.conversation.groups.selected = selected;
+                    self.conversation.groups.cancel_restoration();
                     self.notice = Some(format!("Selected group {name} · {} exact recipients", self.conversation.groups.selected.len()));
                 }
             }
@@ -366,6 +398,7 @@ impl State {
     }
 
     pub(super) fn chat_poll_groups(&mut self, snapshot: &Value) {
+        self.chat_restore_group_selection(snapshot);
         let Some(pending) = &self.conversation.groups.pending else {
             return;
         };
