@@ -705,7 +705,7 @@ impl EventView {
         let head = &mut self.events[group.start];
         head.group_expanded = expanded;
         head.group_automatic = false;
-        if expanded && head.group_panel.rows == 0 {
+        if expanded && head.group_panel.rows == 0 && head.group_panel.scroll.is_none() {
             head.group_panel.scroll = Some(0);
         }
         self.selected = Some(group.head);
@@ -1486,10 +1486,7 @@ impl EventView {
                 break;
             };
             if let Some(successor) = successor
-                && let Some(next) = self
-                    .events
-                    .iter_mut()
-                    .find(|next| next.id == successor)
+                && let Some(next) = self.events.iter_mut().find(|next| next.id == successor)
             {
                 next.group_expanded = event.group_expanded;
                 next.group_automatic = event.group_automatic;

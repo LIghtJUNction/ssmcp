@@ -1525,6 +1525,65 @@ async fn collect_question_answers(report: &CodeRunReport) {
     }
 }
 
+/// Recheck authority at the synchronous response boundary shared by interactive
+/// delivery and passive summary delivery. An eligibility snapshot is not authority.
+fn response_authorization(
+    report: &CodeRunReport,
+    target: &EligibleUserResponse,
+) -> Option<Authorization> {
+    let EligibleUserResponse {
+        session,
+        owner,
+        binding,
+        ..
+    } = target;
+    if !session.is_alive() {
+        report.run.finish_wait_state(
+            session.client_id(),
+            code_mode::user_wait::Outcome::Disconnected,
+            "connection_closed_before_delivery",
+        );
+        return None;
+    }
+    let Some(authorization) = report
+        .broker
+        .authenticate_now(&report.user, &report.access_token)
+    else {
+        report.run.finish_wait_state(
+            session.client_id(),
+            code_mode::user_wait::Outcome::AuthorizationRevoked,
+            "oauth_or_account_revoked_at_delivery_decision",
+        );
+        return None;
+    };
+    if !authorization.is_live()
+        || !authorization.permits(session)
+        || crate::bridge::owner(&report.user, &authorization).as_deref() != Ok(owner.as_str())
+    {
+        report.run.finish_wait_state(
+            session.client_id(),
+            code_mode::user_wait::Outcome::AuthorizationRevoked,
+            "access_revoked_before_delivery",
+        );
+        return None;
+    }
+    if let Some(binding) = binding
+        && (binding.owner.as_str() != owner.as_str()
+            || session
+                .collaboration
+                .bind(owner, &binding.agent_id, &binding.token)
+                .is_err())
+    {
+        report.run.finish_wait_state(
+            session.client_id(),
+            code_mode::user_wait::Outcome::BindingInvalid,
+            "agent_binding_invalid_at_delivery_decision",
+        );
+        return None;
+    }
+    Some(authorization)
+}
+
 fn commit_user_response(
     report: &CodeRunReport,
     response: Value,
@@ -1572,68 +1631,19 @@ fn commit_user_response_inner(
     // the real agent binding at this synchronous decision point for each target.
     // No await follows it. Queue revisions/receipts are atomic under their own
     // lock; the distinct authorization stores are not one global transaction.
-    for EligibleUserResponse {
-        session,
-        owner,
-        binding,
-        may_claim,
-        waiting,
-    } in eligible
-    {
-        if !session.is_alive() {
-            report.run.finish_wait_state(
-                session.client_id(),
-                code_mode::user_wait::Outcome::Disconnected,
-                "connection_closed_before_delivery",
-            );
-            continue;
-        }
-        let Some(authorization) = report
-            .broker
-            .authenticate_now(&report.user, &report.access_token)
-        else {
-            report.run.finish_wait_state(
-                session.client_id(),
-                code_mode::user_wait::Outcome::AuthorizationRevoked,
-                "oauth_or_account_revoked_at_delivery_decision",
-            );
+    for target in eligible {
+        let Some(authorization) = response_authorization(report, &target) else {
             continue;
         };
-        if !authorization.is_live()
-            || !authorization.permits(&session)
-            || crate::bridge::owner(&report.user, &authorization).as_deref() != Ok(owner.as_str())
-        {
-            report.run.finish_wait_state(
-                session.client_id(),
-                code_mode::user_wait::Outcome::AuthorizationRevoked,
-                "access_revoked_before_delivery",
-            );
-            continue;
-        }
-        if let Some(binding) = &binding
-            && (binding.owner != owner
-                || session
-                    .collaboration
-                    .bind(&owner, &binding.agent_id, &binding.token)
-                    .is_err())
-        {
-            report.run.finish_wait_state(
-                session.client_id(),
-                code_mode::user_wait::Outcome::BindingInvalid,
-                "agent_binding_invalid_at_delivery_decision",
-            );
-            continue;
-        }
+        tool_summary_notices.extend(tool_summaries::notices(report, &target));
+        let EligibleUserResponse {
+            session,
+            owner,
+            binding,
+            may_claim,
+            waiting,
+        } = target;
         let agent_id = binding.as_ref().map(|binding| binding.agent_id.as_str());
-        // Legacy providers may emit this reserved field without host stripping.
-        // Only this live connection's actual native capability can promote it.
-        if session.tool_summary_advertised() {
-            tool_summary_notices.extend(
-                report
-                    .run
-                    .tool_summary_notices(session.client_id(), agent_id),
-            );
-        }
         native_candidates.push((session.clone(), owner.clone(), binding.clone()));
         if answers_deferred.len() < 8
             && binding.is_some()
