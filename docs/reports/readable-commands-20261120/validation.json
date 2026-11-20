@@ -1,0 +1,247 @@
+{
+  "schema": "ssmcp.readable-commands-acceptance.v1",
+  "status": "passed",
+  "product_source_revision": "6f251674269875455cca148299f9ddcf97a8cb5c",
+  "product_source_tree": "e05c8e855b4a3423c4d9061fed07b2ee2115bbee",
+  "cloud_build": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "cargo_jobs": 1,
+    "global_serial_rustc": true,
+    "submodules": [
+      " db4206d3b74e37d57ff052948962f55514081d4b crates/zharness (v0.6.0)",
+      " 00d566eedcff7b2932e90b9dfeb44910c783d305 crates/zplugin (v0.3.1)",
+      " 9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e crates/ztuio (v0.1.0)",
+      " 94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a crates/zuse (94c8375)"
+    ],
+    "gates": [
+      {
+        "name": "fetch",
+        "exit_code": 0,
+        "seconds": 19.219,
+        "log_sha256": "45c76ccb475e3700baf1829c5e47f1bda78b89fbbb8f66fe7c1979ef7a6f264f"
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 4.981,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "library-compile",
+        "exit_code": 0,
+        "seconds": 335.185,
+        "log_sha256": "5977a2f83b3986bcd7fead387a9ab8b66ddc41031786b89772d3faec3fd4d795"
+      },
+      {
+        "name": "events",
+        "exit_code": 0,
+        "seconds": 5.501,
+        "log_sha256": "171a36f3f4490234995c31a43ed640e3e1dc13647f27f1ffb13f93a2ef4a20fd"
+      },
+      {
+        "name": "tool-groups",
+        "exit_code": 0,
+        "seconds": 0.358,
+        "log_sha256": "ccc682aaa53c31cb04d012194a79b086cf0b3c2c224597638cd6b6c073c5f70a"
+      },
+      {
+        "name": "binaries",
+        "exit_code": 0,
+        "seconds": 133.603,
+        "log_sha256": "fc017736a6a316077be03ef448c973d076c6945d346024f60e4d23f3c4d83f12"
+      }
+    ],
+    "unit_suites": [
+      {
+        "name": "events",
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "name": "tool-groups",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "unit_total_passed": 91,
+    "binaries_sha256": {
+      "fixture": "ed4e8214718d1eb7692a5a9caf6d60709fc2041e87ac28143ba1da408ff30932",
+      "ssmcp": "1f2258b1886634ade780908d190fb9174afaa1cf4ffc3de5f1342fc4055798e6",
+      "ssmcpd": "b57f4371358e6d4818949d71cc20b689d3867d6ccfaed65310d7efa215a49129",
+      "vt_snapshot": "7dbf1dcd25d4bef6551d6b18a457772e4ce1f7793808420c5255d21afae3ad30",
+      "ssmcp-frontend": "fd47b74d4e0638328ac5c47659ebf78dd37b0d31d46b14c3a70527261df78fed"
+    },
+    "receipt_sha256": "c223230d00e15aca8a5fa85fac6c06e1c65359e866d79c80e779431ae423488d"
+  },
+  "client_ui": {
+    "fixture_revision": "27636f6a4d2677764780a4a1a282b98d60ca794c",
+    "fixture_sha256": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+    "exit_code": 0,
+    "checks_passed": 56,
+    "seconds": 11.193,
+    "scope": "production compositor with sample events, isolated PTY; no live connection",
+    "receipt_sha256": "0e586aa9e1c5d43227e76890f790f5d3fe77c84b98112fbec04af613350ba4c6",
+    "visual_review": "passed",
+    "screenshots": [
+      {
+        "path": "preview-120-collapsed.png",
+        "sha256": "001d79283cdefae22c37a7998bc6f1435f48f3e1423c8270686103efb5dffc82"
+      },
+      {
+        "path": "preview-120-expanded.png",
+        "sha256": "7c40f93cc9e6ca5528ba5e5daaf80e2033670a97a0fdfbf02b64769c577be1e6"
+      }
+    ]
+  },
+  "native_pty": {
+    "fixture_revision": "ba379a1f105261eb0739cf281f0fa3e1cb6d97f9",
+    "fixture_sha256": "5a71ba09b2c4fcf7e4c25216140b510f9722c990945d1717f02b72580ff89885",
+    "status": "passed",
+    "checks_passed": 71,
+    "seconds": 9.143,
+    "widths": [
+      120,
+      48
+    ],
+    "rows": 40,
+    "native_commands": 3,
+    "transport": "production account router, native exec, owned PTY, independent VT",
+    "binaries_unchanged": true,
+    "models_started": false,
+    "real_user_credentials_used": false,
+    "existing_services_touched": false,
+    "receipt_sha256": "37d4d88ee4f65cc5aa3aef515678b431831c5ea6dee06d582d0c52627ea2964b",
+    "visual_review": "passed by implementation owner and independent parent reviewer",
+    "screenshots": [
+      {
+        "path": "commands-48.png",
+        "sha256": "d60cb591de10957986cb116742d87aa1658fb45d0229e0ac506756f6cb589aa8"
+      },
+      {
+        "path": "commands-120.png",
+        "sha256": "0a4112f4175a775a0638cf479316b3ad4ea695acbbab6c929fef8d06648114e5"
+      }
+    ]
+  },
+  "cloud_native_pty_attempt": {
+    "status": "environment_blocked",
+    "checks_before_runtime_launch": 17,
+    "reason": "The managed host rejects the NETLINK_ROUTE socket required by the mandatory bubblewrap network namespace.",
+    "isolation_unchanged": true,
+    "receipt_sha256": "b5decc6b853c7622a80c6e3f3ab6c0c83307910a1c47169fb35e458983f02a93"
+  },
+  "integration_limit": "Evidence is bound to the frozen product source above; a later merged release source needs its own integration validation.",
+  "native_build": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+    "source_tree": "e05c8e855b4a3423c4d9061fed07b2ee2115bbee",
+    "cargo_jobs": 1,
+    "global_serial_rustc": true,
+    "unit_suites": [
+      {
+        "name": "events",
+        "passed": 88,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "name": "tool-groups",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "unit_total_passed": 91,
+    "gates": [
+      {
+        "name": "submodules",
+        "exit_code": 0,
+        "seconds": 0.114,
+        "log_sha256": "a8b60c69cdcc3b689145f818c79c1fe2673413f1b1c36772c16e2307da4f338f"
+      },
+      {
+        "name": "fetch",
+        "exit_code": 0,
+        "seconds": 18.651,
+        "log_sha256": "0a91dbb337f7b4ca0966dd1e0e8b814bd7129d17f80014b1b39e0443e824c455"
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 6.726,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "library-compile",
+        "exit_code": 0,
+        "seconds": 143.447,
+        "log_sha256": "d8d06f5127d16d6b2ee7f01248976b03574e1154df8255b358150ddb4d03a10c"
+      },
+      {
+        "name": "events",
+        "exit_code": 0,
+        "seconds": 3.323,
+        "log_sha256": "ef844de7488dba6cfdb0e5cdc11f8db831af96d4d6cb45eabfe4f8ee79094a26"
+      },
+      {
+        "name": "tool-groups",
+        "exit_code": 0,
+        "seconds": 0.215,
+        "log_sha256": "03fb4cdd0bc72d1988efe7fd432d344ac029b5de44a8d7dece4bd7ff4c9f4eb5"
+      },
+      {
+        "name": "binaries",
+        "exit_code": 0,
+        "seconds": 66.653,
+        "log_sha256": "af25126d74766266a68eb8acde01c0f8c5914075ebb22c13cdd3395d2db2c04e"
+      },
+      {
+        "name": "readable-commands-pty",
+        "exit_code": 0,
+        "seconds": 9.639,
+        "log_sha256": "93a2c093c783e827705d7e67a40865b2be56151a92d39573e17892d4cb86ab81"
+      }
+    ],
+    "binaries_sha256": {
+      "fixture": "e67cfe9bc068df22afebb34829c607e62df09a7525c7b1c1a3f53f815c2e714d",
+      "ssmcp": "5cc83dff46a307bb17ab44f2f1fb756738fabe24f2f4828b55836a76cb6023c3",
+      "ssmcpd": "5b990ea53a3f38c6edb68d09c4df9b77815e94fad962ee73b06809f269933e7d",
+      "ssmcp-frontend": "9e698f5294d61ba5f352f3bd26c2b3152dd0bd017347a28f6bccb0c50ff37847",
+      "vt_snapshot": "9fd36e39a05fe285d13ef38745e5d5ff8bca589065083d90efeebd3ae5be89da"
+    },
+    "receipt_sha256": "71c890dc785177f851d60e56978f2656abfc807f9d360b016b36c4bc77aa0f7f"
+  },
+  "commands": {
+    "build": [
+      "cargo test --offline --locked --lib --no-run --message-format=json --jobs 1",
+      "cargo build --offline --locked --bins --example vt_snapshot --jobs 1 --message-format=json"
+    ],
+    "unit_filters": [
+      "client::terminal::events::",
+      "client::terminal::conversation::tests::tool_groups"
+    ],
+    "ui_fixture": "python3 scripts/e2e_client_ui.py --bin-dir BUILD_BIN_DIR --out NEW_OUTPUT_DIR",
+    "native_fixture": "python3 scripts/e2e_readable_commands.py --bin-dir BUILD_BIN_DIR --decoder VT_SNAPSHOT --fixture-binary LIBTEST_EXECUTABLE --source-revision 6f251674269875455cca148299f9ddcf97a8cb5c --out NEW_OUTPUT_DIR --font MONOSPACE_TTF"
+  },
+  "strict_clippy": {
+    "status": "passed",
+    "source_revision": "6f251674269875455cca148299f9ddcf97a8cb5c",
+    "command": [
+      "cargo",
+      "clippy",
+      "--workspace",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "build_jobs": 1,
+    "exit_code": 0,
+    "seconds": 476.607,
+    "log_sha256": "3d486c89eb4bef39ad1b2d93e077ffacf868135a1c5251807c90a6357e05c7d1",
+    "binaries_unchanged": true
+  },
+  "scope": "Frozen readable-command product source, its two committed PTY fixtures, and synthetic screenshots; later integrations require their own source-bound validation."
+}

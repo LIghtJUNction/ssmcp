@@ -383,6 +383,7 @@ impl Hub {
                     agent.capabilities = capabilities;
                 }
                 agent.renew();
+                agent.changed.send_replace(());
                 Ok(json!({"agent":agent.public(), "lease_ms":LEASE_MS}))
             }
             Request::Send {
@@ -604,7 +605,7 @@ impl Hub {
         Ok(receipt)
     }
 
-    async fn receive(
+    pub(crate) async fn receive(
         &self,
         owner: &str,
         id: &str,
@@ -683,6 +684,51 @@ impl Hub {
                 tokio::time::timeout_at(deadline.min(expires), changed.changed()).await
             {
                 return Err("agent membership or collaboration session ended; join again".into());
+            }
+        }
+    }
+
+    /// Observe a visible member without consuming messages or changing its task.
+    /// The watcher subscribes under the same lock used by update/remove.
+    pub(crate) async fn wait_status(
+        &self,
+        owner: &str,
+        id: &str,
+        token: &str,
+        target: &str,
+        statuses: &[String],
+        wait_ms: u64,
+    ) -> Result<Value, String> {
+        if statuses.is_empty() || statuses.len() > 16 || wait_ms > MAX_WAIT_MS {
+            return Err("invalid agent status wait bounds".into());
+        }
+        for status in statuses {
+            text(status, "status", 128, false)?;
+        }
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let mut changes = None;
+        loop {
+            let expires = {
+                let mut state = self.locked()?;
+                state.authenticated(owner, id, token)?.renew();
+                let agent = state
+                    .agents
+                    .get(target)
+                    .ok_or("await_unknown_target: agent is absent or its lease expired")?;
+                let matched = statuses.contains(&agent.status);
+                if matched || Instant::now() >= deadline {
+                    return Ok(json!({"agent":agent.public(),"matched":matched}));
+                }
+                if changes.is_none() {
+                    changes = Some(agent.changed.subscribe());
+                }
+                agent.expires
+            };
+            let changed = changes.as_mut().expect("subscribed status observer");
+            if let Ok(Err(_)) =
+                tokio::time::timeout_at(deadline.min(expires), changed.changed()).await
+            {
+                return Err("await_unknown_target: agent membership ended".into());
             }
         }
     }
@@ -768,5 +814,7 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX - LEASE_MS)
 }
 
+#[cfg(test)]
+mod await_tests;
 #[cfg(test)]
 mod tests;
