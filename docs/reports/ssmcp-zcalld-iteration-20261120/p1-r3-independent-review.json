@@ -1,0 +1,60 @@
+{
+  "schema": "ssmcp.message-audit.p1-r3.static-review.v1",
+  "verdict": "no concrete blocking issue found in reviewed fixed bytes",
+  "scope": "Static source/schema review and local AST/JSON/hash consistency checks only",
+  "reviewed": {
+    "wrapper": {
+      "path": "/workspace/scratch/642d3049388f/ssmcp-zcalld-delivery/p1-r3/run_final_p1_r3.py",
+      "sha256": "4550cf311ceca921a0b4e26031fdface4625765e8800832541ba46078915c38b"
+    },
+    "gate_helper": {
+      "path": "/workspace/scratch/642d3049388f/ssmcp-zcalld-delivery/p1-r3/gate_r3_binding.py",
+      "sha256": "18d13760eebc42e0d83aeffe6ec25e7f95dc6a25c532c86f6f5f5f2f6802e0c4"
+    },
+    "native_helper": {
+      "path": "/workspace/scratch/642d3049388f/ssmcp-zcalld-delivery/p1-r3/native_ef439_binding.py",
+      "sha256": "4ff65e1a7d731196ed47779350fca25e482615acd9a9aac0b4f74987061b6541"
+    },
+    "inventory": {
+      "path": "/workspace/scratch/642d3049388f/final24-controller/gate_inventory_r3.py",
+      "sha256": "b1a4c184c58ed32f8efaee34bb5e0636b07611a0dfd55643e1485fb16799c4fa"
+    },
+    "driver_sha256": "1ad9ec768988aa8aeba23ffbd97ce565908f88d6c64d3a14ebb64049c5bc782d",
+    "launcher_sha256": "99b78f15e4be1a0653289897a255f2cfdb2d92f547c67b1f5cec11769f73f833",
+    "untouched_previous_wrapper_sha256": "f1a6a0eff76ad3efb7e3427918721f46427a923eb6b0737fbe640a6c0aff0783"
+  },
+  "confirmed": [
+    "The helper matches the actual r3 stage argv, 34-stage order, 25 Rust selections, 19 integration target inventory, exact zuse ignored test, raw final-parent/child log schema, and 52 metadata/list/version probes.",
+    "Cargo metadata source and target directories, compiler package/source/kind/profile/executable records, library and integration binaries, workspace bridge helper before/after proofs and optimized products are cross-bound.",
+    "The ten native/desktop tool identities, before/after hashes, aliases, frozen code-mode runner and sole ordinary server_runtime SSMCP_NODE exception match the actual driver.",
+    "The actual launcher exit, launch, claim, source identity, gate run ID, ordered stdout, wrapper/jobs/Cargo paths and input hashes are required before product launch.",
+    "The accepted native JSON evidence matches ef439/be72, exact parents/gitlinks, 32 ordered stages, eight artifacts, 16 metadata and two compaction methods, and recorded private non-loopback peer fields.",
+    "validate_report, freeze_source, freeze_artifacts, successful_rows and passed_inputs are AST-identical to f1a6. Four provider requests, three execution receipts, both exact-size real VT cell captures, and before/after byte hashes remain required.",
+    "The wrapper copies evidence, runtime tools, artifacts and source into owned paths, binds source archives to Git objects and the passed build manifest, then rechecks original and frozen inputs before and after execution."
+  ],
+  "accepted_native_evidence": {
+    "archive_sha256": "bbbdcce805e23c5cc054708c810e7fe2aac30c3db4f4d3c7c8036588d1740109",
+    "report_sha256": "de2cdb6c1226b6e09fa4a563293b6985539a1efd20fc972d186a048551f6c218",
+    "manifest_sha256": "3b9c97790e500f60c09c6d1e9399614ee2a849c3d3797b3be9b61ac670a81589",
+    "revision": "ef4394ac0928cd53cda5f25862851465ca97f009",
+    "compat_revision": "be72b3aa3ef17032a360ea5b9a9d38fe40c4b622",
+    "scope": "Previously accepted unpublished development cohort; no new native gate run"
+  },
+  "handoff": {
+    "path": "/workspace/scratch/642d3049388f/ssmcp-zcalld-delivery/ssmcp-p1-r3-handoff-18d13760-20261120.zip",
+    "sha256": "f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9",
+    "member_count": 15,
+    "four_reviewed_code_member_hashes_match": true
+  },
+  "limitations": {
+    "cargo_run": false,
+    "driver_or_launcher_executed": false,
+    "product_or_model_run": false,
+    "synthetic_tests_rerun": false,
+    "actual_native_logs_and_binaries_reread": false,
+    "current_ssmcp_gate_passed_observed": false,
+    "current_p1_passed_observed": false,
+    "real_human_finish_permission": false,
+    "note": "This review is not a build, P1 acceptance or human finish approval. Actual completed r3 gate and launcher receipts remain required, and the existing seven synthetic contracts are not product evidence."
+  }
+}

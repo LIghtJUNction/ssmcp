@@ -1,0 +1,96 @@
+{
+  "source": "407084c4fcc582f5fef01b772de838f04e2d5484",
+  "evidence": [
+    {
+      "path": "/var/tmp/ssmcp-convergence-verification-20261120/release21-final-8-r3/candidate-gates.json",
+      "bytes": 807155,
+      "sha256": "97450a28c74a226a063ad29d887232da14bf74464f48dadd1718a447038909ed",
+      "keys": [
+        "cargo_metadata",
+        "checks",
+        "error",
+        "failed_stage",
+        "finished_at",
+        "library_artifact",
+        "library_binary",
+        "library_partition",
+        "library_sha256",
+        "library_test_names",
+        "probes",
+        "root_worktree",
+        "root_worktree_head",
+        "run_id",
+        "runtime_bindings",
+        "runtime_tools",
+        "script_sha256",
+        "source_archives",
+        "source_manifest",
+        "source_revision",
+        "started_at",
+        "status",
+        "template",
+        "template_sha256"
+      ],
+      "receipt": {
+        "source_revision": "407084c4fcc582f5fef01b772de838f04e2d5484",
+        "status": "failed",
+        "failed_stage": "library-private",
+        "error": "RuntimeError: library-private exited 101, log: /var/tmp/ssmcp-convergence-verification-20261120/release21-final-8-r3/logs/candidate2-library-private.log\nassertion failed: delivery_budget(&response) > 0\n\n\nfailures:\n    client::terminal::conversation::tests::explicit_diagnostics_start_in_logs_and_escape_restores_conversation\n    client::terminal::conversation::tests::sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results\n    client::terminal::conversation::tests::tool_groups::reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay\n    client::terminal::events::read_activity::tests::read_activity_navigation_canvas_positions_and_mouse_keep_original_ids\n    http::tests::saved_memory_and_requirements_share_the_frame_budget_before_claim\n\ntest result: FAILED. 1880 passed; 5 failed; 22 ignored; 0 measured; 4 filtered out; finished in 30.70s\n",
+        "finished_at": 1795190514.451014
+      }
+    },
+    {
+      "path": "/var/tmp/ssmcp-convergence-verification-20261120/release21-final-8-r3-launch/exit.json",
+      "bytes": 2701,
+      "sha256": "43e4fd6334151e2f4f40bdf429e9cb930a601a719a14fa7c10fd4f10fc6fee7a",
+      "keys": [
+        "command",
+        "environment",
+        "exclusive_target_lock",
+        "exit_code",
+        "finished_at",
+        "gate_receipt_sha256",
+        "gate_run_id",
+        "gate_status",
+        "hashes_after",
+        "hashes_before",
+        "input_paths",
+        "invocation_id",
+        "launcher_error",
+        "launcher_sha256",
+        "source_revision",
+        "started_at",
+        "status",
+        "umask",
+        "versions",
+        "worktree",
+        "worktree_head_after",
+        "worktree_status_after"
+      ],
+      "receipt": {
+        "source_revision": "407084c4fcc582f5fef01b772de838f04e2d5484",
+        "status": "failed",
+        "exit_code": 1,
+        "gate_status": "failed",
+        "gate_run_id": "a33dc2bcf98adca44816f9662ce717de",
+        "gate_receipt_sha256": "97450a28c74a226a063ad29d887232da14bf74464f48dadd1718a447038909ed",
+        "hashes_after": {
+          "cargo_config": "822715c915751e3ef1e6711a6716e7bc9e08845550337416568a1c80e7429ccd",
+          "cargo_lock": "09e852ddcdf27460b682ae75dbdf49f3ef783657bdff6de0015f3d81d8142e8e",
+          "driver": "1ad9ec768988aa8aeba23ffbd97ce565908f88d6c64d3a14ebb64049c5bc782d",
+          "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+        },
+        "worktree_head_after": "407084c4fcc582f5fef01b772de838f04e2d5484",
+        "worktree_status_after": "",
+        "finished_at": 1795190514.5076382,
+        "launcher_error": "AssertionError: gate did not pass"
+      }
+    },
+    {
+      "path": "/var/tmp/ssmcp-convergence-verification-20261120/release21-final-8-r3/logs/candidate2-library-private.log",
+      "bytes": 532524,
+      "sha256": "663ba3363b1ddd495a4de35db2547b46cf22c461907a919d836b2dca1da32b2b",
+      "failure_blocks": "\nfailures:\n\n---- client::terminal::conversation::tests::explicit_diagnostics_start_in_logs_and_escape_restores_conversation stdout ----\n\nthread 'client::terminal::conversation::tests::explicit_diagnostics_start_in_logs_and_escape_restores_conversation' (3921384) panicked at src/client/terminal/conversation.rs:5942:13:\nassertion failed: conversation.contains(\"cargo test --lib\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- client::terminal::conversation::tests::sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results stdout ----\n\nthread 'client::terminal::conversation::tests::sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results' (3921429) panicked at src/client/terminal/conversation.rs:5613:9:\nassertion failed: screen.contains(\"cargo test --lib\")\n\n---- client::terminal::conversation::tests::tool_groups::reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay stdout ----\n\nthread 'client::terminal::conversation::tests::tool_groups::reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay' (3921484) panicked at src/client/terminal/conversation/tests/tool_groups.rs:302:13:\nassertion `left == right` failed\n  left: Number(0)\n right: Number(11)\n\n---- client::terminal::events::read_activity::tests::read_activity_navigation_canvas_positions_and_mouse_keep_original_ids stdout ----\n\nthread 'client::terminal::events::read_activity::tests::read_activity_navigation_canvas_positions_and_mouse_keep_original_ids' (3921562) panicked at src/client/terminal/events/read_activity.rs:670:9:\nassertion `left == right` failed\n  left: [0, 1, 2, 3, 4]\n right: [0, 4]\n\n---- http::tests::saved_memory_and_requirements_share_the_frame_budget_before_claim stdout ----\n\nthread 'http::tests::saved_memory_and_requirements_share_the_frame_budget_before_claim' (3926026) panicked at src/http.rs:2240:9:\nassertion failed: delivery_budget(&response) > 0\n\n\nfailures:\n    client::terminal::conversation::tests::explicit_diagnostics_start_in_logs_and_escape_restores_conversation\n    client::terminal::conversation::tests::sidebar_sections_obey_configuration_and_diagnostic_filters_keep_results\n    client::terminal::conversation::tests::tool_groups::reload_tool_group_frame_preserves_display_fold_and_draft_without_native_replay\n    client::terminal::events::read_activity::tests::read_activity_navigation_canvas_positions_and_mouse_keep_original_ids\n    http::tests::saved_memory_and_requirements_share_the_frame_budget_before_claim\n\ntest result: FAILED. 1880 passed; 5 failed; 22 ignored; 0 measured; 4 filtered out; finished in 30.70s\n\n"
+    }
+  ]
+}
