@@ -118,6 +118,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Clear visible logs",
     },
     SlashCommand {
+        name: "/message",
+        description: "Choose a verified agent or account inbox for a native text message",
+    },
+    SlashCommand {
         name: "/paste",
         description: "Import clipboard text, image or desktop file selection",
     },
