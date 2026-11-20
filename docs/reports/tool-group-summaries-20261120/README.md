@@ -113,27 +113,29 @@ readable 套件只检查最终输入草稿文本与待发送队列为空；它�
 
 图片来自本候选的 PTY 字节，经 VT 解码后渲染；没有手工重画产品界面。宽屏与窄屏使用同一套真实交互。
 
+PNG 归档保留原目录 `docs/reports/tool-group-summaries-20261120/`；下列链接指向云盘 ZIP，括号中是该目录内的文件名。完整清单见 [归档清单](../generated-png-manifest-20261121.json)。
+
 | 核心摘要阶段 | 120 列 | 48 列 |
 | --- | --- | --- |
-| 首次摘要、折叠 | [查看](tool-summary-first-folded-120.png) | [查看](tool-summary-first-folded-48.png) |
-| 更新摘要、展开并滚动 | [查看](tool-summary-updated-expanded-120.png) | [查看](tool-summary-updated-expanded-48.png) |
-| 最终摘要、折叠 | [查看](tool-summary-final-folded-120.png) | [查看](tool-summary-final-folded-48.png) |
+| 首次摘要、折叠 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-first-folded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-first-folded-48.png`） |
+| 更新摘要、展开并滚动 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-updated-expanded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-updated-expanded-48.png`） |
+| 最终摘要、折叠 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-final-folded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-final-folded-48.png`） |
 
 | readable 命令阶段 | 120 列 | 48 列 |
 | --- | --- | --- |
-| 默认命令卡片 | [查看](readable/readable-commands-folded-120.png) | [查看](readable/readable-commands-folded-48.png) |
-| 展开后的命令开头 | [查看](readable/readable-commands-expanded-head-120.png) | [查看](readable/readable-commands-expanded-head-48.png) |
-| 展开的输出 | [查看](readable/readable-commands-expanded-output-120.png) | [查看](readable/readable-commands-expanded-output-48.png) |
-| 展开的源码尾部 | [查看](readable/readable-commands-expanded-source-tail-120.png) | [查看](readable/readable-commands-expanded-source-tail-48.png) |
+| 默认命令卡片 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-folded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-folded-48.png`） |
+| 展开后的命令开头 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-head-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-head-48.png`） |
+| 展开的输出 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-output-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-output-48.png`） |
+| 展开的源码尾部 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-source-tail-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `readable/readable-commands-expanded-source-tail-48.png`） |
 
 | 摘要与命令整合 | 120 列 | 48 列 |
 | --- | --- | --- |
-| 纯命令、用户明确折叠 | [查看](commands/exec-only/summary-commands-exec-only-folded-120.png) | [查看](commands/exec-only/summary-commands-exec-only-folded-48.png) |
-| 文件与命令混合、用户明确折叠 | [查看](commands/mixed/summary-commands-mixed-folded-120.png) | [查看](commands/mixed/summary-commands-mixed-folded-48.png) |
+| 纯命令、用户明确折叠 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `commands/exec-only/summary-commands-exec-only-folded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `commands/exec-only/summary-commands-exec-only-folded-48.png`） |
+| 文件与命令混合、用户明确折叠 | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `commands/mixed/summary-commands-mixed-folded-120.png`） | [查看](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `commands/mixed/summary-commands-mixed-folded-48.png`） |
 
-![展开后的摘要窗口与保留草稿](tool-summary-updated-expanded-120.png)
+[展开后的摘要窗口与保留草稿](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `tool-summary-updated-expanded-120.png`）
 
-![窄屏下明确折叠的混合摘要窗口](commands/mixed/summary-commands-mixed-folded-48.png)
+[窄屏下明确折叠的混合摘要窗口](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `commands/mixed/summary-commands-mixed-folded-48.png`）
 
 ## 6. 本轮修复的实际问题
 

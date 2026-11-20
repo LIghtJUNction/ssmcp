@@ -1,0 +1,127 @@
+{
+  "schema": "ssmcp.generated-artifact-locations.v1",
+  "repository": "LIghtJUNction/ssmcp",
+  "documentation_base_revision": "8148410bc51e1ae61369fae06d0898148521a983",
+  "historical_artifact_source_revision": "55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a",
+  "recorded_at_utc": "2026-11-20T17:12:39.967757+00:00",
+  "scope": "仅补充已移出 Git 历史的生成材料位置与校验范围；不重写原始证据，不重新运行产品测试，不改变历史成功或失败结论。",
+  "drive_folder": {
+    "id": "1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+    "url": "https://drive.google.com/drive/folders/1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9"
+  },
+  "png_manifest": {
+    "path": "generated-png-manifest-20261121.json",
+    "sha256": "2118e4f721c1dcd5cca9e7d30b952e70e915c02324b3f7a7a083cd52dc1cb1c3",
+    "file_count": 39,
+    "fields": [
+      "path",
+      "git_blob_sha1",
+      "sha256",
+      "bytes",
+      "width_px",
+      "height_px",
+      "source_url"
+    ],
+    "copied_without_changes_from_archive_manifest": true
+  },
+  "verification_notes": [
+    "39 张 PNG 逐项核对原 Git blob SHA-1 与 SHA-256；上传后的 ZIP 已实际下载，并与本地归档逐字节摘要一致。",
+    "另外三个 ZIP 仅重新计算本地文件 SHA-256，并核对云盘名称、大小、MIME 与父目录；没有下载云盘内容，不能据此声称远端内容已通过哈希校验。",
+    "归档内部保留原文件名和目录。原始 JSON 中的历史路径、提交和哈希没有改写。",
+    "云盘共享权限没有修改；链接本身不声明材料公开可访问。"
+  ],
+  "archives": [
+    {
+      "id": "historical_pngs",
+      "file_name": "ssmcp-generated-png-evidence-55056d3-20261120.zip",
+      "drive": {
+        "file_id": "1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj",
+        "url": "https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view",
+        "parent_folder_id": "1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+        "mime_type": "application/zip",
+        "metadata_size_bytes": 1770808
+      },
+      "local_file_bytes": 1770808,
+      "local_file_sha256": "901595a39482e38a30c622b115617e298058a5dabd61aa58efd97f15a2689988",
+      "original_repository_path_manifest": "generated-png-manifest-20261121.json",
+      "original_png_count": 39,
+      "original_png_bytes": 2061704,
+      "verification": {
+        "drive_metadata_checked": true,
+        "local_file_rehashed": true,
+        "remote_archive_downloaded": true,
+        "downloaded_archive_sha256": "901595a39482e38a30c622b115617e298058a5dabd61aa58efd97f15a2689988",
+        "downloaded_archive_matches_local": true,
+        "individual_png_git_blob_sha1_and_sha256_checked": true,
+        "png_bytes_modified": false
+      },
+      "scope": "Historical original PNG bytes from the recorded source commit; archived without image changes, not a new or final acceptance run."
+    },
+    {
+      "id": "native_ef439_gates32",
+      "file_name": "native-ef439-gates32-20261120.zip",
+      "original_repository_path": "docs/reports/ssmcp-zcalld-iteration-20261120/native-ef439-gates32-20261120.zip",
+      "drive": {
+        "file_id": "1OlScR20aKm_dZ4yLj-Z4tKYvzjmgMKj7",
+        "url": "https://drive.google.com/file/d/1OlScR20aKm_dZ4yLj-Z4tKYvzjmgMKj7/view",
+        "parent_folder_id": "1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+        "mime_type": "application/zip",
+        "metadata_size_bytes": 226264
+      },
+      "local_file_bytes": 226264,
+      "local_file_sha256": "bbbdcce805e23c5cc054708c810e7fe2aac30c3db4f4d3c7c8036588d1740109",
+      "verification": {
+        "drive_metadata_checked": true,
+        "local_file_rehashed": true,
+        "remote_archive_downloaded": false,
+        "downloaded_archive_sha256": null,
+        "downloaded_archive_matches_local": null
+      },
+      "scope": "Historical native ef439/be72 verification evidence; not a later source, official zcalld release, or final SSMCP acceptance."
+    },
+    {
+      "id": "p1_r3_prepared_controller",
+      "file_name": "ssmcp-p1-r3-handoff-18d13760-20261120.zip",
+      "original_repository_path": "artifacts/iteration-evidence-20261120/ssmcp-p1-r3-handoff-18d13760-20261120.zip",
+      "drive": {
+        "file_id": "19MHe3COB8lmSpX-28HCuSSVHUWq_VWsk",
+        "url": "https://drive.google.com/file/d/19MHe3COB8lmSpX-28HCuSSVHUWq_VWsk/view",
+        "parent_folder_id": "1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+        "mime_type": "application/zip",
+        "metadata_size_bytes": 76778
+      },
+      "local_file_bytes": 76778,
+      "local_file_sha256": "f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9",
+      "verification": {
+        "drive_metadata_checked": true,
+        "local_file_rehashed": true,
+        "remote_archive_downloaded": false,
+        "downloaded_archive_sha256": null,
+        "downloaded_archive_matches_local": null
+      },
+      "scope": "Prepared controller handoff; not a completed P1 product run."
+    },
+    {
+      "id": "final24_prepared_controller",
+      "file_name": "final24-controller-5da61c1d-prepared.zip",
+      "original_repository_path": "artifacts/iteration-evidence-20261120/final24-controller-5da61c1d-prepared.zip",
+      "drive": {
+        "file_id": "1KIRxKZ8lKaBxo77vL5W4rves4nZLQyX7",
+        "url": "https://drive.google.com/file/d/1KIRxKZ8lKaBxo77vL5W4rves4nZLQyX7/view",
+        "parent_folder_id": "1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+        "mime_type": "application/zip",
+        "metadata_size_bytes": 83543
+      },
+      "local_file_bytes": 83543,
+      "local_file_sha256": "f08d35dadc127158b44e296baf72cd47584e7ee808db963843ff82d855b67142",
+      "verification": {
+        "drive_metadata_checked": true,
+        "local_file_rehashed": true,
+        "remote_archive_downloaded": false,
+        "downloaded_archive_sha256": null,
+        "downloaded_archive_matches_local": null
+      },
+      "scope": "Prepared controller handoff and pure contract evidence; not completed 24-suite product acceptance."
+    }
+  ]
+}

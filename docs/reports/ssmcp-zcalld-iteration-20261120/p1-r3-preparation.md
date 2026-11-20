@@ -19,7 +19,7 @@ P1 保留原来的四次本地模拟 provider 请求、三个执行回执，以�
 | `native_ef439_binding.py` | `4ff65e1a7d731196ed47779350fca25e482615acd9a9aac0b4f74987061b6541` |
 | `gate_inventory_r3.py` | `b1a4c184c58ed32f8efaee34bb5e0636b07611a0dfd55643e1485fb16799c4fa` |
 
-[完整交接包](../../../artifacts/iteration-evidence-20261120/ssmcp-p1-r3-handoff-18d13760-20261120.zip)：76,778 字节，SHA-256 `f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9`。包内含运行清单、输入模板、代码、真实 driver/launcher 参考和逐文件清单。旧 `f1a6…` 控制器与旧归档保留。
+[完整交接包](https://drive.google.com/file/d/19MHe3COB8lmSpX-28HCuSSVHUWq_VWsk/view)：76,778 字节，SHA-256 `f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9`。包内含运行清单、输入模板、代码、真实 driver/launcher 参考和逐文件清单。旧 `f1a6…` 控制器与旧归档保留。
 
 ## 准备阶段的证据边界
 

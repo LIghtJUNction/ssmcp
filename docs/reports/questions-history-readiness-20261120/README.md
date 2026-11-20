@@ -28,7 +28,9 @@ Questions 和 InputHistory 现在等待精确成员进入本地 steering roster�
 
 ## 真实 PTY 截图
 
-[48 列归档恢复](archive-restored-48.png) · [120 列归档恢复](archive-restored-120.png)
+PNG 归档保留原目录 `docs/reports/questions-history-readiness-20261120/`；下列链接指向云盘 ZIP，括号中是该目录内的文件名。完整清单见 [归档清单](../generated-png-manifest-20261121.json)。
+
+[48 列归档恢复](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `archive-restored-48.png`） · [120 列归档恢复](https://drive.google.com/file/d/1rSdpBIFpEt7izp-hbq5RdwCJ5KyI-mDj/view)（归档内 `archive-restored-120.png`）
 
 两张图都来自 **ae8 产品 + 4221 夹具** 的实际 VT 单元格，展示恢复后的原历史、`ARCHIVE_RESTORED_CONTINUATION`、中文与输入框。它们是归档恢复证据，**不代表 407084c 或后续统一 Tools 组整合后的最终 UI 验收**。实现者与独立审阅者均已实际打开两图，内容仅为本地合成夹具；未包含用户参考图片。
 

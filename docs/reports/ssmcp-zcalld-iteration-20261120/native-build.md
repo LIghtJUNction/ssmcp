@@ -18,7 +18,7 @@
 
 ## 原始材料与校验
 
-压缩包 [native-ef439-gates32-20261120.zip](native-ef439-gates32-20261120.zip) 包含原始门禁报告、前后源码清单、metadata/compaction 逐项回执，以及摘要与 `SHA256SUMS`。打包没有改写原始 JSON。下载后可按以下摘要核对：
+压缩包 [native-ef439-gates32-20261120.zip](https://drive.google.com/file/d/1OlScR20aKm_dZ4yLj-Z4tKYvzjmgMKj7/view) 包含原始门禁报告、前后源码清单、metadata/compaction 逐项回执，以及摘要与 `SHA256SUMS`。打包没有改写原始 JSON。下载后可按以下摘要核对：
 
 | 文件 | SHA-256 |
 | --- | --- |
