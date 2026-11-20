@@ -110,8 +110,106 @@
       ],
       "exit_code": 0,
       "seconds": 8.769
+    },
+    {
+      "check": "workspace_serial",
+      "command": [
+        "cargo",
+        "test",
+        "--workspace",
+        "--locked",
+        "--offline",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 209.961
+    },
+    {
+      "check": "windows_cross_clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--target",
+        "x86_64-pc-windows-gnu",
+        "--locked",
+        "--offline",
+        "--lib",
+        "--bin",
+        "ssmcp",
+        "--test",
+        "release_client",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 374.561
     }
   ],
-  "full_workspace_and_windows_cross_clippy": "pending; separate receipts will record results",
-  "production_deployed": false
+  "production_deployed": false,
+  "checked_source_sha": "8a54a3f8500ce37724d6062bee7b4bc17f597d88",
+  "full_workspace": {
+    "serial_exit_code": 0,
+    "test_threads": 1,
+    "library_passed": 1521,
+    "library_failed": 0,
+    "library_ignored": 21,
+    "default_parallelism_exit_code": 101,
+    "default_parallelism_library_passed": 1514,
+    "default_parallelism_library_failed": 7,
+    "default_parallelism_library_ignored": 21,
+    "failures": [
+      "backend::playwright::tests::native_permission_request_stays_pending_until_an_explicit_response",
+      "backend::rpc::tests::discovery_has_one_reserved_slot_without_raising_the_native_call_limit",
+      "backend::rpc::tests::metadata_audit_keeps_native_arguments_results_and_pending_requests_intact",
+      "observer::tests::parallel_jobs_cancel_owned_children_and_reuse_observers",
+      "observer::tests::managed_pty_preserves_argv_color_exit_and_pipe_stdin",
+      "backend::shell::tests::large_output_keeps_the_full_artifact_after_releasing_the_live_tail",
+      "pty::tests::long_terminal_output_keeps_full_prefix_beyond_ring_capacity"
+    ],
+    "qualification": "Default concurrency produced seven timeout or PTY-launch failures on this host. The same unchanged source passed the complete workspace suite with one test thread. No test assertion, deadline, permission or official CI gate was relaxed; the exact environmental causes have not been isolated."
+  },
+  "windows_check_scope": "Strict cross-target Clippy for x86_64-pc-windows-gnu, library, client binary and release_client tests; not native Windows execution.",
+  "formal_six_platform_release": "not yet started at this evidence checkpoint",
+  "registry_dependencies": [
+    {
+      "package": "zplugin",
+      "version": "0.3.0",
+      "available": true,
+      "checksum": "ea2485a9c61ce94d77f52baf55dcad088a151a7c742125f7a7c1cfee6bd07b4e"
+    },
+    {
+      "package": "zharness",
+      "version": "0.5.0",
+      "available": true,
+      "checksum": "76dcd53a4d6ff3f64e6788eadc5d31ce2875e284d3793de7679070833c86b1e9"
+    },
+    {
+      "package": "ztuio",
+      "version": "0.1.0",
+      "available": true,
+      "checksum": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca"
+    },
+    {
+      "package": "zuse-computer",
+      "version": "0.1.0",
+      "available": true,
+      "checksum": "d8213abf0138ae60e79b92c51dcc2b0d7942f6c61edf96e00f86ac3a5d97d109"
+    }
+  ],
+  "retained_log_hashes": {
+    "workspace_all_tests.log": {
+      "sha256": "ead06a58072374b9dcc61bc17b9c3324dd21cec1958f4fbae5c84d52c2703a06",
+      "bytes": 462140
+    },
+    "workspace_serial.log": {
+      "sha256": "dd27228634e75a1a827a0321787b7e0aff6124939de0891895c1e41adb3e03f3",
+      "bytes": 611158
+    },
+    "windows_cross_clippy.log": {
+      "sha256": "57d62f524bbe585f125b0434a2c0bbaeb401fa6166f4a55d933a7c6a9206efcb",
+      "bytes": 6735
+    }
+  }
 }
