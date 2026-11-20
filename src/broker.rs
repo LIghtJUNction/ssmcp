@@ -1075,6 +1075,7 @@ impl Broker {
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
         let native_messages =
             registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
+        let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
         let mut capabilities = Vec::new();
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
@@ -1084,6 +1085,9 @@ impl Broker {
         }
         if native_messages {
             capabilities.push(wire::messages::CAPABILITY.into());
+        }
+        if version_notice_supported {
+            capabilities.push(wire::versions::CAPABILITY.into());
         }
         let login_code = if restricted {
             String::new()
@@ -1198,7 +1202,18 @@ impl Broker {
             } => Ok(()),
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
-            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities }).await?;
+            let version_notice = if version_notice_supported {
+                let published_client = match &self.client_downloads {
+                    Some(publisher) => tokio::time::timeout(Duration::from_secs(2), publisher.version_notice())
+                        .await.ok().flatten(),
+                    None => None,
+                };
+                Some(wire::versions::Notice {
+                    server_version: env!("CARGO_PKG_VERSION").into(),
+                    published_client,
+                })
+            } else { None };
+            wire::write_frame(&mut writer, &Frame::Ready { url: format!("{}/{resource}", self.public_url), login_code, login_expires_in, client_id:client_id.clone(), capabilities, version_notice }).await?;
             let mut next_id = 0u64;
             let mut delivered_runs = std::collections::VecDeque::<(String, Option<Authorization>)>::new();
             let mut dispatches: BillingQueue<DispatchReady> = FuturesUnordered::new();

@@ -308,6 +308,22 @@ pub(super) fn update_link_metrics(generation: u64, status: super::link_metrics::
     }
 }
 
+pub(super) fn set_connection_versions(versions: super::update::ConnectionVersions) {
+    if let Some(shared) = shared() {
+        let mut state = shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let notice = versions
+            .update_message()
+            .unwrap_or_else(|| versions.summary());
+        // Preserve a more urgent local recovery or authentication notice.
+        state.notice.get_or_insert(notice);
+        state.connection_versions = Some(versions);
+        state.dirty = true;
+    }
+}
+
 pub(super) fn set_logout_target(target: Option<(&str, &str)>) {
     if let Some(shared) = shared() {
         shared
@@ -662,6 +678,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "focus":if chat && state.conversation.logs_open && state.conversation.content_focus {"logs"} else if state.help {"help"} else if chat {if state.conversation.content_focus {"content"} else {"input"}} else if state.keyboard.logs || state.ui.layout == Layout::Logs {"logs"} else {"audit"},
         "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
+        "versions":state.connection_versions,
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
@@ -1257,6 +1274,7 @@ impl vt100::Callbacks for Replies {
 struct State {
     context_label: String,
     server_origin: Option<footer::Origin>,
+    connection_versions: Option<super::update::ConnectionVersions>,
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
@@ -1301,6 +1319,7 @@ impl State {
             events: events::EventView::new(),
             context_label: String::new(),
             server_origin: None,
+            connection_versions: None,
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
