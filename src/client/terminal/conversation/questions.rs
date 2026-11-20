@@ -70,7 +70,13 @@ impl State {
         self.question_editor()
             .map(|editor| editor.text().len())
             .ok_or_else(|| {
-                "No pending question to answer; press Esc to return to your draft".into()
+                self.ui
+                    .language
+                    .text(
+                        "No pending question to answer; press Esc to return to your draft",
+                        "暂无待回答问题；按 Esc 返回草稿",
+                    )
+                    .into()
             })
     }
 
@@ -144,9 +150,17 @@ impl State {
             Ok(question) => {
                 self.conversation.answers.remove(&id);
                 let mut record = format!("\n[ANSWER] #{id}\n");
-                let text = question.answer.as_deref().unwrap_or("Skipped by user");
+                let text = question
+                    .answer
+                    .as_deref()
+                    .unwrap_or(self.ui.language.text("Skipped by user", "用户已跳过"));
                 let history_error = if !self.preview {
-                    crate::client::interface::history::record("answer", text).err()
+                    // Keep generated history text independent of the display language.
+                    crate::client::interface::history::record(
+                        "answer",
+                        question.answer.as_deref().unwrap_or("Skipped by user"),
+                    )
+                    .err()
                 } else {
                     None
                 };
@@ -161,21 +175,29 @@ impl State {
                     self.question_open_selected();
                 }
                 self.notice = if let Some(error) = history_error {
-                    Some(format!(
-                        "Answer retained; history could not be saved: {error}"
+                    Some(localized!(
+                        self.ui.language,
+                        "Answer retained; history could not be saved: {error}",
+                        "回答已保留；无法保存历史：{error}"
                     ))
                 } else {
                     Some(
                         if skip {
-                            "Question skipped · your original draft is preserved"
+                            self.ui.language.text(
+                                "Question skipped · your original draft is preserved",
+                                "已跳过问题 · 保留原草稿",
+                            )
                         } else {
-                            "Answer saved · the agent can read it · original draft preserved"
+                            self.ui.language.text(
+                                "Answer saved · the agent can read it · original draft preserved",
+                                "回答已保存 · 智能体可以读取 · 保留原草稿",
+                            )
                         }
                         .into(),
                     )
                 };
             }
-            Err(error) => self.notice = Some(error),
+            Err(error) => self.notice = Some(self.ui.language.local_message(&error)),
         }
         self.dirty = true;
     }
@@ -220,7 +242,15 @@ impl State {
                             editor.backspace();
                         }
                         ch if !ch.is_control() && !editor.insert(&ch.to_string()) => {
-                            self.notice = Some("Answer limit reached · 16 KiB".into());
+                            self.notice = Some(
+                                self.ui
+                                    .language
+                                    .text(
+                                        "Answer limit reached · 16 KiB",
+                                        "已达到回答上限 · 16 KiB",
+                                    )
+                                    .into(),
+                            );
                         }
                         _ => {}
                     }
@@ -329,8 +359,10 @@ impl State {
         let width = self.geometry.left;
         let pending = queue::pending();
         let mut rows = vec![self.chat_line(
-            &format!(
+            &localized!(
+                self.ui.language,
                 "  Questions · {} waiting · agent work continues",
+                "  问题 · {} 项待回答 · 智能体继续工作",
                 pending.len()
             ),
             PanelTone::Heading,
@@ -338,7 +370,10 @@ impl State {
         )];
         if pending.is_empty() {
             rows.push(self.chat_line(
-                "  No questions waiting. Esc returns to your draft.",
+                self.ui.language.text(
+                    "  No questions waiting. Esc returns to your draft.",
+                    "  暂无待回答问题。Esc 返回草稿。",
+                ),
                 PanelTone::Muted,
                 width,
             ));
@@ -353,10 +388,11 @@ impl State {
         {
             rows.push(
                 self.chat_line(
-                    question
-                        .title
-                        .as_deref()
-                        .unwrap_or("  Reply below when ready"),
+                    question.title.as_deref().unwrap_or(
+                        self.ui
+                            .language
+                            .text("  Reply below when ready", "  准备好后在下方回答"),
+                    ),
                     PanelTone::Accent,
                     width,
                 ),
@@ -372,7 +408,10 @@ impl State {
                     ));
                 }
                 body.push(self.chat_line(
-                    "  Enter a number or write your own answer.",
+                    self.ui.language.text(
+                        "  Enter a number or write your own answer.",
+                        "  输入选项编号，或编写自己的回答。",
+                    ),
                     PanelTone::Muted,
                     width,
                 ));
@@ -387,14 +426,17 @@ impl State {
                 let question = &pending[index];
                 rows.push(self.chat_line(
                     &format!(
-                        "{} {}",
-                        if index == self.conversation.selected {
-                            "›"
-                        } else {
-                            " "
-                        },
-                        question.title.as_deref().unwrap_or("Question")
-                    ),
+                            "{} {}",
+                            if index == self.conversation.selected {
+                                "›"
+                            } else {
+                                " "
+                            },
+                            question
+                                .title
+                                .as_deref()
+                                .unwrap_or(self.ui.language.text("Question", "问题"))
+                        ),
                     if index == self.conversation.selected {
                         PanelTone::Accent
                     } else {

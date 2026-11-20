@@ -143,6 +143,18 @@ pub(crate) enum Layout {
 }
 
 impl Layout {
+    pub(crate) fn label(self, language: Language) -> &'static str {
+        language.text(
+            self.name(),
+            match self {
+                Self::Chat => "会话",
+                Self::Split => "拆分",
+                Self::Audit => "审计",
+                Self::Logs => "日志",
+            },
+        )
+    }
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Chat => "chat",

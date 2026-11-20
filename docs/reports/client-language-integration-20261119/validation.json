@@ -1,0 +1,115 @@
+{
+  "gate": {
+    "cwd": "/home/lightjunction/Documents/GITHUB/ssmcp/.worktrees/client-language-20261119",
+    "pid": 2599129,
+    "start_ticks": "6813479",
+    "head": "972f8e23bcbebc23d16c590e364eb0723ebeed66",
+    "source_before": "ca22d7963ea44f7a0714f21a790b5fa85a00bd5f6548db23528d415d80545b74",
+    "environment": {
+      "CARGO_TARGET_DIR": "/home/lightjunction/Documents/GITHUB/ssmcp/.worktrees/client-language-20261119/target",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_INCREMENTAL": "0"
+    },
+    "steps": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--check"
+        ],
+        "started_at": 1795132372.0177565,
+        "exit_code": 0,
+        "finished_at": 1795132374.0355372
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--lib",
+          "client::terminal"
+        ],
+        "started_at": 1795132374.0356743,
+        "exit_code": 0,
+        "finished_at": 1795132498.19371
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "started_at": 1795132498.2150285,
+        "exit_code": 0,
+        "finished_at": 1795132573.9064484
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "--bin",
+          "ssmcp"
+        ],
+        "started_at": 1795132573.9243472,
+        "exit_code": 0,
+        "finished_at": 1795132625.1725063
+      }
+    ],
+    "started_at": 1795132372.0176227,
+    "source_after": "ca22d7963ea44f7a0714f21a790b5fa85a00bd5f6548db23528d415d80545b74",
+    "finished_at": 1795132625.771272,
+    "exit_code": 0,
+    "binary": {
+      "path": "/home/lightjunction/Documents/GITHUB/ssmcp/.worktrees/client-language-20261119/target/debug/ssmcp",
+      "sha256": "b25ddc07542582f93c1d8e9487dc4ec43ac1c956fffceefa7cbe3bda259e1767",
+      "bytes": 111529016
+    }
+  },
+  "terminal": {
+    "passed": 296,
+    "failed": 0,
+    "ignored": 2,
+    "ignored_tests": [
+      "client::terminal::images::kitty::source_png::tests::measure_preparation_after_common_pixel_validation",
+      "client::terminal::tests::physical_output_multi_user_fixture"
+    ]
+  },
+  "pty": {
+    "binary": "/tmp/ssmcp-language-integration-20261119/ssmcp",
+    "sha256": "b25ddc07542582f93c1d8e9487dc4ec43ac1c956fffceefa7cbe3bda259e1767",
+    "scope": "owned PTYs with isolated preview config; no backend or real account",
+    "checks": [
+      "default_english_real_pty",
+      "immediate_chinese_private_atomic_save_preserves_other_sections",
+      "invalid_language_keeps_active_and_saved_language",
+      "chinese_survives_process_restart",
+      "switch_back_to_english_real_pty",
+      "english_survives_process_restart",
+      "failed_save_keeps_english_and_malformed_document",
+      "en_static_narrow_unicode_frames",
+      "zh_static_narrow_unicode_frames",
+      "machine_readable_show_stays_clean_toml"
+    ],
+    "exit_code": 0
+  },
+  "gate_log_sha256": "035926ba990196e93bb879847c46faa9b6838269d8ff5d0a5db959089316748e",
+  "pty_script_sha256": "a935eba85ac92e51e45e2e8a598e0cec20bff2a167072404905b55b16a492859",
+  "production_file_sha256": {
+    "src/client/terminal/conversation/help.rs": "a66f742f17b1e6514d254f3a61186102374aaf5257b9eb5edb0334454d88138d",
+    "src/client/terminal/sleep.rs": "5a67f7e9784797868cc2d38dc8037ab43c926910bd7dd9473bfa51ae00df8e4c"
+  },
+  "submodules": [
+    " 84e370450f1d047d43119bf81caf73f742ba6b0a crates/zharness (v0.5.0-1-g84e3704)",
+    " 3e758b5c21af1bad1cfaf10264b43fe15440e69c crates/zplugin (v0.3.0-2-g3e758b5)",
+    " 9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e crates/ztuio (v0.1.0)",
+    " c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41 crates/zuse (v0.1.0-5-gc0dbfda)"
+  ],
+  "report_added_after_source_freeze": true
+}

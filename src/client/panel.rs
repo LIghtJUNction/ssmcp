@@ -1,6 +1,7 @@
 //! Pure sidebar layout. The compositor alone owns terminal escape sequences.
 use super::{
     git_status::{FetchState, GitSnapshot, GitState},
+    language::{Language, localized},
     ui::{Panel, Ui},
 };
 use std::{
@@ -111,6 +112,7 @@ pub(super) fn render_configured(
     now: Instant,
     ui: &Ui,
 ) -> Vec<PanelLine> {
+    let language = ui.language;
     let panels = ui
         .panels
         .iter()
@@ -144,15 +146,23 @@ pub(super) fn render_configured(
         }
         let mut section = match panel {
             Panel::Agents | Panel::Queue => Vec::new(),
-            Panel::Controller => controller_lines(snapshot),
-            Panel::Tasks => task_lines(&snapshot.tasks, budget.min(10), now),
-            Panel::Progress => {
-                progress_lines(&snapshot.progress, budget.min(8), usize::from(width), now)
-            }
-            Panel::Git => git_lines(snapshot.git.as_deref(), budget.min(9), now),
-            Panel::History => {
-                history_lines(snapshot.git.as_deref(), budget, usize::from(width), now)
-            }
+            Panel::Controller => controller_lines(snapshot, language),
+            Panel::Tasks => task_lines(&snapshot.tasks, budget.min(10), now, language),
+            Panel::Progress => progress_lines(
+                &snapshot.progress,
+                budget.min(8),
+                usize::from(width),
+                now,
+                language,
+            ),
+            Panel::Git => git_lines(snapshot.git.as_deref(), budget.min(9), now, language),
+            Panel::History => history_lines(
+                snapshot.git.as_deref(),
+                budget,
+                usize::from(width),
+                now,
+                language,
+            ),
         };
         section.truncate(budget);
         if !rows.is_empty() && !section.is_empty() && rows.len() < available {
@@ -165,9 +175,12 @@ pub(super) fn render_configured(
         );
     }
     if rows.is_empty() && available > 0 {
-        rows.push(line("Ready", PanelTone::Accent));
+        rows.push(line(language.text("Ready", "就绪"), PanelTone::Accent));
         if available > 1 {
-            rows.push(line("F1 Help & appearance", PanelTone::Muted));
+            rows.push(line(
+                language.text("F1 Help & appearance", "F1 帮助与外观"),
+                PanelTone::Muted,
+            ));
         }
     }
     rows.resize_with(available, PanelLine::default);
@@ -185,7 +198,8 @@ pub(super) fn render(
     height: u16,
     now: Instant,
 ) -> Vec<PanelLine> {
-    let mut lines = controller_lines(snapshot);
+    let language = Language::English;
+    let mut lines = controller_lines(snapshot, language);
     lines.truncate(usize::from(height));
     let remaining = usize::from(height).saturating_sub(lines.len() + 1);
     if remaining > 0 {
@@ -199,7 +213,7 @@ pub(super) fn render(
     lines
 }
 
-fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
+fn controller_lines(snapshot: &PanelSnapshot, language: Language) -> Vec<PanelLine> {
     let active = !snapshot.controllers.is_empty();
     let controllers = if active {
         snapshot.controllers.iter().take(2).collect::<Vec<_>>()
@@ -207,48 +221,71 @@ fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
         snapshot.last_controller.iter().collect::<Vec<_>>()
     };
     let heading = if active {
-        format!("Controller · {} active", snapshot.controllers.len())
+        localized!(
+            language,
+            "Controller · {} active",
+            "控制方 · {} 项活动请求",
+            snapshot.controllers.len()
+        )
     } else if controllers.is_empty() {
-        "Controller".into()
+        language.text("Controller", "控制方").into()
     } else {
-        "Last controller".into()
+        language.text("Last controller", "最近控制方").into()
     };
     let mut rows = vec![line(heading, PanelTone::Heading)];
     if controllers.is_empty() {
-        rows.push(line("Model unknown", PanelTone::Muted));
-        rows.push(line("No controller metadata yet", PanelTone::Muted));
+        rows.push(line(
+            language.text("Model unknown", "模型未知"),
+            PanelTone::Muted,
+        ));
+        rows.push(line(
+            language.text("No controller metadata yet", "暂无控制方信息"),
+            PanelTone::Muted,
+        ));
         return rows;
     }
     for controller in controllers {
         if let Some(attribution) = &controller.attribution {
             rows.push(line(
-                format!("Account · {}", attribution.account.label()),
+                localized!(
+                    language,
+                    "Account · {}",
+                    "账号 · {}",
+                    attribution.account.label()
+                ),
                 PanelTone::Accent,
             ));
             rows.push(line(
                 match &attribution.agent {
-                    Some(agent) => format!(
+                    Some(agent) => localized!(
+                        language,
                         "Agent · {} · {}",
+                        "智能体 · {} · {}",
                         agent.name,
                         &agent.id[..agent.id.len().min(14)]
                     ),
-                    None => "Agent · not bound".into(),
+                    None => language.text("Agent · not bound", "智能体 · 未绑定").into(),
                 },
                 PanelTone::Normal,
             ));
             rows.push(line(
                 match &attribution.owner {
-                    Some(owner) => format!("Owner · {}", owner.label()),
-                    None => "Owner · unavailable".into(),
+                    Some(owner) => localized!(language, "Owner · {}", "所有者 · {}", owner.label()),
+                    None => language
+                        .text("Owner · unavailable", "所有者 · 不可用")
+                        .into(),
                 },
                 PanelTone::Muted,
             ));
         } else {
-            rows.push(line("Account · unverified", PanelTone::Muted));
+            rows.push(line(
+                language.text("Account · unverified", "账号 · 未验证"),
+                PanelTone::Muted,
+            ));
         }
         if !controller.operation.is_empty() {
             rows.push(line(
-                format!("Op · {}", controller.operation),
+                localized!(language, "Op · {}", "操作 · {}", controller.operation),
                 PanelTone::Normal,
             ));
         }
@@ -256,19 +293,23 @@ fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
         rows.push(line(
             identity
                 .and_then(|value| value.model.as_deref())
-                .unwrap_or("Model unknown"),
+                .unwrap_or(language.text("Model unknown", "模型未知")),
             PanelTone::Accent,
         ));
         rows.push(line(
             identity
                 .and_then(|value| value.name.as_deref())
-                .unwrap_or("Client unknown"),
+                .unwrap_or(language.text("Client unknown", "客户端未知")),
             PanelTone::Normal,
         ));
         let source = match identity.map(|value| value.source) {
-            Some(crate::wire::ControllerSource::CallerReported) => "caller-reported",
-            Some(crate::wire::ControllerSource::McpClientInfo) => "MCP clientInfo",
-            None => "metadata missing",
+            Some(crate::wire::ControllerSource::CallerReported) => {
+                language.text("caller-reported", "调用方自报")
+            }
+            Some(crate::wire::ControllerSource::McpClientInfo) => {
+                language.text("MCP clientInfo", "MCP 客户端信息")
+            }
+            None => language.text("metadata missing", "缺少元数据"),
         };
         rows.push(line(
             format!("{source} · #{}", controller.request_id),
@@ -277,7 +318,12 @@ fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
     }
     if snapshot.controllers.len() > 2 {
         rows.push(line(
-            format!("+{} other active requests", snapshot.controllers.len() - 2),
+            localized!(
+                language,
+                "+{} other active requests",
+                "另有 {} 项活动请求",
+                snapshot.controllers.len() - 2
+            ),
             PanelTone::Muted,
         ));
     }
@@ -286,13 +332,14 @@ fn controller_lines(snapshot: &PanelSnapshot) -> Vec<PanelLine> {
 
 #[cfg(test)]
 fn render_body(snapshot: &PanelSnapshot, width: u16, height: u16, now: Instant) -> Vec<PanelLine> {
+    let language = Language::English;
     let width = usize::from(width);
     let height = usize::from(height);
     if height == 0 {
         return Vec::new();
     }
     let git_budget = (height / 3).clamp(2, 10).min(height);
-    let git = git_lines(snapshot.git.as_deref(), git_budget, now);
+    let git = git_lines(snapshot.git.as_deref(), git_budget, now, language);
     let history_minimum = snapshot
         .git
         .as_deref()
@@ -318,17 +365,24 @@ fn render_body(snapshot: &PanelSnapshot, width: u16, height: u16, now: Instant) 
         top_budget.saturating_sub(4).min(8)
     };
     let task_budget = top_budget.saturating_sub(progress_budget);
-    let mut lines = task_lines(&snapshot.tasks, task_budget, now);
+    let mut lines = task_lines(&snapshot.tasks, task_budget, now, language);
     lines.extend(progress_lines(
         &snapshot.progress,
         progress_budget,
         width,
         now,
+        language,
     ));
     lines.truncate(top_budget);
     append_section(&mut lines, git, width, height);
     let history_budget = height.saturating_sub(lines.len() + usize::from(!lines.is_empty()));
-    let history = history_lines(snapshot.git.as_deref(), history_budget, width, now);
+    let history = history_lines(
+        snapshot.git.as_deref(),
+        history_budget,
+        width,
+        now,
+        language,
+    );
     append_section(&mut lines, history, width, height);
     lines.truncate(height);
     lines.resize_with(height, PanelLine::default);
@@ -356,17 +410,30 @@ fn line(text: impl Into<String>, tone: PanelTone) -> PanelLine {
     }
 }
 
-fn task_lines(tasks: &[TaskView], budget: usize, now: Instant) -> Vec<PanelLine> {
+fn task_lines(
+    tasks: &[TaskView],
+    budget: usize,
+    now: Instant,
+    language: Language,
+) -> Vec<PanelLine> {
     if budget == 0 {
         return Vec::new();
     }
     let mut lines = vec![line(
-        format!("Tasks · {} running", tasks.len()),
+        localized!(
+            language,
+            "Tasks · {} running",
+            "任务 · {} 项运行中",
+            tasks.len()
+        ),
         PanelTone::Heading,
     )];
     if tasks.is_empty() {
         if budget > 1 {
-            lines.push(line("No running tasks", PanelTone::Muted));
+            lines.push(line(
+                language.text("No running tasks", "暂无运行中的任务"),
+                PanelTone::Muted,
+            ));
         }
         return lines;
     }
@@ -395,7 +462,12 @@ fn task_lines(tasks: &[TaskView], budget: usize, now: Instant) -> Vec<PanelLine>
     }
     if tasks.len() > shown && lines.len() < budget {
         lines.push(line(
-            format!("+{} more running", tasks.len() - shown),
+            localized!(
+                language,
+                "+{} more running",
+                "另有 {} 项运行中",
+                tasks.len() - shown
+            ),
             PanelTone::Accent,
         ));
     }
@@ -407,11 +479,15 @@ fn progress_lines(
     budget: usize,
     width: usize,
     now: Instant,
+    language: Language,
 ) -> Vec<PanelLine> {
     if progress.is_empty() || budget == 0 {
         return Vec::new();
     }
-    let mut lines = vec![line("Native progress", PanelTone::Heading)];
+    let mut lines = vec![line(
+        language.text("Native progress", "原生进度"),
+        PanelTone::Heading,
+    )];
     for update in progress.iter().take(2) {
         if lines.len() + 2 > budget {
             break;
@@ -422,7 +498,7 @@ fn progress_lines(
             .map(|m| format!("{} · {m}", update.source))
             .unwrap_or_else(|| update.source.clone());
         lines.push(line(title, PanelTone::Normal));
-        let (detail, complete) = progress_text(update, width);
+        let (detail, complete) = progress_text(update, width, language);
         lines.push(line(
             detail,
             if complete {
@@ -434,7 +510,7 @@ fn progress_lines(
         let age = now.saturating_duration_since(update.updated);
         if age >= Duration::from_secs(5) && lines.len() < budget {
             lines.push(line(
-                format!("updated {} ago", elapsed(age)),
+                localized!(language, "updated {} ago", "{} 前更新", elapsed(age)),
                 PanelTone::Muted,
             ));
         }
@@ -442,7 +518,7 @@ fn progress_lines(
     lines
 }
 
-fn progress_text(update: &ProgressView, width: usize) -> (String, bool) {
+fn progress_text(update: &ProgressView, width: usize, language: Language) -> (String, bool) {
     let value = update.value.filter(|v| v.is_finite() && *v >= 0.0);
     let total = update.total.filter(|v| v.is_finite() && *v > 0.0);
     if let Some((value, total)) = value.zip(total).filter(|(v, t)| v <= t) {
@@ -461,27 +537,47 @@ fn progress_text(update: &ProgressView, width: usize) -> (String, bool) {
     }
     (
         value
-            .map(|v| format!("{v} · total unknown"))
-            .unwrap_or_else(|| "total unknown".into()),
+            .map(|v| localized!(language, "{v} · total unknown", "{v} · 总量未知"))
+            .unwrap_or_else(|| language.text("total unknown", "总量未知").into()),
         false,
     )
 }
 
-fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec<PanelLine> {
+fn git_lines(
+    snapshot: Option<&GitSnapshot>,
+    budget: usize,
+    now: Instant,
+    language: Language,
+) -> Vec<PanelLine> {
     if budget == 0 {
         return Vec::new();
     }
     let mut lines = vec![line("Git", PanelTone::Heading)];
     let Some(git) = snapshot else {
-        lines.push(line("Status pending", PanelTone::Muted));
+        lines.push(line(
+            language.text("Status pending", "等待状态"),
+            PanelTone::Muted,
+        ));
         lines.truncate(budget);
         return lines;
     };
     let state = match git.status {
-        GitState::Checking => Some(("Checking repository", PanelTone::Muted)),
-        GitState::NotRepository => Some(("Not a repository", PanelTone::Muted)),
-        GitState::Unavailable => Some(("Git unavailable", PanelTone::Warning)),
-        GitState::Error => Some(("Status unavailable", PanelTone::Warning)),
+        GitState::Checking => Some((
+            language.text("Checking repository", "正在检查仓库"),
+            PanelTone::Muted,
+        )),
+        GitState::NotRepository => Some((
+            language.text("Not a repository", "不是 Git 仓库"),
+            PanelTone::Muted,
+        )),
+        GitState::Unavailable => Some((
+            language.text("Git unavailable", "Git 不可用"),
+            PanelTone::Warning,
+        )),
+        GitState::Error => Some((
+            language.text("Status unavailable", "状态不可用"),
+            PanelTone::Warning,
+        )),
         GitState::Ready => None,
     };
     if let Some((state, tone)) = state {
@@ -492,9 +588,19 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
     if git.stale && previous_repository {
         let age = git
             .observed_at
-            .map(|at| format!(" · {} old", elapsed(now.saturating_duration_since(at))))
+            .map(|at| {
+                localized!(
+                    language,
+                    " · {} old",
+                    " · {} 前的记录",
+                    elapsed(now.saturating_duration_since(at))
+                )
+            })
             .unwrap_or_default();
-        lines.push(line(format!("Last known state{age}"), PanelTone::Warning));
+        lines.push(line(
+            localized!(language, "Last known state{age}", "最近已知状态{age}"),
+            PanelTone::Warning,
+        ));
     }
     if git.status == GitState::Ready || (git.stale && previous_repository) {
         let branch = git
@@ -502,24 +608,29 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
             .as_deref()
             .map(str::to_owned)
             .or_else(|| {
-                git.head
-                    .as_deref()
-                    .map(|v| format!("detached {}", v.chars().take(8).collect::<String>()))
+                git.head.as_deref().map(|v| {
+                    localized!(
+                        language,
+                        "detached {}",
+                        "分离状态 {}",
+                        v.chars().take(8).collect::<String>()
+                    )
+                })
             })
-            .unwrap_or_else(|| "Branch unavailable".into());
+            .unwrap_or_else(|| language.text("Branch unavailable", "分支不可用").into());
         lines.push(line(branch, PanelTone::Accent));
         if git.conflicts > 0 {
             lines.push(line(
-                format!("{} conflicts", git.conflicts),
+                localized!(language, "{} conflicts", "{} 项冲突", git.conflicts),
                 PanelTone::Error,
             ));
         }
         if git.staged == 0 && git.unstaged == 0 && git.untracked == 0 && git.conflicts == 0 {
             lines.push(line(
                 if git.stale {
-                    "Previously clean"
+                    language.text("Previously clean", "上次工作区干净")
                 } else {
-                    "Clean working tree"
+                    language.text("Clean working tree", "工作区干净")
                 },
                 if git.stale {
                     PanelTone::Muted
@@ -529,40 +640,80 @@ fn git_lines(snapshot: Option<&GitSnapshot>, budget: usize, now: Instant) -> Vec
             ));
         } else {
             lines.push(line(
-                format!(
+                localized!(
+                    language,
                     "stage {} · work {} · new {}",
-                    git.staged, git.unstaged, git.untracked
+                    "暂存 {} · 工作区 {} · 新增 {}",
+                    git.staged,
+                    git.unstaged,
+                    git.untracked
                 ),
                 PanelTone::Normal,
             ));
         }
         if let Some((ahead, behind)) = git.ahead.zip(git.behind) {
             lines.push(line(
-                format!("↑{ahead} ahead · ↓{behind} behind"),
+                localized!(
+                    language,
+                    "↑{ahead} ahead · ↓{behind} behind",
+                    "↑领先 {ahead} · ↓落后 {behind}"
+                ),
                 PanelTone::Muted,
             ));
         }
-        let remote = git.fetch.remote.as_deref().unwrap_or("upstream");
+        let remote = git
+            .fetch
+            .remote
+            .as_deref()
+            .unwrap_or(language.text("upstream", "上游"));
         let (fetch, tone) = match git.fetch.state {
-            FetchState::Disabled => ("Fetch off".into(), PanelTone::Muted),
+            FetchState::Disabled => (
+                language.text("Fetch off", "自动获取已关闭").into(),
+                PanelTone::Muted,
+            ),
             FetchState::Waiting => (
-                format!(
+                localized!(
+                    language,
                     "Fetch every {}",
+                    "每 {} 获取一次",
                     elapsed(Duration::from_secs(git.fetch.interval_seconds))
                 ),
                 PanelTone::Muted,
             ),
-            FetchState::Running => (format!("Fetching {remote}"), PanelTone::Accent),
+            FetchState::Running => (
+                localized!(language, "Fetching {remote}", "正在获取 {remote}"),
+                PanelTone::Accent,
+            ),
             FetchState::Fresh => {
                 let age = git
                     .fetch
                     .last_success_at
-                    .map(|at| format!(" · {} ago", elapsed(now.saturating_duration_since(at))))
+                    .map(|at| {
+                        localized!(
+                            language,
+                            " · {} ago",
+                            " · {} 前",
+                            elapsed(now.saturating_duration_since(at))
+                        )
+                    })
                     .unwrap_or_default();
-                (format!("Fetched {remote}{age}"), PanelTone::Muted)
+                (
+                    localized!(language, "Fetched {remote}{age}", "已获取 {remote}{age}"),
+                    PanelTone::Muted,
+                )
             }
-            FetchState::Failed => ("Fetch failed · retry scheduled".into(), PanelTone::Warning),
-            FetchState::NoUpstream => ("Fetch needs an upstream".into(), PanelTone::Muted),
+            FetchState::Failed => (
+                language
+                    .text("Fetch failed · retry scheduled", "获取失败 · 已安排重试")
+                    .into(),
+                PanelTone::Warning,
+            ),
+            FetchState::NoUpstream => (
+                language
+                    .text("Fetch needs an upstream", "获取需要上游分支")
+                    .into(),
+                PanelTone::Muted,
+            ),
         };
         if git.fetch.state != FetchState::Disabled {
             lines[0] = line(
@@ -597,6 +748,7 @@ fn history_lines(
     budget: usize,
     width: usize,
     now: Instant,
+    language: Language,
 ) -> Vec<PanelLine> {
     let Some(git) = snapshot.filter(|git| show_history(git)) else {
         return Vec::new();
@@ -610,9 +762,9 @@ fn history_lines(
         || (history.stale && history.checked_at.is_some());
     let mut rows = vec![line(
         if stale {
-            "Recent commits · stale"
+            language.text("Recent commits · stale", "最近提交 · 旧快照")
         } else {
-            "Recent commits"
+            language.text("Recent commits", "最近提交")
         },
         if stale {
             PanelTone::Warning
@@ -621,15 +773,18 @@ fn history_lines(
         },
     )];
     if git.status == GitState::Ready && !git.stale && git.unborn && git.head.is_none() {
-        rows.push(line("No commits yet", PanelTone::Muted));
+        rows.push(line(
+            language.text("No commits yet", "暂无提交"),
+            PanelTone::Muted,
+        ));
         return rows;
     }
     if git.head.is_none() || history.head != git.head {
         rows.push(line(
             if history.error.is_some() {
-                "History unavailable"
+                language.text("History unavailable", "历史不可用")
             } else {
-                "History pending for HEAD"
+                language.text("History pending for HEAD", "等待当前 HEAD 的历史")
             },
             if history.error.is_some() {
                 PanelTone::Warning
@@ -642,11 +797,11 @@ fn history_lines(
     if history.commits.is_empty() {
         rows.push(line(
             if history.error.is_some() {
-                "History unavailable"
+                language.text("History unavailable", "历史不可用")
             } else if history.stale {
-                "Loading recent commits"
+                language.text("Loading recent commits", "正在加载最近提交")
             } else {
-                "No history returned"
+                language.text("No history returned", "没有返回历史")
             },
             if history.error.is_some() {
                 PanelTone::Warning
@@ -658,11 +813,19 @@ fn history_lines(
     }
     let shown = history.commits.len().min(5).min((budget - 1) / 2);
     if shown == 0 {
-        rows.push(line("Expand to show commits", PanelTone::Muted));
+        rows.push(line(
+            language.text("Expand to show commits", "展开以显示提交"),
+            PanelTone::Muted,
+        ));
         return rows;
     }
     if !stale && shown < history.commits.len().min(5) {
-        rows[0].text = format!("Recent commits · {shown}/{}", history.commits.len().min(5));
+        rows[0].text = localized!(
+            language,
+            "Recent commits · {shown}/{}",
+            "最近提交 · {shown}/{}",
+            history.commits.len().min(5)
+        );
     }
     let observed_now = history
         .observed_at_unix
@@ -681,11 +844,16 @@ fn history_lines(
             format!(
                 "{} · {}",
                 commit.short_hash,
-                commit_age(commit.committed_at_unix, observed_now)
+                commit_age(commit.committed_at_unix, observed_now, language)
             ),
             PanelTone::Muted,
         ));
-        for subject in wrap_subject(&commit.subject, width.saturating_sub(2), subject_rows) {
+        for subject in wrap_subject(
+            &commit.subject,
+            width.saturating_sub(2),
+            subject_rows,
+            language,
+        ) {
             rows.push(line(format!("  {subject}"), PanelTone::Normal));
         }
     }
@@ -693,9 +861,9 @@ fn history_lines(
     rows
 }
 
-fn commit_age(committed_at_unix: i64, now_unix: Option<i64>) -> String {
+fn commit_age(committed_at_unix: i64, now_unix: Option<i64>, language: Language) -> String {
     let Some(now) = now_unix else {
-        return "time unknown".into();
+        return language.text("time unknown", "时间未知").into();
     };
     let delta = now.saturating_sub(committed_at_unix);
     let seconds = delta.unsigned_abs();
@@ -709,21 +877,21 @@ fn commit_age(committed_at_unix: i64, now_unix: Option<i64>) -> String {
         format!("{}d", seconds / 86400)
     };
     if delta < 0 {
-        format!("in {age}")
+        localized!(language, "in {age}", "{age} 后")
     } else {
-        format!("{age} ago")
+        localized!(language, "{age} ago", "{age} 前")
     }
 }
 
 /// Sanitize the whole subject before wrapping, so a split cannot conceal a secret.
-fn wrap_subject(subject: &str, width: usize, max_lines: usize) -> Vec<String> {
+fn wrap_subject(subject: &str, width: usize, max_lines: usize, language: Language) -> Vec<String> {
     if width == 0 || max_lines == 0 {
         return Vec::new();
     }
     let safe = safe_text(subject);
     let mut remaining = safe.trim();
     if remaining.is_empty() {
-        return vec!["(no subject)".into()];
+        return vec![language.text("(no subject)", "（无标题）").into()];
     }
     let mut rows = Vec::new();
     while !remaining.is_empty() && rows.len() < max_lines {
@@ -945,15 +1113,18 @@ mod tests {
             total: None,
             updated: Instant::now(),
         };
-        assert_eq!(progress_text(&p, 28).0, "3 · total unknown");
+        assert_eq!(
+            progress_text(&p, 28, Language::English).0,
+            "3 · total unknown"
+        );
         for total in [0.0, -1.0, f64::NAN, 2.0] {
             p.total = Some(total);
-            assert!(!progress_text(&p, 28).0.contains('%'));
+            assert!(!progress_text(&p, 28, Language::English).0.contains('%'));
         }
         p.total = Some(12.0);
-        assert!(progress_text(&p, 28).0.ends_with("25%"));
+        assert!(progress_text(&p, 28, Language::English).0.ends_with("25%"));
         p.value = Some(12.0);
-        assert!(progress_text(&p, 28).1);
+        assert!(progress_text(&p, 28, Language::English).1);
     }
 
     #[test]
@@ -1146,7 +1317,7 @@ mod tests {
         let mut git = git_with_history(now);
         let old_subject = git.history.commits[0].subject.clone();
         git.head = Some("f".repeat(40));
-        let pending = history_lines(Some(&git), 20, 28, now);
+        let pending = history_lines(Some(&git), 20, 28, now, Language::English);
         assert!(
             pending
                 .iter()
@@ -1163,7 +1334,7 @@ mod tests {
         git.status = GitState::Error;
         git.stale = true;
         git.history.stale = true;
-        let stale = history_lines(Some(&git), 20, 28, now);
+        let stale = history_lines(Some(&git), 20, 28, now, Language::English);
         assert_eq!(stale[0].text, "Recent commits · stale");
         assert_eq!(stale[0].tone, PanelTone::Warning);
         assert!(
@@ -1177,7 +1348,7 @@ mod tests {
         git.unborn = true;
         git.head = None;
         git.history = super::super::git_status::GitHistory::default();
-        let unborn = history_lines(Some(&git), 20, 28, now);
+        let unborn = history_lines(Some(&git), 20, 28, now, Language::English);
         assert!(unborn.iter().any(|row| row.text == "No commits yet"));
         assert!(!unborn.iter().any(|row| row.text.contains("stale")));
     }
@@ -1188,6 +1359,7 @@ mod tests {
             "password=panel-secret-fixture 修复 e\u{301}\x1b[2J\nnext",
             26,
             2,
+            Language::English,
         );
         let text = rows.join("\n");
         assert!(text.contains("[redacted]"));
@@ -1195,14 +1367,17 @@ mod tests {
         assert!(rows.iter().all(|row| {
             UnicodeWidthStr::width(row.as_str()) <= 26 && !row.chars().any(char::is_control)
         }));
-        assert_eq!(wrap_subject("e\u{301}界", 3, 2), ["e\u{301}界"]);
         assert_eq!(
-            wrap_subject("Keep commit subjects readable", 18, 2),
+            wrap_subject("e\u{301}界", 3, 2, Language::English),
+            ["e\u{301}界"]
+        );
+        assert_eq!(
+            wrap_subject("Keep commit subjects readable", 18, 2, Language::English),
             ["Keep commit", "subjects readable"]
         );
-        assert_eq!(commit_age(100, None), "time unknown");
-        assert_eq!(commit_age(100, Some(40)), "in 1m");
-        assert_eq!(commit_age(40, Some(100)), "1m ago");
-        assert_eq!(commit_age(-5, Some(10)), "15s ago");
+        assert_eq!(commit_age(100, None, Language::English), "time unknown");
+        assert_eq!(commit_age(100, Some(40), Language::English), "in 1m");
+        assert_eq!(commit_age(40, Some(100), Language::English), "1m ago");
+        assert_eq!(commit_age(-5, Some(10), Language::English), "15s ago");
     }
 }

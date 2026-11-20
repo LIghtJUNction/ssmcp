@@ -96,16 +96,34 @@ impl Drop for Task {
 impl State {
     pub(super) fn chat_force_send(&mut self, text: &str) -> Result<(), String> {
         if text.trim().is_empty() {
-            return Err("用法：/send <正文>；强制发送给当前会话监听程序".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Use /send <text> to send to this session’s listener",
+                    "用法：/send <正文>；强制发送给当前会话监听程序",
+                )
+                .into());
         }
         if self.preview {
-            return Err("预览不会发送消息".into());
+            return Err(self
+                .ui
+                .language
+                .text("Preview does not send messages", "预览不会发送消息")
+                .into());
         }
         if self.conversation.logout_task.is_some() || self.conversation.exit_requested {
-            return Err("发送失败：当前连接正在关闭，草稿已保留".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Send failed: the connection is closing. Draft preserved",
+                    "发送失败：当前连接正在关闭，草稿已保留",
+                )
+                .into());
         }
         if self.conversation.editing.is_some() || self.conversation.submitting.is_some() {
-            return Err("发送失败：请先完成当前队列消息的编辑或提交，草稿已保留".into());
+            return Err(self.ui.language.text("Send failed: finish editing or submitting the current queued message first. Draft preserved", "发送失败：请先完成当前队列消息的编辑或提交，草稿已保留").into());
         }
         if let Some(target) = self
             .conversation
@@ -114,16 +132,41 @@ impl State {
             .filter(|target| *target != "next")
             && receiver::snapshot()["listener"]["thread_id"].as_str() != Some(target)
         {
-            return Err("发送失败：没有对应指定 agent 的监听程序；草稿已保留".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Send failed: no listener matches the selected agent. Draft preserved",
+                    "发送失败：没有对应指定 agent 的监听程序；草稿已保留",
+                )
+                .into());
         }
         if self.conversation.force_task.is_some() {
-            return Err("正在等待监听程序确认，草稿已保留".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Waiting for listener acknowledgement. Draft preserved",
+                    "正在等待监听程序确认，草稿已保留",
+                )
+                .into());
         }
         steering::validate_text(text)?;
-        let stamp = self.chat_input_stamp().ok_or("发送失败：当前输入不可用")?;
+        let stamp = self.chat_input_stamp().ok_or(self.ui.language.text(
+            "Send failed: the current input is unavailable",
+            "发送失败：当前输入不可用",
+        ))?;
         let task = Task::start(stamp, text.into(), self.conversation.target.as_deref())?;
         self.conversation.force_task = Some(task);
-        self.notice = Some("正在发送给监听程序…等待接收确认，草稿已保留".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Sending to the listener… awaiting acknowledgement. Draft preserved",
+                    "正在发送给监听程序…等待接收确认，草稿已保留",
+                )
+                .into(),
+        );
         self.dirty = true;
         Ok(())
     }
@@ -160,19 +203,32 @@ impl State {
                     for line in markdown::rows(source, self.geometry.left, &self.ui) {
                         let _ = writeln!(record, "{line}");
                     }
-                    record.push_str("  监听程序已接收\n\n");
+                    record.push_str(
+                        self.ui
+                            .language
+                            .text("  Accepted by the listener\n\n", "  监听程序已接收\n\n"),
+                    );
                     self.log_message("user", source, record.as_bytes());
                 }
                 if let Some(error) = completed.history_error {
-                    format!("{}；历史记录未保存：{error}", completed.receipt.detail)
+                    localized!(
+                        self.ui.language,
+                        "{}; history was not saved: {error}",
+                        "{}；历史记录未保存：{error}",
+                        self.ui.language.local_message(&completed.receipt.detail)
+                    )
                 } else {
                     completed.receipt.detail
                 }
             }
             Err(error) if error.starts_with("发送") => error,
-            Err(error) => format!("发送失败：{error}；草稿已保留"),
+            Err(error) => localized!(
+                self.ui.language,
+                "Send failed: {error}; draft preserved",
+                "发送失败：{error}；草稿已保留"
+            ),
         };
-        let detail = panel::safe_text(&detail);
+        let detail = panel::safe_text(&self.ui.language.local_message(&detail));
         self.log_event(
             "listener",
             &json!({"type":"ssmcp.message","author":"Listener","text":detail}),
@@ -188,7 +244,14 @@ mod tests {
     use super::*;
 
     fn preview(text: &str) -> State {
-        let mut state = super::super::super::preview_state(24, 100, &Ui::default());
+        let mut state = super::super::super::preview_state(
+            24,
+            100,
+            &Ui {
+                language: Language::Chinese,
+                ..Ui::default()
+            },
+        );
         state.events.clear();
         state.conversation.composer.set_text(text);
         state

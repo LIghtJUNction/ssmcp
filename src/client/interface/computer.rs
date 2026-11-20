@@ -1,5 +1,6 @@
 //! Operator-only terminal commands. These functions are not remote UI actions.
 use super::{harness, terminal};
+use crate::client::language::{Language, localized};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -29,32 +30,46 @@ fn parse(text: &str) -> Result<Command, String> {
 }
 
 /// This is called only by the local terminal's slash-command path, never by ui.action/message.
-pub(crate) fn local_command(text: &str) -> Result<String, String> {
+pub(crate) fn local_command(text: &str, language: Language) -> Result<String, String> {
     let command = parse(text)?;
     if !terminal::active() {
-        return Err("host handoff requires the local interactive ssmcp terminal".into());
+        return Err(language
+            .text(
+                "host handoff requires the local interactive ssmcp terminal",
+                "主机输入授权需要本机交互式 ssmcp 终端",
+            )
+            .into());
     }
     let (runtime, _) = harness::local_runtime()?;
     match command {
         Command::Status => {
             let status = runtime.host_input_status();
             Ok(if status["enabled"] == true {
-                format!(
+                localized!(
+                    language,
                     "Host input handed over for up to {}s · input in this terminal returns control",
+                    "主机输入已授权，最多 {} 秒 · 在此终端输入即可收回控制",
                     status["remaining_seconds"].as_u64().unwrap_or(0)
                 )
             } else {
-                "Host input locked · isolated desktop and background browser control remain available".into()
+                language.text("Host input locked · isolated desktop and background browser control remain available", "主机输入已锁定 · 隔离桌面和后台浏览器仍可用").into()
             })
         }
         Command::Stop => {
             runtime.revoke_host_input();
-            Ok("Host input locked · control returned".into())
+            Ok(language
+                .text(
+                    "Host input locked · control returned",
+                    "主机输入已锁定 · 已收回控制",
+                )
+                .into())
         }
         Command::Host(seconds) => {
             runtime.handoff_host_input_local(seconds)?;
-            Ok(format!(
-                "Host input handed over for {seconds}s · any input in this terminal stops it · /computer stop"
+            Ok(localized!(
+                language,
+                "Host input handed over for {seconds}s · any input in this terminal stops it · /computer stop",
+                "主机输入已授权 {seconds} 秒 · 在此终端输入即可停止 · /computer stop"
             ))
         }
     }

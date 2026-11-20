@@ -1,5 +1,5 @@
 //! Bounded code_mode history and a terminal-independent source viewer.
-use super::{highlight::Lexer, ui::Ui};
+use super::{highlight::Lexer, language::localized, ui::Ui};
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
@@ -443,11 +443,21 @@ impl AuditView {
             return Vec::new();
         }
         let visible = self.visible();
-        let title = format!(" Code mode · {} runs · Enter inspect", visible.len());
+        let title = localized!(
+            ui.language,
+            " Code mode · {} runs · Enter inspect",
+            " 代码模式 · {} 次调用 · Enter 查看",
+            visible.len()
+        );
         let mut rows = vec![row(&[(title, "heading")], width, ui)];
         if visible.is_empty() {
             rows.push(row(
-                &[(" Waiting for code_mode calls".into(), "muted")],
+                &[(
+                    ui.language
+                        .text(" Waiting for code_mode calls", " 等待 code_mode 调用")
+                        .into(),
+                    "muted",
+                )],
                 width,
                 ui,
             ));
@@ -476,14 +486,27 @@ impl AuditView {
                 .code
                 .lines()
                 .find(|line| !line.trim().is_empty())
-                .unwrap_or("(source unavailable)")
+                .unwrap_or(ui.language.text("(source unavailable)", "（源代码不可用）"))
                 .trim();
             if per_entry == 2 {
                 rows.push(row(
                     &[
                         (format!("{marker} {time}  #{short_id}  "), "accent"),
-                        (entry.status().into(), status_tone),
-                        (format!("  {} calls", entry.calls.len()), "muted"),
+                        (
+                            ui.language
+                                .state_label(ui.language.state_label(entry.status()))
+                                .into(),
+                            status_tone,
+                        ),
+                        (
+                            localized!(
+                                ui.language,
+                                "  {} calls",
+                                "  {} 次工具调用",
+                                entry.calls.len()
+                            ),
+                            "muted",
+                        ),
                     ],
                     width,
                     ui,
@@ -503,7 +526,10 @@ impl AuditView {
             } else {
                 rows.push(row(
                     &[
-                        (format!("{marker} {}  ", entry.status()), status_tone),
+                        (
+                            format!("{marker} {}  ", ui.language.state_label(entry.status())),
+                            status_tone,
+                        ),
                         (code.into(), "foreground"),
                     ],
                     width,
@@ -524,14 +550,28 @@ impl AuditView {
         let mut rows = vec![row(
             &[(
                 if let Some(controller) = &entry.controller {
-                    format!(
+                    localized!(
+                        ui.language,
                         " {} · {} · {} · ← back",
-                        controller.name.as_deref().unwrap_or("Unknown controller"),
-                        controller.model.as_deref().unwrap_or("Model unknown"),
-                        entry.status()
+                        " {} · {} · {} · ← 返回",
+                        controller
+                            .name
+                            .as_deref()
+                            .unwrap_or(ui.language.text("Unknown controller", "未知控制方")),
+                        controller
+                            .model
+                            .as_deref()
+                            .unwrap_or(ui.language.text("Model unknown", "模型未知")),
+                        ui.language.state_label(entry.status())
                     )
                 } else {
-                    format!(" #{} · {} · Esc back", entry.run_id, entry.status())
+                    localized!(
+                        ui.language,
+                        " #{} · {} · Esc back",
+                        " #{} · {} · Esc 返回",
+                        entry.run_id,
+                        ui.language.state_label(entry.status())
+                    )
                 },
                 "heading",
             )],
@@ -542,15 +582,20 @@ impl AuditView {
             return rows;
         }
         let source_lines = entry.code.split('\n').count();
-        let mut metadata = format!(
+        let mut metadata = localized!(
+            ui.language,
             " {} · {} lines · {} calls · {} ms",
+            " {} · {} 行 · {} 次工具调用 · {} ms",
             clock(entry.timestamp_ms),
             source_lines,
             entry.calls.len(),
             entry.duration_ms
         );
         if entry.truncated {
-            metadata.push_str(" · source truncated at display limit");
+            metadata.push_str(ui.language.text(
+                " · source truncated at display limit",
+                " · 源代码超过显示上限，已截断",
+            ));
         }
         if let Some(error) = &entry.error {
             metadata.push_str(&format!(" · {error}"));
@@ -572,31 +617,61 @@ impl AuditView {
             lines.push(vec![(format!("#{id} · {}", call.tool), "heading")]);
             if let Some(attribution) = &call.attribution {
                 lines.push(vec![(
-                    format!("Account · {}", attribution.account.label()),
+                    localized!(
+                        ui.language,
+                        "Account · {}",
+                        "账号 · {}",
+                        attribution.account.label()
+                    ),
                     "foreground",
                 )]);
                 lines.push(vec![(
                     match &attribution.agent {
-                        Some(agent) => format!("Agent · {} · {}", agent.id, agent.name),
-                        None => "Agent · not bound for this operation".into(),
+                        Some(agent) => localized!(
+                            ui.language,
+                            "Agent · {} · {}",
+                            "代理 · {} · {}",
+                            agent.id,
+                            agent.name
+                        ),
+                        None => ui
+                            .language
+                            .text(
+                                "Agent · not bound for this operation",
+                                "代理 · 此操作未绑定代理",
+                            )
+                            .into(),
                     },
                     "muted",
                 )]);
                 if let Some(owner) = &attribution.owner {
                     lines.push(vec![(
-                        format!("Registered owner · {}", owner.label()),
+                        localized!(
+                            ui.language,
+                            "Registered owner · {}",
+                            "注册所有者 · {}",
+                            owner.label()
+                        ),
                         "muted",
                     )]);
                 }
             } else {
                 lines.push(vec![(
-                    "Account · unverified; agent unavailable".into(),
+                    ui.language
+                        .text(
+                            "Account · unverified; agent unavailable",
+                            "账号 · 未验证；代理信息不可用",
+                        )
+                        .into(),
                     "muted",
                 )]);
             }
         }
         if !entry.calls.is_empty() {
-            lines.push(vec![("Source".into(), "heading")]);
+            lines.push(vec![(
+                ui.language.text("Source", "源代码").into(),
+                "heading",
+            )]);
         }
         lines.extend(source_rows(&entry.code, width));
         let body = height.saturating_sub(rows.len());

@@ -36,20 +36,34 @@ impl State {
                 && !self.chat_menu_visible()
                 && !self.conversation.composer.completion_loading();
             let hint = if recall {
-                "↑ edit"
+                self.ui.language.text("↑ edit", "↑ 编辑")
             } else if queue
                 .iter()
                 .any(|entry| Receipt::from_entry(entry).editable())
             {
-                "Edit in /queue"
+                self.ui.language.text("Edit in /queue", "在 /queue 中编辑")
             } else {
                 "/queue"
             };
-            Some(format!("○ {pending} waiting · {hint}"))
+            Some(localized!(
+                self.ui.language,
+                "○ {pending} waiting · {hint}",
+                "○ {pending} 条待发送 · {hint}"
+            ))
         } else {
             match queue.last().map(Receipt::from_entry) {
-                Some(Receipt::Read) => Some("● Read · /queue".into()),
-                Some(Receipt::Review | Receipt::Unconfirmed) => Some("○ Review in /queue".into()),
+                Some(Receipt::Read) => Some(
+                    self.ui
+                        .language
+                        .text("● Read · /queue", "● 已读 · /queue")
+                        .into(),
+                ),
+                Some(Receipt::Review | Receipt::Unconfirmed) => Some(
+                    self.ui
+                        .language
+                        .text("○ Review in /queue", "○ 请在 /queue 中检查")
+                        .into(),
+                ),
                 _ => None,
             }
         }

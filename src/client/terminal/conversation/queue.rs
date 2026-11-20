@@ -5,39 +5,49 @@ fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
+#[cfg(test)]
 fn age(entry: &Value, now: u64) -> Option<String> {
+    age_in(entry, now, Language::English)
+}
+
+fn age_in(entry: &Value, now: u64, language: Language) -> Option<String> {
     let timestamp = entry["updated_at_ms"]
         .as_u64()
         .filter(|value| *value > 0)
         .or_else(|| entry["created_at_ms"].as_u64().filter(|value| *value > 0))?;
     let minutes = now.saturating_sub(timestamp) / 60_000;
     Some(match minutes {
-        0 => "now".into(),
-        1..60 => format!("{minutes}m"),
-        60..1440 => format!("{}h", minutes / 60),
-        _ => format!("{}d", minutes / 1440),
+        0 => language.text("now", "刚刚").into(),
+        1..60 => localized!(language, "{minutes}m", "{minutes} 分钟"),
+        60..1440 => localized!(language, "{}h", "{} 小时", minutes / 60),
+        _ => localized!(language, "{}d", "{} 天", minutes / 1440),
     })
 }
 
+#[cfg(test)]
 fn metadata(entry: &Value, data: &Value, now: u64) -> String {
+    metadata_in(entry, data, now, Language::English)
+}
+
+fn metadata_in(entry: &Value, data: &Value, now: u64, language: Language) -> String {
     let receipt = Receipt::from_entry(entry);
     let edit = if receipt.editable() {
-        " · Enter edit"
+        language.text(" · Enter edit", " · Enter 编辑")
     } else {
         ""
     };
     let mut detail = format!(
         "{} {}{edit} · #{}",
         receipt.marker(),
-        receipt.label(),
+        language.receipt(receipt),
         short_id(message_id(entry))
     );
-    if let Some(age) = age(entry, now) {
+    if let Some(age) = age_in(entry, now, language) {
         detail.push_str(&format!(" · {age}"));
     }
     let target = field(entry, "target");
     let recipient = if target.is_empty() || target == "next" {
-        "next caller".into()
+        language.text("next caller", "下一个调用方").into()
     } else {
         data["agents"]
             .as_array()
@@ -47,13 +57,18 @@ fn metadata(entry: &Value, data: &Value, now: u64) -> String {
             .map(|agent| field(agent, "name"))
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("agent {}", short_id(target)))
+            .unwrap_or_else(|| localized!(language, "agent {}", "智能体 {}", short_id(target)))
     };
     detail.push_str(&format!(" · → {recipient}"));
     panel::safe_text(&detail)
 }
 
+#[cfg(test)]
 fn preview(text: &str, width: u16) -> Vec<String> {
+    preview_in(text, width, Language::English)
+}
+
+fn preview_in(text: &str, width: u16, language: Language) -> Vec<String> {
     // Redact each complete source line before wrapping or clipping a preview.
     let safe = references::source(text)
         .lines()
@@ -94,7 +109,7 @@ fn preview(text: &str, width: u16) -> Vec<String> {
         remaining = remaining[boundary..].trim_start();
     }
     if rows.is_empty() {
-        rows.push("(empty request)".into());
+        rows.push(language.text("(empty request)", "（空请求）").into());
     } else if !remaining.is_empty() {
         let last = rows.last_mut().unwrap();
         *last = format!("{}…", fit(last, width.saturating_sub(1) as u16));
@@ -106,9 +121,13 @@ impl State {
     fn queue_card(&self, entry: &Value, data: &Value, now: u64, selected: bool) -> Vec<String> {
         let width = self.geometry.left;
         let mut rows = Vec::new();
-        for (line, text) in preview(field(entry, "text"), width.saturating_sub(2))
-            .iter()
-            .enumerate()
+        for (line, text) in preview_in(
+            field(entry, "text"),
+            width.saturating_sub(2),
+            self.ui.language,
+        )
+        .iter()
+        .enumerate()
         {
             let marker = if selected && line == 0 { "› " } else { "  " };
             rows.push(self.chat_line(
@@ -125,7 +144,7 @@ impl State {
             &format!(
                 "  {}",
                 panel::fit(
-                    &metadata(entry, data, now),
+                    &metadata_in(entry, data, now, self.ui.language),
                     usize::from(width.saturating_sub(2))
                 )
             ),
@@ -168,28 +187,47 @@ impl State {
         let edit = entries
             .get(self.conversation.selected)
             .is_some_and(|entry| Receipt::from_entry(entry).editable());
-        let action = if edit { "Enter edit" } else { "Enter inspect" };
+        let action = if edit {
+            self.ui.language.text("Enter edit", "Enter 编辑")
+        } else {
+            self.ui.language.text("Enter inspect", "Enter 查看")
+        };
         let heading = if self.conversation.detail {
-            "  Requests · Esc back".into()
+            self.ui
+                .language
+                .text("  Requests · Esc back", "  请求 · Esc 返回")
+                .into()
         } else if width >= 100 {
-            format!(
+            localized!(
+                self.ui.language,
                 "  Requests · {pending} pending · {} total    {action} · i inspect · Del cancel · R resend",
+                "  请求 · {pending} 条待处理 · 共 {} 条    {action} · i 查看 · Del 取消 · R 重发",
                 entries.len()
             )
         } else if width >= 60 {
-            format!(
+            localized!(
+                self.ui.language,
                 "  Requests · {pending} pending · {} total · i inspect",
+                "  请求 · {pending} 条待处理 · 共 {} 条 · i 查看",
                 entries.len()
             )
         } else {
-            format!("  Requests · {} total · i inspect", entries.len())
+            localized!(
+                self.ui.language,
+                "  Requests · {} total · i inspect",
+                "  请求 · 共 {} 条 · i 查看",
+                entries.len()
+            )
         };
         let mut rows = vec![self.chat_line(&heading, PanelTone::Muted, width)];
         self.conversation.queue_hit_rows.push(None);
         if entries.is_empty() {
             if height > 1 {
                 rows.push(self.chat_line(
-                    "  No requests yet. Write a requirement below.",
+                    self.ui.language.text(
+                        "  No requests yet. Write a requirement below.",
+                        "  尚无请求。请在下方输入需求。",
+                    ),
                     PanelTone::Normal,
                     width,
                 ));
@@ -199,7 +237,7 @@ impl State {
         if self.conversation.detail {
             let entry = &entries[self.conversation.selected];
             let mut detail = vec![self.chat_line(
-                &format!("  {}", metadata(entry, data, now)),
+                &format!("  {}", metadata_in(entry, data, now, self.ui.language)),
                 PanelTone::Muted,
                 width,
             )];
@@ -210,11 +248,16 @@ impl State {
             ));
             if Receipt::from_entry(entry) == Receipt::Read {
                 detail.extend(markdown::rows(
-                    "● Read means delivered with a tool response; it does not confirm understanding or execution.",
+                    self.ui.language.text("● Read means delivered with a tool response; it does not confirm understanding or execution.", "● 已读表示已随工具响应送达，不代表模型已理解或执行。"),
                     width, &self.ui,
                 ));
                 detail.extend(markdown::rows(
-                    &format!("Delivery run: {}", field(&entry["delivery"], "run_id")),
+                    &localized!(
+                        self.ui.language,
+                        "Delivery run: {}",
+                        "送达调用：{}",
+                        field(&entry["delivery"], "run_id")
+                    ),
                     width,
                     &self.ui,
                 ));

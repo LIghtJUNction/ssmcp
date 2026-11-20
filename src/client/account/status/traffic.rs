@@ -1,4 +1,5 @@
 //! Read-only quota presentation. The server supplies usage, capacity and reset time.
+use crate::client::language::{Language, localized};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
@@ -61,7 +62,12 @@ impl Traffic {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn progress(&self, width: u16) -> String {
+        self.progress_in(width, Language::English)
+    }
+
+    pub(super) fn progress_in(&self, width: u16, language: Language) -> String {
         let width = usize::from(width);
         let Self::Known {
             used_bytes,
@@ -69,14 +75,19 @@ impl Traffic {
             ..
         } = self
         else {
-            return "Quota unavailable".into();
+            return language.text("Quota unavailable", "额度不可用").into();
         };
-        let maximum = format!("Max {}", self.maximum());
+        let maximum = localized!(language, "Max {}", "上限 {}", self.maximum());
         let Some(used) = used_bytes else {
-            return format!("{maximum} · Used ?");
+            return localized!(language, "{maximum} · Used ?", "{maximum} · 已用 ?");
         };
         let Some(limit) = limit_bytes.filter(|limit| *limit > 0) else {
-            let detail = format!("{maximum} · Used {}", bytes(*used));
+            let detail = localized!(
+                language,
+                "{maximum} · Used {}",
+                "{maximum} · 已用 {}",
+                bytes(*used)
+            );
             return if detail.width() <= width {
                 detail
             } else {
@@ -84,7 +95,7 @@ impl Traffic {
             };
         };
         let percent = if *used > limit {
-            "Over".into()
+            language.text("Over", "超额").into()
         } else {
             format!("{}%", u128::from(*used) * 100 / u128::from(limit))
         };
@@ -103,16 +114,21 @@ impl Traffic {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn reset_label(&self, width: u16) -> String {
+        self.reset_label_in(width, Language::English)
+    }
+
+    pub(super) fn reset_label_in(&self, width: u16, language: Language) -> String {
         let Self::Known {
             reset: Some((at, offset)),
             ..
         } = self
         else {
-            return "Reset unknown".into();
+            return language.text("Reset unknown", "重置日期未知").into();
         };
         let Some((year, month, day, hour, minute)) = calendar(*at, *offset) else {
-            return "Reset unknown".into();
+            return language.text("Reset unknown", "重置日期未知").into();
         };
         let zone = if *offset == 0 {
             "UTC".into()
@@ -131,17 +147,29 @@ impl Traffic {
         } else {
             format!(" {hour:02}:{minute:02}")
         };
-        let full = format!("Reset {year:04}-{month:02}-{day:02}{time} {zone}");
+        let full = localized!(
+            language,
+            "Reset {year:04}-{month:02}-{day:02}{time} {zone}",
+            "重置 {year:04}-{month:02}-{day:02}{time} {zone}"
+        );
         if full.width() <= usize::from(width) {
             full
         } else if width >= 16 {
-            format!("Reset {year:04}-{month:02}-{day:02}")
+            localized!(
+                language,
+                "Reset {year:04}-{month:02}-{day:02}",
+                "重置 {year:04}-{month:02}-{day:02}"
+            )
         } else {
-            format!("Reset {month:02}-{day:02}")
+            localized!(
+                language,
+                "Reset {month:02}-{day:02}",
+                "重置 {month:02}-{day:02}"
+            )
         }
     }
 
-    pub(super) fn compact(&self) -> String {
+    pub(super) fn compact(&self, language: Language) -> String {
         let reset = match self {
             Self::Known {
                 reset: Some((at, offset)),
@@ -149,8 +177,10 @@ impl Traffic {
             } => calendar(*at, *offset).map(|(_, month, day, _, _)| format!("{month:02}-{day:02}")),
             _ => None,
         };
-        format!(
+        localized!(
+            language,
             "Max {} · Reset {}",
+            "上限 {} · 重置 {}",
             self.maximum(),
             reset.as_deref().unwrap_or("?")
         )
@@ -275,7 +305,7 @@ mod tests {
         let quota =
             Traffic::from_reply(&json!({"traffic":{"limit_bytes":null,"remaining_bytes":null}}));
         assert_eq!(quota.progress(24), "Max ∞ · Used ?");
-        assert_eq!(quota.compact(), "Max ∞ · Reset ?");
+        assert_eq!(quota.compact(Language::English), "Max ∞ · Reset ?");
         assert_eq!(
             Traffic::from_reply(&json!({"traffic":{"limit_bytes":null}})),
             Traffic::Unknown

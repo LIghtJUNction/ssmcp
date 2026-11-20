@@ -20,20 +20,40 @@ fn parse(arguments: &str) -> Result<Action<'_>, String> {
     }
 }
 
+#[cfg(test)]
 fn message(snapshot: &session_access::Snapshot) -> String {
+    message_in(snapshot, Language::English)
+}
+
+fn message_in(snapshot: &session_access::Snapshot, language: Language) -> String {
     if !snapshot.connected {
         return snapshot
             .last_error
             .as_deref()
             .map(panel::safe_text)
-            .unwrap_or_else(|| "Disconnected · session access is not confirmed".into());
+            .unwrap_or_else(|| {
+                language
+                    .text(
+                        "Disconnected · session access is not confirmed",
+                        "已断开 · 会话访问权尚未确认",
+                    )
+                    .into()
+            });
     }
     if !snapshot.supported {
-        return "Session access requires an updated server and an account HTTPS connection".into();
+        return language
+            .text(
+                "Session access requires an updated server and an account HTTPS connection",
+                "会话访问管理需要更新后的服务端与账号 HTTPS 连接",
+            )
+            .into();
     }
     let mut text = String::new();
     if snapshot.pending {
-        text.push_str("Waiting for the server to confirm session access.\n");
+        text.push_str(language.text(
+            "Waiting for the server to confirm session access.\n",
+            "正在等待服务端确认会话访问权。\n",
+        ));
     } else if let Some(error) = &snapshot.last_error {
         text.push_str(&panel::safe_text(error));
         text.push('\n');
@@ -43,30 +63,46 @@ fn message(snapshot: &session_access::Snapshot) -> String {
     }
     if snapshot.loaded {
         text.push_str(if snapshot.pending || snapshot.last_error.is_some() {
-            "\nLast confirmed list:\n"
+            language.text("\nLast confirmed list:\n", "\n最近确认的名单：\n")
         } else {
-            "\nAllowed users for this session:\n"
+            language.text(
+                "\nAllowed users for this session:\n",
+                "\n允许访问此会话的用户：\n",
+            )
         });
         for entry in &snapshot.entries {
             text.push_str("- ");
             text.push_str(&panel::safe_text(&entry.principal));
             if entry.owner {
-                text.push_str(" · owner");
+                text.push_str(language.text(" · owner", " · 所有者"));
             }
             text.push('\n');
         }
     } else if !snapshot.pending {
-        text.push_str("\nThe current list is not confirmed. Use /allow to read it again.\n");
+        text.push_str(language.text(
+            "\nThe current list is not confirmed. Use /allow to read it again.\n",
+            "\n当前名单尚未确认。使用 /allow 重新读取。\n",
+        ));
     }
-    text.push_str("\n/allow USER grants access · /allow remove USER revokes access");
+    text.push_str(language.text(
+        "\n/allow USER grants access · /allow remove USER revokes access",
+        "\n/allow USER 授予访问权 · /allow remove USER 撤销访问权",
+    ));
     text
 }
 
 impl State {
     pub(super) fn chat_allow(&mut self, arguments: &str) -> Result<(), String> {
-        let action = parse(arguments)?;
+        let action = parse(arguments).map_err(|error| self.ui.language.local_message(&error))?;
         if self.preview {
-            return Err("Preview cannot read or change a live session's access list".into());
+            return Err(self
+                .ui
+                .language
+                .text(
+                    "Preview cannot read or change a live session's access list",
+                    "预览模式无法读取或更改真实会话的访问名单",
+                )
+                .into());
         }
         self.chat_poll_access();
         let revision = session_access::snapshot().revision;
@@ -77,7 +113,15 @@ impl State {
         }
         // Ok means queued. A later revision with pending=false is the result.
         self.conversation.access_request = Some(revision);
-        self.notice = Some("Session access requested · waiting for the server".into());
+        self.notice = Some(
+            self.ui
+                .language
+                .text(
+                    "Session access requested · waiting for the server",
+                    "已请求会话访问状态 · 等待服务端确认",
+                )
+                .into(),
+        );
         self.dirty = true;
         Ok(())
     }
@@ -96,7 +140,7 @@ impl State {
             return;
         }
         self.conversation.access_request = None;
-        let text = message(snapshot);
+        let text = message_in(snapshot, self.ui.language);
         let raw = format!("\n[ACCESS]\n{text}\n");
         self.log_event(
             "access",
@@ -110,9 +154,23 @@ impl State {
                 .last_message
                 .as_deref()
                 .map(panel::safe_text)
-                .unwrap_or_else(|| "Session access list received · see Conversation".into())
+                .unwrap_or_else(|| {
+                    self.ui
+                        .language
+                        .text(
+                            "Session access list received · see Conversation",
+                            "已收到会话访问名单 · 请查看会话",
+                        )
+                        .into()
+                })
         } else {
-            "Session access is not confirmed · see Conversation".into()
+            self.ui
+                .language
+                .text(
+                    "Session access is not confirmed · see Conversation",
+                    "会话访问状态尚未确认 · 请查看会话",
+                )
+                .into()
         });
         self.dirty = true;
     }

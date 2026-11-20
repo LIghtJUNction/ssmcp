@@ -1,6 +1,12 @@
 //! Bounded local event previews. Expanding reveals retained display text, not a
 //! reread of tools or an unbounded replacement for their original output archive.
-use super::{super::ui::Ui, images};
+use super::{
+    super::{
+        language::{Language, localized},
+        ui::Ui,
+    },
+    images,
+};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -181,11 +187,25 @@ impl Event {
         title.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn chat_title(&self) -> String {
-        let heading = self.chat_heading();
+    fn chat_heading_in(&self, language: Language) -> String {
+        if self.meta.kind == Kind::Conversation {
+            if self.meta.user {
+                return language.text("You", "你").into();
+            }
+            if self.meta.author.is_empty() {
+                return language.text("Assistant", "助手").into();
+            }
+        }
+        self.chat_heading()
+    }
+
+    fn chat_title_in(&self, language: Language) -> String {
+        let heading = self.chat_heading_in(language);
         match self.meta.status {
-            Some(Status::Done | Status::Exit(0)) => format!("{heading} · done"),
-            Some(status) => format!("{heading} · {}", status.label()),
+            Some(Status::Done | Status::Exit(0)) => {
+                localized!(language, "{heading} · done", "{heading} · 已完成")
+            }
+            Some(status) => format!("{heading} · {}", status_label(status, language)),
             None => heading,
         }
     }
@@ -202,7 +222,7 @@ impl Event {
 
     /// At most two result lines, drawn from the retained redacted transcript.
     /// The existing render cache keeps scanning out of idle repaint frames.
-    fn chat_preview(&self, width: usize) -> Vec<String> {
+    fn chat_preview_in(&self, width: usize, language: Language) -> Vec<String> {
         let plain = unstyled(&self.text);
         let summary = unstyled(&self.summary);
         let mut first = Vec::new();
@@ -297,9 +317,9 @@ impl Event {
         if !rows.is_empty() {
             rows.push(clip_plain(
                 if more {
-                    "… Click expand"
+                    language.text("… Click expand", "… 点击展开")
                 } else {
-                    "Click expand"
+                    language.text("Click expand", "点击展开")
                 },
                 width,
             ));
@@ -383,9 +403,9 @@ impl Event {
                     .is_some_and(|read| read.path.to_lowercase().contains(query)))
     }
 
-    fn summary_with_status(&self) -> String {
+    fn summary_with_status(&self, language: Language) -> String {
         match self.meta.status {
-            Some(status) => format!("{} [{}]", self.summary, status.label()),
+            Some(status) => format!("{} [{}]", self.summary, status_label(status, language)),
             None => self.summary.clone(),
         }
     }
@@ -1482,7 +1502,7 @@ impl EventView {
                             "{}{}",
                             paint(&prefix, "muted", ui, selected && focused),
                             paint(
-                                &clip_plain(&group.title(), body_width),
+                                &clip_plain(&group.title_in(ui.language), body_width),
                                 "muted",
                                 ui,
                                 selected && focused
@@ -1598,12 +1618,12 @@ impl EventView {
             let expanded = event.expanded(self.scope);
             let title = if chat {
                 if conversation {
-                    event.chat_heading()
+                    event.chat_heading_in(ui.language)
                 } else {
-                    event.chat_title()
+                    event.chat_title_in(ui.language)
                 }
             } else {
-                event.summary_with_status()
+                event.summary_with_status(ui.language)
             };
             let marker = if expanded { "▾" } else { "▸" };
             let prefix = format!("{} {marker} ", if selected && focused { "›" } else { " " });
@@ -1644,7 +1664,12 @@ impl EventView {
                         // This is the retained, already-redacted display text,
                         // including full command/script details. Never read raw
                         // event metadata to reconstruct the command.
-                        format!("Command\n{}", event.text.trim_end())
+                        localized!(
+                            ui.language,
+                            "Command\n{}",
+                            "命令\n{}",
+                            event.text.trim_end()
+                        )
                     } else {
                         event.command_output()
                     };
@@ -1673,20 +1698,40 @@ impl EventView {
                 }
                 if !content.is_empty() {
                     previous_compact_tool = false;
-                    let action = if expanded { "fold" } else { "expand" };
+                    let action = if expanded {
+                        ui.language.text("fold", "收起")
+                    } else {
+                        ui.language.text("expand", "展开")
+                    };
                     let range = format!(
                         "{}–{}/{}",
                         offset + 1,
                         offset + event.panel.page,
                         content.len()
                     );
-                    let partial = if event.truncated { " · partial" } else { "" };
+                    let partial = if event.truncated {
+                        ui.language.text(" · partial", " · 部分内容")
+                    } else {
+                        ""
+                    };
                     let detail = if expanded && width >= 70 {
-                        format!("{range} · wheel/PgUp/PgDn · Home command · Enter fold{partial}")
+                        localized!(
+                            ui.language,
+                            "{range} · wheel/PgUp/PgDn · Home command · Enter fold{partial}",
+                            "{range} · 滚轮/PgUp/PgDn · Home 命令开头 · Enter 收起{partial}"
+                        )
                     } else if expanded && width >= 48 {
-                        format!("{range} · Home cmd · Enter fold{partial}")
+                        localized!(
+                            ui.language,
+                            "{range} · Home cmd · Enter fold{partial}",
+                            "{range} · Home 命令 · Enter 收起{partial}"
+                        )
                     } else if width >= 70 {
-                        format!("{range} · wheel / PgUp/PgDn · Enter {action}{partial}")
+                        localized!(
+                            ui.language,
+                            "{range} · wheel / PgUp/PgDn · Enter {action}{partial}",
+                            "{range} · 滚轮 / PgUp/PgDn · Enter {action}{partial}"
+                        )
                     } else {
                         format!("{range} · {action}{partial}")
                     };
@@ -1736,20 +1781,39 @@ impl EventView {
                                 if (native.width, native.height) == (image.width, image.height) {
                                     format!("{} × {}", image.width, image.height)
                                 } else {
-                                    format!(
+                                    localized!(
+                                        ui.language,
                                         "{} × {} preview · {} × {} source",
-                                        native.width, native.height, image.width, image.height
+                                        "{} × {} 预览 · {} × {} 原图",
+                                        native.width,
+                                        native.height,
+                                        image.width,
+                                        image.height
                                     )
                                 };
                             if thumbnail {
-                                format!("Click/Enter expands · {dimensions}")
+                                localized!(
+                                    ui.language,
+                                    "Click/Enter expands · {dimensions}",
+                                    "点击/Enter 展开 · {dimensions}"
+                                )
                             } else if usize::from(area.rows) > page.saturating_sub(2) {
-                                format!("{dimensions} · scroll to inspect")
+                                localized!(
+                                    ui.language,
+                                    "{dimensions} · scroll to inspect",
+                                    "{dimensions} · 滚动查看"
+                                )
                             } else {
                                 dimensions
                             }
                         }
-                        None => format!("{} × {} · Image attachment", image.width, image.height),
+                        None => localized!(
+                            ui.language,
+                            "{} × {} · Image attachment",
+                            "{} × {} · 图片附件",
+                            image.width,
+                            image.height
+                        ),
                     };
                     rows.push((
                         event.id,
@@ -1794,7 +1858,7 @@ impl EventView {
                                 " ".repeat(indent + inset),
                                 paint(
                                     &clip_plain(
-                                        "Inline preview unavailable. Use a terminal with image support.",
+                                        ui.language.text("Inline preview unavailable. Use a terminal with image support.", "无法内嵌预览，请使用支持图像的终端。"),
                                         usize::from(image_width),
                                     ),
                                     "muted",
@@ -1876,9 +1940,9 @@ impl EventView {
                         paint(
                             &clip_plain(
                                 if chat {
-                                    "    More output is available in Logs."
+                                    ui.language.text("    More output is available in Logs.", "    更多输出可在日志中查看。")
                                 } else {
-                                    "    Preview truncated; inspect the original output archive."
+                                    ui.language.text("    Preview truncated; inspect the original output archive.", "    预览已截断，请查看原始输出存档。")
                                 },
                                 width,
                             ),
@@ -1892,11 +1956,17 @@ impl EventView {
                 let label = if chat {
                     title
                 } else {
-                    format!(
+                    localized!(
+                        ui.language,
                         "{} · {} lines{}",
+                        "{} · {} 行{}",
                         title,
                         event.lines,
-                        if event.truncated { " · partial" } else { "" }
+                        if event.truncated {
+                            ui.language.text(" · partial", " · 部分内容")
+                        } else {
+                            ""
+                        }
                     )
                 };
                 let label = clip_plain(&label, body_width);
@@ -1921,7 +1991,7 @@ impl EventView {
                         event.cache = Some((
                             preview_width,
                             preview_palette,
-                            event.chat_preview(preview_width),
+                            event.chat_preview_in(preview_width, ui.language),
                         ));
                     }
                     let preview = &event.cache.as_ref().unwrap().2;
@@ -2011,21 +2081,30 @@ impl EventView {
         if footer != 0 {
             let hint = if visible_events == 0 {
                 if self.events.is_empty() {
-                    "No events yet."
+                    ui.language.text("No events yet.", "暂无事件。")
                 } else {
-                    "No matching events."
+                    ui.language.text("No matching events.", "没有匹配的事件。")
                 }
                 .to_owned()
             } else if width < 60 {
-                "Enter fold/open · retained preview only".to_owned()
+                ui.language
+                    .text(
+                        "Enter fold/open · retained preview only",
+                        "Enter 收起/展开 · 仅显示保留的预览",
+                    )
+                    .to_owned()
             } else if focused {
-                format!(
+                localized!(
+                    ui.language,
                     "{} events · ↑↓ select · Enter fold/open · full output: archive",
+                    "{} 条事件 · ↑↓ 选择 · Enter 收起/展开 · 完整输出见存档",
                     visible_events
                 )
             } else {
-                format!(
+                localized!(
+                    ui.language,
                     "{} events · focus Activity to fold/open · full output: archive",
+                    "{} 条事件 · 聚焦活动页以收起/展开 · 完整输出见存档",
                     visible_events
                 )
             };
@@ -2195,9 +2274,9 @@ fn semantic_text(text: &str, ui: &Ui, language: &str) -> String {
 
 fn palette_key(ui: &Ui) -> String {
     if !ui.color {
-        return String::new();
+        return ui.language.code().to_owned();
     }
-    [
+    let palette = [
         "foreground",
         "muted",
         "accent",
@@ -2210,7 +2289,23 @@ fn palette_key(ui: &Ui) -> String {
     .iter()
     .map(|tone| ui.color(tone))
     .collect::<Vec<_>>()
-    .join(";")
+    .join(";");
+    format!("{}:{palette}", ui.language.code())
+}
+
+fn status_label(status: Status, language: Language) -> String {
+    if language == Language::English {
+        return status.label();
+    }
+    match status {
+        Status::Running => "运行中".into(),
+        Status::Done => "已完成".into(),
+        Status::Exit(code) => format!("退出码={code}"),
+        Status::Cancelled => "已取消".into(),
+        Status::Timeout => "超时".into(),
+        Status::Signal(signal) => format!("信号={signal}"),
+        Status::Failed => "失败".into(),
+    }
 }
 
 fn paint(text: &str, tone: &str, ui: &Ui, bold: bool) -> String {
