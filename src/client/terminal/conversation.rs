@@ -293,6 +293,7 @@ impl State {
     }
 
     fn chat_accepted(&mut self, id: String, text: String) {
+        let warnings = references::warnings(&text);
         let text = references::source(&text).to_owned();
         self.conversation.composer.remember(&text);
         if self.conversation.view == View::History {
@@ -302,7 +303,11 @@ impl State {
         for line in markdown::rows(&text, self.geometry.left, &self.ui) {
             let _ = writeln!(record, "{line}");
         }
-        record.push_str("  queued · waiting for the next eligible tool response\n\n");
+        record.push_str("  queued · waiting for the next eligible tool response\n");
+        for warning in &warnings {
+            let _ = writeln!(record, "  Reference notice: {}", panel::safe_text(warning));
+        }
+        record.push('\n');
         self.log_message("user", &text, record.as_bytes());
         if self
             .conversation
@@ -313,7 +318,14 @@ impl State {
             self.conversation.submitting = None;
         }
         // Even identical text may be a deliberately typed next request.
-        self.notice = Some("Queued · delivered with the next eligible tool response".into());
+        self.notice = Some(if warnings.is_empty() {
+            "Queued · delivered with the next eligible tool response".into()
+        } else {
+            format!(
+                "Queued · reference notice: {}",
+                panel::safe_text(&warnings.join(" · "))
+            )
+        });
         self.dirty = true;
     }
 

@@ -87,8 +87,18 @@ fn receipt_label(status: &str) -> &'static str {
         "queued" => "Queued by service · waiting for recipient call",
         "included" => "Included in recipient tool response",
         "acknowledged" => "Acknowledged by recipient",
-        "failed" => "Delivery failed or expired",
+        "expired" => "Message expired · no automatic reroute",
+        "failed" => "Delivery failed or unconfirmed",
         _ => "Awaiting message receipt",
+    }
+}
+
+fn receipt_hint(receipt: &Value) -> String {
+    if field(receipt, "status") == "included" && receipt["connection_closed"] == true {
+        "Included in recipient tool response · connection closed · acknowledgement unavailable"
+            .into()
+    } else {
+        receipt_label(field(receipt, "status")).into()
     }
 }
 
@@ -343,10 +353,10 @@ impl State {
             && field(receipt, "recipient_id") == id
         {
             rows.push(("".into(), PanelTone::Normal));
-            rows.push((
-                receipt_label(field(receipt, "status")).into(),
-                PanelTone::Muted,
-            ));
+            rows.push((receipt_hint(receipt), PanelTone::Muted));
+            if !field(receipt, "error").is_empty() {
+                rows.push((panel::safe_text(field(receipt, "error")), PanelTone::Muted));
+            }
         }
         rows
     }
@@ -438,13 +448,27 @@ impl State {
             })
         {
             let status = field(receipt, "status");
-            if matches!(status, "queued" | "included" | "acknowledged" | "failed") {
+            if matches!(
+                status,
+                "queued" | "included" | "acknowledged" | "expired" | "failed"
+            ) {
                 let pending = self.conversation.native_pending.take().unwrap();
                 self.conversation.native_last = Some(receipt.clone());
-                if status == "failed" {
-                    self.conversation.native_retry = Some(pending);
+                if matches!(status, "failed" | "expired") {
+                    self.conversation.native_retry = if status == "failed" {
+                        Some(pending)
+                    } else {
+                        // Expiry is a terminal broker receipt. Keep the draft,
+                        // but do not retry that completed request ID.
+                        None
+                    };
+                    let state = if status == "expired" {
+                        "expired"
+                    } else {
+                        "unconfirmed"
+                    };
                     self.notice = Some(format!(
-                        "Message failed · {} · draft retained",
+                        "Message {state} · {} · draft retained",
                         panel::safe_text(field(receipt, "error"))
                     ));
                 } else {
@@ -462,7 +486,7 @@ impl State {
                     for row in markdown::rows(&pending.body, self.geometry.left, &self.ui) {
                         let _ = writeln!(record, "{row}");
                     }
-                    let _ = writeln!(record, "  {}\n", receipt_label(status));
+                    let _ = writeln!(record, "  {}\n", receipt_hint(receipt));
                     self.log_message("user", &pending.body, record.as_bytes());
                     self.notice = if same {
                         None
@@ -498,7 +522,7 @@ impl State {
         if let Some(receipt) = &self.conversation.native_last
             && field(receipt, "recipient_id") == selected
         {
-            return Some(receipt_label(field(receipt, "status")).into());
+            return Some(receipt_hint(receipt));
         }
         Some("Native message · text only · Enter sends · /message chooses recipient".into())
     }
@@ -756,5 +780,58 @@ mod tests {
                 })).unwrap()).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn closed_included_receipts_and_terminal_expiry_keep_delivery_facts_and_drafts() {
+        let mut state = state(120);
+        let recipient = state.chat_native_entries().remove(0);
+        let recipient_id = field(&recipient, "id").to_owned();
+        state.conversation.native_recipient = Some(recipient_id.clone());
+        state.conversation.native_last = Some(json!({
+            "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "recipient_id":recipient_id,
+            "text":"message body",
+            "status":"included",
+            "connection_closed":true,
+            "error":"消息已包含在收件方工具响应中；原连接已断开，未自动重发"
+        }));
+        let hint = state.chat_native_hint().unwrap();
+        assert!(hint.contains("Included in recipient tool response"));
+        assert!(hint.contains("connection closed"));
+        assert!(hint.contains("acknowledgement unavailable"));
+        assert!(!hint.contains("failed"));
+        assert!(
+            state
+                .chat_native_details(&recipient)
+                .iter()
+                .any(|(text, _)| { text.contains("消息已包含在收件方工具响应中") })
+        );
+
+        state.conversation.composer.set_text("message body");
+        state.conversation.native_pending = Some(pending(&state, "message body"));
+        state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([{
+            "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "message_id":"native_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "recipient_id":recipient_id,
+            "text":"message body",
+            "status":"expired",
+            "error":"Connection ended after inclusion; acknowledgement is unavailable"
+        }]);
+        state.chat_poll_native();
+        assert!(state.conversation.native_pending.is_none());
+        assert!(state.conversation.native_retry.is_none());
+        assert_eq!(state.conversation.composer.text(), "message body");
+        assert!(state.notice.as_deref().unwrap().contains("Message expired"));
+        assert!(
+            state
+                .chat_native_hint()
+                .unwrap()
+                .contains("Message expired")
+        );
+        assert_eq!(
+            state.conversation.native_last.as_ref().unwrap()["status"],
+            "expired"
+        );
     }
 }

@@ -29,25 +29,35 @@ enum Reference {
 /// Recover only a validated generated suffix, leaving arbitrary user text intact.
 /// Queue editors can show this source while retaining the frozen transport payload.
 pub(crate) fn source(text: &str) -> &str {
+    generated(text).map_or(text, |(source, _)| source)
+}
+
+/// Read nonblocking attachment notices from a validated generated payload.
+pub(crate) fn warnings(text: &str) -> Vec<String> {
+    generated(text)
+        .and_then(|(_, payload)| payload["references"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter(|reference| reference["status"] == "unavailable")
+        .filter_map(|reference| reference["warning"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn generated(text: &str) -> Option<(&str, Value)> {
     if text.len() > MAX_USER_MESSAGE_BYTES {
-        return text;
+        return None;
     }
-    let Some((original, encoded)) = text.strip_suffix(END).and_then(|s| s.rsplit_once(BEGIN))
-    else {
-        return text;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(encoded) else {
-        return text;
-    };
+    let (original, encoded) = text.strip_suffix(END)?.rsplit_once(BEGIN)?;
+    let value = serde_json::from_str::<Value>(encoded).ok()?;
     if value["schema_version"] == 1
         && value["source_sha256"] == digest(original.as_bytes())
         && value["references"]
             .as_array()
             .is_some_and(|items| !items.is_empty())
     {
-        original
+        Some((original, value))
     } else {
-        text
+        None
     }
 }
 
@@ -76,26 +86,36 @@ pub(crate) async fn expand(
         })
         .collect::<BTreeSet<_>>();
     let skills = if names.is_empty() {
-        BTreeMap::new()
+        Ok(BTreeMap::new())
     } else {
-        discover_skills(context, &names).await?
+        discover_skills(context, &names).await
     };
     let mut expanded = Vec::new();
     let mut files = BTreeSet::new();
     for reference in references {
         let value = match reference {
-            Reference::File(path) => {
-                let path = relative_path(&path, workspace.root())?;
-                if !files.insert(path.clone()) {
-                    continue;
+            Reference::File(path) => match relative_path(&path, workspace.root()) {
+                Ok(path) => {
+                    if !files.insert(path.clone()) {
+                        continue;
+                    }
+                    file_reference(workspace, &path)
+                        .await
+                        .unwrap_or_else(|warning| unavailable("file", "path", &path, &warning))
                 }
-                file_reference(workspace, &path).await?
-            }
+                Err(warning) => unavailable("file", "path", &path, &warning),
+            },
             Reference::Skill(name) => {
-                let entry = skills
-                    .get(&name)
-                    .ok_or("The selected skill disappeared; retry.")?;
-                skill_reference(context, &name, entry).await?
+                let resolved = match &skills {
+                    Ok(skills) => match skills.get(&name) {
+                        Some(entry) => skill_reference(context, &name, entry).await,
+                        None => Err(format!(
+                            "${name}: skill not found in the configured directories."
+                        )),
+                    },
+                    Err(warning) => Err(format!("${name}: {warning}")),
+                };
+                resolved.unwrap_or_else(|warning| unavailable("skill", "name", &name, &warning))
             }
         };
         expanded.push(value);
@@ -104,13 +124,24 @@ pub(crate) async fn expand(
         "schema_version":1,
         "source_sha256":digest(text.as_bytes()),
         "references":expanded,
-        "usage":"These explicitly reference workspace files or installed and embedded skills. Read the selected source with the delivering client's ID. File previews may be partial; read a selected skill in full before applying it."
+        "usage":"These explicitly reference workspace files or installed and embedded skills. Unavailable references retain the user's text and carry a warning, without file contents or read actions. Read available sources with the delivering client's ID. File previews may be partial; read a selected skill in full before applying it."
     });
     let result = format!("{text}{BEGIN}{payload}{END}");
     if result.len() > MAX_USER_MESSAGE_BYTES {
         return Err("The request and reference previews exceed 16 KiB; use fewer references or shorten the request. Your draft is unchanged.".into());
     }
     Ok(result)
+}
+
+fn unavailable(kind: &str, key: &str, value: &str, warning: &str) -> Value {
+    let mut end = warning.len().min(512);
+    while !warning.is_char_boundary(end) {
+        end -= 1;
+    }
+    json!({
+        "kind":kind,key:value,"status":"unavailable",
+        "warning":&warning[..end]
+    })
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -146,10 +177,9 @@ fn parse(text: &str) -> Result<Vec<Reference>, String> {
             at += count;
             continue;
         }
-        let boundary = text[..at]
-            .chars()
-            .next_back()
-            .is_none_or(|previous| previous.is_whitespace() || "([{>\"'".contains(previous));
+        let boundary = text[..at].chars().next_back().is_none_or(|previous| {
+            previous.is_whitespace() || "([{>\"'（【「『，。；：！？、".contains(previous)
+        });
         if code_ticks == 0 && boundary && matches!(ch, '@' | '$') {
             let start = at + 1;
             let next = text[start..].chars().next();
@@ -205,7 +235,9 @@ fn token(text: &str, start: usize) -> Result<(String, usize), String> {
         if Some(ch) == quote {
             return Ok((value, at + ch.len_utf8()));
         }
-        if quote.is_none() && (ch.is_whitespace() || "()[]{}<>,;!?".contains(ch)) {
+        if quote.is_none()
+            && (ch.is_whitespace() || "()[]{}<>,;!?（）【】「」『』，。；：！？、".contains(ch))
+        {
             return Ok((value, at));
         }
         if ch == '\\'
@@ -399,17 +431,7 @@ async fn discover_skills(
         }
         cursor = page["next_cursor"].as_str().map(str::to_owned);
         match &cursor {
-            None => {
-                let missing = names
-                    .iter()
-                    .filter(|name| !found.contains_key(*name))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                return Err(format!(
-                    "Skills not found in the configured directories: {}.",
-                    missing.join(", ")
-                ));
-            }
+            None => return Ok(found),
             Some(cursor) if !cursors.insert(cursor.clone()) => {
                 return Err(
                     "Skill discovery repeated a page; retry from the current index.".into(),
@@ -534,6 +556,35 @@ mod tests {
     }
 
     #[test]
+    fn unquoted_references_end_at_chinese_punctuation_and_allow_adjacent_references() {
+        assert_eq!(
+            parse("读取 @notes.txt，$lint-check；再看（@资料.txt），以及「$review」。").unwrap(),
+            vec![
+                Reference::File("notes.txt".into()),
+                Reference::Skill("lint-check".into()),
+                Reference::File("资料.txt".into()),
+                Reference::Skill("review".into()),
+            ]
+        );
+        assert_eq!(
+            parse("@\"含，标点.txt\" $\"中文；技能\"").unwrap(),
+            vec![
+                Reference::File("含，标点.txt".into()),
+                Reference::Skill("中文；技能".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unavailable_warnings_are_utf8_bounded() {
+        let reference = unavailable("file", "path", "missing.txt", &"缺".repeat(400));
+        assert_eq!(reference["path"], "missing.txt");
+        let warning = reference["warning"].as_str().unwrap();
+        assert!(warning.len() <= 512);
+        assert!(warning.chars().all(|ch| ch == '缺'));
+    }
+
+    #[test]
     fn quoted_file_references_preserve_windows_verbatim_prefixes() {
         for path in [
             r"\\?\C:\workspace\allowed file.txt",
@@ -587,7 +638,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn references_reject_missing_directories_external_paths_and_symlinks() {
+    async fn unavailable_files_keep_source_and_warn_without_read_actions() {
         let fixture = Fixture::new();
         let outside = Fixture::new();
         fixture.write("allowed.txt", "readable");
@@ -597,19 +648,18 @@ mod tests {
             "@missing.txt".to_owned(),
             "@.".into(),
             "@../outside.txt".into(),
+            quoted_file(&outside.0.join("outside.txt")),
         ] {
-            assert!(
-                expand(&draft, &workspace, &context).await.is_err(),
-                "{draft}"
-            );
+            let expanded = expand(&draft, &workspace, &context).await.unwrap();
+            assert_eq!(source(&expanded), draft);
+            let reference = &payload(&expanded)["references"][0];
+            assert_eq!(reference["kind"], "file");
+            assert_eq!(reference["status"], "unavailable");
+            assert!(reference.get("read").is_none());
+            assert!(reference.get("preview").is_none());
+            assert_eq!(warnings(&expanded).len(), 1);
+            assert!(!expanded.contains("private fixture"));
         }
-        let external = quoted_file(&outside.0.join("outside.txt"));
-        assert!(
-            expand(&external, &workspace, &context)
-                .await
-                .unwrap_err()
-                .contains("outside this session's workspace")
-        );
         let absolute = quoted_file(&fixture.0.join("allowed.txt"));
         assert_eq!(
             payload(&expand(&absolute, &workspace, &context).await.unwrap())["references"][0]["path"],
@@ -619,12 +669,38 @@ mod tests {
         {
             std::os::unix::fs::symlink(outside.0.join("outside.txt"), fixture.0.join("linked.txt"))
                 .unwrap();
-            assert!(expand("@linked.txt", &workspace, &context).await.is_err());
+            let expanded = expand("@linked.txt", &workspace, &context).await.unwrap();
+            assert_eq!(payload(&expanded)["references"][0]["status"], "unavailable");
+            assert_eq!(warnings(&expanded).len(), 1);
+            assert!(!expanded.contains("private fixture"));
         }
     }
 
     #[tokio::test]
-    async fn size_and_message_budgets_fail_without_truncating_the_draft() {
+    async fn missing_reference_retries_remain_frozen_until_source_is_edited() {
+        let fixture = Fixture::new();
+        let (workspace, context) = fixture.clients();
+        let draft = "请创建 @missing.txt，再参考 @existing.txt";
+        fixture.write("existing.txt", "available source");
+        let first = expand(draft, &workspace, &context).await.unwrap();
+        assert_eq!(source(&first), draft);
+        assert_eq!(payload(&first)["references"][0]["status"], "unavailable");
+        assert_eq!(
+            payload(&first)["references"][1]["preview"],
+            "available source"
+        );
+        assert_eq!(warnings(&first).len(), 1);
+        fixture.write("missing.txt", "new contents");
+        assert_eq!(expand(&first, &workspace, &context).await.unwrap(), first);
+        let edited = expand(source(&first), &workspace, &context).await.unwrap();
+        assert_eq!(payload(&edited)["references"][0]["preview"], "new contents");
+        assert!(warnings(&edited).is_empty());
+        assert!(warnings(draft).is_empty());
+        assert!(warnings(&first.replacen("请创建", "已修改", 1)).is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_files_warn_and_transport_limits_preserve_the_draft() {
         let fixture = Fixture::new();
         fixture.write("oversized.png", b"\x89PNG\r\n\x1a\n");
         fs::OpenOptions::new()
@@ -642,18 +718,12 @@ mod tests {
             .unwrap();
         fixture.write("notes.txt", "x".repeat(PREVIEW_BYTES * 2));
         let (workspace, context) = fixture.clients();
-        assert!(
-            expand("@oversized.png", &workspace, &context)
-                .await
-                .unwrap_err()
-                .contains("400 KiB")
-        );
-        assert!(
-            expand("@large.bin", &workspace, &context)
-                .await
-                .unwrap_err()
-                .contains("64 MiB")
-        );
+        for (draft, expected) in [("@oversized.png", "400 KiB"), ("@large.bin", "64 MiB")] {
+            let expanded = expand(draft, &workspace, &context).await.unwrap();
+            assert_eq!(source(&expanded), draft);
+            assert!(warnings(&expanded)[0].contains(expected));
+            assert!(payload(&expanded)["references"][0].get("read").is_none());
+        }
         let draft = format!(
             "{} @notes.txt",
             "字".repeat((MAX_USER_MESSAGE_BYTES - 32) / 3)
@@ -705,12 +775,20 @@ mod tests {
         );
         assert_eq!(data["references"][1]["root"], "context-1");
         assert_eq!(data["references"][1]["read"]["tool"], "ssmcp.skills.read");
-        assert!(
-            expand("$not-installed", &workspace, &context)
-                .await
-                .unwrap_err()
-                .contains("not found")
+        let draft = "使用 $lint-check，同时参考 $not-installed 和 @future.txt";
+        let mixed = expand(draft, &workspace, &context).await.unwrap();
+        let mixed_payload = payload(&mixed);
+        assert_eq!(source(&mixed), draft);
+        assert_eq!(
+            mixed_payload["references"][0]["description"],
+            "Project instructions."
         );
+        assert_eq!(mixed_payload["references"][1]["name"], "not-installed");
+        assert_eq!(mixed_payload["references"][1]["status"], "unavailable");
+        assert!(mixed_payload["references"][1].get("read").is_none());
+        assert_eq!(mixed_payload["references"][2]["path"], "future.txt");
+        assert_eq!(warnings(&mixed).len(), 2);
+        assert!(warnings(&mixed)[0].contains("not found"));
     }
 
     #[test]

@@ -1105,10 +1105,9 @@ impl Manager {
                             let SteeringCommand::Publish { text, .. } = request.command else {
                                 unreachable!()
                             };
-                            let text = super::references::source(&text).to_owned();
                             self.accepted_history.push(AcceptedHistory {
                                 id: message_id.clone(),
-                                text: text.clone(),
+                                text: super::references::source(&text).to_owned(),
                             });
                             self.event(UiEvent::Accepted {
                                 id: message_id,
@@ -1964,7 +1963,7 @@ mod tests {
             manager.events.pop_front(),
             Some(UiEvent::Accepted {
                 id: message_id.clone(),
-                text: draft.into()
+                text: expanded.clone()
             })
         );
         manager.take_back(&message_id).unwrap();

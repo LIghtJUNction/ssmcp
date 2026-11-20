@@ -1,7 +1,7 @@
 //! Nonblocking terminal sender. Only broker receipts mean queued or delivered.
 #[cfg(test)]
 mod tests;
-use crate::wire::messages::{Command, Receipt, Recipient, Reply};
+use crate::wire::messages::{Command, Receipt, Recipient, Reply, Status};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -33,6 +33,11 @@ struct Outgoing {
     status: String,
     message_id: Option<String>,
     error: Option<String>,
+    connection_closed: bool,
+    #[serde(skip)]
+    confirmed_status: Option<Status>,
+    #[serde(skip)]
+    receipt_updated_at_ms: u64,
 }
 #[derive(Default)]
 struct Manager {
@@ -152,11 +157,13 @@ impl Manager {
             }
         }
         if self.outgoing.len() >= 128 {
-            let Some(index) = self
-                .outgoing
-                .iter()
-                .position(|message| matches!(message.status.as_str(), "acknowledged" | "failed"))
-            else {
+            let Some(index) = self.outgoing.iter().position(|message| {
+                message.connection_closed
+                    || matches!(
+                        message.status.as_str(),
+                        "acknowledged" | "expired" | "failed"
+                    )
+            }) else {
                 return Err("发送记录已满，请先等待现有消息回执".into());
             };
             self.outgoing.remove(index);
@@ -169,6 +176,7 @@ impl Manager {
         {
             previous.status = "submitting".into();
             previous.error = None;
+            previous.connection_closed = false;
         } else {
             self.outgoing.push(Outgoing {
                 request_id: request_id.into(),
@@ -177,6 +185,9 @@ impl Manager {
                 status: "submitting".into(),
                 message_id: None,
                 error: None,
+                connection_closed: false,
+                confirmed_status: None,
+                receipt_updated_at_ms: 0,
             });
         }
         self.error = None;
@@ -188,15 +199,51 @@ impl Manager {
         }) else {
             return false;
         };
-        let (status, error) = match receipt.status {
-            crate::wire::messages::Status::Queued => ("queued", None),
-            crate::wire::messages::Status::Included => ("included", None),
-            crate::wire::messages::Status::Acknowledged => ("acknowledged", None),
-            crate::wire::messages::Status::Expired => (
-                "failed",
-                Some("连接、成员或权限已变化；消息没有重新路由给其他收件人".to_owned()),
+        // List polling and send replies may arrive out of order. Once a
+        // message is identified, neither another ID nor an older delivery
+        // milestone can replace it. Terminal receipts remain terminal.
+        if message
+            .message_id
+            .as_ref()
+            .is_some_and(|id| id != &receipt.message_id)
+        {
+            if message.status == "submitting" {
+                message.status = "failed".into();
+                message.error = Some(
+                    "服务器回执对应不同消息，重试结果未确认；原消息编号已保留，不会自动重发".into(),
+                );
+                return true;
+            }
+            return false;
+        }
+        if !receipt_progresses(message.confirmed_status, receipt.status)
+            || (message.confirmed_status == Some(receipt.status)
+                && receipt.updated_at_ms < message.receipt_updated_at_ms)
+        {
+            return false;
+        }
+        message.confirmed_status = Some(receipt.status);
+        message.receipt_updated_at_ms = message.receipt_updated_at_ms.max(receipt.updated_at_ms);
+        let (status, mut error) = match receipt.status {
+            Status::Queued => ("queued", None),
+            Status::Included => ("included", None),
+            Status::Acknowledged => ("acknowledged", None),
+            Status::Expired => (
+                "expired",
+                Some(if receipt.included_at_ms.is_some() {
+                    "消息曾包含在收件方工具响应中；连接、成员或权限已变化，后续确认已过期，未自动重发"
+                        .to_owned()
+                } else {
+                    "连接、成员或权限已变化；消息已过期，没有重新路由给其他收件人".to_owned()
+                }),
             ),
         };
+        if message.connection_closed && matches!(receipt.status, Status::Queued | Status::Included)
+        {
+            // A delayed observation cannot reopen a closed transport or make
+            // an included message look safe to resend.
+            error = message.error.clone();
+        }
         let changed = message.message_id.as_deref() != Some(receipt.message_id.as_str())
             || message.status != status
             || message.error != error;
@@ -214,8 +261,19 @@ impl Manager {
                 .iter_mut()
                 .find(|message| message.request_id == *request_id)
         {
-            message.status = "failed".into();
-            message.error = Some(error.into());
+            // A transport error only describes this request. It cannot
+            // retract delivery already confirmed by another overlapping poll.
+            message.status = match message.confirmed_status {
+                Some(Status::Queued) => "queued",
+                Some(Status::Included) => "included",
+                Some(Status::Acknowledged) => "acknowledged",
+                Some(Status::Expired) => "expired",
+                None => "failed",
+            }
+            .into();
+            if message.confirmed_status != Some(Status::Acknowledged) {
+                message.error = Some(error.into());
+            }
         }
     }
     fn reply(&mut self, id: u64, result: Result<Reply, String>) {
@@ -281,10 +339,10 @@ impl Manager {
         if self.available() && self.next_poll.is_some_and(|deadline| deadline <= now) {
             self.next_poll = Some(now + POLL);
             if self.watch_recipients
-                || self
-                    .outgoing
-                    .iter()
-                    .any(|m| matches!(m.status.as_str(), "submitting" | "queued" | "included"))
+                || self.outgoing.iter().any(|m| {
+                    !m.connection_closed
+                        && matches!(m.status.as_str(), "submitting" | "queued" | "included")
+                })
             {
                 let _ = self.refresh_with_visibility(true);
             }
@@ -303,10 +361,29 @@ impl Manager {
                 message.status = "failed".into();
                 message.error =
                     Some("原连接已断开；请保留正文并重新选择明确收件人，未自动重发".into());
+                message.connection_closed = true;
+            } else if message.status == "included" {
+                // Included is a fact: the receiving tool response contained
+                // the text. Disconnect does not undo it or prove a retry is
+                // safe, but this connection can no longer poll for an ACK.
+                message.connection_closed = true;
+                message.error = Some(
+                    "消息已包含在收件方工具响应中；原连接已断开，后续确认不可继续查询，未自动重发"
+                        .into(),
+                );
             }
         }
     }
 }
+fn receipt_progresses(previous: Option<Status>, next: Status) -> bool {
+    match previous {
+        None | Some(Status::Queued) => true,
+        Some(Status::Included) => next != Status::Queued,
+        Some(Status::Acknowledged) => next == Status::Acknowledged,
+        Some(Status::Expired) => next == Status::Expired,
+    }
+}
+
 fn state() -> std::sync::MutexGuard<'static, Manager> {
     STATE
         .get_or_init(|| Mutex::new(Manager::default()))
