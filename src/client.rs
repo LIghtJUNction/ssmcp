@@ -1231,6 +1231,45 @@ async fn apply_account(options: &mut Options, allow_login: bool) -> crate::Resul
     Ok(())
 }
 
+/// Bare/named account connections already carry account ownership and quota.
+/// Only their exact pre-Ready legacy-format rejection may retry as verified self.
+/// Explicit anonymous --allow has no credential here and can never enter this path.
+async fn retry_legacy_self_account(
+    options: &mut Options,
+    rejection: &str,
+    registered: bool,
+) -> crate::Result<bool> {
+    if registered
+        || rejection != relay::LEGACY_ACCOUNT_ALLOW
+        || options.account_compat
+        || options.temporary
+        || options.username.is_none()
+    {
+        return Ok(false);
+    }
+    let Some(previous) = options.relay.as_ref() else {
+        return Ok(false);
+    };
+    let verified = account::compat_credential(&previous.server, &options.allow).await?;
+    if verified.subject != previous.subject
+        || verified.principal != previous.principal
+        || verified.token != previous.token
+    {
+        return Err(
+            "saved login changed during legacy account verification; start a new connection".into(),
+        );
+    }
+    options.relay = Some(verified);
+    options.account_compat = true;
+    options.username = None;
+    render::status(
+        "account",
+        "Notice",
+        "Older relay: reconnecting once with the same verified account and self-only access.",
+    );
+    Ok(true)
+}
+
 pub async fn run() -> crate::Result<()> {
     #[cfg(target_os = "linux")]
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__local-relay")) {
@@ -1556,6 +1595,11 @@ pub async fn run() -> crate::Result<()> {
             return Ok(());
         }
         let error = result.as_ref().err().map(ToString::to_string);
+        if let Some(message) = error.as_deref()
+            && retry_legacy_self_account(&mut options, message, registered).await?
+        {
+            continue;
+        }
         let unsupported_protocol = result
             .as_ref()
             .err()
