@@ -202,7 +202,7 @@ pub(crate) fn agent_message(
             serde_json::to_value(document).expect("a typed presentation serializes");
     }
     let display_source = source.display();
-    crate::session::attach::record_event("agent", &event, display_source.history.as_ref());
+    crate::session::attach::record_event("agent", &event, display_source.history.local_id());
     let width = terminal_width().min(1000) as u16;
     let (raw, mut ui) = {
         let renderer = display().lock().unwrap_or_else(|e| e.into_inner());
@@ -310,7 +310,7 @@ fn emit_event(
     }
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     if !matches!(origin, EventOrigin::Replay) {
-        crate::session::attach::record_event(label, value, source.history.as_ref());
+        crate::session::attach::record_event(label, value, source.history.local_id());
     }
     let dashboard = super::terminal::active();
     let width = terminal_width();

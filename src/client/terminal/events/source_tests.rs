@@ -458,7 +458,7 @@ fn late_native_image_uses_its_own_placeholder_and_owner() {
         "data":STANDARD.encode(crate::client::input::paste::fixture_png())});
     let preview = images::decode(&block, false).unwrap();
     let source = DisplaySource {
-        history: Some(a.clone()),
+        history: DisplayHistory::Local(a.clone()),
         call: None,
     };
     state
@@ -475,6 +475,64 @@ fn late_native_image_uses_its_own_placeholder_and_owner() {
     assert_eq!(state.events.visible_ids(), vec![a_card.id]);
     assert!(a_card.image.is_some());
     assert!(state.logs.screen().contents().contains("Image attachment"));
+}
+
+#[test]
+fn legacy_attach_shared_cards_stay_out_of_explicitly_selected_local_history() {
+    let mut state = super::super::State::new(30, 100, &Ui::default());
+    state.events.set_scope(EventScope::Conversation);
+    state.follow_attach_history(DisplayHistory::LegacyAttach);
+    let legacy = DisplaySource {
+        history: DisplayHistory::LegacyAttach,
+        call: None,
+    };
+    state.log_scoped_event(
+        "agent",
+        &json!({"type":"ssmcp.message","text":"Legacy shared reply"}),
+        b"Legacy shared reply\n",
+        legacy.clone(),
+    );
+    state.log_scoped_event(
+        "shell",
+        &json!({"type":"exec.started","job_id":"unowned-log"}),
+        b"[RUN] Unowned native job\n",
+        DisplaySource::default(),
+    );
+    let rows = state.events.render(100, 20, &state.ui, false).join("\n");
+    assert!(rows.contains("Legacy shared reply"), "{rows}");
+    assert!(!rows.contains("Unowned native job"), "{rows}");
+    assert!(state.events.events[0].meta.history.local_id().is_none());
+
+    let b = HistoryId::parse("conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+    state.events.set_history_owner(Some(b.clone()));
+    state.events.ingest_event(
+        "message",
+        &json!({"type":"ssmcp.message","text":"Local B reply"}),
+        b"",
+    );
+    // Another page from the same legacy backend must preserve the local selection.
+    state.follow_attach_history(DisplayHistory::LegacyAttach);
+    state.log_scoped_event(
+        "agent",
+        &json!({"type":"ssmcp.message","text":"Late legacy reply"}),
+        b"Late legacy reply\n",
+        legacy,
+    );
+    let rows = state.events.render(100, 20, &state.ui, false).join("\n");
+    assert!(rows.contains("Local B reply"), "{rows}");
+    assert!(!rows.to_lowercase().contains("legacy"), "{rows}");
+    assert!(state.logs.screen().contents().contains("Late legacy reply"));
+
+    state.follow_attach_history(DisplayHistory::NoSelection);
+    assert!(state.events.is_empty());
+    state.events.set_scope(EventScope::All);
+    assert_eq!(state.events.visible_ids().len(), 4);
+
+    let mut waiting = super::super::State::new(30, 100, &Ui::default());
+    waiting.follow_attach_history(DisplayHistory::NoSelection);
+    waiting.events.set_history_owner(Some(b.clone()));
+    waiting.follow_attach_history(DisplayHistory::LegacyAttach);
+    assert_eq!(waiting.events.history_selection, DisplayHistory::Local(b));
 }
 
 async fn verified_reply_routing(name: &str, arguments: Value) {
@@ -542,11 +600,9 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
         let page = capture.read_for_test().await;
         assert_eq!(page["active_history_id"], b.as_str());
         let mut attached = super::super::State::new(30, 100, &Ui::default());
-        attached.follow_attach_history(
-            page["active_history_id"]
-                .as_str()
-                .and_then(HistoryId::parse),
-        );
+        attached.follow_attach_history(DisplayHistory::Local(
+            HistoryId::parse(page["active_history_id"].as_str().unwrap()).unwrap(),
+        ));
         attached.events.set_scope(EventScope::Conversation);
         let first_id = first["message_id"].as_str().unwrap();
         let captured = page["events"]
@@ -566,7 +622,7 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             } else {
                 &b
             };
-            assert_eq!(source.history.as_ref().unwrap().as_str(), expected);
+            assert_eq!(source.history.local_id().unwrap().as_str(), expected);
             assert!(source.call.is_none());
             let bytes = crate::client::render::render_event_for_test(label, value, 100).unwrap();
             attached.log_scoped_event(label, value, &bytes, source.clone());
@@ -574,7 +630,7 @@ async fn verified_reply_routing(name: &str, arguments: Value) {
             attached.log_scoped_event(label, value, &bytes, source);
         }
         for (owner, id) in [(&b, b_id.as_str()), (&a, first_id)] {
-            attached.follow_attach_history(HistoryId::parse(owner));
+            attached.follow_attach_history(DisplayHistory::Local(HistoryId::parse(owner).unwrap()));
             let visible = attached.events.visible_ids();
             let cards = attached
                 .events

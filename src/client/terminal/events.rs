@@ -3,7 +3,7 @@
 use super::{super::ui::Ui, images};
 use crate::{
     client::interface::history::{HistoryId, HistoryOwner},
-    runtime::call_scope::DisplaySource,
+    runtime::call_scope::{DisplayHistory, DisplaySource},
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -437,8 +437,8 @@ impl Event {
             + self.history_id.as_ref().map_or(0, String::len)
     }
 
-    fn owned_by(&self, owner: Option<&HistoryId>) -> bool {
-        !self.meta.global_only && self.meta.owner.as_ref() == owner
+    fn owned_by(&self, selection: &DisplayHistory) -> bool {
+        self.meta.history != DisplayHistory::Global && &self.meta.history == selection
     }
 
     fn matches(
@@ -446,9 +446,9 @@ impl Event {
         query: &str,
         level: u8,
         scope: EventScope,
-        owner: Option<&HistoryId>,
+        selection: &DisplayHistory,
     ) -> bool {
-        (scope == EventScope::All || (self.meta.kind != Kind::Log && self.owned_by(owner)))
+        (scope == EventScope::All || (self.meta.kind != Kind::Log && self.owned_by(selection)))
             && (level != 1 || self.meta.command || self.summary.starts_with("[RUN"))
             && (level != 2 || self.meta.status.is_some_and(Status::failed) || self.tone == "error")
             && (query.is_empty()
@@ -522,7 +522,7 @@ pub(crate) struct EventView {
     query: String,
     level: u8,
     scope: EventScope,
-    history_owner: Option<HistoryId>,
+    history_selection: DisplayHistory,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
     read_expanded: Vec<u64>,
@@ -541,7 +541,7 @@ impl EventView {
             return Vec::new();
         }
         let mut groups = read_activity::groups(&self.events, |event| {
-            event.owned_by(self.history_owner.as_ref())
+            event.owned_by(&self.history_selection)
         });
         for group in &mut groups {
             group.expanded = self.read_expanded.contains(&group.head);
@@ -554,7 +554,7 @@ impl EventView {
             return Vec::new();
         }
         tool_activity::groups(&self.events, |event| {
-            event.owned_by(self.history_owner.as_ref())
+            event.owned_by(&self.history_selection)
         })
     }
 
@@ -570,7 +570,7 @@ impl EventView {
         let reads = self.read_groups();
         let mut targets = Vec::new();
         for (index, event) in self.events.iter().enumerate() {
-            if !event.matches(&self.query, self.level, self.scope, self.history_owner.as_ref()) {
+            if !event.matches(&self.query, self.level, self.scope, &self.history_selection) {
                 continue;
             }
             if let Some(group) = groups.iter().find(|group| group.contains(index)) {
@@ -710,12 +710,7 @@ impl EventView {
 
     pub(crate) fn is_empty(&self) -> bool {
         !self.events.iter().any(|event| {
-            event.matches(
-                &self.query,
-                self.level,
-                self.scope,
-                self.history_owner.as_ref(),
-            )
+            event.matches(&self.query, self.level, self.scope, &self.history_selection)
         })
     }
 
@@ -728,12 +723,29 @@ impl EventView {
     }
 
     pub(super) fn set_history_owner(&mut self, owner: Option<HistoryId>) {
-        if self.history_owner == owner {
+        self.set_history_selection(
+            owner.map_or(DisplayHistory::NoSelection, DisplayHistory::Local),
+        );
+    }
+
+    pub(super) fn set_history_selection(&mut self, selection: DisplayHistory) {
+        // The first legacy page may arrive after the frontend selected a saved history.
+        if selection == DisplayHistory::LegacyAttach && self.history_selection.local_id().is_some()
+        {
             return;
         }
-        self.history_owner = owner;
-        self.read_boundary.interrupt();
-        self.refresh_visibility();
+        if self.history_selection != selection {
+            self.history_selection = selection;
+            self.read_boundary.interrupt();
+            self.refresh_visibility();
+        }
+    }
+
+    fn local_display_history(&self) -> DisplayHistory {
+        match &self.history_selection {
+            DisplayHistory::Local(owner) => DisplayHistory::Local(owner.clone()),
+            _ => DisplayHistory::NoSelection,
+        }
     }
 
     /// Replace saved prose while retaining native activity and its correlation.
@@ -742,10 +754,10 @@ impl EventView {
         owner: HistoryOwner,
         messages: &[crate::client::interface::history::Message],
     ) {
-        let owner = owner.display_id();
-        self.set_history_owner(Some(owner.clone()));
+        let selection = DisplayHistory::Local(owner.display_id());
+        self.set_history_selection(selection.clone());
         self.events
-            .retain(|event| !(event.meta.history_message && event.owned_by(Some(&owner))));
+            .retain(|event| !(event.meta.history_message && event.owned_by(&selection)));
         self.prune();
         self.refresh_visibility();
         for message in messages {
@@ -870,7 +882,7 @@ impl EventView {
                             &self.query,
                             self.level,
                             self.scope,
-                            self.history_owner.as_ref(),
+                            &self.history_selection,
                         )
                         && event
                             .image
@@ -901,7 +913,7 @@ impl EventView {
         self.ingest_inner(
             bytes,
             Meta {
-                owner: self.history_owner.clone(),
+                history: self.local_display_history(),
                 ..Meta::default()
             },
         );
@@ -1004,7 +1016,7 @@ impl EventView {
     /// Correlate only registered event identities. Text is never an identity.
     pub(crate) fn ingest_event(&mut self, label: &str, event: &Value, bytes: &[u8]) {
         let mut meta = Meta::from_event(label, event);
-        meta.owner = self.history_owner.clone();
+        meta.history = self.local_display_history();
         self.ingest_event_with_meta(label, event, bytes, meta);
     }
 
@@ -1026,7 +1038,7 @@ impl EventView {
             meta.message_id = event["message_id"].as_str().map(str::to_owned);
             if let Some(id) = &meta.message_id
                 && self.events.iter().any(|previous| {
-                    previous.owned_by(meta.owner.as_ref())
+                    previous.owned_by(&meta.history)
                         && previous.meta.message_id.as_ref() == Some(id)
                 })
             {
@@ -1297,7 +1309,7 @@ impl EventView {
     ) {
         self.read_boundary.interrupt();
         let mut meta = Meta {
-            owner: self.history_owner.clone(),
+            history: self.local_display_history(),
             ..Meta::default()
         };
         if let Some(source) = source {
@@ -1320,12 +1332,7 @@ impl EventView {
             event.meta.kind = Kind::Tool;
             event.chat_expanded = false;
             if self.follow
-                && event.matches(
-                    &self.query,
-                    self.level,
-                    self.scope,
-                    self.history_owner.as_ref(),
-                )
+                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
             {
                 self.selected = Some(event.id);
                 if self.scope != EventScope::Conversation {
@@ -1481,12 +1488,7 @@ impl EventView {
                 && event.meta.command
                 && !event.meta.diff
                 && event.panel.rows > 0
-                && event.matches(
-                    &self.query,
-                    self.level,
-                    self.scope,
-                    self.history_owner.as_ref(),
-                )
+                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
         }) else {
             return false;
         };
@@ -1522,12 +1524,7 @@ impl EventView {
         }
         if let Some(event) = self.events.iter_mut().find(|event| {
             Some(event.id) == self.selected
-                && event.matches(
-                    &self.query,
-                    self.level,
-                    self.scope,
-                    self.history_owner.as_ref(),
-                )
+                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
         }) {
             if self.scope == EventScope::Conversation {
                 if event.meta.kind == Kind::Conversation {
@@ -1566,12 +1563,7 @@ impl EventView {
         }
         let Some(event) = self.events.iter_mut().find(|event| {
             Some(event.id) == self.selected
-                && event.matches(
-                    &self.query,
-                    self.level,
-                    self.scope,
-                    self.history_owner.as_ref(),
-                )
+                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
         }) else {
             return false;
         };
@@ -1600,12 +1592,7 @@ impl EventView {
         };
         if !self.events.iter().any(|event| {
             event.id == id
-                && event.matches(
-                    &self.query,
-                    self.level,
-                    self.scope,
-                    self.history_owner.as_ref(),
-                )
+                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
         }) {
             return false;
         }
@@ -1660,7 +1647,7 @@ impl EventView {
             })).collect::<Vec<_>>(),
             "retained_events":self.events.len(),"retained_bytes":self.bytes,
             "event_scope":self.scope.label(),"diff_mode":self.diff_mode().name(),
-            "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope,self.history_owner.as_ref())).count(),
+            "visible_events":self.events.iter().filter(|event| event.matches(&self.query,self.level,self.scope,&self.history_selection)).count(),
             "visible_cards":self.visible_ids().len(),
             "read_groups":groups.iter().map(|group|json!({
                 "id":group.head,"count":group.members.len(),"expanded":group.expanded,
@@ -1778,12 +1765,7 @@ impl EventView {
                 continue;
             }
             let event = &mut self.events[index];
-            if !event.matches(
-                &self.query,
-                self.level,
-                self.scope,
-                self.history_owner.as_ref(),
-            ) {
+            if !event.matches(&self.query, self.level, self.scope, &self.history_selection) {
                 continue;
             }
             if let Some(group) = groups.iter().find(|group| group.contains(index)) {
@@ -4362,7 +4344,7 @@ mod tests {
         assert_eq!(
             view.events
                 .iter()
-                .filter(|event| event.matches("", 2, EventScope::All, None))
+                .filter(|event| event.matches("", 2, EventScope::All, &DisplayHistory::NoSelection))
                 .count(),
             4
         );

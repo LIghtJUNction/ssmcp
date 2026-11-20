@@ -157,7 +157,9 @@ impl Source {
     pub(crate) fn display(&self) -> DisplaySource {
         DisplaySource {
             call: self.call.clone(),
-            history: self.owner().map(HistoryOwner::display_id),
+            history: self.owner().map_or(DisplayHistory::Global, |owner| {
+                DisplayHistory::Local(owner.display_id())
+            }),
         }
     }
 
@@ -178,11 +180,39 @@ impl Source {
     }
 }
 
-/// Local display provenance. Attach replay carries only the display ID.
-#[derive(Clone, Default)]
+/// Display routing for a local conversation, global activity or legacy attach replay.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DisplayHistory {
+    #[default]
+    NoSelection,
+    Local(HistoryId),
+    LegacyAttach,
+    Global,
+}
+
+impl DisplayHistory {
+    pub(crate) fn local_id(&self) -> Option<&HistoryId> {
+        match self {
+            Self::Local(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// Local display provenance. Attach replay does not recreate a call scope.
+#[derive(Clone)]
 pub(crate) struct DisplaySource {
     pub(crate) call: Option<Arc<CallScope>>,
-    pub(crate) history: Option<HistoryId>,
+    pub(crate) history: DisplayHistory,
+}
+
+impl Default for DisplaySource {
+    fn default() -> Self {
+        Self {
+            call: None,
+            history: DisplayHistory::Global,
+        }
+    }
 }
 
 pub(crate) fn current_source() -> Source {

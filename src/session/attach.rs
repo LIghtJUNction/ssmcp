@@ -22,7 +22,10 @@ use super::ipc;
 use crate::{
     Result,
     client::interface::history::{self, HistoryId},
-    runtime::{Runtime, call_scope::DisplaySource},
+    runtime::{
+        Runtime,
+        call_scope::{DisplayHistory, DisplaySource},
+    },
 };
 
 const ENDPOINT: &str = "attach.json";
@@ -567,7 +570,8 @@ async fn attached(
     let _local_input = crate::client::attachments::LocalInput::bind(spec.cwd.clone())?;
     let display =
         terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
-    terminal::follow_attach_history(None);
+    terminal::follow_attach_history(DisplayHistory::NoSelection);
+    let mut replay_history = ReplayHistory::Legacy;
     let mut terminal_ids = Vec::new();
     sync_terminals(open, &mut terminal_ids);
     let mut selected = 0usize;
@@ -692,7 +696,9 @@ async fn attached(
                 page = pages.recv() => {
                     let page = page.ok_or("attach output stream ended")?.map_err(|error| format!("attach ended: {error}; the session may be reconnecting, stopped, or restarted"))?;
                     if page["truncated"] == true { render::status("attach","Warning","Earlier display history was evicted; showing the retained tail. Use session logs for older output."); }
-                    terminal::follow_attach_history(page["active_history_id"].as_str().and_then(HistoryId::parse));
+                    if let Some(selection) = replay_history.observe_page(&page) {
+                        terminal::follow_attach_history(selection);
+                    }
                     for event in page["events"].as_array().ok_or("invalid attach events")? {
                         if event["kind"]=="backend" && event["sequence"].as_u64().unwrap_or(0)>=live_cursor {
                             let generation=event["backend_generation"].as_u64().ok_or("missing backend generation")?;
@@ -707,7 +713,7 @@ async fn attached(
                             let epoch=event["backend_generation"].as_u64().unwrap_or(0);
                             if backend_generation.is_some_and(|current|current!=epoch) || epoch<display_generation_floor {continue;}
                         }
-                        replay(event)?;
+                        replay(event, replay_history)?;
                     }
                 }
                 _ = tick.tick() => {
@@ -793,6 +799,42 @@ fn sync_terminals(snapshot: &Value, ids: &mut Vec<String>) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ReplayHistory {
+    Legacy,
+    Modern,
+}
+
+impl ReplayHistory {
+    /// The page has already passed the private IPC and capture generation checks.
+    fn observe_page(&mut self, page: &Value) -> Option<DisplayHistory> {
+        if let Some(selection) = page.get("active_history_id") {
+            *self = Self::Modern;
+            return Some(
+                selection
+                    .as_str()
+                    .and_then(HistoryId::parse)
+                    .map_or(DisplayHistory::NoSelection, DisplayHistory::Local),
+            );
+        }
+        // Once the stream advertises ownership metadata, a missing field
+        // cannot turn the viewer back into the legacy shared timeline.
+        matches!(self, Self::Legacy).then_some(DisplayHistory::LegacyAttach)
+    }
+
+    fn event(self, frame: &Value) -> (&str, &Value, DisplaySource) {
+        let (label, value, mut source) = recorded_event(frame);
+        if matches!(self, Self::Legacy) {
+            source.history = if frame.get("local_history_id").is_none() {
+                DisplayHistory::LegacyAttach
+            } else {
+                DisplayHistory::Global
+            };
+        }
+        (label, value, source)
+    }
+}
+
 /// Decode display metadata only from the envelope of a checked local attach page.
 pub(crate) fn recorded_event(frame: &Value) -> (&str, &Value, DisplaySource) {
     (
@@ -801,16 +843,17 @@ pub(crate) fn recorded_event(frame: &Value) -> (&str, &Value, DisplaySource) {
         DisplaySource {
             history: frame["local_history_id"]
                 .as_str()
-                .and_then(HistoryId::parse),
+                .and_then(HistoryId::parse)
+                .map_or(DisplayHistory::Global, DisplayHistory::Local),
             call: None,
         },
     )
 }
 
-fn replay(event: &Value) -> Result<()> {
+fn replay(event: &Value, history: ReplayHistory) -> Result<()> {
     match event["kind"].as_str() {
         Some("event") => {
-            let (label, value, source) = recorded_event(event);
+            let (label, value, source) = history.event(event);
             crate::client::render::replay_event(label, value, source);
         }
         Some("finish") => {
@@ -981,15 +1024,74 @@ mod tests {
         assert!(legacy.get("local_history_id").is_none());
         let (_, value, source) = recorded_event(legacy);
         assert_eq!(value["local_history_id"], owner.as_str());
-        assert!(source.history.is_none());
+        assert_eq!(source.history, DisplayHistory::Global);
         assert!(source.call.is_none());
 
         let (_, _, source) = recorded_event(&page["events"][1]);
-        assert_eq!(source.history, Some(owner));
+        assert_eq!(source.history, DisplayHistory::Local(owner));
         assert!(source.call.is_none());
         let mut invalid = page["events"][1].clone();
         invalid["local_history_id"] = json!("../foreign");
-        assert!(recorded_event(&invalid).2.history.is_none());
+        assert_eq!(recorded_event(&invalid).2.history, DisplayHistory::Global);
+    }
+
+    #[test]
+    fn untagged_private_legacy_pages_have_a_shared_display_without_a_local_owner() {
+        let page = json!({"events":[{"kind":"event","label":"agent","value":{
+            "type":"ssmcp.message","text":"legacy fixture","active_history_id":null,
+            "local_history_id":"conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]});
+        let mut history = ReplayHistory::Legacy;
+        assert_eq!(
+            history.observe_page(&page),
+            Some(DisplayHistory::LegacyAttach)
+        );
+        let (_, _, source) = history.event(&page["events"][0]);
+        assert_eq!(source.history, DisplayHistory::LegacyAttach);
+        assert!(source.history.local_id().is_none());
+        assert!(source.call.is_none());
+
+        let mut unexpected = page["events"][0].clone();
+        unexpected["local_history_id"] = json!(null);
+        assert_eq!(history.event(&unexpected).2.history, DisplayHistory::Global);
+    }
+
+    #[test]
+    fn explicit_null_and_invalid_modern_metadata_keep_untagged_frames_global() {
+        let untagged = json!({"kind":"event","value":{"type":"ssmcp.message",
+            "text":"unowned","legacy_attach":true}});
+        let absent = json!({"events":[untagged.clone()]});
+        for selection in [Value::Null, json!("foreign"), json!(42)] {
+            let mut history = ReplayHistory::Legacy;
+            assert_eq!(
+                history.observe_page(&json!({"active_history_id":selection})),
+                Some(DisplayHistory::NoSelection)
+            );
+            assert_eq!(history.event(&untagged).2.history, DisplayHistory::Global);
+            assert_eq!(history.observe_page(&absent), None);
+            assert_eq!(history.event(&untagged).2.history, DisplayHistory::Global);
+        }
+    }
+
+    #[test]
+    fn modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner() {
+        let a = "conversation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let mut history = ReplayHistory::Legacy;
+        assert_eq!(
+            history.observe_page(&json!({"active_history_id":a})),
+            Some(DisplayHistory::Local(HistoryId::parse(a).unwrap()))
+        );
+        assert_eq!(
+            history.observe_page(&json!({"active_history_id":b})),
+            Some(DisplayHistory::Local(HistoryId::parse(b).unwrap()))
+        );
+        let late = json!({"kind":"event","local_history_id":a,
+            "value":{"type":"ssmcp.message","text":"late A","local_history_id":b}});
+        let (_, _, source) = history.event(&late);
+        assert_eq!(source.history.local_id().unwrap().as_str(), a);
+        assert!(source.call.is_none());
+        assert_eq!(history.observe_page(&json!({})), None);
+        assert_eq!(history.event(&late).2.history, source.history);
     }
 
     #[test]

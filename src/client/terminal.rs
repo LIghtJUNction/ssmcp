@@ -723,13 +723,13 @@ pub(crate) fn notice(message: &str) {
     }
 }
 
-pub(crate) fn follow_attach_history(owner: Option<super::interface::history::HistoryId>) {
+pub(crate) fn follow_attach_history(selection: crate::runtime::call_scope::DisplayHistory) {
     if let Some(shared) = shared() {
         let mut state = shared
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state.follow_attach_history(owner);
+        state.follow_attach_history(selection);
     }
 }
 
@@ -1390,7 +1390,7 @@ struct State {
     logs: vt100::Parser,
     events: events::EventView,
     // Attached frontends can have an unknown history before the first page or with a legacy peer.
-    attached_history: Option<Option<super::interface::history::HistoryId>>,
+    attached_history: Option<crate::runtime::call_scope::DisplayHistory>,
     pty: vt100::Parser<Replies>,
     active_session: String,
     inactive: BTreeMap<String, vt100::Parser<Replies>>,
@@ -1586,10 +1586,10 @@ impl State {
         self.events.ingest(bytes);
         self.log_raw(bytes);
     }
-    fn follow_attach_history(&mut self, owner: Option<super::interface::history::HistoryId>) {
-        if self.attached_history.as_ref() != Some(&owner) {
-            self.events.set_history_owner(owner.clone());
-            self.attached_history = Some(owner);
+    fn follow_attach_history(&mut self, selection: crate::runtime::call_scope::DisplayHistory) {
+        if self.attached_history.as_ref() != Some(&selection) {
+            self.events.set_history_selection(selection.clone());
+            self.attached_history = Some(selection);
             self.dirty = true;
         }
     }

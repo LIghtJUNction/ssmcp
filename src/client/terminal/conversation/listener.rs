@@ -2,7 +2,7 @@
 use super::*;
 use crate::client::interface::history::HistoryId;
 use crate::client::interface::listener::{self as receiver, Receipt, Status};
-use crate::runtime::call_scope::DisplaySource;
+use crate::runtime::call_scope::{DisplayHistory, DisplaySource};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 /// Strip the command and one separator, preserving the message's indentation.
@@ -278,7 +278,7 @@ impl State {
                 event,
                 bytes,
                 DisplaySource {
-                    history: Some(history.clone()),
+                    history: DisplayHistory::Local(history.clone()),
                     call: None,
                 },
             );

@@ -219,7 +219,11 @@ pub(super) fn groups(events: &VecDeque<Event>, owned: impl Fn(&Event) -> bool) -
                 })
             {
                 members.push(end);
-            } else if !((visible_owner || event.meta.owner.is_none())
+            } else if !((visible_owner
+                || matches!(
+                    &event.meta.history,
+                    super::DisplayHistory::Global | super::DisplayHistory::NoSelection
+                ))
                 && event.meta.read_bookkeeping
                 && event.meta.kind == Kind::Log
                 && !event.meta.command

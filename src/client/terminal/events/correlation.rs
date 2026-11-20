@@ -147,8 +147,7 @@ pub(super) struct Meta {
     pub(super) scope: Option<std::sync::Arc<crate::runtime::call_scope::CallScope>>,
     pub(super) kind: Kind,
     pub(super) user: bool,
-    pub(super) owner: Option<crate::client::interface::history::HistoryId>,
-    pub(super) global_only: bool,
+    pub(super) history: crate::runtime::call_scope::DisplayHistory,
     pub(super) history_message: bool,
     pub(super) message_id: Option<String>,
     pub(super) author: String,
@@ -313,13 +312,12 @@ impl Meta {
     }
 
     pub(super) fn set_source(&mut self, source: crate::runtime::call_scope::DisplaySource) {
-        self.owner = source.history;
-        self.global_only = self.owner.is_none();
+        self.history = source.history;
         self.scope = source.call;
     }
 
     pub(super) fn same_source(&self, other: &Self) -> bool {
-        if self.owner != other.owner || self.global_only != other.global_only {
+        if self.history != other.history {
             return false;
         }
         match (&self.scope, &other.scope) {
@@ -367,7 +365,10 @@ impl Meta {
 
     pub(super) fn bytes(&self) -> usize {
         self.author.len()
-            + self.owner.as_ref().map_or(0, |owner| owner.as_str().len())
+            + self
+                .history
+                .local_id()
+                .map_or(0, |owner| owner.as_str().len())
             + self.message_id.as_ref().map_or(0, String::len)
             + self.scope.as_ref().map_or(0, |scope| {
                 std::mem::size_of::<crate::runtime::call_scope::CallScope>()
