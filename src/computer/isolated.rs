@@ -24,6 +24,7 @@ impl Environment {
             .env("SDL_VIDEODRIVER", "x11")
             .env("MOZ_ENABLE_WAYLAND", "0")
             .env_remove("WAYLAND_DISPLAY")
+            .env_remove("WAYLAND_SOCKET")
             .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("DESKTOP_STARTUP_ID")
@@ -428,6 +429,8 @@ impl Desktop {
             .args([
                 "-displayfd",
                 "1",
+                // Reject a partial filesystem/abstract bind in an external race.
+                "-nopn",
                 "-screen",
                 "0",
                 &format!("{}x{}x24", options.width, options.height),
@@ -482,12 +485,9 @@ impl Desktop {
                 .verify(process, &mut files.entries)
         }
         .await;
-        match ready {
-            Ok(()) => {}
-            Err(error) => {
-                desktop.shutdown().await;
-                return Err(error);
-            }
+        if let Err(error) = ready {
+            desktop.shutdown().await;
+            return Err(error);
         }
         desktop.x11_files.reservation.take();
         if let Err(error) = desktop.computer.monitors().await {
@@ -670,6 +670,39 @@ fn authority_record(display: &str, cookie: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_command_removes_inherited_wayland_socket_without_changing_parent() {
+        use std::ffi::OsStr;
+        let before: Vec<_> = ["DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "XAUTHORITY"]
+            .into_iter()
+            .map(|name| (name, std::env::var_os(name)))
+            .collect();
+        let environment = Environment {
+            display: ":10000".into(),
+            authority: PathBuf::from("private-cookie"),
+            runtime: PathBuf::from("private-runtime"),
+        };
+        let mut command = std::process::Command::new("not-executed");
+        command
+            .env("WAYLAND_DISPLAY", "fixture-wayland")
+            .env("WAYLAND_SOCKET", "91");
+        environment.apply(&mut command);
+        let overrides: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            overrides.get(OsStr::new("DISPLAY")),
+            Some(&Some(OsStr::new(":10000")))
+        );
+        assert_eq!(
+            overrides.get(OsStr::new("XDG_SESSION_TYPE")),
+            Some(&Some(OsStr::new("x11")))
+        );
+        assert_eq!(overrides.get(OsStr::new("WAYLAND_DISPLAY")), Some(&None));
+        assert_eq!(overrides.get(OsStr::new("WAYLAND_SOCKET")), Some(&None));
+        for (name, expected) in before {
+            assert_eq!(std::env::var_os(name), expected, "{name}");
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
