@@ -59,11 +59,10 @@ enum Owner {
         subject: String,
         thread: Option<String>,
     },
-    Local {
-        uid: u32,
-        pid: u32,
-        started: u64,
-    },
+    // Only the Linux peer-credential transport constructs local owners in production.
+    // Keep the shared owner model available to portable scope tests.
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    Local { uid: u32, pid: u32, started: u64 },
 }
 
 impl Owner {
