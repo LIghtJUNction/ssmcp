@@ -160,6 +160,7 @@ impl State {
     }
 
     pub(super) fn chat_native_refresh(&mut self) {
+        self.dirty = true;
         if !self.preview
             && transport::available()
             && let Err(error) = transport::refresh()
@@ -355,6 +356,7 @@ impl State {
     }
 
     pub(super) fn chat_native_submit(&mut self, text: &str) {
+        self.dirty = true;
         if self.conversation.native_pending.is_some() {
             self.notice = Some("Waiting for the native message receipt · draft retained".into());
             return;
@@ -509,7 +511,7 @@ mod tests {
     use std::time::Instant;
 
     fn descriptor(id: &str, name: &str, subject: &str) -> Value {
-        json!({"id":id,"client_id":"device-1","agent_id":null,"display_name":name,
+        json!({"id":id,"client_id":id.strip_prefix("client:").unwrap(),"agent_id":null,"display_name":name,
             "kind":"account_inbox","account":{"provider":"github","subject":subject,"login":"owner"},
             "online":true,"sendable":true})
     }
@@ -526,15 +528,16 @@ mod tests {
             },
         );
         state.conversation.native_fixture = Some(json!({"available":true,"connected":true,
-            "recipients":[descriptor("inbox:one","project-z","123"),descriptor("inbox:two","review","123")],"outgoing":[]}));
+            "recipients":[descriptor("client:1111111111111111111111111111111111111111111111111111111111111111","project-z","123"),descriptor("client:2222222222222222222222222222222222222222222222222222222222222222","review","123")],"outgoing":[]}));
         state.conversation.composer.set_text("保留草稿");
         state
     }
 
     fn pending(state: &State, body: &str) -> Pending {
         Pending {
-            request_id: "ui-request-1".into(),
-            recipient_id: "inbox:one".into(),
+            request_id: "ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            recipient_id: "client:1111111111111111111111111111111111111111111111111111111111111111"
+                .into(),
             body: body.into(),
             original: state.chat_saved_draft(),
             revision: state.conversation.composer.revision(),
@@ -555,9 +558,13 @@ mod tests {
         state.chat_native_select(&selected);
         assert_eq!(
             state.conversation.native_recipient.as_deref(),
-            Some("inbox:one")
+            Some("client:1111111111111111111111111111111111111111111111111111111111111111")
         );
-        let recipient = state.native_descriptor("inbox:one").unwrap();
+        let recipient = state
+            .native_descriptor(
+                "client:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .unwrap();
         assert_eq!(
             message_body(state.conversation.composer.text(), &recipient),
             "hello\n  retained"
@@ -619,14 +626,18 @@ mod tests {
             json!("456");
         assert!(
             state
-                .native_descriptor("inbox:one")
+                .native_descriptor(
+                    "client:1111111111111111111111111111111111111111111111111111111111111111"
+                )
                 .unwrap_err()
                 .contains("account changed")
         );
         state.conversation.native_fixture.as_mut().unwrap()["recipients"] = json!([]);
         assert!(
             state
-                .native_descriptor("inbox:one")
+                .native_descriptor(
+                    "client:1111111111111111111111111111111111111111111111111111111111111111"
+                )
                 .unwrap_err()
                 .contains("not currently verified")
         );
@@ -638,7 +649,9 @@ mod tests {
     fn service_receipt_clears_only_the_exact_submitted_native_draft() {
         for edit_after_send in [false, true] {
             let mut state = state(120);
-            state.conversation.native_recipient = Some("inbox:one".into());
+            state.conversation.native_recipient = Some(
+                "client:1111111111111111111111111111111111111111111111111111111111111111".into(),
+            );
             state.conversation.composer.set_text("message body");
             state.conversation.native_pending = Some(pending(&state, "message body"));
             if edit_after_send {
@@ -646,7 +659,7 @@ mod tests {
             }
             let expected = state.conversation.composer.text().to_owned();
             state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([{
-                "request_id":"ui-request-1","recipient_id":"inbox:one","text":"message body","status":"submitting"
+                "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message_id":"native_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","recipient_id":"client:1111111111111111111111111111111111111111111111111111111111111111","text":"message body","status":"submitting"
             }]);
             state.chat_poll_native();
             assert!(state.conversation.native_pending.is_some());
@@ -683,16 +696,17 @@ mod tests {
     #[test]
     fn a_mismatched_or_failed_native_receipt_never_clears_the_draft() {
         let mut state = state(120);
-        state.conversation.native_recipient = Some("inbox:one".into());
+        state.conversation.native_recipient =
+            Some("client:1111111111111111111111111111111111111111111111111111111111111111".into());
         state.conversation.composer.set_text("message body");
         state.conversation.native_pending = Some(pending(&state, "message body"));
         state.conversation.native_fixture.as_mut().unwrap()["outgoing"] = json!([{
-            "request_id":"ui-request-1","recipient_id":"inbox:two","text":"message body","status":"queued"
+            "request_id":"ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message_id":"native_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","recipient_id":"client:2222222222222222222222222222222222222222222222222222222222222222","text":"message body","status":"queued"
         }]);
         state.chat_poll_native();
         assert!(state.conversation.native_pending.is_some());
         state.conversation.native_fixture.as_mut().unwrap()["outgoing"][0]["recipient_id"] =
-            json!("inbox:one");
+            json!("client:1111111111111111111111111111111111111111111111111111111111111111");
         state.conversation.native_fixture.as_mut().unwrap()["outgoing"][0]["text"] =
             json!("different body");
         state.chat_poll_native();
@@ -707,12 +721,12 @@ mod tests {
         assert!(state.conversation.native_pending.is_none());
         assert_eq!(
             state.conversation.native_retry.as_ref().unwrap().request_id,
-            "ui-request-1"
+            "ui-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(state.conversation.composer.text(), "message body");
         assert_eq!(
             state.conversation.native_recipient.as_deref(),
-            Some("inbox:one")
+            Some("client:1111111111111111111111111111111111111111111111111111111111111111")
         );
     }
 

@@ -79,6 +79,12 @@ impl State {
 
     fn question_open_selected(&mut self) {
         let views = self.question_views();
+        self.conversation
+            .answers
+            .retain(|id, _| views.iter().any(|view| view.question.id == *id));
+        self.conversation
+            .finish_choices
+            .retain(|id, _| views.iter().any(|view| view.question.id == *id));
         self.conversation.selected = self
             .conversation
             .selected
@@ -137,20 +143,23 @@ impl State {
         };
         self.chat_change_view(View::Questions);
         self.conversation.selected = next;
-        self.conversation.answers.retain(|id, _| {
-            views
-                .iter()
-                .any(|view| view.question.id == *id && editable(view))
-        });
-        self.conversation.finish_choices.retain(|id, _| {
-            views
-                .iter()
-                .any(|view| view.question.id == *id && editable(view))
-        });
+        self.conversation
+            .answers
+            .retain(|id, _| views.iter().any(|view| view.question.id == *id));
+        self.conversation
+            .finish_choices
+            .retain(|id, _| views.iter().any(|view| view.question.id == *id));
         self.question_open_selected();
     }
 
     pub(super) fn question_editor(&self) -> Option<&Composer> {
+        if self
+            .question_current()
+            .as_ref()
+            .is_some_and(|view| !editable(view))
+        {
+            return None;
+        }
         self.conversation
             .question_id
             .as_ref()
@@ -167,6 +176,7 @@ impl State {
             .is_some_and(|view| !editable(view))
         {
             self.notice = Some("This request already has a recorded answer or decision".into());
+            self.conversation.content_focus = true;
             return None;
         }
         self.conversation
@@ -709,6 +719,23 @@ impl State {
                 }
                 body.push(self.chat_line(delivery_label(&view), PanelTone::Muted, width));
             }
+            if !editable(&view) {
+                self.conversation.content_focus = true;
+                if let Some(local) = self
+                    .conversation
+                    .answers
+                    .get(&question.id)
+                    .filter(|editor| !editor.is_empty())
+                {
+                    body.push(self.chat_line("", PanelTone::Normal, width));
+                    body.push(self.chat_line(
+                        "Your unsent draft · not delivered",
+                        PanelTone::Muted,
+                        width,
+                    ));
+                    body.extend(markdown::rows(local.text(), width, &self.ui));
+                }
+            }
             let available = usize::from(height).saturating_sub(rows.len());
             self.conversation.detail_scroll = self
                 .conversation
@@ -938,6 +965,31 @@ mod tests {
             assert_eq!(state.conversation.composer.text(), original);
             assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
         }
+    }
+
+    #[test]
+    fn another_agents_decision_preserves_but_does_not_submit_the_local_comment() {
+        let mut state = state(120, vec![fixture("finish-a", true)]);
+        for ch in "my unfinished comment".chars() {
+            state.question_character(ch);
+        }
+        let view = &mut state.conversation.question_fixture.as_mut().unwrap()[0];
+        view.question.state = QuestionState::Answered;
+        view.finish.as_mut().unwrap().status = FinishStatus::Denied;
+        assert!(state.question_editor().is_none());
+        let contents = screen(&mut state, "finish-external");
+        assert!(contents.contains("Your unsent draft"));
+        assert!(contents.contains("my unfinished comment"));
+        assert!(state.conversation.content_focus);
+        state.chat_questions();
+        assert_eq!(
+            state.conversation.answers["finish-a"].text(),
+            "my unfinished comment"
+        );
+        assert_eq!(
+            state.conversation.composer.text(),
+            "保留原始草稿\n  indentation"
+        );
     }
 
     #[test]
