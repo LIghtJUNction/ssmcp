@@ -2592,6 +2592,35 @@ fn command_label(command: &Value) -> String {
     command::Command::new(command).summary()
 }
 
+/// Retain a redacted display copy even when concise logs omit inline source.
+/// Native argv is never modified or executed by this presentation helper.
+pub(crate) fn interactive_command_source(event: &Value) -> Option<String> {
+    let rpc = event.get("request").unwrap_or(event);
+    let value = if event["type"] == "exec.started" {
+        event.get("command")?
+    } else if rpc["method"] == "command/exec" {
+        rpc["params"]
+            .get("command")
+            .or_else(|| rpc["params"].get("cmd"))?
+    } else {
+        return None;
+    };
+    if !value.is_string() && !value.is_array() {
+        return None;
+    }
+    let redacted = crate::audit::event(serde_json::json!({"command":value}));
+    let command = command::Command::new(&redacted["command"]);
+    let mut source = format!("cmd={}\n", command.invocation.replace('\n', "\\n"));
+    if let Some(script) = command.script {
+        let lines = script.split('\n').collect::<Vec<_>>();
+        source.push_str(&format!("script · {} lines\n", lines.len()));
+        for (index, line) in lines.iter().enumerate() {
+            source.push_str(&format!("{} │ {line}\n", index + 1));
+        }
+    }
+    Some(source)
+}
+
 fn json_record(text: &str) -> bool {
     let text = text.trim_start();
     text.starts_with('{')

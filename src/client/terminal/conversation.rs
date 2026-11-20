@@ -619,6 +619,19 @@ impl State {
                 }
                 self.notice = Some(crate::client::interface::computer::local_command(rest)?);
             }
+            "/command" => {
+                if rest.split_whitespace().count() > 1 {
+                    return Err("Use /command [JOB_ID] to inspect a complete command".into());
+                }
+                self.chat_change_view(View::Tasks);
+                self.conversation.content_focus = true;
+                if let Err(error) = self.conversation.tasks.refresh(self.preview) {
+                    self.notice = Some(error);
+                }
+                self.conversation
+                    .tasks
+                    .open_command((!rest.is_empty()).then_some(rest));
+            }
             "/tasks" => {
                 if rest.is_empty() {
                     self.chat_change_view(View::Tasks);
@@ -3408,6 +3421,29 @@ mod tests {
             assert_eq!(state.conversation.snapshot()["draft"], draft);
             save_command_panel_preview(&mut state, "scroll-zones-page");
         }
+    }
+
+    #[test]
+    fn command_shortcut_is_read_only_and_selects_the_exact_task() {
+        let mut state = preview(32, 120);
+        display(&mut state);
+        state.conversation.composer.set_text("keep draft");
+        let before = state.conversation.snapshot()["draft"].clone();
+        assert!(state.chat_command("/command preview-task-test").unwrap());
+        assert_eq!(state.conversation.view, View::Tasks);
+        assert_eq!(
+            state.conversation.tasks.snapshot()["selected_id"],
+            "preview-task-test"
+        );
+        assert_eq!(state.conversation.tasks.snapshot()["detail"], true);
+        assert_eq!(state.conversation.snapshot()["draft"], before);
+        let screen = display(&mut state).screen().contents();
+        assert!(
+            screen.contains("complete argv") && screen.contains("cargo"),
+            "{screen}"
+        );
+        assert!(state.chat_command("/command target extra").is_err());
+        assert!(state.actions.is_empty() && state.conversation.submitting.is_none());
     }
 
     #[test]

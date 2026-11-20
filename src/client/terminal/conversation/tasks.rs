@@ -51,7 +51,8 @@ impl Job {
     }
 
     fn command(&self) -> String {
-        self.data["command"]
+        let display = crate::audit::event(json!({"command":self.data["command"]}));
+        display["command"]
             .as_array()
             .unwrap()
             .iter()
@@ -386,6 +387,19 @@ impl TaskPanel {
         true
     }
 
+    /// Resolve an exact job through the normal asynchronous read; never run it.
+    pub(crate) fn open_command(&mut self, id: Option<&str>) {
+        if let Some(id) = id {
+            self.position.selected_id = Some(id.into());
+        } else if self.position.selected_id.is_none() {
+            self.position.selected_id = self.jobs.first().map(|job| job.id.clone());
+        }
+        self.position.detail = true;
+        self.position.detail_scroll = 0;
+        self.next_refresh = None;
+        self.mouse_rows.clear();
+    }
+
     pub(crate) fn back(&mut self) -> bool {
         if !self.position.detail {
             return false;
@@ -452,7 +466,7 @@ impl TaskPanel {
         rows.push((title, "heading", None));
         rows.push((
             if self.position.detail {
-                " Esc list · ↑/↓ scroll · /tasks cancel JOB_ID"
+                " Esc list · ↑/↓ scroll · F7 select/copy"
             } else {
                 " ↑/↓ select · Enter details · PgUp/PgDn scroll"
             }
@@ -552,6 +566,9 @@ impl TaskPanel {
 
     fn detail_lines(&self, width: usize) -> Vec<String> {
         let Some(index) = self.selected_index() else {
+            if !self.loaded && self.error.is_none() {
+                return wrap("Loading local command details…", width);
+            }
             return wrap(
                 &format!(
                     "Job {} is no longer retained. Press Esc to return to the task list.",
@@ -566,9 +583,25 @@ impl TaskPanel {
             format!("State: {}", job.state()),
             format!("Exit: {}", job.exit()),
             format!("Duration: {}", job.duration()),
-            format!("Command: {}", job.command()),
             format!("cwd: {}", job.cwd()),
+            "Command · complete argv · read only".into(),
         ];
+        let display = crate::audit::event(json!({"command":job.data["command"]}));
+        for (index, argument) in display["command"].as_array().unwrap().iter().enumerate() {
+            let argument = argument.as_str().unwrap();
+            if argument.contains('\n') {
+                let parts = argument.split('\n').collect::<Vec<_>>();
+                lines.push(format!("argv[{index}] · {} lines:", parts.len()));
+                for (number, line) in parts.iter().enumerate() {
+                    lines.push(format!("  {} │ {line}", number + 1));
+                }
+            } else {
+                lines.push(format!(
+                    "argv[{index}]: {}",
+                    serde_json::to_string(argument).unwrap()
+                ));
+            }
+        }
         if let Some((id, error)) = &self.detail_error
             && id == &job.id
         {
@@ -728,6 +761,42 @@ mod tests {
             color: false,
             ..Ui::default()
         }
+    }
+
+    #[test]
+    fn complete_command_keeps_long_multiline_argv_and_exact_selection() {
+        let mut panel = TaskPanel::default();
+        panel.open_command(Some("target"));
+        let mut target = job("target", false);
+        let script = format!(
+            "first\nAPI_TOKEN=task-private-secret\n{}\nlast-marker",
+            "界".repeat(700)
+        );
+        target["command"] = json!(["python3", "-c", script, ""]);
+        panel
+            .ingest(&json!({"jobs":[job("other", true), target.clone()]}))
+            .unwrap();
+        assert_eq!(panel.snapshot()["selected_id"], "target");
+        assert_eq!(
+            panel.snapshot()["selected_job"]["command"],
+            target["command"]
+        );
+        for width in [47, 119] {
+            let lines = panel.detail_lines(width);
+            let text = lines.join("\n");
+            assert!(text.contains("last-marker") && text.contains("argv[3]: \"\""));
+            assert!(text.contains("[redacted]") && !text.contains("task-private-secret"));
+            assert_eq!(text.matches('界').count(), 700);
+            assert!(lines.iter().all(|line| line.width() <= width));
+        }
+        panel.open_command(Some("not-retained"));
+        assert!(
+            panel
+                .detail_lines(80)
+                .join("\n")
+                .contains("no longer retained")
+        );
+        assert_eq!(panel.snapshot()["selected_id"], "not-retained");
     }
 
     #[test]
