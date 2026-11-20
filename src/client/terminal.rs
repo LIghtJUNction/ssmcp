@@ -31,6 +31,7 @@ mod guide;
 mod images;
 pub(crate) mod markdown;
 mod sleep;
+mod update_notice;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -63,6 +64,7 @@ pub(crate) struct Session {
     thread: Option<JoinHandle<()>>,
     guide_probe: Option<tokio::task::JoinHandle<()>>,
     account_probe: Option<tokio::task::JoinHandle<()>>,
+    update_probe: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Session {
@@ -207,11 +209,18 @@ impl Session {
                         }
                     }))
                 });
+                let update_probe = update_notice::spawn(
+                    &shared,
+                    endpoint.is_some(),
+                    io::stdout().is_terminal(),
+                    super::update::available_notice(),
+                );
                 Ok(Some(Self {
                     shared,
                     thread: Some(thread),
                     guide_probe,
                     account_probe,
+                    update_probe,
                 }))
             }
             Err(error) => {
@@ -233,6 +242,9 @@ impl Drop for Session {
             probe.abort();
         }
         if let Some(probe) = self.account_probe.take() {
+            probe.abort();
+        }
+        if let Some(probe) = self.update_probe.take() {
             probe.abort();
         }
         if let Some(thread) = self.thread.take() {
@@ -317,8 +329,11 @@ pub(super) fn set_connection_versions(versions: super::update::ConnectionVersion
         let notice = versions
             .update_message()
             .unwrap_or_else(|| versions.summary());
-        // Preserve a more urgent local recovery or authentication notice.
-        state.notice.get_or_insert(notice);
+        // Reconnecting keeps fresh metadata without repeatedly taking the footer.
+        // Errors and local recovery retain the higher-priority notice slot.
+        if super::update::claim_connection_notice(&versions) {
+            state.update_notice = Some(notice);
+        }
         state.connection_versions = Some(versions);
         state.dirty = true;
     }
@@ -1409,6 +1424,7 @@ struct State {
     filter_offset: usize,
     preview: bool,
     notice: Option<String>,
+    update_notice: Option<String>,
     actions: Vec<&'static str>,
     previous_cr: bool,
     dirty: bool,
@@ -1463,6 +1479,7 @@ impl State {
             filter_offset: 0,
             preview: false,
             notice: None,
+            update_notice: None,
             actions: Vec::new(),
             previous_cr: false,
             dirty: true,
@@ -2147,6 +2164,13 @@ impl State {
         for row in 0..g.rows {
             if g.rows >= 3 && row == g.rows - 1 {
                 let level = ["all", "commands", "errors"][usize::from(self.log_level)];
+                let idle_update = !self.help
+                    && !self.selection
+                    && !self.filter_editing
+                    && self.notice.is_none()
+                    && self.log_query.is_empty()
+                    && self.log_level == 0
+                    && self.update_notice.is_some();
                 let hint = if self.selection {
                     COPY_HINT.into()
                 } else if self.filter_editing {
@@ -2158,6 +2182,8 @@ impl State {
                         " Logs: {level} /{} · / Edit · Esc Clear · Wheel Scroll · ↑↓ Audit · Enter Open ",
                         self.log_query
                     )
+                } else if idle_update {
+                    self.update_notice.clone().unwrap_or_default()
                 } else if g.cols < 100 {
                     " F7 Copy · Wheel Logs · ↑↓ Audit · Enter/→ Open · / Filter · F1 Help ".into()
                 } else {
@@ -2169,7 +2195,7 @@ impl State {
                     self.server_origin.as_ref(),
                     connection,
                     g.cols,
-                    self.notice.is_some() || self.filter_editing,
+                    self.notice.is_some() || self.filter_editing || idle_update,
                 );
                 rows.push(self.tone(
                     if self.keyboard.logs {
@@ -4030,6 +4056,7 @@ mod tests {
             thread: Some(thread),
             guide_probe: None,
             account_probe: None,
+            update_probe: None,
         };
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 65536];

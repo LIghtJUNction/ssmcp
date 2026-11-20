@@ -1,6 +1,8 @@
-//! Explicit self-update through the bundled, checksum-verifying installers.
+//! Observational startup checks and explicit, checksum-verified self-update.
 mod notice;
-pub(super) use notice::{ConnectionVersions, report_connection};
+mod startup;
+pub(super) use notice::{ConnectionVersions, claim_connection_notice, report_connection};
+pub(super) use startup::{available_notice, mark_notice_shown};
 use std::{
     cmp::Ordering,
     ffi::OsString,
@@ -69,7 +71,7 @@ fn release_version(bytes: &[u8]) -> crate::Result<Version> {
     Version::parse(&release.tag_name)
 }
 
-async fn latest_release(client: &reqwest::Client, url: &str) -> crate::Result<Version> {
+async fn release_metadata(client: &reqwest::Client, url: &str) -> crate::Result<Vec<u8>> {
     let mut response = client
         .get(url)
         .header("Accept", "application/vnd.github+json")
@@ -89,7 +91,11 @@ async fn latest_release(client: &reqwest::Client, url: &str) -> crate::Result<Ve
         }
         body.extend_from_slice(&chunk);
     }
-    release_version(&body)
+    Ok(body)
+}
+
+async fn latest_release(client: &reqwest::Client, url: &str) -> crate::Result<Version> {
+    release_version(&release_metadata(client, url).await?)
 }
 
 fn package_manager_hint(executable: &Path, cargo_home: Option<&Path>) -> Option<&'static str> {
