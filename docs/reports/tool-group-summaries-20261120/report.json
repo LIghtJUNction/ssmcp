@@ -1,0 +1,583 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "source_revision": "911bfe905e6df1b54bcc46be2f88c87813cb031c",
+  "package_version": "0.10.21",
+  "source_clean_before_and_after": true,
+  "rust_toolchain": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "build_policy": {
+    "locked": true,
+    "offline": true,
+    "jobs": 1,
+    "incremental": false,
+    "debug_info": 0,
+    "ordinary_ci_dispatched": false
+  },
+  "submodule_commits": {
+    "crates/zharness": "db4206d3b74e37d57ff052948962f55514081d4b",
+    "crates/zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "crates/zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "stages": [
+    {
+      "name": "01-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.677,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "02-libtest-build",
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--no-run",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 82.836,
+      "stdout_sha256": "68106fafe7a743f042c4914fdc4b5a6c2794b150477f7bf6750834352c1975c7",
+      "stderr_sha256": "70a2f9dd628e74b3be59502f3a436516ac12801f43e15ed267d704f4418f5042"
+    },
+    {
+      "name": "03-summary-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "tool_summar",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.589,
+      "stdout_sha256": "1182736cb57757fd1b0ef1e995b792f0f655b5eb39f411deb80e2821ef39c945",
+      "stderr_sha256": "bc7e27d27abf20efb2f7a1d86912090547310c64d1ac7fb989f3cb6c5ab1a406"
+    },
+    {
+      "name": "04-events-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::terminal::events::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 7.341,
+      "stdout_sha256": "ccdddf794d6ccc514f95754dd61624bebaecfa7d857deebb84890fd603be292a",
+      "stderr_sha256": "c7e60edde0203e70c4102a46a4b0bb895df79393d5c0377ace18293e73ef2b0f"
+    },
+    {
+      "name": "05-broker-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "broker::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.032,
+      "stdout_sha256": "aa78d76793e97d5b065836f41c640e7dff1dd9a7b99cc7a720ef63995776db19",
+      "stderr_sha256": "1881123566e33ed2d552377b00fe42fb208ae847064861dc057e98fda5decfa0"
+    },
+    {
+      "name": "06-runtime-tests",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "runtime::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 2.752,
+      "stdout_sha256": "7f239a45ecab6d49c91b0267a6c765831b8dd89df805bbf2c4b03154de669e97",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06b-ui-inventory",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::tests::action_decoder_validates_the_catalog_without_executing_actions",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "stdout_sha256": "f5e1f5a0d09a67cc716c2ce2b7682932b86f3ddede9a30c90ed2fed1a05a0fc0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06c-history-owner",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::history::ownership::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.062,
+      "stdout_sha256": "5f96cb6b453bc5b050097ede686e8b5f512a04f5666ed2ccf83a799a05e08404",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06d-queue-recall",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::latest_takeback_reclaims_only_the_latest_unsent_request",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.005,
+      "stdout_sha256": "9096258e23f60702ffb21ed6075733ae0dffeba72e3adb3f8e145443aa0c2fa0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06e-queue-retry",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::uncertain_retarget_and_local_edit_never_retract_previous_history",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.005,
+      "stdout_sha256": "ec24faab51d809e1dd8707a1ba7eccbee3a2e01aa0cd893d5469e8872d46738a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06f-queue-ack",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.004,
+      "stdout_sha256": "3323e1d2295076c7cf2acadf52308785cbea0384efc4ac059bc24bcfe95e1038",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06g-queue-delivery",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "stdout_sha256": "7c86850edb8bc57296b89c4c7da0e882d6db10f0a0c9f24baefa4c68d2639f3f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06h-history-archive",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::interface::history::archive::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.897,
+      "stdout_sha256": "6cd15613221d219503960f720fe5fd34ac50092f910eecdd3adf26343be60d0c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06i-conversation-reload",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "client::terminal::conversation::reload_state::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.046,
+      "stdout_sha256": "733998d1f56a5440af7d001e843782f07e19ad758278369e20ead02cc65d7335",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "06j-late-session-frames",
+      "command": [
+        "<validation-root>/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+        "session::attach::tests::modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "seconds": 0.006,
+      "stdout_sha256": "947b41285f460009a4d055ed9cc133a9f4fb204f0d633b84fa2164b5a3152ddb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "07-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--offline",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 51.289,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "5d85c857e23c1c1850bd78bdaab3a08b6fef386fcf067db8ea7f9a12aff60a02"
+    },
+    {
+      "name": "08-binaries",
+      "command": [
+        "cargo",
+        "build",
+        "--bins",
+        "--example",
+        "vt_snapshot",
+        "--locked",
+        "--offline",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 45.329,
+      "stdout_sha256": "bf137cf7e4635a60d0ffc4f405e2d816914fcfe438546c97ed1b50495b497345",
+      "stderr_sha256": "57503e7bdfccb4a40e47d6477f8c62aa735a1d77fe77b82972709ae0c323ec9f"
+    },
+    {
+      "name": "09-pty",
+      "command": [
+        "python3",
+        "scripts/e2e_tool_summaries.py",
+        "--bin-dir",
+        "<validation-root>/attempt-08/bin",
+        "--decoder",
+        "<validation-root>/attempt-08/bin/vt_snapshot",
+        "--fixture-binary",
+        "<validation-root>/attempt-08/bin/libtest",
+        "--source-revision",
+        "911bfe905e6df1b54bcc46be2f88c87813cb031c",
+        "--out",
+        "<validation-root>/attempt-08/pty"
+      ],
+      "exit_code": 0,
+      "seconds": 10.557,
+      "stdout_sha256": "f6242d35d163c34c2af4fe5dabfadccdd00404acd14a3556decd369b12411b93",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "rust_tests": [
+    {
+      "stage": "03-summary-tests",
+      "label": "工具组摘要、计数、授权与提醒",
+      "filter": "tool_summar",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "04-events-tests",
+      "label": "终端事件、分组与显示归属",
+      "filter": "client::terminal::events::",
+      "passed": 93,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "05-broker-tests",
+      "label": "Broker 原生交付",
+      "filter": "broker::tests::",
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06-runtime-tests",
+      "label": "Runtime 执行",
+      "filter": "runtime::tests::",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06b-ui-inventory",
+      "label": "原生 UI 工具目录",
+      "filter": "client::interface::tests::action_decoder_validates_the_catalog_without_executing_actions",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06c-history-owner",
+      "label": "历史所有权",
+      "filter": "client::interface::history::ownership::tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06d-queue-recall",
+      "label": "待发送撤回",
+      "filter": "client::steering::tests::latest_takeback_reclaims_only_the_latest_unsent_request",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06e-queue-retry",
+      "label": "跨会话重试与编辑",
+      "filter": "client::steering::tests::uncertain_retarget_and_local_edit_never_retract_previous_history",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06f-queue-ack",
+      "label": "消息确认与修订号",
+      "filter": "client::steering::tests::enqueue_ack_and_edit_use_the_same_message_and_expected_revision",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06g-queue-delivery",
+      "label": "投递与撤回竞争",
+      "filter": "client::steering::tests::delivery_winning_takeback_cannot_restore_or_republish_the_request",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06h-history-archive",
+      "label": "历史归档",
+      "filter": "client::interface::history::archive::tests::",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06i-conversation-reload",
+      "label": "会话重载",
+      "filter": "client::terminal::conversation::reload_state::tests::",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "stage": "06j-late-session-frames",
+      "label": "会话切换后的晚到帧",
+      "filter": "session::attach::tests::modern_pages_keep_a_late_frames_distinct_from_the_selected_b_owner",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "unique_rust_test_total_claimed": false,
+  "binaries_sha256": {
+    "ssmcp": "db1a91c3a2c8dbcb89c76929df26d3d45218d2f2124a4e8f8d1b69c2951c5b9a",
+    "ssmcpd": "e2dd5e05042a7c2906b0445cd30b97768be52b4a9cffbf76dd5c665222618acb",
+    "vt_snapshot": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+    "libtest": "ca52ce64f23a8788ec6f8d5ae18d8c94e0ae65212589cb5562f7e2d5b5ab6127"
+  },
+  "pty": {
+    "status": "passed",
+    "checks": 68,
+    "passed_checks": [
+      "the owned account router keeps its credentials in a private ready record",
+      "the isolated account has the expected stable provider identity and handle",
+      "the real production account router is healthy",
+      "the account connection advertises its exact identity-scoped MCP resource",
+      "MCP 401 advertises protected-resource metadata",
+      "resource metadata binds the exact account endpoint and OAuth issuer",
+      "OAuth discovery advertises authorization-code PKCE S256",
+      "public MCP client registers through OAuth DCR",
+      "the account OAuth endpoint requires provider consent instead of a connection login code",
+      "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+      "OAuth pages cannot be cached and bind same-origin form submission",
+      "real identity exchange validates provider PKCE and requires explicit consent",
+      "OAuth consent preserves the registered callback, state and issuer",
+      "the real OAuth endpoint issues an identity-scoped MCP access token",
+      "OAuth access expires in eight hours and supplies a refresh token",
+      "OAuth token responses cannot be cached",
+      "the account relay credential cannot authenticate as an MCP access token",
+      "the live client advertises the summary tool before metadata is trusted",
+      "10 real native file-stat calls completed successfully",
+      "ten logical calls do not inject a summary reminder",
+      "ten adjacent native calls produce one stable group",
+      "repeated list operations preserve group identity, count, and revision",
+      "1 real native file-stat calls completed successfully",
+      "the outer code_mode response identifies the exact overdue group after eleven new calls",
+      "the model-facing response also contains the explicit summary reminder text block",
+      "listing does not count as work or repeat an already delivered reminder",
+      "the summary tool returns an accepted update",
+      "updating the same group advances only its summary revision and coverage",
+      "summary updates do not issue tool-count reminders",
+      "first-folded: the exact text and UTF-8 cursor survive 120-column rendering",
+      "first-folded: the exact text and UTF-8 cursor survive 48-column rendering",
+      "2 real native file-stat calls completed successfully",
+      "two calls after the first summary remain below the next reminder threshold",
+      "additional native calls overflow the twelve-row tool viewport",
+      "expansion and internal scrolling retain the unsent draft and its cursor",
+      "the summary tool returns an accepted update",
+      "updating the same group advances only its summary revision and coverage",
+      "summary updates do not issue tool-count reminders",
+      "summary replacement preserves group expansion, inner scroll, and outer scroll",
+      "two summary updates replace metadata without appending chat messages or tool records",
+      "updated-expanded: the exact text and UTF-8 cursor survive 120-column rendering",
+      "updated-expanded: the exact text and UTF-8 cursor survive 48-column rendering",
+      "the native summary update rejects with tool_summary_revision_conflict",
+      "the native summary update rejects with tool_summary_not_found",
+      "stale revisions and a different authenticated agent cannot alter the owner group",
+      "10 real native file-stat calls completed successfully",
+      "ten calls after an update remain below the next reminder threshold",
+      "1 real native file-stat calls completed successfully",
+      "the outer code_mode response identifies the exact overdue group after eleven new calls",
+      "the model-facing response also contains the explicit summary reminder text block",
+      "only real work advances the group count across both reminder periods",
+      "the summary tool returns an accepted update",
+      "updating the same group advances only its summary revision and coverage",
+      "summary updates do not issue tool-count reminders",
+      "one real code_mode run completes eleven calls and proactively updates that group",
+      "a successful same-run update removes the older pending summary reminder",
+      "the proactive update covers all calls at the new revision",
+      "JavaScript return data cannot manufacture a host summary reminder",
+      "eleven actual missing-file calls fail without a mutation retry",
+      "the outer code_mode response identifies the exact overdue group after eleven new calls",
+      "the model-facing response also contains the explicit summary reminder text block",
+      "native errors remain in the same logical group instead of being reset by diagnostics",
+      "the summary tool returns an accepted update",
+      "updating the same group advances only its summary revision and coverage",
+      "summary updates do not issue tool-count reminders",
+      "final-folded: the exact text and UTF-8 cursor survive 120-column rendering",
+      "final-folded: the exact text and UTF-8 cursor survive 48-column rendering",
+      "the summary lifecycle adds no user or assistant chat body"
+    ],
+    "final_group": {
+      "summary": "Checked file lookup results",
+      "revision": 5,
+      "call_count": 46,
+      "covered_call_count": 46
+    },
+    "transport": "production account router, native tools, code_mode, WebSocket, and owned PTY",
+    "elapsed_seconds": 10.069,
+    "source_of_images": "actual owned PTY cells decoded by the independent VT fixture",
+    "source_revision": "911bfe905e6df1b54bcc46be2f88c87813cb031c",
+    "source_sha256": {
+      "e2e_tool_summaries.py": "3daa4079e1e1998f22c406e90ecde7cbe935bb4d1e02a3807fae58feecef8c83",
+      "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+      "e2e_input_history.py": "faa5b730097ff3bc94d324e09b494bd7be020e6345b80fb00cbcd7448ecaa708",
+      "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+      "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+      "e2e_client_ui.py": "c5fa9052ae597177e9ae07c4c777fe4de5071597636eae07b8860ac6c8b4da73",
+      "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+      "e2e.py": "14727560353c25fd1878f217d03ea957ca93ca4373f93e9d8dc5b913e145f5ba",
+      "render_ui_snapshot.py": "758b525dffda1fb79bceb299ebbea5ab22ffd51d1c736aeee0125d4c6744b4f8"
+    },
+    "font_sha256": "09c42e7acca82bfb6cc602624d40f80a3f29557e0d8e4b93d6612a8af03af7f2",
+    "inputs_unchanged": true,
+    "binaries_sha256_before": {
+      "ssmcp": "db1a91c3a2c8dbcb89c76929df26d3d45218d2f2124a4e8f8d1b69c2951c5b9a",
+      "ssmcpd": "e2dd5e05042a7c2906b0445cd30b97768be52b4a9cffbf76dd5c665222618acb",
+      "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+      "fixture": "ca52ce64f23a8788ec6f8d5ae18d8c94e0ae65212589cb5562f7e2d5b5ab6127"
+    },
+    "binaries_sha256_after": {
+      "ssmcp": "db1a91c3a2c8dbcb89c76929df26d3d45218d2f2124a4e8f8d1b69c2951c5b9a",
+      "ssmcpd": "e2dd5e05042a7c2906b0445cd30b97768be52b4a9cffbf76dd5c665222618acb",
+      "decoder": "3cba0d5cce51277f4a515a35dd5a570903f0100fadb38ca853b641ea236026f4",
+      "fixture": "ca52ce64f23a8788ec6f8d5ae18d8c94e0ae65212589cb5562f7e2d5b5ab6127"
+    },
+    "models_started": false,
+    "existing_clients_reloaded": false,
+    "existing_services_touched": false,
+    "real_user_credentials_used": false
+  },
+  "images": [
+    {
+      "file": "tool-summary-first-folded-120.png",
+      "bytes": 27128,
+      "sha256": "8264c86efa161c59b9d0626ac63d5132bb0baa6ff183e8bfe74f54e540ac6bbb"
+    },
+    {
+      "file": "tool-summary-first-folded-48.png",
+      "bytes": 21282,
+      "sha256": "fd0e157c210be4dff3e44b5b474f7de331edb898c1842314e37a68b9d0f157f9"
+    },
+    {
+      "file": "tool-summary-updated-expanded-120.png",
+      "bytes": 57115,
+      "sha256": "7824aeab197b9f1d0ccea99f8462999a6cda3097e40604d6468365e89594e13c"
+    },
+    {
+      "file": "tool-summary-updated-expanded-48.png",
+      "bytes": 48673,
+      "sha256": "74aba020be91a6889d4aec0d4bd252f4bffe767e5adf961334c0b6e59acc5156"
+    },
+    {
+      "file": "tool-summary-final-folded-120.png",
+      "bytes": 27885,
+      "sha256": "96f63747f4b9e4006396360ff01fe27a4c7334a6843d3232907a47e147b6580f"
+    },
+    {
+      "file": "tool-summary-final-folded-48.png",
+      "bytes": 22106,
+      "sha256": "2453dc309cde43eede0ed418d9159fbfba4bd7b66604ac3c5d0436092d9588cc"
+    }
+  ],
+  "repository_cleanup": {
+    "remote_deleted": 23,
+    "local_deleted": 21,
+    "readback_verified": true,
+    "receipt": "branch-cleanup.json"
+  },
+  "previous_attempts": [
+    {
+      "attempt": "02",
+      "source_revision": "a00e1b1333315090db89e6dfb9c6dd8716af0ffc",
+      "status": "failed",
+      "reason": "Strict list input, exact test identity and read-group boundary defects were corrected."
+    },
+    {
+      "attempt": "03",
+      "source_revision": "5998949d0fd6103bf72794c2293ebe8e42eebab9",
+      "status": "failed",
+      "reason": "PTY fixture needed more than twelve actual rows before testing internal scroll."
+    },
+    {
+      "attempt": "04",
+      "source_revision": "2a40d08adbcf0ca1458e99f89c40bb3ef5adcbac",
+      "status": "failed",
+      "reason": "Unscoped native error diagnostics split the active summary group."
+    },
+    {
+      "attempt": "05",
+      "source_revision": "c265794e2a1df5c27fcb448452a82e0143dbc497",
+      "status": "failed",
+      "reason": "65 real PTY assertions passed before the full events projection exceeded the unchanged 8 KiB limit."
+    },
+    {
+      "attempt": "06",
+      "source_revision": "46cef6e5bcded40ee4a3181b828d7758c758654d",
+      "status": "passed",
+      "reason": "Full gate and 68 PTY checks passed; later input-performance integration required a separate candidate."
+    },
+    {
+      "attempt": "07",
+      "source_revision": "8729bf8e26b8e91d34a676af2e67d8ef37fe9b13",
+      "status": "failed",
+      "reason": "Targeted tests passed; strict non-test Clippy found the test-only HistoryStore import."
+    }
+  ],
+  "scope": "Exact-source local integration acceptance; not a production deployment or all-platform release certificate.",
+  "recorded_at": "2026-11-20T22:31:17+08:00"
+}
