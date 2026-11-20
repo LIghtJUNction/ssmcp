@@ -45,7 +45,7 @@ class AtCompletion(InputHistory):
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
-        front.until(lambda shot: "To · Reference fixture member" in text(shot)
+        front.until(lambda shot: "To Reference fixture member" in text(shot)
                     and column(shot) == ("conversation", 2, 8), "exact fixture recipient")
 
         for typed, path, expected in [
