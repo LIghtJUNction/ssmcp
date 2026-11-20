@@ -896,6 +896,8 @@ impl State {
             && self.conversation.view != View::Questions
             && !self.conversation.content_focus
             && self.conversation.native_recipient.is_none()
+            && !(self.conversation.send_to_group
+                && listener::body(self.conversation.composer.text()).is_some())
             && !self.chat_native_has_mention();
         self.conversation.composer.refresh_completions(enabled);
     }
@@ -979,13 +981,6 @@ impl State {
         if self.chat_wait_for_input() {
             return;
         }
-        if let Some(body) = listener::body(&text) {
-            if let Err(error) = self.chat_force_send(body) {
-                self.notice = Some(error);
-            }
-            self.dirty = true;
-            return;
-        }
         if self.chat_native_pick_mention(&text) {
             return;
         }
@@ -1006,6 +1001,13 @@ impl State {
             } else {
                 self.notice = None;
             }
+            return;
+        }
+        if let Some(body) = listener::body(&text) {
+            if let Err(error) = self.chat_force_send(body) {
+                self.notice = Some(error);
+            }
+            self.dirty = true;
             return;
         }
         if self.conversation.submitting.is_some() {
