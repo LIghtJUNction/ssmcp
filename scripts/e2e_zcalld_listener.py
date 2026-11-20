@@ -51,16 +51,20 @@ class Provider:
                     self.send_error(400)
                     return
                 body = json.loads(self.rfile.read(length))
+                request = {
+                    "path": self.path, "body": body,
+                    "caller_credential_forwarded": bool(self.headers.get("Authorization")),
+                    "unexpected": True,
+                }
+                # Count every actual HTTP attempt, including an unplanned replay.
+                # Waiting for a matching plan must never hide an extra request.
+                owner.requests.append(request)
                 try:
                     plan = owner.plans.get(timeout=2)
                 except queue.Empty:
                     self.send_error(500, "unexpected fixture generation")
                     return
-                request = {
-                    "path": self.path, "body": body,
-                    "caller_credential_forwarded": bool(self.headers.get("Authorization")),
-                }
-                owner.requests.append(request)
+                request["unexpected"] = False
                 plan.request = request
                 plan.started.set()
                 if not plan.release.wait(25):
@@ -378,26 +382,42 @@ class Integration(ForceSend):
         lease = {key: opened["result"][key] for key in ("listener_id", "token")}
         self.sensitive.append(lease["token"])
         delivery_id = self.force(front, "/send P1_DUPLICATE_SOURCE")
-        program.call("read", **lease, wait_ms=0)
+        offered = program.call("read", **lease, wait_ms=0)
+        self.check(offered.get("ok") is True
+                   and offered["result"]["delivery"]["delivery_id"] == delivery_id,
+                   "the real local reader receives the exact duplicate-test delivery")
         early = program.call("reply", **lease, delivery_id=delivery_id, execution_state="completed", text="P1_DUPLICATE_RESULT")
-        self.check(not early["ok"], "a result cannot precede an accepted input receipt")
-        program.call("ack", **lease, delivery_id=delivery_id, status="accepted")
+        self.check(early.get("ok") is False and "listener_reply_expired" in early.get("error", ""),
+                   "a pre-ACK result is rejected by the listener protocol, not by a worker failure")
+        acknowledged = program.call("ack", **lease, delivery_id=delivery_id, status="accepted")
+        self.check(acknowledged.get("ok") is True
+                   and acknowledged["result"]["receipt"]["delivery_id"] == delivery_id
+                   and acknowledged["result"]["receipt"]["status"] == "accepted",
+                   "the real local ACK confirms the exact input before its result")
         result = program.call("reply", **lease, delivery_id=delivery_id, execution_state="completed", text="P1_DUPLICATE_RESULT")
         repeated = program.call("reply", **lease, delivery_id=delivery_id, execution_state="completed", text="P1_DUPLICATE_RESULT")
         conflict = program.call("reply", **lease, delivery_id=delivery_id, execution_state="completed", text="different")
-        self.check(result["ok"] and repeated["ok"] and repeated["result"]["duplicate"]
-                   and result["result"]["reply"] == repeated["result"]["reply"] and not conflict["ok"],
+        self.check(result.get("ok") is True and repeated.get("ok") is True
+                   and result["result"]["duplicate"] is False and repeated["result"]["duplicate"] is True
+                   and result["result"]["reply"] == repeated["result"]["reply"]
+                   and conflict.get("ok") is False and "listener_reply_conflict" in conflict.get("error", ""),
                    "real Unix reply retries return one stable receipt while changed content conflicts")
         self.receipt(front, delivery_id, "accepted")
         _, current = self.history_path()
         message_id = result["result"]["reply"]["message_id"]
         self.check(sum(item["id"] == message_id for item in self.history_messages(current)) == 1,
                    "real duplicate result requests create exactly one history message")
-        program.call("close", **lease)
+        closed = program.call("close", **lease)
+        self.check(closed.get("ok") is True and closed["result"]["closed"] is True,
+                   "the actual local lease closes successfully before testing stale credentials")
         stale = program.call("reply", **lease, delivery_id=delivery_id, execution_state="completed", text="P1_DUPLICATE_RESULT")
-        self.check(not stale["ok"], "closed local leases cannot reuse old reply credentials")
+        self.check(stale.get("ok") is False and "listener lease has expired" in stale.get("error", ""),
+                   "closed local leases reject old reply credentials with an explicit lease error")
         program.close()
         self.evidence.append({"scenario": "real-reply-idempotency", "result": result["result"]["reply"]})
+        self.check(len(self.provider.requests) == 4
+                   and all(not request["unexpected"] for request in self.provider.requests),
+                   "the provider saw exactly four planned HTTP requests and no hidden replay")
         gateway_log.close()
         return {"status": "passed", "provider_requests": self.provider.requests,
                 "receipts": self.evidence, "frames": self.frames}
@@ -424,13 +444,21 @@ def main():
     if (args.out / "report.json").exists():
         parser.error("use a fresh output directory")
     before = {name: digest(path) for name, path in binaries.items()}
+    # Imports reuse the real account/PTY harness. Record them as inputs, too;
+    # the caller binds declared revisions to these hashes via its build manifest.
+    harness_files = sorted(Path(__file__).resolve().parent.glob("e2e*.py"))
+    harness_before = {path.name: digest(path) for path in harness_files}
     os.environ["SSMCP_E2E_FIXTURE_BINARY"] = str(binaries["fixture"])
     def interrupted(_signal, _frame):
         raise TimeoutError("native listener fixture interrupted")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     started = time.monotonic()
-    report = {"status": "failed", "source_revision": args.source_revision, "zcalld_revision": args.zcalld_revision}
+    report = {
+        "status": "failed", "source_revision": args.source_revision,
+        "zcalld_revision": args.zcalld_revision,
+        "revision_binding": "Caller-provided revisions; verify recorded hashes against immutable build manifests.",
+    }
     # Keep owned Unix endpoints below sockaddr_un's path limit even when the
     # immutable build/report directory has a long provenance-rich name.
     with tempfile.TemporaryDirectory(prefix="ssmcp-zcl-", dir="/tmp") as directory:
@@ -452,11 +480,14 @@ def main():
             harness.close_frontends()
             harness.cleanup()
         after = {name: digest(path) for name, path in binaries.items()}
+        harness_after = {path.name: digest(path) for path in harness_files}
+        unchanged = before == after and harness_before == harness_after
         report.update(checks=harness.checks, elapsed_seconds=round(time.monotonic() - started, 3),
                       binaries_sha256_before=before, binaries_sha256_after=after,
-                      inputs_unchanged=before == after, script_sha256=digest(__file__))
-        if before != after:
-            report["status"], report["error"] = "failed", "an executable changed during acceptance"
+                      harness_sha256_before=harness_before, harness_sha256_after=harness_after,
+                      inputs_unchanged=unchanged, script_sha256=digest(__file__))
+        if not unchanged:
+            report["status"], report["error"] = "failed", "an executable or harness changed during acceptance"
         encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
         if redact(encoded) != encoded:
             raise AssertionError("report contains a private fixture credential")
