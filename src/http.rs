@@ -29,6 +29,8 @@ const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
 mod finish_request;
 #[cfg(test)]
+mod question_delivery_tests;
+#[cfg(test)]
 mod relay_composer_fixture;
 mod user_wait;
 
