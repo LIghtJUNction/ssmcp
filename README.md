@@ -4,7 +4,7 @@
 
 ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件、浏览器和已安装的开发工具接入授权会话；Agent 通过 MCP 选择设备并调用这些工具。模型可以在云端，工作区、执行环境和工具状态留在你的机器上。
 
-[演示视频](#演示视频) · [快速开始](#快速开始) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
+[演示视频](#演示视频) · [快速开始](#快速开始) · [本地与远程目标](docs/connection-contexts.md) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
 
 [![Rust](https://img.shields.io/badge/Rust-1.100%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
 
@@ -115,6 +115,19 @@ Linux 上可以使用 `ssmcp local` 在当前项目启动本地 MCP 会话，无
 本地 `code_mode` 还需已安装的 Node.js、Bubblewrap（`bwrap`）和 `prlimit`，以及系统允许创建相应的 Linux namespace。缺失时会明确失败，不会绕过沙箱。同版 `code-mode.js` 已编入 Linux 客户端，每次本地会话使用自己的私有副本，无需额外安装脚本。详见[运行前提](docs/local-mode.md#运行前提)。
 
 已有 `.local` 名称解析和受信任的本机 HTTPS 反向代理时，可运行 `ssmcp local --listen 127.0.0.1:8765 --public-url https://workstation.local`。代理须指向该固定端口；命令不自动配置 mDNS、证书或防火墙。详见[本地运行与 `.local` 入口](docs/local-mode.md)。本段描述源码能力，安装版本是否包含该命令，以 `ssmcp local --help` 为准。
+
+### 使用同一入口选择连接目标
+
+把本机或 HTTPS 中继保存为命名 context，随后用同一个参数选择：
+
+~~~sh
+ssmcp context create here --local
+ssmcp context create work --server https://relay.example.com
+ssmcp --context work --name dev
+ssmcp context use here
+~~~
+
+`--context` 只选择本次目标，`context use` 保存新连接的默认选择；已有连接和保存的 session 继续使用原目标。用 `ssmcp context show` 查看目标与选择来源。命名目标不保存账号凭据；完整优先级和本地运行前提见[本地与远程目标](docs/connection-contexts.md)。安装版本是否支持，以 `ssmcp context --help` 为准。
 
 ### 对话与工具
 

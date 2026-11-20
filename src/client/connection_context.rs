@@ -172,7 +172,7 @@ pub(super) fn remote_server(cli: Option<&str>, explicit: Option<&str>) -> Result
 
 /// Only move a leading selector prefix across a known command boundary. Values
 /// such as --title "--context" are never searched for or rewritten.
-pub(super) fn normalize_args(args: &mut Vec<OsString>) -> Result<()> {
+pub(super) fn normalize_args(args: &mut [OsString]) -> Result<()> {
     let mut end = 0;
     let mut has_context = false;
     while let Some(arg) = args.get(end).and_then(|arg| arg.to_str()) {

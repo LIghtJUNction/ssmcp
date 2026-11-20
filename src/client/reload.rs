@@ -17,7 +17,7 @@ pub(crate) const TOOL: &str = "ssmcp.client.reload";
 pub(crate) fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Acknowledge and restart this foreground client from its installed executable, preserving startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
+        "description": "Acknowledge and restart this foreground client from its installed executable, preserving its resolved connection target, other startup arguments, cwd and environment. Reject while other requests are in flight. Stops local background commands, harnesses and forwards. The client reconnects with a new ID; use list again. Server-qualified --allow accounts are checked again after reconnect; control apps retain their independent sign-in.",
         "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
         "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
     })
@@ -113,7 +113,7 @@ pub(crate) struct Restart {
 }
 
 impl Restart {
-    pub(crate) fn capture() -> crate::Result<Self> {
+    pub(super) fn capture(options: &super::Options, saved_session: bool) -> crate::Result<Self> {
         let mut args = std::env::args_os();
         let entry = args.next().ok_or("client executable path is missing")?;
         let cwd = std::env::current_dir()?;
@@ -140,7 +140,7 @@ impl Restart {
             })?;
         Ok(Self {
             program,
-            arguments: args.collect(),
+            arguments: connection_arguments(args.collect(), options, saved_session)?,
             cwd,
         })
     }
@@ -200,6 +200,57 @@ impl Restart {
             .into())
         }
     }
+}
+
+/// Reload is a continuation of this connection, not a new context selection.
+/// Keep the service entry point intact so its saved SessionSpec remains the
+/// authority. Foreground invocations record only the resolved endpoint, never
+/// credentials; all other arguments retain their original values and order.
+fn connection_arguments(
+    arguments: Vec<OsString>,
+    options: &super::Options,
+    saved_session: bool,
+) -> crate::Result<Vec<OsString>> {
+    if saved_session {
+        return Ok(arguments);
+    }
+    let mut pinned = if options.is_local() {
+        vec![OsString::from("local")]
+    } else {
+        vec![
+            OsString::from("--server"),
+            OsString::from(
+                options
+                    .server
+                    .as_deref()
+                    .ok_or("reload requires a resolved relay server")?,
+            ),
+        ]
+    };
+    let mut arguments = arguments.into_iter().peekable();
+    if arguments.peek().is_some_and(|argument| argument == "local") {
+        arguments.next();
+    }
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            Some("--context" | "--server") => {
+                arguments
+                    .next()
+                    .ok_or("reload connection selector is missing its value")?;
+            }
+            Some(value) if value.starts_with("--context=") => {}
+            Some(value) if super::connection_option_takes_value(value) => {
+                pinned.push(argument);
+                pinned.push(
+                    arguments
+                        .next()
+                        .ok_or("reload option is missing its value")?,
+                );
+            }
+            _ => pinned.push(argument),
+        }
+    }
+    Ok(pinned)
 }
 
 fn validate_executable(path: &Path) -> Result<(), String> {
@@ -320,6 +371,115 @@ fn resolve_entry(entry: &OsStr, cwd: &Path, path: Option<&OsStr>) -> Result<Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn foreground_reload_pins_the_resolved_server_and_preserves_literal_values() {
+        let root = std::env::current_dir().unwrap();
+        let trailing = vec![
+            OsString::from("--title"),
+            OsString::from("--context"),
+            OsString::from("--name"),
+            OsString::from("local"),
+            OsString::from("--context-root"),
+            root.into_os_string(),
+            OsString::from("--ui-config"),
+            OsString::from("--context=other"),
+            OsString::from("--theme"),
+            OsString::from("nord"),
+            OsString::from("--no-color"),
+            OsString::from("--no-watchdog"),
+        ];
+        let mut initial = args(&["--server", "https://original.example"]);
+        initial.extend(trailing.clone());
+        let options = super::super::Options::parse(initial).unwrap().unwrap();
+        for selector in [
+            args(&[]),
+            args(&["--context", "removed"]),
+            args(&["--context=edited"]),
+            args(&["--server", "https://original.example"]),
+        ] {
+            let mut original = selector;
+            original.extend(trailing.clone());
+            let pinned = connection_arguments(original, &options, false).unwrap();
+            let mut expected = args(&["--server", "https://original.example"]);
+            expected.extend(trailing.clone());
+            assert_eq!(pinned, expected);
+            // This is the same new-connection parser used after actual reexec.
+            // An explicit origin bypasses all ambient context selection.
+            let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
+            assert_eq!(restored.server, options.server);
+            assert_eq!(restored.title, options.title);
+            assert_eq!(restored.name, options.name);
+            assert_eq!(restored.context_roots, options.context_roots);
+            assert_eq!(restored.ui_config, options.ui_config);
+            assert_eq!(restored.theme, options.theme);
+            assert_eq!(restored.no_color, options.no_color);
+            assert_eq!(restored.watchdog, options.watchdog);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn foreground_local_reload_preserves_mode_and_listener_options() {
+        let trailing = args(&[
+            "--listen",
+            "127.0.0.1:34819",
+            "--public-url",
+            "https://workstation.local",
+            "--title",
+            "--context",
+            "--no-watchdog",
+        ]);
+        let mut initial = args(&["local"]);
+        initial.extend(trailing.clone());
+        let options = super::super::Options::parse(initial).unwrap().unwrap();
+        for selector in [
+            args(&[]),
+            args(&["--context", "removed"]),
+            args(&["--context=edited"]),
+            args(&["local"]),
+        ] {
+            let mut original = selector;
+            original.extend(trailing.clone());
+            let pinned = connection_arguments(original, &options, false).unwrap();
+            let mut expected = args(&["local"]);
+            expected.extend(trailing.clone());
+            assert_eq!(pinned, expected);
+            let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
+            assert!(restored.is_local());
+            assert_eq!(
+                restored.local.as_ref().unwrap().listen,
+                options.local.as_ref().unwrap().listen
+            );
+            assert_eq!(
+                restored.local.as_ref().unwrap().public_url,
+                options.local.as_ref().unwrap().public_url
+            );
+            assert_eq!(restored.title, options.title);
+        }
+    }
+
+    #[test]
+    fn saved_runner_reload_keeps_its_manifest_entry_point() {
+        let options = super::super::Options::parse(args(&["--server", "https://saved.example"]))
+            .unwrap()
+            .unwrap();
+        let original = args(&["__session-run", "saved"]);
+        assert_eq!(
+            connection_arguments(original.clone(), &options, true).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn foreground_reload_without_a_resolved_endpoint_fails_closed() {
+        let options = super::super::Options::parse(args(&[])).unwrap().unwrap();
+        assert!(connection_arguments(args(&[]), &options, false).is_err());
+    }
 
     #[test]
     fn reload_rejects_arguments_and_inflight_requests_before_acceptance() {

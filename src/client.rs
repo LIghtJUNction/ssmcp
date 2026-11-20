@@ -1236,6 +1236,8 @@ fn connection_option_takes_value(option: &str) -> bool {
             | "--title"
             | "--allow"
             | "--context-root"
+            | "--listen"
+            | "--public-url"
             | "--portal"
             | "--reconnect-delay"
             | "--log-format"
@@ -2226,7 +2228,7 @@ async fn connect_inner(
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
-    let restart = reload::Restart::capture()?;
+    let restart = reload::Restart::capture(options, service.is_some())?;
     let metadata = options.metadata()?;
     let wire_metadata = options.registration_metadata()?;
     let executable = std::env::current_exe()?;
