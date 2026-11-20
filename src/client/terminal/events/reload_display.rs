@@ -458,6 +458,7 @@ impl EventView {
                 panel: CommandPanel::default(),
                 group_panel: CommandPanel::default(),
                 group_expanded: false,
+                group_automatic: false,
                 truncated: entry.truncated,
                 tone: tone(&entry.tone),
                 cache: None,

@@ -114,6 +114,25 @@ fn group_id(view: &EventView, source: &Source) -> String {
         .to_owned()
 }
 
+async fn command_call(view: &mut EventView, runtime: &Runtime, request: u64) -> Source {
+    let source = source(runtime, request, "123", None, "same-label").await;
+    let job = format!("summary-command-{request}");
+    view.summary_call_started(&source, "ssmcp.exec.start");
+    view.ingest_scoped_event(
+        "shell",
+        &json!({"type":"exec.started","job_id":job,"command":["printf",format!("command-{request}")]}),
+        b"[RUN] command\n", source.display(),
+    );
+    view.ingest_scoped_event(
+        "shell",
+        &json!({"type":"exec.exited","job_id":job,"exit_code":0}),
+        b"[OK] exit=0\n",
+        source.display(),
+    );
+    view.summary_call_finished(&source, true);
+    source
+}
+
 #[tokio::test]
 async fn eleventh_real_call_reminds_once_and_summary_restarts_the_counter() {
     let fixture = Fixture::new().await;
@@ -315,6 +334,21 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
             true
         );
         assert_eq!(view.tool_groups().len(), 1);
+        for width in [120, 48] {
+            let ui = Ui {
+                color: false,
+                ..Ui::default()
+            };
+            let rows = view.render(width, 24, &ui, true);
+            let text = rows.join("\n");
+            assert_eq!(text.matches("Read process output").count(), 1, "{text}");
+            assert_eq!(text.matches("Ran printf hello").count(), 1, "{text}");
+            assert!(text.contains("Show details"), "{text}");
+            assert!(
+                rows.iter()
+                    .all(|row| unstyled(row).width() <= usize::from(width))
+            );
+        }
         for (request, name) in [
             (2, "ssmcp.exec.status"),
             (3, "ssmcp.exec.read"),
@@ -327,6 +361,151 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
         assert_eq!(view.events.len(), 4);
         assert_eq!(view.snapshot()["tool_groups"][0]["call_count"], 4);
         assert!(view.take_tool_summary_reminder(&call).is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn commands_and_other_tools_share_one_visible_summary_and_exact_count() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        stat(&mut view, &fixture.runtime, 1).await;
+        let command = command_call(&mut view, &fixture.runtime, 2).await;
+        let read = source(&fixture.runtime, 3, "123", None, "same-label").await;
+        view.summary_call_started(&read, "ssmcp.fs.read_text");
+        view.ingest_scoped_event(
+            "workspace",
+            &json!({"type":"ssmcp.file.read","path":"src/main.rs"}),
+            b"[READ] src/main.rs\n",
+            read.display(),
+        );
+        view.summary_call_finished(&read, true);
+        command_call(&mut view, &fixture.runtime, 4).await;
+        for _ in 0..3 {
+            view.ingest_scoped_event(
+                "shell",
+                &json!({"type":"exec.stdout","job_id":"summary-command-2"}),
+                b"checked\n",
+                command.display(),
+            );
+        }
+        view.ingest_scoped_event(
+            "shell",
+            &json!({"type":"exec.exited","job_id":"summary-command-2","exit_code":0}),
+            b"[OK] exit=0\n",
+            command.display(),
+        );
+        let id = group_id(&view, &first);
+        let receipt = view
+            .tool_summary_set(&first, &id, "Inspect workspace and tools", Some(0))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["call_count"], 4);
+        let snapshot = view.snapshot();
+        assert_eq!(snapshot["tool_groups"].as_array().unwrap().len(), 1);
+        assert_eq!(snapshot["tool_groups"][0]["group_id"], id);
+        assert_eq!(snapshot["tool_groups"][0]["count"], 4);
+        assert_eq!(snapshot["tool_groups"][0]["call_count"], 4);
+        assert_eq!(view.events.len(), 4);
+        for width in [120, 48] {
+            let ui = Ui {
+                color: false,
+                ..Ui::default()
+            };
+            for index in [1, 3] {
+                view.selected = Some(view.events[index].id);
+                view.selected_group = None;
+                view.follow = false;
+                view.reveal = true;
+                let rows = view.render(width, 24, &ui, true);
+                let text = rows.join("\n");
+                assert_eq!(
+                    text.matches("Inspect workspace and tools").count(),
+                    1,
+                    "{text}"
+                );
+                assert_eq!(text.matches("4 calls").count(), 1, "{text}");
+                assert!(
+                    text.contains(&format!("Ran printf command-{}", index + 1)),
+                    "{text}"
+                );
+                assert!(text.contains("Show details"), "{text}");
+                assert!(
+                    rows.iter()
+                        .all(|row| unstyled(row).width() <= usize::from(width))
+                );
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn exec_reminder_summary_and_retention_never_reopen_an_explicit_fold() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        for request in 1..=11 {
+            let call = command_call(&mut view, &fixture.runtime, request).await;
+            let reminder = view.take_tool_summary_reminder(&call);
+            if request < 11 {
+                assert!(reminder.is_none());
+            } else {
+                assert_eq!(reminder.unwrap()["call_count"], 11);
+                assert!(view.take_tool_summary_reminder(&call).is_none());
+            }
+        }
+        let id = group_id(&view, &first);
+        let receipt = view
+            .tool_summary_set(&first, &id, "Checked eleven commands", Some(0))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["covered_call_count"], 11);
+        assert_eq!(view.tool_groups().len(), 1);
+        assert!(view.tool_groups()[0].expanded);
+        view.select(isize::MIN);
+        assert!(view.back());
+        let group = view.tool_groups()[0].clone();
+        assert!(!view.events[group.start].group_automatic);
+        let next = command_call(&mut view, &fixture.runtime, 12).await;
+        assert!(view.take_tool_summary_reminder(&next).is_none());
+        let receipt = view
+            .tool_summary_set(&next, &id, "Checked twelve commands", Some(1))
+            .unwrap();
+        assert_eq!(receipt["shown"], true);
+        assert_eq!(receipt["call_count"], 12);
+        assert!(!view.tool_groups()[0].expanded);
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+        let text = view.render(48, 24, &ui, true).join("\n");
+        assert_eq!(text.matches("Checked twelve commands").count(), 1, "{text}");
+        assert!(!text.contains("printf"), "{text}");
+        let saved_canvas = view.position();
+        let old_head = view.tool_groups()[0].head;
+        for request in 13..=(MAX_EVENTS as u64 + 5) {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert_eq!(group_id(&view, &first), id);
+        assert_eq!(view.tool_groups().len(), 1);
+        assert!(!view.tool_groups()[0].expanded);
+        assert!(!view.events[view.tool_groups()[0].start].group_automatic);
+        assert_eq!(
+            view.snapshot()["tool_groups"][0]["call_count"],
+            MAX_EVENTS as u64 + 5
+        );
+        assert_ne!(view.tool_groups()[0].head, old_head);
+        view.restore_position(&saved_canvas);
+        let text = view.render(48, 24, &ui, true).join("\n");
+        assert!(!view.tool_groups()[0].expanded);
+        assert!(!view.events[view.tool_groups()[0].start].group_automatic);
+        assert_eq!(view.selected_group, Some(view.tool_groups()[0].head));
+        assert!(!text.contains("printf"), "{text}");
     })
     .await;
 }
