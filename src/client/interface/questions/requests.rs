@@ -3,7 +3,7 @@ use super::{Question, QuestionState};
 use crate::runtime::call_scope::CallScope;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum QuestionKind {
     #[default]
@@ -18,7 +18,7 @@ pub(crate) enum FinishChoice {
     No,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AgentActor {
     pub provider: String,
     pub subject: String,
@@ -26,14 +26,28 @@ pub(crate) struct AgentActor {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
 pub(crate) enum DecisionActor {
     Human,
     Agent { agent: AgentActor },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+impl DecisionActor {
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Human, Self::Human) => true,
+            (Self::Agent { agent: left }, Self::Agent { agent: right }) => {
+                left.provider == right.provider
+                    && left.subject == right.subject
+                    && left.thread_id == right.thread_id
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct FinishDecision {
     pub choice: FinishChoice,
     pub comment: Option<String>,
@@ -42,7 +56,7 @@ pub(crate) struct FinishDecision {
     pub decided_at_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FinishStatus {
     Pending,
@@ -53,7 +67,7 @@ pub(crate) enum FinishStatus {
     Completed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AnswerDelivery {
     NotAnswered,
@@ -63,7 +77,7 @@ pub(crate) enum AnswerDelivery {
     ScopeExpired,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct FinishView {
     pub reason: String,
     pub default_decision: FinishChoice,
@@ -73,7 +87,7 @@ pub(crate) struct FinishView {
     pub invalidation_reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct QuestionView {
     #[serde(flatten)]
     pub question: Question,
@@ -95,6 +109,26 @@ pub(super) struct RequestScope {
 }
 
 impl RequestScope {
+    pub(super) fn account_only(scope: &CallScope, session_id: &str) -> Result<Self, String> {
+        let attribution = scope
+            .attribution()
+            .ok_or("question_auth_required: no authenticated account")?;
+        Ok(Self {
+            connection: scope.connection(),
+            session_id: session_id.into(),
+            requester: AgentActor {
+                provider: attribution.account.provider.clone(),
+                subject: attribution.account.subject.clone(),
+                thread_id: String::new(),
+                name: String::new(),
+            },
+        })
+    }
+
+    pub(super) fn has_thread(&self) -> bool {
+        !self.requester.thread_id.is_empty()
+    }
+
     pub(super) fn from_call(scope: &CallScope) -> Result<Self, String> {
         let attribution = scope
             .attribution()
@@ -229,15 +263,20 @@ impl Routing {
         QuestionView {
             question,
             kind: self.kind,
-            requester: Some(self.scope.requester.clone()),
+            requester: self
+                .scope
+                .has_thread()
+                .then(|| self.scope.requester.clone()),
             finish,
             answer_actor: self.answer_actor.clone(),
             answer_revision: self.answer_revision,
-            automatic_delivery: true,
+            automatic_delivery: self.scope.has_thread(),
             delivery: if self.answer_revision == 0 {
                 AnswerDelivery::NotAnswered
             } else if self.scope_expired {
                 AnswerDelivery::ScopeExpired
+            } else if !self.scope.has_thread() {
+                AnswerDelivery::ManualRead
             } else if self.answer_delivered {
                 AnswerDelivery::Delivered
             } else {
@@ -304,7 +343,7 @@ impl super::Queue {
         if let Some(previous) = &routing.decision {
             if previous.choice == choice
                 && previous.comment.as_deref() == comment
-                && previous.actor == actor
+                && previous.actor.same_identity(&actor)
             {
                 return Ok(record.view());
             }
@@ -458,6 +497,71 @@ mod tests {
         assert_eq!(view.delivery, AnswerDelivery::NotAnswered);
         assert!(queue.consume_finish(&scope("42", "requester")).is_err());
         assert!(queue.finish(&id, Some("yes")).is_err());
+    }
+
+    #[test]
+    fn an_unbound_account_keeps_manual_answers_private_without_next_caller_delivery() {
+        let mut queue = queue();
+        let mut manual = scope("42", "");
+        manual.requester.name.clear();
+        let question = queue
+            .ask_for(
+                parse_ask(json!({"question":"Private account choice"})).unwrap(),
+                Some(manual.clone()),
+                QuestionKind::Question,
+            )
+            .unwrap()
+            .0;
+        let record = queue
+            .records
+            .iter()
+            .find(|record| record.question.id == question.id)
+            .unwrap();
+        assert!(record.visible_to(Some(&scope("42", "reader")), false));
+        assert!(!record.visible_to(Some(&scope("43", "reader")), false));
+        assert!(!record.visible_to(None, false));
+        assert!(!record.view().automatic_delivery);
+        assert!(record.view().requester.is_none());
+        queue.finish(&question.id, Some("Keep it local")).unwrap();
+        assert_eq!(queue.records[0].view().delivery, AnswerDelivery::ManualRead);
+        assert!(
+            queue
+                .ask_for(
+                    parse_ask(json!({"question":"Can I finish?"})).unwrap(),
+                    Some(manual),
+                    QuestionKind::Finish
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_new_human_question_answer_invalidates_the_asking_threads_old_approval() {
+        let mut queue = queue();
+        let owner = scope("42", "requester");
+        let question = queue
+            .ask_for(
+                parse_ask(json!({"question":"One remaining detail?"})).unwrap(),
+                Some(owner.clone()),
+                QuestionKind::Question,
+            )
+            .unwrap()
+            .0;
+        let finish_id = finish(&mut queue, owner.clone());
+        queue
+            .decide_finish_for(&finish_id, FinishChoice::Yes, None, None)
+            .unwrap();
+        queue
+            .finish(&question.id, Some("There is one more required change."))
+            .unwrap();
+        assert!(queue.consume_finish(&owner).is_err());
+        let view = queue
+            .records
+            .iter()
+            .find(|record| record.question.id == finish_id)
+            .unwrap()
+            .view();
+        assert_eq!(view.finish.unwrap().status, FinishStatus::Invalidated);
     }
 
     #[test]
