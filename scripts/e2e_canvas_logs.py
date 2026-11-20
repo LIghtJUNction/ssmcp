@@ -181,7 +181,7 @@ def run(binary, decoder, output, checks):
             check(body(restored) == selected_body and draft in prompt_text(restored),
                   "Escape closes logs and preserves the original column selection and shared draft")
             preview.send(b"\r")
-            recipient = preview.until(lambda shot: view(shot, "conversation") and "To · Builder" in text(shot),
+            recipient = preview.until(lambda shot: view(shot, "conversation") and "To Builder" in text(shot),
                                       "the selected member becoming the draft recipient")
             check(draft in prompt_text(recipient), "choosing a recipient preserves the shared draft")
             preview.send(ALT_RIGHT)
@@ -205,7 +205,7 @@ def run(binary, decoder, output, checks):
             preview.until(lambda shot: view(shot, "conversation"), "leaving the scrolled audit column")
             preview.send(ALT_RIGHT)
             back = preview.until(lambda shot: view(shot, "code audit"), "returning to the scrolled audit column")
-            check(body(back) == scrolled_body and "To · Builder" in text(back)
+            check(body(back) == scrolled_body and "To Builder" in text(back)
                   and draft in prompt_text(back),
                   "audit viewport, shared recipient and draft survive horizontal navigation")
             check(intact_cells(back), "narrow columns keep wide glyphs and cursor coordinates within the viewport")
@@ -216,7 +216,7 @@ def run(binary, decoder, output, checks):
             grown = preview.until(lambda shot: shot["size"] == [30, 110]
                                   and view(shot, "conversation") and draft in prompt_text(shot),
                                   "conversation after restoring terminal dimensions")
-            check("To · Builder" in text(grown) and DIAGNOSTIC not in body(grown),
+            check("To Builder" in text(grown) and DIAGNOSTIC not in body(grown),
                   "resizing restores the conversation with its recipient and diagnostic separation")
             save_shot(output, "canvas-restored", grown)
 
@@ -227,7 +227,7 @@ def run(binary, decoder, output, checks):
             created = preview.until(lambda shot: view(shot, "queue") and "#example-" in body(shot)
                                     and "Keep the interface simple;" in body(shot),
                                     "new queue column inserted after conversation")
-            check("To · Builder" in text(created) and column(created)[2] == initial_count + 1,
+            check("To Builder" in text(created) and column(created)[2] == initial_count + 1,
                   "new columns extend the canvas and share the selected recipient")
             preview.send(b"i")
             detail = preview.until(lambda shot: view(shot, "queue")
@@ -252,7 +252,7 @@ def run(binary, decoder, output, checks):
             preview.until(lambda shot: view(shot, "conversation"), "closing the inserted queue restores the original neighbor")
             preview.send(ALT_RIGHT)
             original = preview.until(lambda shot: view(shot, "code audit"), "original audit after removing inserted columns")
-            check("To · Builder" in text(original) and column(original)[2] == initial_count
+            check("To Builder" in text(original) and column(original)[2] == initial_count
                   and preview.process.poll() is None,
                   "/new and /close extend and shrink the canvas without ending the session")
             preview.send(ALT_RIGHT * 8)
@@ -352,7 +352,6 @@ def run_diff_login(binary, decoder, output, checks):
                                       "an independent duplicate conversation")
             expected_column = column(duplicate)
             expected_body = body(duplicate)
-            expected_recipient_row = left_rows(duplicate)[prompt_start(duplicate)]
             check("expanded = false" in expected_body and "@@ -1 +1 @@" not in expected_body,
                   "a new conversation column starts with its own collapsed tool cards")
             for command in ["/login", "/login open", "/login copy", "/login link"]:
@@ -360,16 +359,21 @@ def run_diff_login(binary, decoder, output, checks):
                 typed = preview.until(lambda shot: command in prompt_text(shot),
                                       "the login command draft")
                 cursor = typed["cursor"]
+                recipient_row = left_rows(typed)[prompt_start(typed)]
                 preview.send(b"\r")
                 rejected = preview.until(
                     lambda shot: "Preview does not start GitHub login" in text(shot),
                     "the explicit preview login rejection",
                 )
-                check(command in prompt_text(rejected) and rejected["cursor"] == cursor
-                      and not rejected["hide_cursor"] and column(rejected) == expected_column
-                      and body(rejected) == expected_body
-                      and left_rows(rejected)[prompt_start(rejected)] == expected_recipient_row,
-                      f"{command} is explicitly rejected in preview without changing draft, cursor, recipient or canvas")
+                unchanged = {
+                    "draft": command in prompt_text(rejected),
+                    "cursor": rejected["cursor"] == cursor and not rejected["hide_cursor"],
+                    "column": column(rejected) == expected_column,
+                    "body": body(rejected) == expected_body,
+                    "recipient": left_rows(rejected)[prompt_start(rejected)] == recipient_row,
+                }
+                changed = [field for field, preserved in unchanged.items() if not preserved]
+                check(not changed, f"{command} preview rejection preserves composer and canvas (changed: {changed})")
             save_shot(output, "canvas-login-preview", rejected)
             preview.send(ALT_LEFT)
             previous = preview.until(lambda shot: view(shot, "conversation") and changes_visible(shot),
@@ -421,7 +425,7 @@ def run_tasks(binary, decoder, output, checks):
                   "the default canvas has eight columns with conversation second")
             preview.send(ALT_LEFT + b"\x1b[B\r")
             recipient = preview.until(lambda shot: view(shot, "conversation")
-                                      and "To · Builder" in text(shot), "the shared task-panel recipient")
+                                      and "To Builder" in text(shot), "the shared task-panel recipient")
             command(preview, recipient, "/tasks")
             tasks = preview.until(task_list, "the actual Tasks panel")
             check(column(tasks) == ("tasks", 8, 8)
@@ -429,7 +433,7 @@ def run_tasks(binary, decoder, output, checks):
                   and "cargo test --lib" in body(tasks)
                   and "running" in body(tasks) and "completed" in body(tasks)
                   and "/preview/fictional-project" in body(tasks)
-                  and "To · Builder" in text(tasks),
+                  and "To Builder" in text(tasks),
                   "/tasks opens the canonical Tasks column with explicitly fictional preview job metadata")
             save_shot(output, "canvas-tasks-list", tasks)
 
@@ -441,7 +445,7 @@ def run_tasks(binary, decoder, output, checks):
                 lambda shot: any("› preview-task-test" in row for row in shot["rows"]),
                 "the second task selected by its stable job id",
             )
-            check(draft in prompt_text(selected) and "To · Builder" in text(selected),
+            check(draft in prompt_text(selected) and "To Builder" in text(selected),
                   "task selection preserves the shared Unicode draft and recipient")
             preview.send(b"\r")
             detail = preview.until(lambda shot: view(shot, "tasks")
@@ -462,7 +466,7 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(LEFT)
             logs = preview.until(logs_open, "Tasks Left reaching the adjacent Logs column")
             check(column(logs)[1] + 1 == column(scrolled)[1]
-                  and draft in prompt_text(logs) and "To · Builder" in text(logs),
+                  and draft in prompt_text(logs) and "To Builder" in text(logs),
                   "Tasks Left reaches Logs without changing the draft or recipient")
             preview.send(RIGHT)
             restored = preview.until(lambda shot: view(shot, "tasks"), "Logs Right returning to Tasks")
@@ -475,7 +479,7 @@ def run_tasks(binary, decoder, output, checks):
                 and any("› preview-task-test" in row for row in shot["rows"]),
                 "the selected task retained in the full-width list",
             )
-            check(draft in prompt_text(listed) and "To · Builder" in text(listed),
+            check(draft in prompt_text(listed) and "To Builder" in text(listed),
                   "Escape leaves task details while keeping the selected job and draft")
 
             preview.send(ALT_LEFT * 5)
@@ -490,7 +494,7 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(ESCAPE)
             returned = preview.until(lambda shot: column(shot) == original_column, "Escape returning to Audit")
             check(body(returned) == original_body and draft in prompt_text(returned)
-                  and "To · Builder" in text(returned),
+                  and "To Builder" in text(returned),
                   "Audit to Logs to Tasks to Logs then Escape returns to the original bookmarked column")
             preview.send(ALT_LEFT)
             chat = preview.until(lambda shot: view(shot, "conversation"), "the shared composer after task navigation")
@@ -506,7 +510,7 @@ def run_tasks(binary, decoder, output, checks):
             command(preview, closed_tasks, "/tasks")
             reopened_tasks = preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 8),
                                            "the canonical Tasks column recreated next to Logs")
-            check("To · Builder" in text(reopened_tasks),
+            check("To Builder" in text(reopened_tasks),
                   "closing and reopening Tasks restores the canonical pair and preserves the recipient")
             preview.send(LEFT)
             current_logs = preview.until(logs_open, "Logs before closing its column")
@@ -519,7 +523,7 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(LEFT)
             repaired_logs = preview.until(lambda shot: logs_open(shot) and column(shot) == ("logs", 7, 8),
                                           "the rebuilt adjacent Logs column")
-            check("To · Builder" in text(repaired_logs),
+            check("To Builder" in text(repaired_logs),
                   "dedicated Tasks restores a closed Logs neighbor without deleting jobs or the recipient")
 
             command(preview, repaired_logs, "/new chat")
@@ -531,7 +535,7 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(ALT_LEFT)
             adjacent_logs = preview.until(lambda shot: logs_open(shot) and column(shot)[1] == 7,
                                           "Logs and Tasks remaining adjacent after insertion")
-            check(column(adjacent_logs)[2] == 9 and "To · Builder" in text(adjacent_logs),
+            check(column(adjacent_logs)[2] == 9 and "To Builder" in text(adjacent_logs),
                   "/new from Logs inserts after Tasks and never splits the canonical pair")
             check(preview.process.poll() is None, "closing system columns leaves the preview session alive")
         except BaseException:

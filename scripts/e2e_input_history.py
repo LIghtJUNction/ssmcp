@@ -732,7 +732,7 @@ class InputHistory(Composer):
         selected = 1 + next(index for index, item in enumerate(roster)
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
-        front.until(lambda shot: "To · Input fixture member" in text(shot)
+        front.until(lambda shot: "To Input fixture member" in text(shot)
                     and column(shot) == ("conversation", 2, 8),
                     "Enter selecting the exact registered fixture recipient")
         first_source = self.reference_scenarios(front, member)
