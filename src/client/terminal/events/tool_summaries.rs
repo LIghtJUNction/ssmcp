@@ -80,7 +80,8 @@ impl Display {
 pub(super) struct Group {
     pub(super) display: Display,
     scope: Option<Scope>,
-    reminded_revision: Option<u64>,
+    // The revision and native request that reserved its reminder.
+    reminded: Option<(u64, u64)>,
 }
 
 impl Group {
@@ -107,7 +108,7 @@ impl Group {
         Self {
             display,
             scope: None,
-            reminded_revision: None,
+            reminded: None,
         }
     }
 }
@@ -227,7 +228,7 @@ impl EventView {
                     ..Display::default()
                 },
                 scope: Some(scope),
-                reminded_revision: None,
+                reminded: None,
             });
             self.summary_groups.len() - 1
         };
@@ -389,7 +390,7 @@ impl EventView {
                 .ok_or("tool_summary_revision_exhausted")?;
             group.display.summary = Some(text);
             group.display.covered_call_count = group.display.call_count;
-            group.reminded_revision = None;
+            group.reminded = None;
         }
         let mut receipt = self.summary_receipt(&self.summary_groups[index]);
         receipt["accepted"] = json!(true);
@@ -412,17 +413,52 @@ impl EventView {
         value
     }
 
+    /// Cancel only the reservation issued to a reply that the client cannot send.
+    /// A different request or a newer summary revision keeps its own dedup state.
+    pub(in crate::client::terminal) fn restore_tool_summary_reminder(
+        &mut self,
+        source: &Source,
+        reminder: &Value,
+    ) -> bool {
+        let Ok(scope) = Scope::capture(source) else {
+            return false;
+        };
+        let (Some(id), Some(revision), Some(call)) = (
+            reminder["group_id"].as_str(),
+            reminder["revision"].as_u64(),
+            source.call.as_ref(),
+        ) else {
+            return false;
+        };
+        if reminder["schema_version"] != 1 {
+            return false;
+        }
+        let Some(group) = self.summary_groups.iter_mut().find(|group| {
+            group.display.group_id == id
+                && group.scope.as_ref() == Some(&scope)
+                && group.display.revision == revision
+                && group.reminded == Some((revision, call.request_id()))
+        }) else {
+            return false;
+        };
+        group.reminded = None;
+        true
+    }
+
     pub(in crate::client::terminal) fn take_tool_summary_reminder(
         &mut self,
         source: &Source,
     ) -> Option<Value> {
         let scope = Scope::capture(source).ok()?;
+        let request_id = source.call.as_ref()?.request_id();
         let group = self.summary_groups.iter_mut().rev().find(|group| {
             group.scope.as_ref() == Some(&scope)
                 && group.display.needs_summary()
-                && group.reminded_revision != Some(group.display.revision)
+                && group
+                    .reminded
+                    .is_none_or(|(revision, _)| revision != group.display.revision)
         })?;
-        group.reminded_revision = Some(group.display.revision);
+        group.reminded = Some((group.display.revision, request_id));
         Some(json!({
             "schema_version":1,"group_id":group.display.group_id,
             "revision":group.display.revision,"call_count":group.display.call_count,
