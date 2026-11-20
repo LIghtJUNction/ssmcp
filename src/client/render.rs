@@ -415,6 +415,17 @@ fn publish(bytes: &[u8], snapshot: Option<PanelSnapshot>) {
     }
 }
 
+#[cfg(test)]
+pub(super) fn render_event_for_test(
+    label: &str,
+    value: &Value,
+    width: usize,
+) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    Renderer::new(false, false, width).event(&mut output, label, value)?;
+    Ok(output)
+}
+
 #[derive(Default)]
 struct Lines {
     pending: String,
