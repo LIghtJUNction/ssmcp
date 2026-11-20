@@ -250,8 +250,9 @@ def main():
             check("Reviewer" not in text(initial) and "Builder" not in text(initial),
                   "the default conversation keeps the sidebar hidden")
             account_row = left_rows(initial)[prompt_start(initial)]
-            check("example" in account_row and "0.75 GB" in account_row,
-                  "the composer still shows its account and remaining traffic")
+            check("Local example" in account_row and "Max 1 GB" in account_row
+                  and "Reset 12-01" in account_row,
+                  "the composer shows its account, traffic limit and reset date")
             save_shot(args.out, "chat", initial)
             preview.send(b"\x1bOR")
             initial = preview.until(lambda s: "Builder" in text(s) and "Reviewer" in text(s)
@@ -485,7 +486,7 @@ def main():
             preview.until(lambda s: column(s) == ("agents", 1, 8)
                           and "切换保留 界" in prompt_text(s), "opening agents with a Unicode draft")
             preview.send(b"\x1b[B\r")
-            chosen = preview.until(lambda s: "To · Builder" in text(s)
+            chosen = preview.until(lambda s: "To Builder" in text(s)
                                    and column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
                                    "explicit agent selection returning to the conversation")
             check("切换保留 界" in prompt_text(chosen)
@@ -515,7 +516,7 @@ def main():
                                          and "#example-" in body_text(s)
                                          and "Keep the interface simple;" in body_text(s),
                                          "Escape restoring the originating queue column")
-            check("To · Builder" in text(queue_return), "Logs preserves the shared recipient")
+            check("To Builder" in text(queue_return), "Logs preserves the shared recipient")
             preview.send(b"\x1b[1;3D\x1b[1;3D")
             preview.until(lambda s: column(s) == ("conversation", 2, 8)
                           and not s["hide_cursor"], "horizontal navigation back to the conversation")
