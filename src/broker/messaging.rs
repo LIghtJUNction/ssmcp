@@ -264,6 +264,7 @@ impl Broker {
             )
             .await?;
         if let Some(run) = &run {
+            run.question_delivery_server_action(&client_id);
             run.dispatched(&client_id);
         }
         serde_json::to_value(result).map_err(|e| e.to_string())
