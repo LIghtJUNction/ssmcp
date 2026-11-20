@@ -1,0 +1,8 @@
+{
+  "status": "prepared_not_run",
+  "root": "/var/tmp/ssmcp-p1-r3-handoff-18d13760-20261120-root-r1",
+  "archive_sha256": "f7a2144b34b5c804dbd428b5abc4844b2ca3e67227679b1897ce99eb7ee21eb9",
+  "files_verified": 13,
+  "receipt_sha256": "db899bc55834200874456fda33db01cc4ecc10e618e2e7e48737e323946761a4",
+  "product_execution": false
+}
