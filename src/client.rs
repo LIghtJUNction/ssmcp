@@ -6,8 +6,8 @@ mod audit_view;
 mod browser_setup;
 mod clipboard;
 pub(crate) mod completion;
-mod computer_control;
 mod composer;
+mod computer_control;
 mod config;
 mod connection_context;
 pub(crate) mod context_memory;
@@ -458,7 +458,7 @@ impl Options {
             return Err("ssmcp local currently requires Linux".into());
         }
         #[cfg(target_os = "linux")]
-        let (mut listen, mut public_url) = (None, None);
+        let (mut listen, mut public_url, mut socket) = (None, None, None);
         let mut destination = None;
         let mut server = None;
         let mut context = None;
@@ -515,6 +515,23 @@ impl Options {
                     return Err("harness selection was removed; remove -t/--type/--backend; optional harnesses load only when explicitly requested".into());
                 }
                 Some("--ssh") => ssh = true,
+                #[cfg(target_os = "linux")]
+                Some("--socket") => {
+                    if socket.is_some() {
+                        return Err("--socket may be supplied only once".into());
+                    }
+                    socket = Some(
+                        args.next_if(|value| !value.to_string_lossy().starts_with('-'))
+                            .map(std::path::PathBuf::from),
+                    );
+                }
+                #[cfg(target_os = "linux")]
+                Some(value) if value.starts_with("--socket=") => {
+                    if socket.is_some() {
+                        return Err("--socket may be supplied only once".into());
+                    }
+                    socket = Some(Some(std::path::PathBuf::from(&value["--socket=".len()..])));
+                }
                 #[cfg(target_os = "linux")]
                 Some("--listen") => {
                     let value = args.next().ok_or("--listen requires IP:PORT")?;
@@ -728,6 +745,12 @@ impl Options {
         let mut local = local_mode.then(local::Settings::default);
         #[cfg(target_os = "linux")]
         {
+            if let Some(path) = socket {
+                local
+                    .as_mut()
+                    .ok_or("--socket is only available with a local connection")?
+                    .set_socket(path)?;
+            }
             if let Some(value) = listen {
                 local
                     .as_mut()
@@ -2137,14 +2160,23 @@ impl Transport<'_> {
                 &format!("Connecting to {server} with an explicit account allow list"),
             ),
             #[cfg(target_os = "linux")]
-            Self::Local(host) => render::status(
-                "local",
-                "Progress",
-                &format!(
-                    "Starting local MCP at {} with private OS-user transport",
-                    host.origin
-                ),
-            ),
+            Self::Local(host) => {
+                render::status(
+                    "local",
+                    "Progress",
+                    &format!(
+                        "Starting local MCP at {} with private OS-user transport",
+                        host.origin
+                    ),
+                );
+                if let Some(path) = &host.socket {
+                    render::status(
+                        "socket",
+                        "Info",
+                        &format!("MCP HTTP socket: {}", path.display()),
+                    );
+                }
+            }
         }
     }
 
@@ -2771,6 +2803,58 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn local_socket_option_accepts_default_and_custom_paths_without_eating_flags() {
+        let default =
+            Options::parse(["local", "--socket", "--name", "socket-fixture"].map(OsString::from))
+                .unwrap()
+                .unwrap();
+        assert!(default.is_local());
+        assert_eq!(default.name.as_deref(), Some("socket-fixture"));
+        assert_eq!(
+            default
+                .local
+                .as_ref()
+                .unwrap()
+                .socket_path()
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "mcp.sock"
+        );
+        for args in [
+            vec!["local", "--socket", "/tmp/private/mcp.sock"],
+            vec!["local", "--socket=/tmp/private/mcp.sock"],
+        ] {
+            let parsed = Options::parse(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                parsed.local.as_ref().unwrap().socket_path(),
+                Some(std::path::Path::new("/tmp/private/mcp.sock"))
+            );
+        }
+        let title = Options::parse(["local", "--title", "--socket"].map(OsString::from))
+            .unwrap()
+            .unwrap();
+        assert_eq!(title.title.as_deref(), Some("--socket"));
+        assert!(title.local.as_ref().unwrap().socket_path().is_none());
+        for args in [
+            vec!["local", "--socket=relative.sock"],
+            vec!["local", "--socket="],
+            vec!["local", "--socket", "--socket"],
+            vec![
+                "--server",
+                "https://remote.example",
+                "--socket",
+                "/tmp/private/mcp.sock",
+            ],
+        ] {
+            assert!(Options::parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn local_options_do_not_select_or_persist_a_remote_account() {
