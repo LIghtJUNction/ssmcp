@@ -312,7 +312,7 @@ fn limits() -> Value {
             "caller_workspace_access":"requires an explicit connected bridge"
         },
         "collaboration":crate::collab::limits(),
-        "finish_requests":{"public_tool":"request_finish","native_tool":"ssmcp.ui.finish","passive_wait_op":"wait","max_wait_ms":25000,"default_decision":"no","pending_decision":null,"human_approval_only":true,"requester_self_approval":false,"external_final_output_intercepted":false},
+        "finish_requests":{"public_tool":"request_finish","native_tool":"ssmcp.ui.finish","passive_wait_op":"wait","max_wait_ms":25000,"default_decision":"no","pending_decision":null,"human_approval_only":true,"requires_chat_enabled_client":true,"requester_self_approval":false,"external_final_output_intercepted":false},
         "await":crate::http::await_tool::limits(),
         "question_answers":{"origin":"typed human or verified agent","delivery":"next eligible verified bound call; native nonconsuming probe has a 1s total deadline","read_consumes":false,"restart_persistence":false},
         "managed_workspaces":{

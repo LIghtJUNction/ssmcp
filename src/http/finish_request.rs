@@ -194,6 +194,7 @@ pub(super) async fn execute(
     let session = broker
         .client(&user, &authorization, &arguments.client_id)
         .await?;
+    session.require_chat()?;
     let owner = crate::bridge::owner(&user, &authorization)?;
     let inherited = code_mode::AUDIT_RUN
         .try_with(|run| run.binding(&arguments.client_id))
@@ -338,7 +339,7 @@ pub(super) fn accepted_native_data(
 
 pub(super) fn tool() -> Value {
     json!({"name":"request_finish",
-        "description":"Request the local user's permission to finish the current work. A nonempty reason is required. This direct Rust tool sleeps up to 25 seconds without occupying a JavaScript worker. Default No is not an invented user decision: pending returns decision null and approved false. Resume the same request_id after timeout; do not finish on timeout, denial or an agent's completion. Only the local user's explicit Yes may approve completion. Pass your existing collab id/token to bind the exact thread (collab.join registers the current participant and starts no model). Where this public tool is unavailable, call the registered native ssmcp.ui.finish in the same bound scope. A human-approved request permits one explicit native kind answer; new user input, cancellation or connection changes invalidate it. Current authentication and ACL remain required. External assistant final speech cannot be intercepted by SSMCP.",
+        "description":"Request the local user's permission to finish the current work on a chat-enabled client. A nonempty reason is required. This direct Rust tool sleeps up to 25 seconds without occupying a JavaScript worker. Default No is not an invented user decision: pending returns decision null and approved false. Resume the same request_id after timeout; do not finish on timeout, denial or an agent's completion. Only the local user's explicit Yes may approve completion. Pass your existing collab id/token to bind the exact thread (collab.join registers the current participant and starts no model). Where this public tool is unavailable, call the registered native ssmcp.ui.finish in the same bound scope. A human-approved request permits one explicit native kind answer; new user input, cancellation or connection changes invalidate it. Current authentication and ACL remain required. External assistant final speech cannot be intercepted by SSMCP.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["client_id","reason"],"properties":{
             "client_id":{"type":"string","minLength":1,"maxLength":64},
             "reason":{"type":"string","minLength":1,"maxLength":8192},

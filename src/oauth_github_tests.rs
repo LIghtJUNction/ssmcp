@@ -251,6 +251,7 @@ impl Fixture {
                 version_notice: false,
                 wait_display: false,
                 time_observation: false,
+                chat_disabled: false,
             },
             crate::user_policy::TrafficFailureState::default(),
         ));

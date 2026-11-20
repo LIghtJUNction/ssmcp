@@ -173,6 +173,7 @@ pub struct Session {
     pub(crate) collaboration: crate::collab::Hub,
     pub(crate) steering: crate::steering::Queue,
     thread_scope: OnceCell<bool>,
+    chat_disabled: bool,
     tool_summary_advertised: AtomicBool,
     io_reply_advertised: AtomicBool,
     thread_history_advertised: AtomicBool,
@@ -232,8 +233,19 @@ impl Session {
         self.tool_summary_advertised.load(Ordering::Acquire)
     }
 
+    pub(crate) fn chat_enabled(&self) -> bool {
+        !self.chat_disabled
+    }
+
+    pub(crate) fn require_chat(&self) -> Result<(), String> {
+        if self.chat_disabled {
+            return Err(wire::CHAT_DISABLED.into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn io_reply_advertised(&self) -> bool {
-        self.io_reply_advertised.load(Ordering::Acquire)
+        self.chat_enabled() && self.io_reply_advertised.load(Ordering::Acquire)
     }
 
     pub(crate) fn thread_history_advertised(&self) -> bool {
@@ -263,6 +275,7 @@ impl Session {
         if !self.is_alive() {
             return Err("client connection is closed".into());
         }
+        self.require_chat()?;
         self.steering
             .command(self.client_id(), self.collaboration.presence()?, command)
     }
@@ -408,6 +421,11 @@ impl Session {
             return Err("session access was revoked; refresh the connected clients".into());
         }
         operation.validate()?;
+        if let Operation::CallTool { name, .. } = &operation
+            && wire::human_chat_tool(name)
+        {
+            self.require_chat()?;
+        }
         let audit_run = crate::code_mode::AUDIT_RUN.try_with(Clone::clone).ok();
         // A later collab.bind in the same run must not reattribute this reply.
         let binding = frozen_binding.unwrap_or_else(|| {
@@ -650,6 +668,7 @@ impl Session {
 }
 
 pub struct Broker {
+    pub(crate) local_chat_disabled: bool,
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
     pub(crate) awaiting: crate::http::await_tool::Registry,
@@ -713,6 +732,7 @@ impl Broker {
         identities: IdentityProviders,
     ) -> Self {
         Self {
+            local_chat_disabled: false,
             oauth,
             identities,
             public_url,
@@ -842,6 +862,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
             thread_history_advertised: AtomicBool::new(false),
@@ -1212,7 +1233,13 @@ impl Broker {
         let time_observation_supported = access_supported
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.time_observation);
+        let chat_disabled = peer
+            .as_ref()
+            .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
         let mut capabilities = Vec::new();
+        if chat_disabled {
+            capabilities.push(wire::CHAT_DISABLED_CAPABILITY.into());
+        }
         if access_supported {
             capabilities.push(wire::SESSION_ACCESS_CAPABILITY.into());
         }
@@ -1245,6 +1272,7 @@ impl Broker {
             collaboration: crate::collab::Hub::for_session(&client_id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            chat_disabled,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
             thread_history_advertised: AtomicBool::new(false),
@@ -2136,6 +2164,7 @@ mod tests {
             collaboration: crate::collab::Hub::for_session(id),
             steering: crate::steering::Queue::default(),
             thread_scope: OnceCell::new(),
+            chat_disabled: false,
             tool_summary_advertised: AtomicBool::new(false),
             io_reply_advertised: AtomicBool::new(false),
             thread_history_advertised: AtomicBool::new(false),

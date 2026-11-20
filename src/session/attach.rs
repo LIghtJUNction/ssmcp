@@ -680,9 +680,15 @@ async fn attached(
     render::configure(ui.clone());
     // Use the attached session's workspace, which may differ from the directory
     // where this frontend was launched. This grants input import only.
-    let _local_input = crate::client::attachments::LocalInput::bind(spec.cwd.clone())?;
-    let display =
-        terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?;
+    let display_enabled = crate::client::saved_chat_enabled(spec);
+    let _local_input = display_enabled
+        .then(|| crate::client::attachments::LocalInput::bind(spec.cwd.clone()))
+        .transpose()?;
+    let display = if display_enabled {
+        terminal::Session::start(&ui, &spec.cwd.to_string_lossy(), title.as_deref(), None)?
+    } else {
+        None
+    };
     terminal::follow_attach_history(DisplayHistory::NoSelection);
     let mut replay_history = ReplayHistory::Legacy;
     let mut terminal_ids = Vec::new();

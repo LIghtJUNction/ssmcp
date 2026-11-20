@@ -43,7 +43,7 @@ pub(super) enum Endpoint {
 impl Endpoint {
     pub(super) async fn open(input: &Input) -> Result<Option<Self>, String> {
         Ok(Some(match input {
-            Input::Terminal => return Ok(None),
+            Input::Terminal | Input::None => return Ok(None),
             #[cfg(unix)]
             Input::Pipe | Input::McpStdio => {
                 use std::io::IsTerminal;

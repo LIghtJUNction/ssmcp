@@ -1631,11 +1631,26 @@ pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
 pub(super) fn take_events() -> Vec<UiEvent> {
     with(|manager| manager.events.drain(..).collect())
 }
+#[cfg(test)]
 pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
+    connect_with_chat(room_id, protocol, true)
+}
+
+pub(super) fn connect_with_chat(
+    room_id: &str,
+    protocol: u32,
+    enabled: bool,
+) -> mpsc::Receiver<Transport> {
     let transport = with(|manager| manager.connect(room_id, protocol));
-    super::interface::listener::connect(room_id);
-    super::interface::user_wait::connect(room_id);
-    super::interface::questions::connect(room_id);
+    if enabled {
+        super::interface::listener::connect(room_id);
+        super::interface::user_wait::connect(room_id);
+        super::interface::questions::connect(room_id);
+    } else {
+        super::interface::listener::disconnect();
+        super::interface::user_wait::disconnect();
+        super::interface::questions::disconnect();
+    }
     transport
 }
 pub(super) fn disconnect() {

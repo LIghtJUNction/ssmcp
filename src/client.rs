@@ -93,7 +93,7 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --input MODE  Chat input (terminal by default)
+  --input MODE  Chat input (terminal by default, none disables chat)
   --agent NAME  Chat recipient (next-caller by default)
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
@@ -133,7 +133,7 @@ Usage: ssmcp username@server [options]
 
   --server URL         Relay for this command; overrides config and last login
   --context NAME       Named local or HTTPS target; overrides SSMCP_CONTEXT and context use
-  --input MODE         terminal (default), pipe, web, mcp-stdio, mcp-http or sock
+  --input MODE         terminal (default), none, pipe, web, mcp-stdio, mcp-http or sock
   --input-host HOST    Loopback host for web or MCP HTTP (required)
   --input-port PORT    Port for web or MCP HTTP (required)
   --input-token-file PATH  Private bearer token file for web or MCP HTTP
@@ -1183,6 +1183,23 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     Ok(())
 }
 
+/// Read the chat mode of an already validated saved session without opening
+/// context roots or resolving the session's credentials.
+pub(crate) fn saved_chat_enabled(spec: &crate::session::SessionSpec) -> bool {
+    let mut args = spec.args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => break,
+            "--input" => return args.next().is_none_or(|value| value != "none"),
+            arg if connection_option_takes_value(arg) => {
+                args.next();
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 /// Read display metadata without reopening optional context roots or transports.
 pub(crate) fn session_title(spec: &crate::session::SessionSpec) -> crate::Result<Option<String>> {
     let mut args = spec.args.iter();
@@ -1211,8 +1228,10 @@ pub(crate) fn child_session_spec(
 ) -> crate::Result<crate::session::SessionSpec> {
     let mut options =
         Options::parse_saved(template)?.ok_or("invalid management connection template")?;
-    if options.chat.input != chat_io::Input::Terminal
-        || options.chat.agent != chat_io::Agent::NextCaller
+    if !matches!(
+        options.chat.input,
+        chat_io::Input::Terminal | chat_io::Input::None
+    ) || options.chat.agent != chat_io::Agent::NextCaller
     {
         return Err(
             "remote child sessions cannot inherit a privately authorized chat input or agent"
@@ -1686,6 +1705,7 @@ pub async fn run() -> crate::Result<()> {
             // Offline discovery lists this binary's native tools. It has no
             // relay, queued requests or public-await display to negotiate.
             runtime.configure_timing(true, false)?;
+            runtime.configure_chat(options.chat.input != chat_io::Input::None)?;
             runtime.enable_default_skill_sources()?;
             Ok(runtime)
         }) {
@@ -1919,6 +1939,7 @@ struct RegisteredSsh {
     ready: (String, String, u64, String),
     access_supported: bool,
     messaging_supported: bool,
+    chat_disabled_acknowledged: bool,
     time_observation_supported: bool,
     wait_display_supported: bool,
     version_notice: Option<crate::wire::versions::Notice>,
@@ -2030,9 +2051,13 @@ async fn register_ssh(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
-            capabilities
-                .iter()
-                .all(|capability| capability == crate::wire::CONTROL_ATTRIBUTION_CAPABILITY),
+            capabilities.iter().all(|capability| {
+                matches!(
+                    capability.as_str(),
+                    crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+                        | crate::wire::CHAT_DISABLED_CAPABILITY
+                )
+            }),
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::messages::CAPABILITY),
@@ -2044,6 +2069,9 @@ async fn register_ssh(
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_timing(timing_offer, &capabilities).1,
+            capabilities
+                .iter()
+                .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -2076,6 +2104,7 @@ async fn register_ssh(
         version_notice,
         time_observation_supported,
         wait_display_supported,
+        chat_disabled_acknowledged,
     ) = ready;
     if account_compat
         && (!metadata.allow.is_empty()
@@ -2105,6 +2134,7 @@ async fn register_ssh(
         ready,
         access_supported,
         messaging_supported,
+        chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_supported,
         version_notice,
@@ -2272,7 +2302,7 @@ async fn connect(
 ) -> crate::Result<ConnectionExit> {
     #[cfg(target_os = "linux")]
     if let Some(settings) = &options.local {
-        let host = local::Host::start(settings).await?;
+        let host = local::Host::start(settings, options.chat.input == chat_io::Input::None).await?;
         let result = connect_inner(
             options,
             ui,
@@ -2361,6 +2391,7 @@ async fn connect_inner(
         }
     };
     let mut metric_channel = None;
+    let chat_enabled = options.chat.input != chat_io::Input::None;
     let registration = register_ssh(
         &wire_metadata,
         options.account_compat,
@@ -2369,6 +2400,9 @@ async fn connect_inner(
             let mut command = transport.command(&executable);
             if options.account_compat {
                 relay::restrict_to_self(&mut command);
+            }
+            if !chat_enabled && matches!(&transport, Transport::Account { .. }) {
+                relay::offer_chat_disabled(&mut command);
             }
             if matches!(&transport, Transport::Account { .. })
                 && ui.dashboard
@@ -2388,6 +2422,14 @@ async fn connect_inner(
     registration
         .require_allow_access(&wire_metadata.allow)
         .await?;
+    if chat_enabled == registration.chat_disabled_acknowledged {
+        stop_registration(&mut registration.ssh, &mut registration.stderr_pump).await?;
+        return Err(Box::new(relay::PermanentFailure(if chat_enabled {
+            "relay disabled human chat without a matching local request".into()
+        } else {
+            "--input none requires a relay that acknowledges disabled human chat".into()
+        })));
+    }
     let RegisteredSsh {
         mut ssh,
         stderr_pump: _stderr_pump,
@@ -2396,6 +2438,7 @@ async fn connect_inner(
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
         messaging_supported,
+        chat_disabled_acknowledged: _,
         time_observation_supported,
         wait_display_supported,
         version_notice,
@@ -2471,6 +2514,7 @@ async fn connect_inner(
     .and_then(|runtime| {
         runtime.bind_client_id(&client_id)?;
         runtime.configure_timing(time_observation_supported, wait_display_supported)?;
+        runtime.configure_chat(chat_enabled)?;
         runtime.enable_default_skill_sources()?;
         Ok(runtime)
     }) {
@@ -2547,7 +2591,7 @@ async fn connect_inner(
     }
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
-    } else if options.chat.input != chat_io::Input::Terminal {
+    } else if chat_enabled && options.chat.input != chat_io::Input::Terminal {
         // External input owns stdout. A local OAuth client still needs its
         // connection URL and one-time code on the operator's stderr.
         if options.is_local() {
@@ -2576,7 +2620,9 @@ async fn connect_inner(
     render::status(
         "shell",
         "Result",
-        if options.chat.input != chat_io::Input::Terminal {
+        if !chat_enabled {
+            "Human chat is disabled. Ctrl-C disconnects this client."
+        } else if options.chat.input != chat_io::Input::Terminal {
             "Chat input is enabled. Ctrl-C disconnects this client."
         } else if github_auth {
             "Sign in with an allowed GitHub account. Ctrl-C disconnects this client."
@@ -2605,11 +2651,12 @@ async fn connect_inner(
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
-    let mut steering_commands = steering::connect(&client_id, VERSION);
+    let mut steering_commands = steering::connect_with_chat(&client_id, VERSION, chat_enabled);
     let mut access_commands = access::connect(access_supported);
     let mut message_commands = messaging::connect(messaging_supported);
-    let mut chat = if options.chat.input == chat_io::Input::Terminal
-        && options.chat.agent == chat_io::Agent::NextCaller
+    let mut chat = if !chat_enabled
+        || (options.chat.input == chat_io::Input::Terminal
+            && options.chat.agent == chat_io::Agent::NextCaller)
     {
         None
     } else {
@@ -2647,7 +2694,7 @@ async fn connect_inner(
                 Err(error) => break Err(Box::new(relay::PermanentFailure(error)) as crate::Error),
             },
             _ = steering_updates.tick() => {
-                if let Err(error) = steering::poll() { terminal::notice(&error); }
+                if chat_enabled && let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
                 messaging::poll();
             },
@@ -3266,6 +3313,60 @@ mod tests {
     #[test]
     fn retired_join_is_not_a_reusable_connection_destination() {
         assert!(Options::parse(["join", "--token", "retired"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn disabled_chat_is_saved_as_a_literal_and_inherited_by_local_children() {
+        let options = Options::parse(
+            [
+                "--name",
+                "quiet",
+                "--server",
+                "https://relay.example",
+                "--title",
+                "--input",
+                "--input",
+                "none",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let spec = options.session_spec().unwrap();
+        validate_session_spec(&spec).unwrap();
+        assert!(!saved_chat_enabled(&spec));
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.chat.input, chat_io::Input::None);
+        assert_eq!(restored.chat.agent, chat_io::Agent::NextCaller);
+        assert_eq!(restored.title.as_deref(), Some("--input"));
+        let child = child_session_spec(
+            &spec,
+            "quiet-child".into(),
+            spec.cwd.clone(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!saved_chat_enabled(&child));
+        assert_eq!(
+            Options::parse_saved(&child).unwrap().unwrap().chat.input,
+            chat_io::Input::None
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--server",
+                    "https://relay.example",
+                    "--input",
+                    "none",
+                    "--agent",
+                    "codex",
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
+        );
     }
 
     #[test]

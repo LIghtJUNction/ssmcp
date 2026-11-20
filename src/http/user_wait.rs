@@ -92,6 +92,7 @@ pub(super) async fn wait_observed(
         .await
         .ok_or("authorization expired or was revoked; refresh the MCP connection")?;
     let session = broker.client(&user, &authorization, &client_id).await?;
+    session.require_chat()?;
     let recipient = Recipient {
         owner: crate::bridge::owner(&user, &authorization)?,
         binding: run.binding(&client_id),
@@ -333,6 +334,26 @@ mod tests {
         task::JoinHandle,
     };
 
+    #[tokio::test]
+    async fn disabled_chat_rejects_before_wait_state_or_native_dispatch() {
+        let mut fixture = Fixture::with_disabled_chat(true).await;
+        let (run, task) = fixture.start_wait(2000);
+        let result = tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.unwrap_err(), wire::CHAT_DISABLED);
+        assert!(run.wait_recipient(fixture.session.client_id()).is_none());
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                wire::read_frame(fixture.reader.as_mut().unwrap()),
+            )
+            .await
+            .is_err()
+        );
+    }
+
     struct Fixture {
         broker: Arc<Broker>,
         user: String,
@@ -346,7 +367,13 @@ mod tests {
 
     impl Fixture {
         async fn new() -> Self {
-            let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+            Self::with_disabled_chat(false).await
+        }
+
+        async fn with_disabled_chat(disabled: bool) -> Self {
+            let mut broker = Broker::new("https://ssmcp.example".into());
+            broker.local_chat_disabled = disabled;
+            let broker = Arc::new(broker);
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             let routes = router(broker.clone());
@@ -376,11 +403,18 @@ mod tests {
                 url,
                 login_code,
                 client_id,
+                capabilities,
                 ..
             }) = wire::read_frame(&mut reader).await.unwrap()
             else {
                 panic!("missing real local-credential ready frame")
             };
+            assert_eq!(
+                capabilities
+                    .iter()
+                    .any(|capability| capability == wire::CHAT_DISABLED_CAPABILITY),
+                disabled
+            );
             let user = url.rsplit('/').next().unwrap().to_owned();
             let token =
                 super::super::tests::cancellation_test_token(&base, &url, &login_code).await;

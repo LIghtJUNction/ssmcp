@@ -386,6 +386,14 @@ impl Runtime {
         self.registry.clone()
     }
 
+    pub(crate) fn configure_chat(&self, enabled: bool) -> Result<(), String> {
+        self.backend.configure_chat(enabled)
+    }
+
+    pub(crate) fn chat_enabled(&self) -> bool {
+        self.backend.chat_enabled()
+    }
+
     pub(crate) fn configure_timing(
         &self,
         time_tools: bool,
@@ -585,6 +593,9 @@ impl Runtime {
             && !self.time.time_tools_enabled()
         {
             return Err("time_observation_not_negotiated: remote time tools require an explicit time_observation_v1 server acknowledgement; old server delivery policies still apply to hard-coded unsupported calls".into());
+        }
+        if !self.chat_enabled() && crate::wire::human_chat_tool(&name) {
+            return Err(crate::wire::CHAT_DISABLED.into());
         }
         let tool = self.registry.lookup(&name)?;
         self.registry.validate(&tool)?;
@@ -834,6 +845,7 @@ impl Runtime {
             value,
             caller.as_deref(),
             &name,
+            self.chat_enabled(),
         ))
     }
     pub async fn shutdown(&self) {

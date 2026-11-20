@@ -9,6 +9,7 @@ use std::{
 pub(crate) enum Input {
     #[default]
     Terminal,
+    None,
     Pipe,
     McpStdio,
     Web(Http),
@@ -139,6 +140,7 @@ impl Flags {
             .unwrap_or_else(|| "terminal".into());
         let input = match mode.as_str() {
             "terminal" => Input::Terminal,
+            "none" => Input::None,
             "pipe" => Input::Pipe,
             "mcp-stdio" => Input::McpStdio,
             "web" | "mcp-http" => {
@@ -187,7 +189,7 @@ impl Flags {
             }
             _ => {
                 return Err(
-                    "--input must be terminal, pipe, web, mcp-stdio, mcp-http or sock".into(),
+                    "--input must be terminal, none, pipe, web, mcp-stdio, mcp-http or sock".into(),
                 );
             }
         };
@@ -238,6 +240,9 @@ impl Flags {
                 );
             }
         };
+        if input == Input::None && agent != Agent::NextCaller {
+            return Err("--input none cannot dispatch chat to an explicit agent".into());
+        }
         if let Some(flag) = self.values.keys().next() {
             return Err(format!(
                 "{flag} does not apply to the selected input or agent"

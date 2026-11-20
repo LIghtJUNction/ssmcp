@@ -83,6 +83,7 @@ pub struct Process {
     loads: lazy::Loads,
     installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
+    chat_enabled: AtomicBool,
 }
 impl Process {
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
@@ -144,9 +145,30 @@ impl Process {
             loads: lazy::Loads::default(),
             installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
+            chat_enabled: AtomicBool::new(true),
         });
         Ok(backend)
     }
+    pub(crate) fn configure_chat(&self, enabled: bool) -> Result<(), String> {
+        self.registry.replace(
+            Provider::Ui,
+            crate::client::interface::tools_for_chat(enabled),
+        )?;
+        self.chat_enabled.store(enabled, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn chat_enabled(&self) -> bool {
+        self.chat_enabled.load(Ordering::Acquire)
+    }
+
+    fn admit_chat_tool(&self, name: &str) -> Result<(), String> {
+        if !self.chat_enabled() && crate::wire::human_chat_tool(name) {
+            return Err(crate::wire::CHAT_DISABLED.into());
+        }
+        Ok(())
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn observe_exec_projection(
         &self,
@@ -340,6 +362,7 @@ impl Process {
                 )
             }
             Operation::CallTool { name, arguments } => {
+                self.admit_chat_tool(&name)?;
                 let tool = self.registry.lookup(&name)?;
                 self.dispatch(&tool, arguments).await
             }
@@ -375,6 +398,7 @@ impl Process {
             generation,
             arguments,
         } = call;
+        self.admit_chat_tool(&native_name)?;
         self.registry
             .validate_route(&id, provider, generation, &native_name)?;
         match provider {
@@ -610,7 +634,10 @@ impl NativePlugin for Process {
                 terminal_tools().as_array().unwrap().clone(),
             ),
             (Provider::Exec, shell::Shell::tools()),
-            (Provider::Ui, crate::client::interface::tools()),
+            (
+                Provider::Ui,
+                crate::client::interface::tools_for_chat(self.chat_enabled()),
+            ),
             (Provider::Harnesses, lazy::tools()),
         ]
     }

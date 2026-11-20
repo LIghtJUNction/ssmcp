@@ -14,11 +14,13 @@ Batch the independent steps you can already determine into one `code_mode` reque
 
 Keep dependent edits, approvals and operations on the same mutable resource ordered. Return a compact result for every item, preserving errors, job IDs and output completeness. Start long work with `exec.start`, return its job ID, and use later requests to observe that job.
 
-Send human updates through say and keep diagnostic output in print/console. Inspect response errors, new user requirements, running jobs and output completeness before deciding the next action.
+Inspect response errors, running jobs and output completeness before deciding the next action. Use print/console for diagnostic output.
+
+Human chat instructions in this guide apply to selected clients with chat enabled. When list reports `chat_enabled:false`, human prompts, replies and finish approval are unavailable. Standard execution, scoped collaboration, native messages and negotiated time tools retain their own permissions.
 
 ## Conversation reminders
 
-`structuredContent.conversation_reminders` / `CONVERSATION REMINDER` is a follow-up to an already delivered local request, not a new user task. For the same authenticated caller, client resource and recipient, the relay emits one reminder after two subsequent responses without a new terminal reply. Send progress or an answer with `say` / `ssmcp.ui.message`, or a presentation with `ssmcp.ui.present`.
+On a chat-enabled client, `structuredContent.conversation_reminders` / `CONVERSATION REMINDER` is a follow-up to an already delivered local request, not a new user task. For the same authenticated caller, client resource and recipient, the relay emits one reminder after two subsequent responses without a new terminal reply. Send progress or an answer with `say` / `ssmcp.ui.message`, or a presentation with `ssmcp.ui.present`.
 
 Only a successful native receipt with `accepted: true`, `duplicate: false` and a valid message ID clears the pending reminder. External chat, failed sends and duplicate retries do not establish a new terminal reply. Binding is captured when the call is dispatched, so changing members later does not reassign the receipt; an older receipt cannot acknowledge a newer request. Acceptance does not prove the user read the message.
 

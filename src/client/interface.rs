@@ -620,6 +620,18 @@ pub(crate) async fn sync_terminal_sizes(
     Ok(())
 }
 
+pub(crate) fn tools_for_chat(enabled: bool) -> Vec<Value> {
+    let mut catalog = tools();
+    if !enabled {
+        catalog.retain(|tool| {
+            !tool["name"]
+                .as_str()
+                .is_some_and(crate::wire::human_chat_tool)
+        });
+    }
+    catalog
+}
+
 pub(crate) fn tools() -> Vec<Value> {
     let color = json!({"type":"string","description":"#RRGGBB, ANSI color name, default (terminal color), or empty (inherit theme)."});
     let properties = json!({

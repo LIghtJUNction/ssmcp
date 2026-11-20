@@ -440,6 +440,27 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                     .count(),
                 2
             );
+            runtime.configure_chat(false).unwrap();
+            let tools = runtime.tools().await.unwrap();
+            assert!(tools.iter().all(|tool| {
+                !tool["name"]
+                    .as_str()
+                    .is_some_and(crate::wire::human_chat_tool)
+            }));
+            for name in ["ssmcp.ui.get", "terminal.status", "ssmcp.time.wait"] {
+                assert!(
+                    tools.iter().any(|tool| tool["name"] == name),
+                    "missing {name}"
+                );
+            }
+            let rejected = runtime
+                .perform(crate::wire::Operation::CallTool {
+                    name: "ssmcp.ui.finish".into(),
+                    arguments: json!({"op":"request","reason":"disabled fixture"}),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(rejected, crate::wire::CHAT_DISABLED);
             let now = runtime
                 .perform(crate::wire::Operation::CallTool {
                     name: "ssmcp.time.now".into(),
