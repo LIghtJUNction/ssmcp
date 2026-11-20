@@ -613,21 +613,23 @@ def main():
             snapshot = auth / ("last-list-" + hashlib.sha256(origin.encode()).hexdigest() + ".json")
             saved_snapshot = snapshot.read_text()
             snapshot.unlink()
-            denied(["2"], "run ssmcp list again")
+            # Console diagnostics are width-bounded; assert the rejection reason,
+            # while the helper separately proves no remote action was reached.
+            denied(["2"], "numbered session list")
             snapshot.write_text(saved_snapshot)
             snapshot.chmod(0o600)
             stale = json.loads(saved_snapshot)
             stale["created_at"] = int(time.time()) - 301
             snapshot.write_text(json.dumps(stale))
-            denied(["2"], "run ssmcp list again")
+            denied(["2"], "numbered session list")
             foreign = json.loads(saved_snapshot)
             foreign["principal"] = "another-user@github"
             snapshot.write_text(json.dumps(foreign))
-            denied(["2"], "run ssmcp list again")
+            denied(["2"], "numbered session list")
             foreign["principal"] = "fixture-user@github"
             foreign["server"] = "https://other.example"
             snapshot.write_text(json.dumps(foreign))
-            denied(["2"], "run ssmcp list again")
+            denied(["2"], "numbered session list")
             snapshot.write_text(saved_snapshot)
             directory["clients"] = [other]
             denied(["2"], "no longer available")
