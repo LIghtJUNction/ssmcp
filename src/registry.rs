@@ -461,7 +461,7 @@ fn component(name: &str) -> String {
     }
     if encoded.len() > 96 {
         use sha2::{Digest, Sha256};
-        format!("_h{:x}", Sha256::digest(name.as_bytes()))
+        format!("_h{}", crate::hex::encode(Sha256::digest(name.as_bytes())))
     } else {
         encoded
     }

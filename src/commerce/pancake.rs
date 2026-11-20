@@ -176,7 +176,7 @@ impl Pancake {
             .map_err(|_| "commerce webhook key must be a PUBLIC KEY PEM")?;
         webpki::RawPublicKeyEntity::try_from(&webhook_key)
             .map_err(|_| "invalid commerce webhook SPKI")?;
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(20))
             .redirect(reqwest::redirect::Policy::none())

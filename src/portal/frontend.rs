@@ -134,7 +134,7 @@ impl Endpoint {
                 ));
             }
             let body = read_frame(&mut stream, MAX_BODY).await?;
-            let fingerprint = format!("{:x}", Sha256::digest(&body));
+            let fingerprint = crate::hex::encode(Sha256::digest(&body));
             if fingerprint != header.sha256 || expected_hash.is_some_and(|hash| hash != fingerprint)
             {
                 return Err(io::Error::new(
@@ -185,7 +185,7 @@ async fn serve_one(mut stream: UnixStream) -> io::Result<()> {
     let header = Header {
         protocol: PROTOCOL,
         content_type: page.content_type.into(),
-        sha256: format!("{:x}", Sha256::digest(&page.body)),
+        sha256: crate::hex::encode(Sha256::digest(&page.body)),
     };
     write_frame(
         &mut stream,

@@ -12,7 +12,7 @@ fn gateway() -> Pancake {
         ..CommerceConfig::default()
     };
     Pancake {
-        client: reqwest::Client::new(),
+        client: crate::http_client::builder().build().unwrap(),
         config,
         signing_key,
         webhook_key,

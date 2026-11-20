@@ -299,7 +299,7 @@ async fn http_login_callback_replay_and_cross_account_mutations() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let router = crate::http::router(broker.clone());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
@@ -603,7 +603,7 @@ async fn dashboard_http_uses_sessions_enforces_admin_and_bounds_failure_audits()
     let server = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
@@ -909,7 +909,7 @@ async fn portal_http_renews_active_login_but_not_assets_failed_forms_or_logout()
     let base = format!("http://{}", listener.local_addr().unwrap());
     let router = crate::http::router(broker.clone());
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();

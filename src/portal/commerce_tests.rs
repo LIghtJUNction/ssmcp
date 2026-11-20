@@ -116,7 +116,7 @@ impl App {
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(5))
             .build()

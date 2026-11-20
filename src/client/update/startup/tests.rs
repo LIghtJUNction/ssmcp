@@ -67,7 +67,7 @@ impl Server {
         self.requests.load(Ordering::SeqCst)
     }
     fn client(&self) -> reqwest::Client {
-        reqwest::Client::builder()
+        crate::http_client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(2))
             .pool_max_idle_per_host(0)
@@ -252,7 +252,7 @@ async fn startup_notice_http_timeout_leaves_reconnect_backoff() {
             .unwrap();
         assert!(matches!(closed, Ok(0)) || closed.is_err(), "{closed:?}");
     });
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .no_proxy()
         .pool_max_idle_per_host(0)
         .timeout(Duration::from_millis(200))

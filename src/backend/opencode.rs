@@ -163,7 +163,7 @@ impl OpenCode {
                 .and_then(Value::as_str)
                 .ok_or("OpenCode ready message has no URL")?,
         )?;
-        let client = Client::builder()
+        let client = crate::http_client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
@@ -217,7 +217,7 @@ impl OpenCode {
                 "OpenCode attach requires a nonempty native password of at most 4096 bytes".into(),
             );
         }
-        let client = Client::builder()
+        let client = crate::http_client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
@@ -2056,7 +2056,7 @@ mod tests {
     fn transport_backend(base: Url) -> OpenCode {
         let output = OutputStore::new_connection().unwrap();
         OpenCode {
-            client: Client::builder()
+            client: crate::http_client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -2352,7 +2352,10 @@ mod tests {
         let saved = artifact_bytes(&backend.output, artifact["id"].as_str().unwrap()).await;
         assert_eq!(saved, expected);
         assert_eq!(artifact["bytes"], saved.len() as u64);
-        assert_eq!(artifact["sha256"], format!("{:x}", Sha256::digest(&saved)));
+        assert_eq!(
+            artifact["sha256"],
+            crate::hex::encode(Sha256::digest(&saved))
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(&saved).unwrap()["tail"],
             native["tail"]
@@ -2414,7 +2417,10 @@ mod tests {
         let artifact = &final_artifact["artifact"];
         let saved = artifact_bytes(&backend.output, artifact["id"].as_str().unwrap()).await;
         assert_eq!(saved, expected);
-        assert_eq!(artifact["sha256"], format!("{:x}", Sha256::digest(&saved)));
+        assert_eq!(
+            artifact["sha256"],
+            crate::hex::encode(Sha256::digest(&saved))
+        );
         server.await.unwrap();
         backend.shutdown().await;
     }

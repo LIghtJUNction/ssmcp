@@ -214,7 +214,10 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn credential_path(root: &Path, server: &str) -> PathBuf {
-    root.join(format!("{:x}.json", Sha256::digest(server.as_bytes())))
+    root.join(format!(
+        "{}.json",
+        crate::hex::encode(Sha256::digest(server.as_bytes()))
+    ))
 }
 
 fn selected_server(root: &Path, explicit: Option<&str>) -> Result<String> {
@@ -301,13 +304,13 @@ struct Reply {
 impl Api {
     fn new(server: &str) -> Result<Self> {
         let server = normalize_server(server)?;
-        let mut builder = Client::builder()
+        let mut builder = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION"), " client"));
         if let Some(tls) = super::trust::tls_config(&server)? {
-            builder = builder.use_preconfigured_tls((*tls).clone());
+            builder = builder.tls_backend_preconfigured((*tls).clone());
         }
         Ok(Self {
             client: builder.build()?,
@@ -1361,7 +1364,10 @@ mod tests {
     fn temporary() -> PathBuf {
         let mut random = [0; 16];
         platform::random_bytes(&mut random).unwrap();
-        let root = std::env::temp_dir().join(format!("ssmcp-auth-{:x}", Sha256::digest(random)));
+        let root = std::env::temp_dir().join(format!(
+            "ssmcp-auth-{}",
+            crate::hex::encode(Sha256::digest(random))
+        ));
         create_tree(&root).unwrap();
         root
     }

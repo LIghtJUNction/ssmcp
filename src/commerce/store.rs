@@ -375,8 +375,8 @@ impl OrderStore {
             return Err(Error::SoldOut);
         }
         let id = format!(
-            "traffic_{:x}",
-            Sha256::digest(format!("{subject}:{nonce}").as_bytes())
+            "traffic_{}",
+            crate::hex::encode(Sha256::digest(format!("{subject}:{nonce}").as_bytes()))
         );
         let order = Order {
             id: id.clone(),

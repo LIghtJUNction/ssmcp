@@ -3108,7 +3108,7 @@ mod tests {
         const CALLBACK: &str = "http://127.0.0.1:37401/callback";
         const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
         const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
-        let http = reqwest::Client::builder()
+        let http = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(5))
             .build()

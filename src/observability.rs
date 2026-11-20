@@ -209,7 +209,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/healthz", listener.local_addr().unwrap());
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder().build().unwrap();
         let a = client
             .get(&url)
             .header("x-request-id", "untrusted")

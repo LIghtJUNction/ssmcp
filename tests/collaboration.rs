@@ -2,6 +2,9 @@
 //! Authenticated response finalization may make a read-only native question probe.
 #![cfg(target_os = "linux")]
 
+#[path = "support/http_client.rs"]
+mod http_client;
+
 use serde_json::{Value, json};
 use ssmcp::{
     broker::Broker,
@@ -46,7 +49,7 @@ impl Server {
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         Self {
             broker,
-            http: reqwest::Client::builder()
+            http: http_client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(10))
                 .build()

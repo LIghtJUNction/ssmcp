@@ -452,7 +452,7 @@ mod tests {
     #[tokio::test]
     async fn gateway_checks_all_origins_and_has_no_portal_routes() {
         let host = Host::start(&Settings::default()).await.unwrap();
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = crate::http_client::builder().no_proxy().build().unwrap();
         let url = format!("{}/healthz", host.origin);
         assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
         assert_eq!(

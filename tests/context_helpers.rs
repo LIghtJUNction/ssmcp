@@ -356,7 +356,10 @@ async fn text_helpers_preserve_unicode_binary_compatibility_and_edit_preconditio
     assert_eq!(result["full"]["text"], original);
     assert_eq!(
         result["full"]["sha256"],
-        format!("{:x}", Sha256::digest(original.as_bytes()))
+        Sha256::digest(original.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
     );
     assert_eq!(result["assembled"], original);
     assert!(

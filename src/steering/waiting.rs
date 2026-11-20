@@ -50,14 +50,11 @@ impl Queue {
             .filter(|message| message.target == "next" || Some(message.target.as_str()) == agent_id)
             .map(|message| json!([message.id, message.revision, message.state]))
             .collect();
-        format!(
-            "{:x}",
-            Sha256::digest(
-                json!([client_id, owner, agent_id, relevant])
-                    .to_string()
-                    .as_bytes()
-            )
-        )
+        crate::hex::encode(Sha256::digest(
+            json!([client_id, owner, agent_id, relevant])
+                .to_string()
+                .as_bytes(),
+        ))
     }
 
     pub(crate) fn reserve(

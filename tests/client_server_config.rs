@@ -59,10 +59,13 @@ impl Home {
             .unwrap()
             .as_secs()
             + 3600;
-        let path = self
-            .0
-            .join("auth")
-            .join(format!("{:x}.json", Sha256::digest(server.as_bytes())));
+        let path = self.0.join("auth").join(format!(
+            "{}.json",
+            Sha256::digest(server.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
         write_private(
             &path,
             &serde_json::to_vec(&json!({

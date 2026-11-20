@@ -761,7 +761,7 @@ impl Browser {
         let http = self
             .http
             .get_or_try_init(|| async {
-                reqwest::Client::builder()
+                crate::http_client::builder()
                     .no_proxy()
                     .redirect(reqwest::redirect::Policy::none())
                     .connect_timeout(Duration::from_secs(3))

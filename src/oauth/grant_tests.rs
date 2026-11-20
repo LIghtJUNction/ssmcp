@@ -393,7 +393,7 @@ async fn real_core_process_restarts_preserve_tokens_and_refresh_replay_revocatio
         let oauth = directory.open().unwrap();
         oauth.test_identity_tokens("mcp", "123")
     };
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();

@@ -22,7 +22,7 @@ struct Asset {
 
 impl Asset {
     fn new(name: &'static str, content_type: &'static str, body: &'static [u8]) -> Self {
-        let fingerprint = format!("{:x}", Sha256::digest(body));
+        let fingerprint = crate::hex::encode(Sha256::digest(body));
         let path = format!("/account/assets/{fingerprint}/{name}");
         let legacy_path = format!("/{name}");
         Self {
@@ -201,7 +201,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder().build().unwrap();
         for asset in ASSETS.iter() {
             for path in [url(asset.name), asset.legacy_path.as_str()] {
                 let response = client.get(format!("{base}{path}")).send().await.unwrap();
@@ -214,7 +214,7 @@ mod tests {
                     .to_owned();
                 let bytes = response.bytes().await.unwrap();
                 assert_eq!(bytes.as_ref(), asset.body);
-                let actual = format!("{:x}", Sha256::digest(&bytes));
+                let actual = crate::hex::encode(Sha256::digest(&bytes));
                 assert_eq!(advertised, actual);
                 assert_eq!(
                     url(asset.name),
@@ -238,7 +238,7 @@ mod tests {
             .await
             .unwrap();
         });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder().build().unwrap();
         let hash = &ASSETS[0].fingerprint;
         for path in [
             format!("/account/assets/{}/portal.css", "0".repeat(64)),

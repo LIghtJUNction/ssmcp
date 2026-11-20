@@ -1017,7 +1017,7 @@ child.wait(timeout=2)
         assert_eq!(result["artifact"]["bytes"], bytes.len());
         assert_eq!(
             result["artifact"]["sha256"],
-            format!("{:x}", Sha256::digest(&bytes))
+            crate::hex::encode(Sha256::digest(&bytes))
         );
         assert_eq!(result["next_cursor"], bytes.len());
         let empty = terminal

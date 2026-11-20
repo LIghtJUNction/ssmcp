@@ -153,7 +153,7 @@ mod tests {
         let broker = Arc::new(Broker::new(public_url.into()));
         let router = crate::http::router(broker);
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder().build().unwrap();
         for (path, language) in [
             ("/guide/", "en"),
             ("/guide/en", "en"),
