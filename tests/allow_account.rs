@@ -40,10 +40,13 @@ impl Home {
         Self(path)
     }
     fn account(&self, server: &str) {
-        let path = self
-            .0
-            .join("auth")
-            .join(format!("{:x}.json", Sha256::digest(server.as_bytes())));
+        let path = self.0.join("auth").join(format!(
+            "{}.json",
+            Sha256::digest(server.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ));
         let expires = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

@@ -200,7 +200,7 @@ fn unavailable(kind: &str, key: &str, value: &str, warning: &str) -> Value {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    format!("{:x}", crate::digest::Hex(Sha256::digest(bytes)))
 }
 
 fn parse(text: &str) -> Result<Vec<Reference>, String> {

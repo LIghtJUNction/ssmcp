@@ -282,7 +282,7 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
     }
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     println!("Checking the latest stable ssmcp release…");
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(30))
@@ -496,7 +496,7 @@ mod tests {
                 );
                 stream.write_all(response.as_bytes()).await.unwrap();
             });
-            let client = reqwest::Client::builder()
+            let client = crate::http_client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(3))
                 .build()

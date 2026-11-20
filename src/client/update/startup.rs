@@ -206,7 +206,7 @@ pub(in crate::client) async fn available_notice() -> Option<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(1))
         .timeout(Duration::from_secs(3))

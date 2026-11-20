@@ -55,7 +55,7 @@ impl Guide {
     pub(super) async fn resolve(endpoint: &str) -> Option<Self> {
         let guide = Self::from_endpoint(endpoint)?;
         let available = tokio::time::timeout(PROBE_TIMEOUT, async {
-            let client = reqwest::Client::builder()
+            let client = crate::http_client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .referer(false)

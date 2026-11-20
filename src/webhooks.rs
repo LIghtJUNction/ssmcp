@@ -85,7 +85,7 @@ impl Webhooks {
         let root = root
             .canonicalize()
             .map_err(|_| "webhook workspace is unavailable")?;
-        let client = Client::builder()
+        let client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10))

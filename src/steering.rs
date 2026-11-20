@@ -303,7 +303,7 @@ impl Queue {
                         message_id.clone()
                     } else {
                         let digest = Sha256::digest(format!("{message_id}:{target}").as_bytes());
-                        format!("broadcast_{digest:x}")
+                        format!("broadcast_{:x}", crate::digest::Hex(&digest))
                     };
                     messages.push(SteeringMessage {
                         id,

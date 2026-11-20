@@ -618,7 +618,7 @@ fn mcp_tool_name(server: &str, tool: &str) -> String {
     digest.update(tool.as_bytes());
     // '_h' cannot occur in an escaped component: an escape always starts with
     // two uppercase hex digits. Long names therefore have a disjoint namespace.
-    format!("codex.mcp._h{:x}", digest.finalize())
+    format!("codex.mcp._h{:x}", crate::digest::Hex(digest.finalize()))
 }
 
 fn catalog(schema: &Value) -> Result<(Vec<Value>, Methods), String> {

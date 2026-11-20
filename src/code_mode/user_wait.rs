@@ -135,11 +135,11 @@ impl AuditRun {
         }
         let wait_id = format!(
             "wait_{:x}",
-            Sha256::digest(
+            crate::digest::Hex(Sha256::digest(
                 json!([self.context.run_id, client_id])
                     .to_string()
                     .as_bytes()
-            )
+            ))
         );
         waits.records.insert(
             client_id.into(),

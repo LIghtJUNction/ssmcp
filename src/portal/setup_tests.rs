@@ -80,7 +80,7 @@ impl Fixture {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();

@@ -712,7 +712,7 @@ mod tests {
             if banned {
                 fixture.ban("42", true).await;
             } else {
-                let response = reqwest::Client::builder()
+                let response = crate::http_client::builder()
                     .no_proxy()
                     .build()
                     .unwrap()
@@ -897,7 +897,7 @@ mod tests {
             };
             assert_eq!(response.status().as_u16(), status);
         }
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = crate::http_client::builder().no_proxy().build().unwrap();
         for path in ["/api/client/invites", "/api/client/enroll"] {
             let response = client
                 .post(format!("{}{path}", fixture.base))
@@ -914,7 +914,7 @@ mod tests {
     async fn anonymous_allow_http_control_requires_login_and_acl_without_owner_billing() {
         let fixture = Fixture::new().await;
         let (mut socket, session) = fixture.ready(None, names(&["alice"])).await;
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = crate::http_client::builder().no_proxy().build().unwrap();
         let body = json!({"client_id":session.client_id(),"name":"fixture.echo","arguments":{}});
         let url = format!("{}/api/client/call", fixture.base);
         assert_eq!(
@@ -1168,7 +1168,7 @@ mod tests {
         reply(&mut socket, "42", Some("123")).await;
         good.await.unwrap().unwrap();
         fixture.ban("123", false).await;
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = crate::http_client::builder().no_proxy().build().unwrap();
         assert_eq!(
             client
                 .get(format!("{}/api/client/whoami", fixture.base))

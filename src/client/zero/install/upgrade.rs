@@ -55,7 +55,7 @@ fn copy_image(mut source: File, destination: &Path) -> Result<String> {
             digest.update(&buffer[..count]);
         }
         target.sync_all()?;
-        Ok(format!("{:x}", digest.finalize()))
+        Ok(format!("{:x}", crate::digest::Hex(digest.finalize())))
     })();
     if result.is_err() {
         let _ = fs::remove_file(destination);

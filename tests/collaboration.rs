@@ -46,11 +46,14 @@ impl Server {
         let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         Self {
             broker,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap(),
+            http: {
+                let _ = rustls::crypto::ring::default_provider().install_default();
+                reqwest::Client::builder()
+            }
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap(),
             url,
             owner: String::new(),
             task,

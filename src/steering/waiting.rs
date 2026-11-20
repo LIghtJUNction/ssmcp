@@ -52,11 +52,11 @@ impl Queue {
             .collect();
         format!(
             "{:x}",
-            Sha256::digest(
+            crate::digest::Hex(Sha256::digest(
                 json!([client_id, owner, agent_id, relevant])
                     .to_string()
                     .as_bytes()
-            )
+            ))
         )
     }
 

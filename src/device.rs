@@ -1075,7 +1075,7 @@ mod tests {
         std::fs::write(&binary, b"fixture").unwrap();
         std::fs::write(assets.join("release.json"), serde_json::to_vec(&json!({
             "schema": 1, "version": "0.10.99", "wire_version": wire::VERSION,
-            "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": format!("{:x}", Sha256::digest(b"fixture"))}},
+            "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": format!("{:x}", crate::digest::Hex(Sha256::digest(b"fixture")))}},
         })).unwrap()).unwrap();
         std::fs::set_permissions(&assets, std::fs::Permissions::from_mode(0o700)).unwrap();
         for path in [&binary, &assets.join("release.json")] {
@@ -1798,7 +1798,9 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder()
+            .build()
+            .expect("HTTP client configuration");
         let legacy_device = {
             let login = alice.clone();
             broker
@@ -2067,7 +2069,9 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder()
+            .build()
+            .expect("HTTP client configuration");
         let claimed: Value = client
             .post(format!("{base}/api/client/username"))
             .bearer_auth(&alice)
@@ -2287,7 +2291,9 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let app = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder()
+            .build()
+            .expect("HTTP client configuration");
         let ordinary: Value = client
             .get(format!("{base}/api/client/whoami"))
             .bearer_auth(&login)
@@ -2403,7 +2409,9 @@ mod tests {
         );
         let app = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder()
+            .build()
+            .expect("HTTP client configuration");
         let before: Value = client
             .get(&url)
             .bearer_auth(&login)

@@ -114,7 +114,7 @@ async fn startup_update_probe_session_drop_cancels_its_in_flight_http_request() 
     let (finished, request_dropped) = tokio::sync::oneshot::channel();
     let probe = spawn(&display, true, true, async move {
         let _finished = Finished(Some(finished));
-        let client = reqwest::Client::builder()
+        let client = crate::http_client::builder()
             .no_proxy()
             .pool_max_idle_per_host(0)
             .timeout(Duration::from_secs(30))

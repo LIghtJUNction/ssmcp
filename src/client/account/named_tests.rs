@@ -82,8 +82,10 @@ async fn server(steps: impl FnOnce(&str) -> Vec<Step>) -> (String, JoinHandle<Ve
 fn root() -> PathBuf {
     let mut bytes = [0; 16];
     platform::random_bytes(&mut bytes).unwrap();
-    let root =
-        std::env::temp_dir().join(format!("ssmcp-named-account-{:x}", Sha256::digest(bytes)));
+    let root = std::env::temp_dir().join(format!(
+        "ssmcp-named-account-{:x}",
+        crate::digest::Hex(Sha256::digest(bytes))
+    ));
     create_tree(&root).unwrap();
     root
 }

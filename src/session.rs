@@ -996,7 +996,10 @@ fn verify_directory(path: &Path) -> Result<()> {
 }
 
 fn session_directory(root: &Path, name: &str) -> PathBuf {
-    root.join(format!("session-{:x}", Sha256::digest(name.as_bytes())))
+    root.join(format!(
+        "session-{:x}",
+        crate::digest::Hex(Sha256::digest(name.as_bytes()))
+    ))
 }
 
 fn manager_id(root: &Path, name: &str) -> String {
@@ -1004,7 +1007,7 @@ fn manager_id(root: &Path, name: &str) -> String {
     digest.update(root.as_os_str().to_string_lossy().as_bytes());
     digest.update([0]);
     digest.update(name.as_bytes());
-    format!("ssmcp-session-{:x}", digest.finalize())
+    format!("ssmcp-session-{:x}", crate::digest::Hex(digest.finalize()))
 }
 
 fn load(root: &Path, name: &str) -> Result<(PathBuf, Manifest)> {
@@ -1208,7 +1211,7 @@ fn snapshot_executable(source: &Path, destination: &Path) -> Result<String> {
         use std::os::unix::fs::PermissionsExt;
         output.set_permissions(fs::Permissions::from_mode(0o500))?;
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(format!("{:x}", crate::digest::Hex(digest.finalize())))
 }
 
 fn checksum(path: &Path) -> Result<String> {
@@ -1222,7 +1225,7 @@ fn checksum(path: &Path) -> Result<String> {
         }
         hash.update(&bytes[..length]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(format!("{:x}", crate::digest::Hex(hash.finalize())))
 }
 
 fn verify_snapshot(directory: &Path, manifest: &Manifest) -> Result<()> {

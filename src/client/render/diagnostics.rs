@@ -252,7 +252,7 @@ fn canonical(text: &str) -> (String, Vec<String>) {
             // Keep malformed URLs distinct without displaying their possible secrets.
             result.push_str(&format!(
                 "[invalid URL {:x}]",
-                Sha256::digest(candidate.as_bytes())
+                crate::digest::Hex(Sha256::digest(candidate.as_bytes()))
             ));
         }
         remaining = &url_text[end..];

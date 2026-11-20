@@ -224,7 +224,7 @@ impl Fixture {
             github,
             upstream,
             base,
-            http: Client::builder()
+            http: crate::http_client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(5))
                 .build()

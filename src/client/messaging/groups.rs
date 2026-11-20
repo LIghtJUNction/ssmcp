@@ -30,7 +30,7 @@ fn same_account(a: &Recipient, b: &Recipient) -> bool {
 
 fn child_id(group: &str, recipient: &str) -> String {
     let canonical = serde_json::to_vec(&(group, recipient)).expect("group key serializes");
-    format!("group-{:x}", Sha256::digest(canonical))
+    format!("group-{:x}", crate::digest::Hex(Sha256::digest(canonical)))
 }
 
 fn receipt_view(message: &Outgoing) -> Value {

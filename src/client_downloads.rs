@@ -622,7 +622,9 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let app = router("https://configured.example", Some(&root)).unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = reqwest::Client::new();
+        let client = crate::http_client::builder()
+            .build()
+            .expect("HTTP client configuration");
         let manifest: Value = client
             .get(format!("http://{address}/client/release.json"))
             .send()

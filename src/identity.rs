@@ -315,7 +315,7 @@ fn unreserved(value: &str) -> bool {
 }
 
 fn http_client(https_only: bool) -> crate::Result<Client> {
-    Client::builder()
+    crate::http_client::builder()
         .https_only(https_only)
         .redirect(Policy::none())
         .connect_timeout(Duration::from_secs(5))

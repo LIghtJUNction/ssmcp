@@ -66,11 +66,14 @@ impl Harness {
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap();
+        let client = {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            Client::builder()
+        }
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
         let mut harness = Self {
             broker,
             server,

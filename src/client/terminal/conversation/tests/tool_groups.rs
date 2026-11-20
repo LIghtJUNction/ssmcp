@@ -50,7 +50,10 @@ fn save_preview(state: &mut State, name: &str) {
     static BINARY_SHA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let binary_sha = BINARY_SHA.get_or_init(|| {
         let executable = std::env::current_exe().unwrap();
-        format!("{:x}", Sha256::digest(std::fs::read(executable).unwrap()))
+        format!(
+            "{:x}",
+            crate::digest::Hex(Sha256::digest(std::fs::read(executable).unwrap()))
+        )
     });
     let source_revision = std::env::var("SSMCP_SOURCE_REVISION").ok();
     let mut manifest: serde_json::Value = std::fs::read(out.join("manifest.json"))
@@ -74,7 +77,7 @@ fn save_preview(state: &mut State, name: &str) {
         "path":filename,
         "rows":frame.geometry.rows,
         "cols":frame.geometry.cols,
-        "sha256":format!("{:x}", Sha256::digest(&ansi)),
+        "sha256":format!("{:x}", crate::digest::Hex(Sha256::digest(&ansi))),
     }));
     std::fs::write(
         out.join("manifest.json"),

@@ -37,7 +37,9 @@ fn paginate(entries: Vec<Value>, field: &str, arguments: Value) -> Result<Value,
     let args: PageArgs = serde_json::from_value(arguments).map_err(|e| e.to_string())?;
     let fingerprint = format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&entries).map_err(|e| e.to_string())?)
+        crate::digest::Hex(Sha256::digest(
+            serde_json::to_vec(&entries).map_err(|e| e.to_string())?
+        ))
     );
     let fingerprint = &fingerprint[..16];
     let mut limit = args.limit.unwrap_or(PAGE_SIZE);
