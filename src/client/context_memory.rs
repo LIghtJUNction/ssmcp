@@ -24,6 +24,7 @@ const MAX_RECORD_TEXT: usize = 16 * 1024;
 const MAX_SOURCES: usize = 16;
 // Leave room for the server's client_id/context envelope inside its 12 KiB cap.
 const MAX_SNAPSHOT: usize = 12 * 1024 - 256;
+const SNAPSHOT_SUMMARY_PREVIEW: usize = 1024;
 const MAX_REVISION: u64 = (1 << 53) - 1;
 
 static MEMORY: OnceLock<Mutex<Local>> = OnceLock::new();
@@ -843,6 +844,7 @@ fn snapshot(store: &Store, document: &Document) -> Result<Value, String> {
     value["context_sources"] = json!(branch.checkpoint.as_ref().map(|c| &c.sources));
     value["workspace"]["path"] = json!(clipped(&document.workspace, 512));
     value["snapshot"] = json!({"summary_truncated":false,"recent_omitted":0,
+        "context_sources_omitted":0,
         "workspace_path_truncated":document.workspace.len()>512,"full_read":"ssmcp.context.read"});
     loop {
         if serde_json::to_vec(&value)
@@ -852,14 +854,45 @@ fn snapshot(store: &Store, document: &Document) -> Result<Value, String> {
         {
             return Ok(value);
         }
+        // Prefer fresh confirmed instructions and state over an older checkpoint.
+        // Only this view is shortened; context.read retains the full checkpoint.
+        if let Some(summary) = value["summary"]
+            .as_str()
+            .filter(|s| s.len() > SNAPSHOT_SUMMARY_PREVIEW)
+        {
+            let limit = (summary.len() / 2).max(SNAPSHOT_SUMMARY_PREVIEW);
+            value["summary"] = json!(clipped(summary, limit));
+            value["snapshot"]["summary_truncated"] = json!(true);
+            continue;
+        }
+        // Every recent entry carries its own source identity. Older checkpoint
+        // references can be followed through context.read instead of displacing it.
+        if let Some(sources) = value["context_sources"].as_array_mut()
+            && !sources.is_empty()
+        {
+            sources.remove(0);
+            let omitted = value["snapshot"]["context_sources_omitted"]
+                .as_u64()
+                .unwrap_or(0)
+                + 1;
+            value["snapshot"]["context_sources_omitted"] = json!(omitted);
+            continue;
+        }
         let recent = value["recent"].as_array_mut().expect("recent array");
-        if !recent.is_empty() {
-            recent.remove(0);
+        let latest_user = recent.iter().rposition(|entry| entry["role"] == "user");
+        // Keep both the latest confirmed user request and the latest state even
+        // when several subsequent assistant updates would otherwise evict the user.
+        if let Some(index) =
+            (0..recent.len().saturating_sub(1)).find(|index| Some(*index) != latest_user)
+        {
+            recent.remove(index);
             let omitted = value["snapshot"]["recent_omitted"].as_u64().unwrap_or(0) + 1;
             value["snapshot"]["recent_omitted"] = json!(omitted);
             continue;
         }
-        if let Some(summary) = value["summary"].as_str().filter(|s| s.len() > 128) {
+        // JSON escaping can still exhaust the budget. The newest source-bearing
+        // records take priority over the remaining optional summary preview.
+        if let Some(summary) = value["summary"].as_str().filter(|s| !s.is_empty()) {
             value["summary"] = json!(clipped(summary, summary.len() / 2));
             value["snapshot"]["summary_truncated"] = json!(true);
             continue;
@@ -1348,6 +1381,105 @@ mod tests {
         let branch = document.branch(&document.active_id).unwrap();
         assert_eq!(branch.checkpoint.as_ref().unwrap().text.len(), MAX_SUMMARY);
         assert!(!branch.recent.is_empty());
+    }
+
+    #[test]
+    fn snapshot_budget_preserves_fresh_user_and_state_before_old_summary_and_sources() {
+        let temporary = Temporary::new();
+        let workspace = "/fixture/snapshot-priority";
+        let store = temporary.store(workspace);
+        for n in 1..=MAX_SOURCES {
+            store
+                .record(conversation(), &message(n, "assistant", "Older progress"))
+                .unwrap();
+            if n % KEEP_RECENT == 0 {
+                store.compact(Some("S".repeat(MAX_SUMMARY)), None).unwrap();
+            }
+        }
+        let goal = message(17, "user", &format!("Current goal 界 {}", "x".repeat(1480)));
+        store.record(conversation(), &goal).unwrap();
+        for n in 18..=21 {
+            store
+                .record(
+                    conversation(),
+                    &message(n, "assistant", &format!("State {n} {}", "y".repeat(1500))),
+                )
+                .unwrap();
+        }
+        let document = store.read().unwrap();
+        let branch = document.branch(&document.active_id).unwrap();
+        assert_eq!(
+            branch.checkpoint.as_ref().unwrap().sources.len(),
+            MAX_SOURCES
+        );
+        assert!(
+            branch
+                .recent
+                .iter()
+                .any(|entry| entry.source.message_id == goal.id)
+        );
+        let before = fs::read(temporary.state_path(workspace)).unwrap();
+        let view = snapshot(&store, &document).unwrap();
+        let recent = view["recent"].as_array().unwrap();
+        let latest_goal = recent
+            .iter()
+            .find(|entry| entry["source"]["message_id"] == goal.id)
+            .expect("the latest confirmed user request remains visible");
+        assert_eq!(latest_goal["text"], goal.content);
+        assert_eq!(latest_goal["source"]["sha256"], digest(&goal.content));
+        assert_eq!(latest_goal["delivery"]["target"], "next");
+        assert_eq!(
+            recent.last().unwrap()["source"]["message_id"],
+            message(21, "assistant", "").id
+        );
+        assert_eq!(view["snapshot"]["summary_truncated"], true);
+        assert!(
+            view["snapshot"]["context_sources_omitted"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(view["snapshot"]["full_read"], "ssmcp.context.read");
+        assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_SNAPSHOT);
+        assert_eq!(fs::read(temporary.state_path(workspace)).unwrap(), before);
+        assert_eq!(store.read().unwrap(), document);
+    }
+
+    #[test]
+    fn snapshot_budget_keeps_latest_user_when_escaped_assistant_updates_fill_view() {
+        let temporary = Temporary::new();
+        let workspace = "/fixture/snapshot-user";
+        let store = temporary.store(workspace);
+        for n in 1..=6 {
+            store
+                .record(
+                    conversation(),
+                    &message(
+                        n,
+                        if n == 1 { "user" } else { "assistant" },
+                        &format!("Record {n} {}", "\\".repeat(MAX_RECENT_TEXT - 32)),
+                    ),
+                )
+                .unwrap();
+        }
+        let document = store.read().unwrap();
+        let branch = document.branch(&document.active_id).unwrap();
+        assert_eq!(branch.recent.len(), 6);
+        let view = snapshot(&store, &document).unwrap();
+        let recent = view["recent"].as_array().unwrap();
+        assert_eq!(
+            recent.first().unwrap()["source"]["message_id"],
+            branch.recent[0].source.message_id
+        );
+        assert_eq!(
+            recent.last().unwrap()["source"]["message_id"],
+            branch.recent[5].source.message_id
+        );
+        assert_eq!(recent.first().unwrap()["text"], branch.recent[0].text);
+        assert_eq!(recent.last().unwrap()["text"], branch.recent[5].text);
+        assert!(view["snapshot"]["recent_omitted"].as_u64().unwrap() > 0);
+        assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_SNAPSHOT);
+        assert_eq!(store.read().unwrap(), document);
     }
 
     #[test]
