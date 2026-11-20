@@ -112,7 +112,7 @@ class AgentPanel(Composer):
                          if value["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * index + ENTER)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"]
-                    and "To · Builder" in text(shot), "the selected member's composer")
+                    and "To Builder" in text(shot), "the selected member's composer")
         state = self.ui("/display/conversation")
         self.check(state["target"] == member["agent_id"],
                    "keyboard selection targets the exact member ID despite equal display names")
