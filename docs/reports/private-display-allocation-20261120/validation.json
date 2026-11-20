@@ -1,0 +1,662 @@
+{
+  "schema": "ssmcp.private-display-opencode-validation.v1",
+  "status": "passed",
+  "version": "0.10.14",
+  "desktop_execution_source": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+  "product_build_source": "6d9a522195a402ab05d1575150db18315b4e37c1",
+  "final_test_source": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7",
+  "dependency_pins": {
+    "zuse": "c0dbfda315f8cf1cd03ddb0a3db15f3dcab22d41",
+    "ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "zplugin": "3e758b5c21af1bad1cfaf10264b43fe15440e69c",
+    "zharness": "84e370450f1d047d43119bf81caf73f742ba6b0a"
+  },
+  "product_build_stages": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/fmt.log"
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/clippy.log"
+    },
+    {
+      "stage": "libtest",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run",
+        "--lib",
+        "--test",
+        "zuse_worker_entry",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/libtest.log"
+    },
+    {
+      "stage": "binaries",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--bins",
+        "--example",
+        "native_plugin_fixture",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/binaries.log"
+    }
+  ],
+  "final_test_build_stages": [
+    {
+      "stage": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--package",
+        "ssmcp",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/fmt.log"
+    },
+    {
+      "stage": "libtest",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--no-run",
+        "--lib",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "log": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/libtest.log"
+    }
+  ],
+  "final_library_gate": {
+    "schema": "ssmcp.library-gate.v1",
+    "source_commit": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7",
+    "product_source_commit": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "version": "0.10.14",
+    "command": [
+      "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "--test-threads=2"
+    ],
+    "exit_code": 0,
+    "duration_seconds": 145.905,
+    "status": "passed",
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "5cb460a9afef5f0b9ce2d04a6fcdf0a8ce0e4d76deb520705854351cc1512352",
+      "bytes": 284861560,
+      "built_from_commit": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7"
+    },
+    "log": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/library-default-suite.log",
+      "sha256": "0739ff21caaa01da7be62890b95282e4b8b00f3e27ef8fe815b7496c8dc331fd"
+    },
+    "finished_at_utc": "2026-11-20T02:21:41.261490+00:00",
+    "results": {
+      "passed": 1512,
+      "failed": 0,
+      "ignored": 21,
+      "measured": 0,
+      "filtered_out": 0
+    },
+    "all_frozen_artifacts_unchanged": true,
+    "source_commit_unchanged": true
+  },
+  "final_task_panel_targeted": {
+    "source_commit": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7",
+    "product_source_commit": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "binary_sha256": "5cb460a9afef5f0b9ce2d04a6fcdf0a8ce0e4d76deb520705854351cc1512352",
+    "status": "passed",
+    "stages": [
+      {
+        "test": "native_exec_snapshots_refresh_and_render_real_jobs",
+        "command": [
+          "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "client::terminal::conversation::tasks::tests::native_exec_snapshots_refresh_and_render_real_jobs",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "duration_seconds": 0.116,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.03s",
+        "log_sha256": "f2763295c60b7db75e40dbf4ac69f48c4076d7d3630be8edccde5d9c52f11df0"
+      },
+      {
+        "test": "background_refresh_keeps_unchanged_rows_and_mouse_targets",
+        "command": [
+          "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "client::terminal::conversation::tasks::tests::background_refresh_keeps_unchanged_rows_and_mouse_targets",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "duration_seconds": 0.017,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.00s",
+        "log_sha256": "1b8a5a64a0f20d1614abfb2dc55987e53649a34216e6e18636ed972d7b57f3fe"
+      }
+    ]
+  },
+  "opencode_targeted": {
+    "source_commit": "6f26b8e50197468d88da701e7b16c467dd23453e",
+    "binary_path": "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "sha256_before": "3d601b5f7e63909bbcd99930934368c658c2791d26e125c3a0be9f8b81661059",
+    "stages": [
+      {
+        "stage": "queued-runtime",
+        "test": "backend::opencode::cleanup::tests::queued_archive_survives_runtime_shutdown_exactly_once",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::cleanup::tests::queued_archive_survives_runtime_shutdown_exactly_once",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.065,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.02s",
+        "log_sha256": "fb3ae43d43f4edb4cef202ca1d3c6bc20bb1d629936ed4dc8e033ff80b7bb1ef"
+      },
+      {
+        "stage": "shutdown-lock",
+        "test": "backend::opencode::tests::attached_shutdown_releases_transport_before_blocked_partial_archive",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::attached_shutdown_releases_transport_before_blocked_partial_archive",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.064,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.03s",
+        "log_sha256": "0eaf64b558a7ef85419d8b14aed8e6f28e158bf2e59b7c63fe3358a8fe10b4bf"
+      },
+      {
+        "stage": "drop-lock",
+        "test": "backend::opencode::tests::attached_drop_releases_transport_before_blocked_partial_archive",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::attached_drop_releases_transport_before_blocked_partial_archive",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.065,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s",
+        "log_sha256": "cbbc4ba83ebdb30a2fd763088e3efc63578c45364be064bba290a26bc56df241"
+      },
+      {
+        "stage": "cancel-shutdown",
+        "test": "backend::opencode::tests::cancelled_shutdown_retains_partial_archive_and_event_close",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::cancelled_shutdown_retains_partial_archive_and_event_close",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.065,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s",
+        "log_sha256": "7666e771ea84f6c83af4fc2c3cf10f1650ecfbd6531bd73e45f6a3b0e295e6e8"
+      },
+      {
+        "stage": "drop-outside-runtime",
+        "test": "backend::opencode::tests::attached_drop_outside_runtime_retains_partial_archive_and_event_close",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::attached_drop_outside_runtime_retains_partial_archive_and_event_close",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.066,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 0.04s",
+        "log_sha256": "0844c98407a080986d29a05a2878bd7d4690af0f55c0dcbcb68088277decee99"
+      },
+      {
+        "stage": "original-lifecycle",
+        "test": "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+        "command": [
+          "$WORKTREE/target/zuse-validation/6f26b8e50197468d88da701e7b16c467dd23453e/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "backend::opencode::tests::attach_discovers_only_readonly_endpoints_then_preserves_native_calls_and_lifecycle",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 7.63,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1532 filtered out; finished in 7.62s",
+        "log_sha256": "e12dd16704bd086b24ff4c39a0bc3e5fa91718a8d87d6ade16738ee7ed52c2f7"
+      }
+    ],
+    "status": "passed",
+    "sha256_after": "3d601b5f7e63909bbcd99930934368c658c2791d26e125c3a0be9f8b81661059",
+    "finished_at": "2026-11-20T02:06:01.971688+00:00"
+  },
+  "desktop_targeted_initial": {
+    "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "status": "failed",
+    "stages": [
+      {
+        "stage": "computer-unit",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "computer::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 4.726,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/computer-unit.log",
+        "log_sha256": "a3750c175ec6bd120968313f3500fe8b78b585d6960aeccb20eb7325270db7d9"
+      },
+      {
+        "stage": "isolated-native",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::tests::private_display_input_capture_and_cleanup",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.666,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/isolated-native.log",
+        "log_sha256": "07be5353842a0cfe29f54d17968ca590caa1e00b4042ae5f92fea04559fe3dfb"
+      },
+      {
+        "stage": "isolated-lifecycle",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::tests::app_launch_auto_starts_private_display_and_releases_owned_state",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.115,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/isolated-lifecycle.log",
+        "log_sha256": "d94e831788b6b69b1a1e62f4146b7007d28c8f156ce3049d7aa7a89d0d86ae17"
+      },
+      {
+        "stage": "display-concurrent",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::display::tests::real_private_displays_avoid_conflicts_concurrently_and_clean_up",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.164,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/display-concurrent.log",
+        "log_sha256": "649889469c73d0b389527f6d2ecdbfd72487895daa1b164bd601c85a05f31b04"
+      },
+      {
+        "stage": "display-reservations",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+          "--exact",
+          "computer::isolated::display::tests::real_aliases_and_unrelated_endpoints_are_never_adopted",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.065,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/display-reservations.log",
+        "log_sha256": "f26326faec8a38d4fabc168e32002cb8e849654f0fcee92795668b956241adae"
+      },
+      {
+        "stage": "embedded-entry",
+        "command": [
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+          "--exact",
+          "missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary",
+          "--ignored",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 0.114,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/embedded-entry.log",
+        "log_sha256": "8741ef1e51077d8e1e9f25779919943e49862b63896d8e65a9f8942910644c58"
+      },
+      {
+        "stage": "private-desktop-mcp",
+        "command": [
+          "python3",
+          "scripts/e2e_private_desktop.py",
+          "--bin-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug",
+          "--evidence-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp",
+          "--report",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp.json"
+        ],
+        "exit_code": 1,
+        "timed_out": false,
+        "duration_seconds": 0.165,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp.log",
+        "log_sha256": "89791c4b2fa0aad210b6b9f5297225e106984d7adc8c39f6e32fd0c25fec66d3"
+      }
+    ]
+  },
+  "desktop_targeted_continuation": {
+    "schema": "ssmcp.private-display-validation.v1",
+    "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "status": "passed",
+    "all_frozen_artifacts_unchanged": true,
+    "stages": [
+      {
+        "stage": "private-desktop-mcp",
+        "command": [
+          "python3",
+          "scripts/e2e_private_desktop.py",
+          "--bin-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug",
+          "--evidence-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp",
+          "--report",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp.json"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 4.624,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/private-desktop-mcp-continued.log",
+        "log_sha256": "19098d510705683dcf224974b9623b3e733214c21337f37f83584c6d155a5619"
+      },
+      {
+        "stage": "native-worker-cli",
+        "command": [
+          "python3",
+          "scripts/e2e_zuse_worker.py",
+          "--binary",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/ssmcp",
+          "--evidence-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-cli",
+          "--report",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-cli.json"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 1.468,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-cli-continued.log",
+        "log_sha256": "8ddc0c74d74bb5939d71dd3c9b723e6aed5ef5d7b9c1b8462793e540a542edf9"
+      },
+      {
+        "stage": "native-worker-daemon",
+        "command": [
+          "python3",
+          "scripts/e2e_zuse_worker.py",
+          "--binary",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/frozen/debug/ssmcpd",
+          "--evidence-dir",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-daemon",
+          "--report",
+          "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-daemon.json"
+        ],
+        "exit_code": 0,
+        "timed_out": false,
+        "duration_seconds": 1.567,
+        "log": "$WORKTREE/target/zuse-validation/3298bfb98497e5d47661d94bcfec2ea39f006dbb/native-worker-daemon-continued.log",
+        "log_sha256": "8ddc0c74d74bb5939d71dd3c9b723e6aed5ef5d7b9c1b8462793e540a542edf9"
+      }
+    ]
+  },
+  "desktop_checks": {
+    "mcp": {
+      "status": "passed",
+      "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+      "checks": [
+        "the owned account router keeps its credentials in a private ready record",
+        "the isolated account has the expected stable provider identity and handle",
+        "the real production account router is healthy",
+        "test host display is privately allocated in the high range",
+        "the account connection advertises its exact identity-scoped MCP resource",
+        "MCP 401 advertises protected-resource metadata",
+        "resource metadata binds the exact account endpoint and OAuth issuer",
+        "OAuth discovery advertises authorization-code PKCE S256",
+        "public MCP client registers through OAuth DCR",
+        "the account OAuth endpoint requires provider consent instead of a connection login code",
+        "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+        "OAuth pages cannot be cached and bind same-origin form submission",
+        "real identity exchange validates provider PKCE and requires explicit consent",
+        "OAuth consent preserves the registered callback, state and issuer",
+        "the real OAuth endpoint issues an identity-scoped MCP access token",
+        "OAuth access expires in eight hours and supplies a refresh token",
+        "OAuth token responses cannot be cached",
+        "the account relay credential cannot authenticate as an MCP access token",
+        "capability inspection leaves the private desktop stopped",
+        "input without an explicit surface cannot use the host desktop",
+        "owned desktop uses a different display from the test host",
+        "desktop_start reuses the owned display",
+        "unsupported native keys return an ordinary input error",
+        "Computer dispatch reaches the linked zuse library after a rejected key",
+        "native typing reaches the private application",
+        "native click reaches the private button",
+        "ssmcp.computer.screenshot returns a visible MCP image (modern=True)",
+        "image is bounded valid JPEG bytes",
+        "image payload is absent from structured metadata and text",
+        "private screenshot reports its own surface and coordinates",
+        "native input and screenshots preserve the test host cursor and focus",
+        "desktop_stop reaps applications and X server before removing owned state",
+        "stopping the private display never falls back to host input",
+        "host pointer and focus remain unchanged after shutdown"
+      ],
+      "check_count": 34,
+      "duration_seconds": 4.406,
+      "report_sha256": "73e7a4140e6af1f5aec24d2b69d4ee97fafc4b1e5e0b8335f9dce2159999044b"
+    },
+    "cli_worker": {
+      "status": "passed",
+      "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+      "checks": [
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: focus",
+        "worker cleanup exit: type",
+        "native zuse typing preserves literal shell punctuation and Unicode",
+        "worker cleanup exit: click",
+        "native zuse button input reaches the application",
+        "cancelled drag exits after cleanup",
+        "cancelled drag reports cancellation and successful release",
+        "cancellation wakes a sleeping drag and releases the physical button",
+        "worker cleanup exit: click",
+        "cancelled Unicode typing exits with an explicit cancellation and cleanup receipt",
+        "cancellation restores the native X11 Unicode keyboard mapping",
+        "no pointer button remains held after cancellation",
+        "worker cleanup exit: capture",
+        "zuse native PNG capture is delivered as bounded JPEG",
+        "capture metadata names the actual library and coordinate mapping",
+        "two fixed display environments preserve the other desktop pointer, focus and keymap",
+        "all operation workers have exited"
+      ],
+      "check_count": 27,
+      "duration_seconds": 1.013,
+      "report_sha256": "7efe87592ff75d350d83faff2a3872b9a40f85236cf74042df605b06bba33817",
+      "binary_sha256": "485401319f5459d030011244bde61eefbdf373f1b4b8f2fe36dd3becffc364f6"
+    },
+    "daemon_worker": {
+      "status": "passed",
+      "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+      "checks": [
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: windows",
+        "worker cleanup exit: focus",
+        "worker cleanup exit: type",
+        "native zuse typing preserves literal shell punctuation and Unicode",
+        "worker cleanup exit: click",
+        "native zuse button input reaches the application",
+        "cancelled drag exits after cleanup",
+        "cancelled drag reports cancellation and successful release",
+        "cancellation wakes a sleeping drag and releases the physical button",
+        "worker cleanup exit: click",
+        "cancelled Unicode typing exits with an explicit cancellation and cleanup receipt",
+        "cancellation restores the native X11 Unicode keyboard mapping",
+        "no pointer button remains held after cancellation",
+        "worker cleanup exit: capture",
+        "zuse native PNG capture is delivered as bounded JPEG",
+        "capture metadata names the actual library and coordinate mapping",
+        "two fixed display environments preserve the other desktop pointer, focus and keymap",
+        "all operation workers have exited"
+      ],
+      "check_count": 27,
+      "duration_seconds": 1.221,
+      "report_sha256": "abd5bb1b361a4784f754d995187bf165ca7b1848a9126a53af4485e1e62140d5",
+      "binary_sha256": "bbe3c71ef07e1b0b1cfe400b58c15da70ac7125b71785354c24930251e44c85c"
+    }
+  },
+  "desktop_and_account_source_equivalence": {
+    "src/computer.rs": "07c76126684dcc29cf37bcecae3bdaef224952ad",
+    "src/computer/isolated.rs": "2b0012c64104d35cadefc55dfd0663868efb6bea",
+    "src/computer/isolated/display.rs": "266b1368455784f2ac9dadbf5cbaa1de44d8fa6a",
+    "src/computer/isolated/display/tests.rs": "2baa073125fa5c343c00f49f8baa76b461db0e03",
+    "src/computer/zuse_backend.rs": "84b897fe3d6cf6b7a3d13afc6cc15e351bd0a039",
+    "src/client.rs": "261cce7d3b33bcfcf77cf824b68670fd22be6592",
+    "src/broker.rs": "d006209e29858bf379b01febe9f96045573c4160",
+    "src/broker/allow.rs": "a8ca187e47c859ee703b603c91611b29b372f9ad",
+    "src/http/relay_composer_fixture.rs": "64543199cc4f339796610303af761c8c21e309a6",
+    "scripts/private_xvfb.py": "0eb2eda4c248083e5d70d11795d1623c942d53fb",
+    "scripts/e2e_zuse_worker.py": "4af91ce9e847d832a76d32c08e02205afd4a25ff",
+    "scripts/e2e_private_desktop.py": "2970b21145642f58a9a44c0532c4bb3a2c2175b5",
+    "scripts/e2e_legacy_client_compat.py": "02f57392870e4c0f5b00527847aca83c0971477d",
+    "scripts/e2e_account_relay.py": "a5c7335cc308d5c7d49873b7a523691ba86221a7"
+  },
+  "product_equivalence": {
+    "product_source_commit": "6d9a522195a402ab05d1575150db18315b4e37c1",
+    "test_source_commit": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7",
+    "changed_test_files": [
+      "src/backend/opencode.rs",
+      "src/client/terminal/conversation/tasks.rs"
+    ],
+    "changes_entirely_in_cfg_test_modules": true,
+    "unchanged_product_prefix_sha256": {
+      "src/backend/opencode.rs": "b513f62c7c9b0351d82dbc662c6aa6065609be60b62a7e0c0cb19ac1a677260e",
+      "src/client/terminal/conversation/tasks.rs": "0af1e5893ef178bf2e9c80103f26592d595a3504bcf5058f6459d70f14c2d89f"
+    },
+    "unchanged_cleanup_blob": "60920020a33affab225ac5433f5ebbba99cbe04a"
+  },
+  "account_evidence": {
+    "source_commit": "3298bfb98497e5d47661d94bcfec2ea39f006dbb",
+    "evidence_commit": "6e0931796da3ad7092a41722115d0f094dd15b4e",
+    "legacy_checks": 41,
+    "modern_checks": 47,
+    "path": "../legacy-client-compat-20261120/allocator-3298/validation.json"
+  },
+  "frozen_artifacts": {
+    "ssmcp": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/ssmcp",
+      "source": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/ssmcp",
+      "sha256": "230b57f9e8d36b31c775eb45010e7bb2f7f1635b9025bd0c82fcadd5afd7525f",
+      "bytes": 188468616,
+      "version_receipt": "ssmcp 0.10.14",
+      "built_from_commit": "6d9a522195a402ab05d1575150db18315b4e37c1"
+    },
+    "ssmcpd": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/ssmcpd",
+      "source": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/ssmcpd",
+      "sha256": "56294dfaf69631cd923197cdb820ee59a5428d44802c072fe14c6532ba9987e4",
+      "bytes": 145393688,
+      "version_receipt": "ssmcpd 0.10.14",
+      "built_from_commit": "6d9a522195a402ab05d1575150db18315b4e37c1"
+    },
+    "native_plugin_fixture": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/examples/libnative_plugin_fixture.so",
+      "source": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/examples/libnative_plugin_fixture.so",
+      "sha256": "f432324f95b5a3de32bf5c82e81a6fadd017fd97071ceab6c9e81f7202b6858a",
+      "bytes": 5450784,
+      "built_from_commit": "6d9a522195a402ab05d1575150db18315b4e37c1"
+    },
+    "ssmcp-frontend": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/ssmcp-frontend",
+      "source": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/ssmcp-frontend",
+      "sha256": "f6e937a5c2584a97cf357c6040934d102ff3a21b85a9b59db208ff6310ca2e13",
+      "bytes": 87022528,
+      "version_receipt": "ssmcp-frontend 0.10.14",
+      "built_from_commit": "6d9a522195a402ab05d1575150db18315b4e37c1"
+    },
+    "zuse_worker_entry": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+      "source": "$WORKTREE/target/zuse-validation/6d9a522195a402ab05d1575150db18315b4e37c1/frozen/debug/deps/zuse_worker_entry-72862e0bc409e9ff",
+      "sha256": "a388f9d689446771ef6f61a7e6bbf648f59f4a9b8ae98b9e68691efa3a88fe01",
+      "bytes": 90752256,
+      "built_from_commit": "6d9a522195a402ab05d1575150db18315b4e37c1"
+    },
+    "libtest": {
+      "path": "$WORKTREE/target/zuse-validation/0a6615d0c325dfb364c9005c01a4a63fefa5fad7/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+      "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+      "sha256": "5cb460a9afef5f0b9ce2d04a6fcdf0a8ce0e4d76deb520705854351cc1512352",
+      "bytes": 284861560,
+      "built_from_commit": "0a6615d0c325dfb364c9005c01a4a63fefa5fad7"
+    }
+  },
+  "rust_build_policy": {
+    "jobs": 1,
+    "wrapper": "$HOME/.cargo/rustc-serial",
+    "ordinary_ci_started": false
+  },
+  "live_services_restarted": false,
+  "tag_created": false
+}
