@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import subprocess
 import tempfile
 import time
 
@@ -474,6 +475,13 @@ class Interactions(InputHistory):
 
     def run(self):
         self.prepare()
+        self.workspace = self.directory / "workspace"
+        self.workspace.mkdir()
+        subprocess.run(
+            ["git", "-c", "init.defaultBranch=main", "init", "-q"],
+            cwd=self.workspace, env={**os.environ, **self.safe_git_env, "HOME": str(self.home)},
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5,
+        )
         front = self.start_front("PTY-interactions")
         requester = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY requester", "role": "requester"})
