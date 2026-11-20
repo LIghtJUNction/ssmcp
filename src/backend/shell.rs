@@ -1056,7 +1056,7 @@ mod tests {
         stdout.finish(None);
         stderr.finish(None);
         Arc::new(Job {
-            creator: None,
+            creator: crate::runtime::call_scope::Source::default(),
             id,
             pid: 0,
             command: vec!["completed fixture".into()],

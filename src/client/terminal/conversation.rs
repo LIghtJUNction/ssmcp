@@ -5252,7 +5252,7 @@ mod tests {
             text: "PARKED_DRAFT".into(),
             cursor: 3,
             target: Some("example-reviewer".into()),
-            native_recipient: None,
+            ..Default::default()
         });
         let parked = state.conversation.parked.clone();
         state.chat_retargeted("wrong_retry", Some("unrelated_source"));
