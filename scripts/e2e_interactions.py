@@ -147,57 +147,128 @@ class Interactions(InputHistory):
         secret = "command-visibility-fixture-private"
         self.sensitive.append(secret)
         counter = self.workspace / "command-view-once.txt"
+        jobs_before = {item["job_id"] for item in self.call("ssmcp.exec.list")["jobs"]}
         script = (
+            "import sys\n"
             "from pathlib import Path\n"
             "p=Path('command-view-once.txt')\n"
             "p.write_text((p.read_text() if p.exists() else '') + 'once\\n')\n"
+            "print('COMMAND_VIEW_EXECUTED_ONCE', flush=True)\n"
             "# API_TOKEN=" + secret + "\n"
             "# " + "界" * 700 + "\n"
+            "sys.stdin.read()\n"
             "# COMMAND_SOURCE_END\n"
         )
-        argv = ["python3", "-c", script, "COMMAND_ARGV_LAST"]
-        job = self.run_job(argv)
-        self.finish_job(job, front)
+        argv = ["python3", "-c", script, "", "COMMAND_ARGV_LAST"]
+        # Keep only this harmless fixture alive so inspection can prove that it
+        # neither cancels the selected job nor creates a replacement execution.
+        job = self.call("ssmcp.exec.start", {
+            "command": argv, "cwd": str(self.workspace), "stdin": "pipe", "timeout_ms": 90000})
+        deadline = time.monotonic() + 8
+        while not counter.exists() and time.monotonic() < deadline:
+            front.pump(0.05)
+        self.check(counter.exists() and counter.read_text() == "once\n",
+                   "the owned command reached its private stdin wait exactly once")
+        before = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(before["running"] is True and before["cancelled"] is False,
+                   "the native command is running before opening its details")
         self.replace_short(front, "/command " + job["job_id"])
         front.send(ENTER)
-        state = self.wait_state(
-            front, lambda item: item["view"] == "tasks"
-            and item["tasks"]["detail"] and item["tasks"]["selected_id"] == job["job_id"],
-            "the complete-command shortcut selects the exact real native job")
+        self.quiet_until(
+            front, lambda shot: "argv[0]" in text(shot) and "State: running" in text(shot),
+            "native command details arrive without keyboard input or UI observation")
+        state = self.ui("/display/conversation")
+        self.check(state["view"] == "tasks" and state["tasks"]["source"] == "native"
+                   and state["tasks"]["loaded"] is True and state["tasks"]["detail"]
+                   and state["tasks"]["selected_id"] == job["job_id"]
+                   and isinstance(state["tasks"]["selected_job"], dict),
+                   "the completed asynchronous read selects the exact real native job")
         self.check(state["tasks"]["selected_job"]["command"] == argv,
                    "display redaction does not modify native command arguments")
+
+        def save_frame(name, columns, shot):
+            encoded = json.dumps(shot, ensure_ascii=False, indent=2) + "\n"
+            self.check(secret not in encoded,
+                       f"{name} frame contains no fixture secret at {columns} columns")
+            stem = f"interactions-{name}-{columns}"
+            (self.output / (stem + ".json")).write_text(encoded)
+            (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
+            self.frames.append(stem + ".json")
+
         for columns in (120, 48):
             front.resize(32, columns)
             front.pump(0.15)
             front.send(HOME)
             shot = front.until(lambda item: "argv[0]" in text(item),
                                "the first exact argument is visible", cells=True)
-            for name, value in (("command-start", shot),):
-                stem = f"interactions-{name}-{columns}"
-                (self.output / (stem + ".json")).write_text(
-                    json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-                (self.output / (stem + ".txt")).write_text(text(value) + "\n")
-                self.frames.append(stem + ".json")
+            save_frame("command-start", columns, shot)
+            redacted_seen = empty_seen = source_end_seen = False
             for _ in range(200):
-                shot = front.until(lambda _item: True, "read the owned command pane", cells=True)
-                self.check(secret not in text(shot),
+                shot = front.snapshot(cells=True)
+                visible = text(shot)
+                self.check(secret not in visible,
                            f"command details keep the fixture secret redacted at {columns} columns")
-                if "COMMAND_ARGV_LAST" in text(shot):
+                redacted_seen |= "API_TOKEN=[redacted]" in visible
+                empty_seen |= 'argv[3]: ""' in visible
+                source_end_seen |= "COMMAND_SOURCE_END" in visible
+                if "COMMAND_ARGV_LAST" in visible:
                     break
                 front.send(DOWN)
                 front.pump(0.025)
             else:
                 raise AssertionError("scrolling never reached the last complete argument")
-            self.check("COMMAND_SOURCE_END" in text(shot),
+            self.check(redacted_seen,
+                       f"the actual token assignment is visibly redacted at {columns} columns")
+            self.check(empty_seen,
+                       f"the empty argument remains explicit at {columns} columns")
+            self.check(source_end_seen,
                        f"long multiline source reaches its real final line at {columns} columns")
-            stem = f"interactions-command-end-{columns}"
-            (self.output / (stem + ".json")).write_text(
-                json.dumps(shot, ensure_ascii=False, indent=2) + "\n")
-            (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
-            self.frames.append(stem + ".json")
+            save_frame("command-end", columns, shot)
+
+        # Tasks Escape returns to its list/input, not to the conversation column.
+        front.resize(32, 120)
+        front.pump(0.15)
+        self.activate_column(front, "conversation")
+        self.conversation(front)
+        missing = "not-retained-" + job["job_id"]
+        self.replace_short(front, "/command " + missing)
+        front.send(ENTER)
+        self.quiet_until(
+            front, lambda shot: "isnolongerretained." in "".join(text(shot).split()),
+            "an exact missing command ID renders its own unavailable result")
+        state = self.ui("/display/conversation")
+        self.check(state["view"] == "tasks" and state["tasks"]["detail"]
+                   and state["tasks"]["selected_id"] == missing
+                   and state["tasks"]["selected_job"] is None,
+                   "a missing exact ID never falls back to another retained task")
+        for columns in (120, 48):
+            front.resize(32, columns)
+            shot = front.until(
+                lambda item: item["size"] == [32, columns]
+                and "isnolongerretained." in "".join(text(item).split()),
+                f"the missing command result at {columns} columns", cells=True)
+            self.check("COMMAND_ARGV_LAST" not in text(shot)
+                       and "COMMAND_SOURCE_END" not in text(shot),
+                       f"the missing-ID pane contains no other job's script at {columns} columns")
+            save_frame("command-missing", columns, shot)
+
+        jobs_after = {item["job_id"] for item in self.call("ssmcp.exec.list")["jobs"]}
+        after = self.call("ssmcp.exec.status", {"job_id": job["job_id"]})
+        self.check(jobs_after == jobs_before | {job["job_id"]},
+                   "opening, scrolling and unknown-ID lookup create no native jobs")
+        self.check(all(after[key] == before[key]
+                       for key in ("job_id", "pid", "command", "cwd", "state", "running",
+                                   "exit_code", "exit_signal", "cancelled", "timed_out"))
+                   and after["running"] is True and after["cancelled"] is False,
+                   "read-only command navigation preserves the running native task")
         self.check(counter.read_text() == "once\n",
                    "opening and scrolling command details never re-executes the command")
+        self.call("ssmcp.exec.write", {"job_id": job["job_id"], "close_stdin": True})
+        finished = self.finish_job(job, front)
+        self.check(finished["exit_code"] == 0 and finished["cancelled"] is False,
+                   "only fixture-owned stdin EOF finishes the inspected command normally")
         front.resize(32, 120)
+        self.activate_column(front, "conversation")
         self.conversation(front)
 
     def ordinary_question(self, front, requester):
