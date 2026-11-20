@@ -1,4 +1,6 @@
 //! Negotiated native messaging. Display labels never resolve a recipient.
+#[cfg(test)]
+mod tests;
 use super::{ControlAccount, ControlAgent, MAX_USER_MESSAGE_BYTES};
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +191,17 @@ pub struct Reply {
     pub more_recipients: bool,
 }
 
+impl Receipt {
+    fn validate(&self) -> Result<(), String> {
+        validate_request_id(&self.request_id)?;
+        parse_recipient(&self.recipient_id)?;
+        Command::Status {
+            message_id: self.message_id.clone(),
+        }
+        .validate()
+    }
+}
+
 impl Reply {
     pub fn validate(&self) -> Result<(), String> {
         if self.recipients.len() > MAX_RECIPIENTS
@@ -200,8 +213,16 @@ impl Reply {
         for recipient in &self.recipients {
             recipient.validate()?;
         }
+        for receipt in &self.receipts {
+            receipt.validate()?;
+        }
         for message in &self.messages {
+            message.receipt.validate()?;
             message.recipient.validate()?;
+            parse_recipient(&format!("client:{}", message.sender.client_id))?;
+            if message.receipt.recipient_id != message.recipient.id {
+                return Err("native message receipt does not match its recipient".into());
+            }
             message.sender.account.validate()?;
             if let Some(agent) = &message.sender.agent {
                 agent.validate()?;
