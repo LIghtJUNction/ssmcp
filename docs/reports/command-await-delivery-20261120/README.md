@@ -2,7 +2,13 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（2026-11-20 20:54 UTC）
+## 当前状态（2026-11-20 21:26 UTC）
+
+[PR #158](https://github.com/LIghtJUNction/ssmcp/pull/158)、[PR #157](https://github.com/LIghtJUNction/ssmcp/pull/157) 与 [PR #155](https://github.com/LIghtJUNction/ssmcp/pull/155) 已合入，本轮合流检查点为 [`cf0ab581`](https://github.com/LIghtJUNction/ssmcp/commit/cf0ab581700918a37fcccbebb93de2e0cab02841)。context 的三种本地重载已在独立固定源码 bbeb 上完成定向运行；输入第一阶段则以 [draft PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 公开，尚无编译或产品运行验收。已合入、定向运行通过和源码阶段完成是不同进度，不能合并为新主线的完整验收结论。
+
+下方 20:54 内容保留为当时的历史状态。后续合流、`--input none` 联动及时间 UI 工作仍在进行；没有新的粘贴 A/B、最终 P1 或 Release 实际结果。
+
+## 历史状态（2026-11-20 20:54 UTC）
 
 [Session service 运行 44812174207](https://github.com/LIghtJUNction/ssmcp/actions/runs/44812174207) 已在固定源码 `72460414a776ec70bdc8b7c124624dff8faabd5e` 上取得 Linux、Windows、macOS 三平台成功。此结论限于该次工作流；后续候选、完整组合验收和发布仍需各自的实际结果。旧 e079 Windows 失败及 89ca Clippy 失败保留原归属，后续成功不证明旧故障的具体原因。
 
@@ -256,3 +262,33 @@ Windows 的完整原日志及同一固定提交中的源码已独立读取。此
 - 时间功能需补齐用户可见的计时、倒计时和时间间隔行为。固定 `90c497` 的 [`runtime/time.rs`](https://github.com/LIghtJUNction/ssmcp/blob/90c497007f6d6f16c3dd2da6a4599c48787e5ee1/src/runtime/time.rs) 已有 `time.now` / `time.wait` 与基于单调时钟的倒计时；[`conversation/timing.rs`](https://github.com/LIghtJUNction/ssmcp/blob/90c497007f6d6f16c3dd2da6a4599c48787e5ee1/src/client/terminal/conversation/timing.rs) 也已有显示入口。接下来核对实际运行版本、能力协商与界面绘制，源码存在不能替代运行验收。
 
 共同最终候选的组合验收、粘贴与 Ctrl+V 性能比较、正式发布核验仍未完成；本记录不构成 v0.10.21 已发布的证明。
+
+## 合流与定向验证补记（2026-11-20 21:26 UTC）
+
+### 已合入的源码
+
+三个 PR 的合并状态已通过 GitHub 实读。下表时间均为 2026-11-20 UTC。
+
+| PR 与范围 | 合并时间 | 固定合并提交 |
+| --- | --- | --- |
+| [#158](https://github.com/LIghtJUNction/ssmcp/pull/158)：线程聊天 IO、真实结果等待与身份历史；[源提交 daf7d93c](https://github.com/LIghtJUNction/ssmcp/commit/daf7d93c3dd86a70299a25502dc9308bed9b4647) | 21:01:44 | [2dbad2cb](https://github.com/LIghtJUNction/ssmcp/commit/2dbad2cbf5b802ad8b8aa771f826a54ee90154d3) |
+| [#157](https://github.com/LIghtJUNction/ssmcp/pull/157)：session、context 与电脑控制整合 | 21:02:00 | [e7672258](https://github.com/LIghtJUNction/ssmcp/commit/e767225827eec4955ab49bb80629cea8879ec10b) |
+| [#155](https://github.com/LIghtJUNction/ssmcp/pull/155)：前台重载目标与 context | 21:02:15 | [cf0ab581](https://github.com/LIghtJUNction/ssmcp/commit/cf0ab581700918a37fcccbebb93de2e0cab02841) |
+
+cf0 的完整 tree 为 `bd2bcce33baffa69b82d69d9cff3abdb85baa0fb`。合并证明源码已进入该检查点，不自动继承其他提交的验收结果。
+
+### 已完成的定向运行
+
+[PR #155 的受测源码 bbeb](https://github.com/LIghtJUNction/ssmcp/commit/bbebfaef5eeefa182776ff03f21d510c1ea4fed3) 与 tree `1356b94a1e43b13185d280fec98451fdd5a6b010` 已完成命令行、环境变量、持久默认选择三种真实本地重载，分别记录 31、32、31 项断言；这些断言不累加为测试数。本检查点完整读取两份 JSON 回执并核对其哈希；主审另已核对开发机原件、不可变 CLI 与续跑驱动的字节数和哈希。
+
+续跑只补齐产物身份及真实重载，8 条命令均退出 0。回执中的 101 项结果来自同一 bbeb 的先前阶段，即 84 项单元结果与 17 项 CLI 结果，没有在续跑中重做。本检查点未独立读完全部继承原日志及最终清理；该范围不等于 cf0 的整体验收、完整 P1 或性能比较。
+
+### 已公开的源码阶段
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 已实读为 open、draft，固定 head 为 [dcb504c3](https://github.com/LIghtJUNction/ssmcp/commit/dcb504c3947259e8912ac37c3123e46809419116)，tree 为 `cbeb8bdecdb8c6d07f585d4d2b4530d2d300653d`。实现负责人报告第一阶段于 21:09:40 完成、退出 0，仅做格式和差异检查，未执行 Cargo、测试或 PTY，也未纳入本轮粘贴补丁。此阶段存在 Unix/Linux 平台限制，不据此承诺跨平台可用。
+
+后续阶段已开始处理新主线合流、`--input none` 与相关 hook/回答工具联动，以及已有时间能力的 UI 补齐和缺陷修复；尚无新增执行结果。PR #159 仍是待审草稿，不能写成已合入或输入功能验收通过。旧 CI 成功与失败继续绑定原提交，最终 P1、粘贴 A/B 和正式发布结果仍待取得。
+
+### 输入草稿的补充复核
+
+固定 dcb 的只读复核新增两项待修问题：[SSMCP 字面转发路径](https://github.com/LIghtJUNction/ssmcp/blob/dcb504c3947259e8912ac37c3123e46809419116/src/client/chat_io.rs#L214) 会先执行其后并不使用的本地引用准备，准备失败或超时会阻断原样转发；[HTTP 地址比较](https://github.com/LIghtJUNction/ssmcp/blob/dcb504c3947259e8912ac37c3123e46809419116/src/client/chat_io/transport.rs#L122) 在成功绑定合法端口 80 后，会拒绝省略默认端口的等价 Host/Origin。HTTP 默认端口省略的规范依据见 [RFC 9110 第 4.2.3 节](https://www.rfc-editor.org/rfc/rfc9110.html#section-4.2.3)。两项均已交回同一源码作者，尚未取得对应修复提交及运行结果；此复核没有启动产品、模型或新增测试。
