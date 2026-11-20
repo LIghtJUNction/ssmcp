@@ -17,6 +17,7 @@ async fn wayland_preflight_refusals_preserve_same_host_connection() {
         // An absolute, nonexistent display prevents fallback to the host seat.
         .env("WAYLAND_DISPLAY", directory.0.join("no-wayland-display"))
         .env_remove("DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
         .env_remove("ZUSE_BACKEND")
         .kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(30), command.output())
@@ -91,6 +92,7 @@ async fn wayland_preflight_recovery_fixture() {
     if std::env::var("SSMCP_ZUSE_WAYLAND_PREFLIGHT_FIXTURE").as_deref() != Ok("1") {
         return;
     }
+    assert!(std::env::var_os("WAYLAND_SOCKET").is_none());
     let root = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap());
     assert_eq!(
         PathBuf::from(std::env::var_os("WAYLAND_DISPLAY").unwrap()),
