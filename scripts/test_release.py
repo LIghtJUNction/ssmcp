@@ -57,6 +57,20 @@ class EventTests(unittest.TestCase):
                 release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
 
 
+    def test_deployment_defaults_preserve_automatic_release_behavior(self):
+        self.assertTrue(release.deployment_requested("push", {}))
+        self.assertTrue(release.deployment_requested("workflow_dispatch", {}))
+        for value in (True, "true", False, "false"):
+            self.assertEqual(release.deployment_requested("workflow_dispatch",
+                             {"inputs": {"deploy_server": value}}),
+                             value in (True, "true"))
+
+    def test_deployment_deferral_rejects_non_boolean_inputs(self):
+        for value in (None, 0, 1, "yes", "FALSE", [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "boolean"):
+                release.deployment_requested("workflow_dispatch", {"inputs": {"deploy_server": value}})
+
+
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
         # Local fixture repositories must not inherit developer signing, hooks,
@@ -106,8 +120,23 @@ class ReleaseTests(unittest.TestCase):
             result = release.validate_tag(None, self.root, build_only=True)
         self.assertEqual(result["tag"], "")
         self.assertEqual(result["publish"], "false")
+        self.assertEqual(result["deploy_server"], "false")
         self.assertIn("publish=false\n", output.read_text())
         self.assertNotIn("publish=true", output.read_text())
+
+    def test_deferred_server_switch_still_validates_and_publishes_exact_tag(self):
+        output = self.root / "action-output"
+        with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}, clear=True):
+            result = release.validate_tag("v0.5.0", self.root, deploy_server=False)
+        self.assertEqual(result["publish"], "true")
+        self.assertEqual(result["deploy_server"], "false")
+        self.assertEqual(result["sha"], self.git("rev-parse", "HEAD"))
+        self.assertIn("deploy_server=false\n", output.read_text())
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            release.validate_tag("v0.5.1", self.root, deploy_server=False)
+        (self.root / "Cargo.lock").write_text('[[package]]\nname="ssmcp"\nversion="0.4.0"\n')
+        with self.assertRaisesRegex(ValueError, "Cargo.lock"):
+            release.validate_tag("v0.5.0", self.root, deploy_server=False)
 
     def test_build_only_rejects_tag_and_still_checks_lockfile(self):
         with self.assertRaisesRegex(ValueError, "cannot select"):
