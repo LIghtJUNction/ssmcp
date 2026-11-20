@@ -147,9 +147,8 @@ fn reload_display_budget_counts_serialized_bytes_and_retains_safe_tails() {
         entries.push(entry);
     }
     let mut snapshot = Snapshot {
-        version: 1,
         entries,
-        omitted: false,
+        ..Snapshot::default()
     };
     snapshot.bound();
     let bytes = serde_json::to_vec(&snapshot).unwrap();
@@ -179,9 +178,8 @@ fn reload_display_budget_counts_serialized_bytes_and_retains_safe_tails() {
         })
         .collect();
     let mut many = Snapshot {
-        version: 1,
         entries,
-        omitted: false,
+        ..Snapshot::default()
     };
     many.bound();
     assert!(many.omitted && many.entries.len() <= MAX_EVENTS);
@@ -219,6 +217,8 @@ fn reload_display_invalid_preview_and_old_positions_do_not_discard_conversation(
 #[test]
 fn reload_without_valid_owner_metadata_stays_out_of_the_selected_conversation() {
     let mut saved = serde_json::to_value(fixture().reload_display()).unwrap();
+    assert!(saved.get("selected_history_id").is_none());
+    saved["selected_history_id"] = json!("legacy_attach");
     saved["entries"][0]
         .as_object_mut()
         .unwrap()
@@ -228,7 +228,9 @@ fn reload_without_valid_owner_metadata_stays_out_of_the_selected_conversation() 
     restored.set_history_owner(HistoryId::parse(
         "conversation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     ));
-    restored.restore_reload_display(serde_json::from_value(saved).unwrap());
+    let saved: Snapshot = serde_json::from_value(saved).unwrap();
+    assert!(saved.selected_history().is_none());
+    restored.restore_reload_display(saved);
     assert!(restored.visible_ids().is_empty());
     assert_eq!(restored.events[0].meta.history, DisplayHistory::Global);
     assert_eq!(restored.events[1].meta.history, DisplayHistory::Global);

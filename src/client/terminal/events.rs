@@ -523,6 +523,7 @@ pub(crate) struct EventView {
     level: u8,
     scope: EventScope,
     history_selection: DisplayHistory,
+    reload_history_preview: bool,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
     read_expanded: Vec<u64>,
@@ -723,6 +724,9 @@ impl EventView {
     }
 
     pub(super) fn set_history_owner(&mut self, owner: Option<HistoryId>) {
+        if owner.is_none() && self.reload_history_preview {
+            return;
+        }
         self.set_history_selection(
             owner.map_or(DisplayHistory::NoSelection, DisplayHistory::Local),
         );
@@ -730,10 +734,13 @@ impl EventView {
 
     pub(super) fn set_history_selection(&mut self, selection: DisplayHistory) {
         // The first legacy page may arrive after the frontend selected a saved history.
-        if selection == DisplayHistory::LegacyAttach && self.history_selection.local_id().is_some()
+        if selection == DisplayHistory::LegacyAttach
+            && self.history_selection.local_id().is_some()
+            && !self.reload_history_preview
         {
             return;
         }
+        self.reload_history_preview = false;
         if self.history_selection != selection {
             self.history_selection = selection;
             self.read_boundary.interrupt();
@@ -741,7 +748,16 @@ impl EventView {
         }
     }
 
+    pub(super) fn set_reload_history_preview(&mut self, history: HistoryId) {
+        self.set_history_selection(DisplayHistory::Local(history));
+        self.reload_history_preview = true;
+    }
+
     fn local_display_history(&self) -> DisplayHistory {
+        if self.reload_history_preview {
+            // A restored preview can filter old cards, but cannot route new events.
+            return DisplayHistory::Global;
+        }
         match &self.history_selection {
             DisplayHistory::Local(owner) => DisplayHistory::Local(owner.clone()),
             _ => DisplayHistory::NoSelection,

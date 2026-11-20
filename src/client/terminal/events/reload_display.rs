@@ -126,6 +126,8 @@ struct Entry {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Snapshot {
     version: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_history_id: Option<String>,
     entries: Vec<Entry>,
     omitted: bool,
 }
@@ -133,6 +135,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             version: 1,
+            selected_history_id: None,
             entries: Vec::new(),
             omitted: false,
         }
@@ -143,6 +146,8 @@ impl Default for Snapshot {
 #[serde(deny_unknown_fields)]
 struct WireSnapshot {
     version: u8,
+    #[serde(default)]
+    selected_history_id: Option<String>,
     entries: Vec<Entry>,
     omitted: bool,
 }
@@ -159,6 +164,7 @@ impl<'de> Deserialize<'de> for Snapshot {
         }
         let mut snapshot = Self {
             version: 1,
+            selected_history_id: raw.selected_history_id,
             entries: raw.entries,
             omitted: raw.omitted,
         };
@@ -194,7 +200,14 @@ impl Snapshot {
         *self = Self::omitted();
     }
 
+    pub(in crate::client::terminal) fn selected_history(&self) -> Option<HistoryId> {
+        HistoryId::parse(self.selected_history_id.as_deref()?)
+    }
+
     fn bound(&mut self) {
+        if self.selected_history().is_none() {
+            self.selected_history_id = None;
+        }
         if self.entries.len() > MAX_EVENTS {
             self.entries.drain(..self.entries.len() - MAX_EVENTS);
             self.omitted = true;
@@ -337,6 +350,10 @@ impl EventView {
             })
             .collect();
         let mut snapshot = Snapshot {
+            selected_history_id: self
+                .history_selection
+                .local_id()
+                .map(|id| id.as_str().to_owned()),
             entries,
             ..Snapshot::default()
         };
@@ -425,21 +442,38 @@ impl EventView {
             .iter()
             .filter(|event| event.reload_index.is_some())
         {
-            if event.meta.raw_message {
-                text.push_str(if event.meta.user {
-                    "[USER] "
-                } else {
-                    "[AGENT] "
-                });
-                text.push_str(&event.summary);
-                text.push('\n');
-            }
-            text.push_str(&event.text);
-            if !event.text.ends_with('\n') {
-                text.push('\n');
-            }
+            event.append_reload_log_text(&mut text, &event.text);
         }
         text
+    }
+
+    pub(in crate::client::terminal) fn append_reconciled_reload_logs(&self, text: &mut String) {
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.reload_index.is_none() && event.history_id.is_some())
+        {
+            let (safe, _) = safe_text(&event.text);
+            event.append_reload_log_text(text, &safe);
+        }
+    }
+}
+
+impl Event {
+    fn append_reload_log_text(&self, text: &mut String, body: &str) {
+        if self.meta.raw_message {
+            text.push_str(if self.meta.user {
+                "[USER] "
+            } else {
+                "[AGENT] "
+            });
+            text.push_str(&self.summary);
+            text.push('\n');
+        }
+        text.push_str(body);
+        if !body.ends_with('\n') {
+            text.push('\n');
+        }
     }
 }
 
