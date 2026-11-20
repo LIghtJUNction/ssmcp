@@ -26,6 +26,7 @@ struct NativeAnswers {
     pending: bool,
     calls: Vec<String>,
     acknowledgements: Vec<Value>,
+    finish_operations: Vec<Value>,
 }
 
 struct Fixture {
@@ -190,6 +191,7 @@ impl Fixture {
             pending: true,
             calls: vec![],
             acknowledgements: vec![],
+            finish_operations: vec![],
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
@@ -219,6 +221,32 @@ impl Fixture {
                         assert_eq!(attribution.account.subject, "42");
                         assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
                         let mut output = match name.as_str() {
+                            "ssmcp.ui.finish" => {
+                                state.finish_operations.push(arguments.clone());
+                                assert_eq!(arguments["request_id"], state.view["id"]);
+                                match arguments["op"].as_str() {
+                                    Some("request") => {
+                                        assert_eq!(arguments["reason"], state.view["question"]);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "created":false,"request":state.view,
+                                            "timed_out":state.view["finish"]["status"]=="pending",
+                                            "default_decision":"no",
+                                            "decision":state.view["finish"]["decision"],
+                                            "approved":state.view["finish"]["approved"]
+                                        }})
+                                    }
+                                    Some("cancel") => {
+                                        state.view["finish"]["status"] = json!("cancelled");
+                                        state.view["finish"]["approved"] = json!(false);
+                                        json!({"structuredContent":{
+                                            "schema_version":1,"request_id":state.view["id"],
+                                            "request":state.view,"timed_out":false
+                                        }})
+                                    }
+                                    _ => panic!("unexpected fixture finish operation"),
+                                }
+                            }
                             "ssmcp.ui.questions" => {
                                 json!({"structuredContent":{"schema_version":1,"question":state.view}})
                             }
@@ -585,3 +613,5 @@ async fn finalizer_validates_the_envelope_and_budget_before_claiming_exact_typed
         *remaining
     );
 }
+
+mod finish_receipts;
