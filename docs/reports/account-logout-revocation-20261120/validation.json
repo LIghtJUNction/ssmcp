@@ -1,0 +1,219 @@
+{
+  "date_utc": "2026-11-20",
+  "baseline": {
+    "source_sha": "4c6178eb811049ce1fce4b6d16803e0e4f7b410d",
+    "workflow_run": 44754296839,
+    "job_id": 136350165955,
+    "observed_result": "failed strict account logout assertion",
+    "local_baseline_executed": false,
+    "local_baseline_limitation": "native artifact download timed out before the fixture ran"
+  },
+  "implementation_sha": "b4d648b37a89c3740c38e3a22ee21475288ea62a",
+  "checks": {
+    "source_sha": "d417a27a47de332dc4a5e0bf4be0c74bf7f1c591",
+    "worktree": "/home/lightjunction/Documents/GITHUB/ssmcp-account-logout-reason-20261120",
+    "target": "/var/tmp/ssmcp-account-logout-reason-20261120/target",
+    "checks": [
+      {
+        "name": "format",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "fmt",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 3.372,
+        "summary": [],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/format.log"
+      },
+      {
+        "name": "diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.012,
+        "summary": [],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/diff-check.log"
+      },
+      {
+        "name": "incoming",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--lib",
+          "--message-format=json",
+          "client::incoming_tests::",
+          "--",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 173.194,
+        "summary": [
+          "    Finished `test` profile [unoptimized] target(s) in 2m 50s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1834 filtered out; finished in 2.01s"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/incoming.log"
+      },
+      {
+        "name": "relay",
+        "command": [
+          "/var/tmp/ssmcp-account-logout-reason-20261120/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+          "client::relay::tests::",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 0.019,
+        "summary": [
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1834 filtered out; finished in 0.01s"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/relay.log"
+      },
+      {
+        "name": "protocol",
+        "command": [
+          "/var/tmp/ssmcp-account-logout-reason-20261120/target/debug/build/ssmcp/3ddfe9544c637721/out/ssmcp-3ddfe9544c637721",
+          "client::protocol_tests::",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "seconds": 1.193,
+        "summary": [
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 1829 filtered out; finished in 1.19s"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/protocol.log"
+      },
+      {
+        "name": "client-build",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--bin",
+          "ssmcp"
+        ],
+        "exit_code": 0,
+        "seconds": 58.983,
+        "summary": [
+          "    Finished `dev` profile [unoptimized] target(s) in 58.52s"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/client-build.log"
+      },
+      {
+        "name": "account-relay",
+        "command": [
+          "python3",
+          "scripts/e2e_account_relay.py",
+          "--binary",
+          "/var/tmp/ssmcp-account-logout-reason-20261120/target/debug/ssmcp",
+          "--report",
+          "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/account-relay.json"
+        ],
+        "exit_code": 0,
+        "seconds": 13.74,
+        "summary": [
+          "PASS logout revokes its live session and declined authorization cannot reconnect it (exit=1, connect_attempts_before=2, connect_attempts_after=2)",
+          "PASS a foreground account session offers at most one fresh authorization after revocation",
+          "PASS logout revokes and removes the selected origin's account credential"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/account-relay.log"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "/home/lightjunction/.cargo/bin/cargo",
+          "clippy",
+          "--offline",
+          "--workspace",
+          "--locked",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "seconds": 191.969,
+        "summary": [
+          "    Finished `dev` profile [unoptimized] target(s) in 3m 11s"
+        ],
+        "log": "/var/tmp/ssmcp-account-logout-reason-20261120/validation-d417a27a47de/clippy.log"
+      }
+    ],
+    "binary": "/var/tmp/ssmcp-account-logout-reason-20261120/target/debug/ssmcp",
+    "binary_sha256": "880e94e8e660bbcfcc33302cbb2003a6f77c713dd723b0ed74a3fa16acbbb86f"
+  },
+  "account": {
+    "status": "passed",
+    "checks": 47,
+    "passed_checks": [
+      "A --ssh exits as expected",
+      "legacy SSH stops before any transport starts",
+      "A invite exits as expected",
+      "retired invite cannot enter a nonexistent invitation flow",
+      "A join exits as expected",
+      "retired join cannot enter a nonexistent invitation flow",
+      "retired commands never contact the relay",
+      "A login exits as expected",
+      "device login stores the verified identity and registered server username",
+      "login output excludes account and polling credentials",
+      "account credentials have owner-only file permissions",
+      "A whoami exits as expected",
+      "whoami verifies identity without exposing the login token",
+      "B --server exits as expected",
+      "an allow target from another relay is rejected before network access",
+      "B --server exits as expected",
+      "provider-style allow labels cannot replace a same-origin account target",
+      "A whoami exits as expected",
+      "selecting another origin never borrows the saved account credential",
+      "A whoami exits as expected",
+      "account API redirects never forward credentials to another origin",
+      "A --no-watchdog exits as expected",
+      "a changed stable identity cannot connect or replace the saved credential",
+      "A other@http://127.0.0.1:39951 exits as expected",
+      "a requested username must match the account registered on this relay",
+      "signed-in A binds its own username and origin with its saved account token",
+      "controlled session exits cleanly",
+      "unsigned B uses explicit same-origin allow and a supported WebSocket protocol",
+      "unsigned B never saves or receives A's account credential",
+      "A list exits as expected",
+      "A lists its currently controllable unsigned B session",
+      "B exposes a real terminal through the relay",
+      "real shell round-trip succeeds without relay credentials reaching native tools",
+      "watchdog reconnects the unsigned device without acquiring a credential",
+      "server access revocation terminates B with an error",
+      "revoked active sessions stop watchdog retries",
+      "revocation immediately after Ready also stops startup retries",
+      "HTTP 401 policy failures stop default watchdog retries",
+      "HTTP 403 policy failures stop default watchdog retries",
+      "controlled session exits cleanly",
+      "Ctrl-C cleans up an unsigned session without leaving credentials on B",
+      "the current lifecycle never depends on invitation or enrollment endpoints",
+      "A logout exits as expected",
+      "logout revokes its live session and declined authorization cannot reconnect it (exit=1, connect_attempts_before=2, connect_attempts_after=2)",
+      "a foreground account session offers at most one fresh authorization after revocation",
+      "logout revokes and removes the selected origin's account credential",
+      "gateways observed no malformed client protocol frames"
+    ],
+    "transport": "loopback WebSocket",
+    "oauth": "synthetic GitHub provider",
+    "device": "unsigned explicit same-origin allow",
+    "ssh": false,
+    "models_started": false,
+    "binary_sha256": "880e94e8e660bbcfcc33302cbb2003a6f77c713dd723b0ed74a3fa16acbbb86f",
+    "script_sha256": "66913456fee0e72606a788ef43386464abf35eff7abff4faf5d6b4239031a919"
+  },
+  "clippy_warnings": [
+    "warning: unused dependency `qrcodegen`",
+    "warning: `ssmcp` (manifest) generated 1 warning"
+  ],
+  "git_status": ""
+}
