@@ -386,6 +386,7 @@ pub(crate) struct DevicePeer {
     pub account: Option<Registration>,
     pub session_access: bool,
     pub control_attribution: bool,
+    pub native_messages: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -393,6 +394,7 @@ impl From<Registration> for DevicePeer {
         Self {
             session_access: account.session_access,
             control_attribution: account.control_attribution,
+            native_messages: false,
             account: Some(account),
         }
     }
@@ -762,10 +764,12 @@ async fn connect(
             "anonymous_control_requires_current_client",
         ));
     }
+    let native_messages = capability_requested(&headers, wire::messages::CAPABILITY);
     let peer = DevicePeer {
         account,
         session_access,
         control_attribution,
+        native_messages,
     };
     Ok(ws
         .max_message_size(wire::MAX_FRAME)

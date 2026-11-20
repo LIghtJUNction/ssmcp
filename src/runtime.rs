@@ -544,6 +544,7 @@ impl Runtime {
         call_id: u64,
     ) -> Result<Value, String> {
         let started = std::time::Instant::now();
+        let caller = call_scope::current();
         let harness_call = tool
             .provider
             .is_harness()
@@ -702,7 +703,12 @@ impl Runtime {
             .await
             .ok()
             .flatten();
-        Ok(attach_context_metadata(value, context))
+        let value = attach_context_metadata(value, context);
+        Ok(crate::client::interface::questions::attach_answers(
+            value,
+            caller.as_deref(),
+            &name,
+        ))
     }
     pub async fn shutdown(&self) {
         self.registry.close();

@@ -476,6 +476,9 @@ fn queue_call(request: QueueRequest) -> Result<Value, String> {
             id
         }
     };
+    // This native entry runs outside the terminal State lock. Local input
+    // handlers mark themselves dirty and only notify finish waiters.
+    terminal::invalidate();
     Ok(json!({"requested":true,"id":id,"queue":super::steering::snapshot()}))
 }
 
@@ -488,6 +491,9 @@ pub(crate) async fn call(
     if name == "ssmcp.ui.wait" {
         return user_wait::call(arguments).await;
     }
+    if name == "ssmcp.ui.finish" {
+        return questions::finish_request(arguments).await;
+    }
     if name == "ssmcp.ui.listener" {
         return listener::call(arguments).await;
     }
@@ -496,13 +502,16 @@ pub(crate) async fn call(
     // a blocking worker; no mutex is held across an await.
     if matches!(name, "ssmcp.ui.message" | "ssmcp.ui.present") {
         let presentation = name == "ssmcp.ui.present";
+        let scope = crate::runtime::call_scope::current();
         return tokio::task::spawn_blocking(move || {
-            let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
-            if presentation {
-                super::presentation::send(arguments)
-            } else {
-                messages::send(arguments)
-            }
+            crate::runtime::call_scope::blocking(scope, || {
+                let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
+                if presentation {
+                    super::presentation::send(arguments)
+                } else {
+                    messages::send(arguments)
+                }
+            })
         })
         .await
         .map_err(|_| "message storage worker stopped".to_owned())?;
@@ -539,6 +548,9 @@ pub(crate) async fn call(
         match name {
             "ssmcp.ui.harness" => return harness::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
+            "ssmcp.ui.answer" => return questions::agent_answer(arguments),
+            "ssmcp.ui.question_ack" => return questions::acknowledge_answers(arguments),
+            "ssmcp.ui.question_delivery" => return questions::delivery_peek(arguments),
             "ssmcp.ui.questions" => return questions::read(arguments),
             "ssmcp.ui.queue" => return queue_call(parse_queue(arguments)?),
             "ssmcp.ui.set" => {
@@ -1067,12 +1079,16 @@ mod tests {
         for tool in &catalog {
             assert!(names.insert(tool["name"].as_str().unwrap()));
         }
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 17);
         assert!(names.contains("ssmcp.ui.harness"));
         assert!(names.contains("ssmcp.ui.history"));
         for name in [
             "ssmcp.ui.ask",
             "ssmcp.ui.questions",
+            "ssmcp.ui.answer",
+            "ssmcp.ui.finish",
+            "ssmcp.ui.question_ack",
+            "ssmcp.ui.question_delivery",
             "ssmcp.ui.listener",
             "ssmcp.ui.wait",
             "ssmcp.ui.message",
