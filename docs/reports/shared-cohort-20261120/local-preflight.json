@@ -1,0 +1,85 @@
+{
+  "schema": "ssmcp.cohort.local-preflight.v1",
+  "source_commit": "c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+  "source_tree": "b24ba5c998431522c280b8ee534cde91c4611a91",
+  "source_url": "https://github.com/LIghtJUNction/ssmcp/commit/c44c2cfecb6ba5dae3a63d67a3af08c77eb7b2cc",
+  "candidate_version": "0.10.14",
+  "formal_release_status": "not_published_by_this_integration",
+  "rust_toolchain": "1.100.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "gitlinks": {
+    "crates/zharness": "e3580c01c7252da090d04e59b59762bc561777d1",
+    "crates/zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "crates/zuse": "d930769005d307c42639e8abedc81ab039427e40"
+  },
+  "cargo_lock_sha256": "27556db8b55f570c5e5c46e8771faf90795a2dee55d773a2d5459f4a19fa62ba",
+  "checks": [
+    {
+      "name": "gtk-fixture-syntax",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 0.567
+    },
+    {
+      "name": "release-tools",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 4.759,
+      "test_count": 73
+    },
+    {
+      "name": "format",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_seconds": 2.959
+    },
+    {
+      "name": "clippy",
+      "status": "interrupted_host_reserve",
+      "completed": false,
+      "last_log_line": "Compiling syn v2.0.119",
+      "compiler_failure_observed": false
+    }
+  ],
+  "overall_status": "incomplete_resource_stop",
+  "source_unchanged_after_stop": true,
+  "resource_guard": {
+    "mechanism": "systemd user service; verified cgroup v2 limits; 500 ms host MemAvailable polling",
+    "memory_max_bytes": 1342177280,
+    "memory_high_bytes": 1073741824,
+    "memory_swap_max_bytes": 0,
+    "cpu_max": "75000 100000",
+    "cargo_jobs": 1,
+    "nice": 19,
+    "admission_bytes": 4831838208,
+    "host_floor_bytes": 3221225472,
+    "started_utc": "2026-11-20T02:04:08Z",
+    "stopped_utc": "2026-11-20T02:04:57Z",
+    "initial_available_bytes": 5524344832,
+    "minimum_available_bytes": 3207434240,
+    "peak_owned_cgroup_bytes": 620806144,
+    "owned_swap_bytes": 0,
+    "oom_events": 0,
+    "oom_kill_events": 0,
+    "action": "stopped only the owned build service when host reserve crossed its floor"
+  },
+  "not_completed": [
+    "Clippy",
+    "test executable and application build",
+    "new-cohort native worker tests",
+    "persistent Computer MCP recovery",
+    "PTY acceptance"
+  ],
+  "evidence_sha256": {
+    "gates.json": "f9922a0c8e1459a10209b4c09d8aa57ffbf5e8ac68c8da4903f0a7d844d3d50e",
+    "resources.json": "bfb051f49429ce44ab8060c55cfb933d9ded179361e2753bf864fb7f91f362db",
+    "enforced-limits.json": "47dfaccfff1206fe64a7607e44e6a2ef36e4d0b4a5de9eb0452738501a6698fe",
+    "gtk-fixture-syntax.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "release-tools.stderr.log": "520aa7c1868112986a73869b7468d96df224bba3724f68f707309a5052eea489",
+    "format.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "clippy.stderr.log": "d748cb6e7c5ef5c52f1ee4eff3b1fe9e1debd7bac13adfb66048fc4c6a643ef4"
+  },
+  "next_step": "Build the exact source in an isolated cloud workspace, then verify source-bound binaries with bounded native acceptance.",
+  "remote_ci_requested": false
+}
