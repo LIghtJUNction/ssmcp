@@ -548,6 +548,7 @@ impl Session {
 pub struct Broker {
     pub public_url: String,
     pub bridges: Arc<crate::bridge::Bridges>,
+    pub(crate) awaiting: crate::http::await_tool::Registry,
     native_messages: crate::messaging::Hub,
     pub oauth: crate::oauth::OAuth,
     pub identities: IdentityProviders,
@@ -611,6 +612,7 @@ impl Broker {
             identities,
             public_url,
             bridges: Arc::new(crate::bridge::Bridges::default()),
+            awaiting: crate::http::await_tool::Registry::default(),
             native_messages: crate::messaging::Hub::default(),
             portal: crate::portal::Portal::default(),
             client_downloads: None,

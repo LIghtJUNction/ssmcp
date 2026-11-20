@@ -449,7 +449,14 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .collect();
         assert_eq!(
             names,
-            ["list", "code_mode", "collab", "request_finish", "messages"]
+            [
+                "list",
+                "code_mode",
+                "collab",
+                "request_finish",
+                "await",
+                "messages"
+            ]
         );
         let method = if modern {
             "server/discover"
@@ -564,7 +571,14 @@ async fn resources_discover_and_page_native_schemas_in_both_protocol_eras() {
             .await;
         assert_eq!(
             data(&body)["public_tools"],
-            json!(["list", "code_mode", "collab", "request_finish", "messages"])
+            json!([
+                "list",
+                "code_mode",
+                "collab",
+                "request_finish",
+                "await",
+                "messages"
+            ])
         );
         assert_eq!(server.clients[0].calls.load(Ordering::Acquire), 0);
     }

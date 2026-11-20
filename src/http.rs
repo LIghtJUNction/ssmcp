@@ -27,6 +27,7 @@ const VERSIONS: &[&str] = &[MODERN, "2025-11-25", "2025-06-18", "2025-03-26"];
 const VERSION_META: &str = "io.modelcontextprotocol/protocolVersion";
 const CAPABILITIES_META: &str = "io.modelcontextprotocol/clientCapabilities";
 
+pub(crate) mod await_tool;
 mod finish_request;
 #[cfg(test)]
 mod question_delivery_tests;
@@ -192,6 +193,12 @@ async fn endpoint(
         }
         Ok(Action::Finish(arguments)) => {
             match finish_request::execute(broker, user, access_token, arguments).await {
+                Ok(response) => response,
+                Err(error) => tool_result(Err(error)),
+            }
+        }
+        Ok(Action::Await(arguments)) => {
+            match await_tool::execute(broker, user, access_token, arguments).await {
                 Ok(response) => response,
                 Err(error) => tool_result(Err(error)),
             }
@@ -474,6 +481,7 @@ enum Action {
     Code(CodeArguments),
     Collab(Value),
     Finish(finish_request::Arguments),
+    Await(await_tool::Arguments),
     Messages(Value),
     ResourceList(Option<String>),
     ResourceRead(String),
@@ -720,6 +728,12 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             arguments.controller = request_controller(request);
             Ok(Action::Finish(arguments))
         }
+        "await" => {
+            let mut arguments =
+                await_tool::Arguments::parse(arguments).map_err(|error| Fault::params(&error))?;
+            arguments.controller = request_controller(request);
+            Ok(Action::Await(arguments))
+        }
         "list" => {
             let arguments: ListArguments = serde_json::from_value(arguments)
                 .map_err(|_| Fault::params("list accepts only client_id and cursor strings"))?;
@@ -796,7 +810,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             Ok(Action::Code(arguments))
         }
         _ => Err(Fault::params(
-            "unknown public tool; use list, code_mode, collab, request_finish or messages",
+            "unknown public tool; use list, code_mode, collab, request_finish, await or messages",
         )),
     }
 }
@@ -812,7 +826,7 @@ fn usage() -> Value {
     json!({
         "language":"javascript",
         "user_messages":"Inspect user_messages / USER REQUIREMENTS on every response. Unbound observation does not collect requests; ui.message/ui.present are interaction. Full recipient rules: ssmcp://guide.",
-        "wait_user":"return await ui.wait(id,{timeout_ms:20000,intent:'need_user',reason:'Your input is needed',notify:true}); waits 1..25s for this authenticated recipient. Outer user_wait plus user_messages is the delivery receipt. Repeat after timed_out; intent:'finish' requests explicit user permission to end and cannot grant it.",
+        "wait_user":"return await ui.wait(id,{timeout_ms:20000,intent:'need_user',reason:'Your input is needed',notify:true}); waits 1..25s for this authenticated recipient. Outer user_wait plus user_messages is the delivery receipt. Repeat after timed_out; intent:'finish' only waits for further user guidance and never grants completion permission.",
         "conversation_reminders":"A reminder follows an existing request after two responses without a new accepted terminal reply; it is not a new task. A successful nonduplicate message/present receipt clears it. Details: ssmcp://guide.",
         "collab":"collab.join/list/update/send/receive/ack/leave coordinate existing participants. Keep tokens private; use direct collab for receive waits over 1s. See ssmcp://collaboration.",
         "controller":"controller:{name,model} is caller-reported display attribution, not authentication.",
@@ -833,6 +847,7 @@ fn usage() -> Value {
         "context":"context.roots lists granted roots. Native ssmcp.context.* and ui.get use the same local context memory.",
         "rsync":"rsync/sync({source,destination,dry_run,delete}) starts a managed transfer job. Exact arguments: ssmcp://guide.",
         "jobs":"jobs.status/wait/cancel/list manage relay jobs that outlive code_mode.",
+        "await":"Use public await outside JavaScript, or waitFor(clientId,{targets:[{type:\"exec\",job_id}],mode:\"any\",timeout_ms:20000}) in code_mode. Resume/cancel with its server-issued wait_id. Typed ready never grants completion permission. Public await uses no JS worker; waitFor retains the enclosing worker.",
         "ports":"ports.open/list/close forward loopback endpoints. Exact arguments: ssmcp://guide.",
         "resources":"resources.list/templates/read access relay resources; resources.forClient(id) accesses the selected client's resources.",
         "native":"capabilities(id) reads client-owned metadata; native(id) exposes discovered names with unchanged schemas.",
@@ -907,6 +922,7 @@ impl CodeRunReport {
 impl Drop for CodeRunReport {
     fn drop(&mut self) {
         let waits = self.run.cancel_user_waits();
+        await_tool::abandon_user_delivery(self);
         if self.delivered && waits.is_empty() {
             return;
         }
@@ -1103,6 +1119,11 @@ fn code_host(
                 if matches!(name.as_str(), "ssmcp.ui.message" | "ssmcp.ui.present") && arguments["kind"] == "answer");
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
+                    if name == "await" {
+                        let mut arguments = await_tool::Arguments::parse(arguments)?;
+                        arguments.controller = controller;
+                        return await_tool::wait(broker, user, access_token, arguments).await;
+                    }
                     if name == "collab.receive"
                         && arguments
                             .get("wait_ms")
@@ -1404,7 +1425,7 @@ async fn finish_user_response(report: &CodeRunReport, response: Value) -> Value 
     collect_question_answers(report).await;
     match eligible_user_response(report).await {
         Ok(eligible) => commit_user_response(report, response, eligible),
-        Err(()) => response,
+        Err(()) => await_tool::commit_user_delivery(report, || response),
     }
 }
 
@@ -1502,6 +1523,16 @@ async fn collect_question_answers(report: &CodeRunReport) {
 }
 
 fn commit_user_response(
+    report: &CodeRunReport,
+    response: Value,
+    eligible: Vec<EligibleUserResponse>,
+) -> Value {
+    await_tool::commit_user_delivery(report, || {
+        commit_user_response_inner(report, response, eligible)
+    })
+}
+
+fn commit_user_response_inner(
     report: &CodeRunReport,
     mut response: Value,
     eligible: Vec<EligibleUserResponse>,
@@ -1855,7 +1886,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args) or exec.run(id,{command:[...],cwd,wait_ms}). Native permissions and approvals apply.\n\nSend user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. conversation_reminders / CONVERSATION REMINDER follows an existing task; reply in the terminal. Controller names are display attribution, not authentication.\n\nContinue authorized work unless the user explicitly agrees to end. When input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}); repeat after timed_out. Use intent:'finish' for an explicit ending request. Only outer user_wait.received with matching user_messages confirms delivery; agent fields cannot grant user consent.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
+            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args) or exec.run(id,{command:[...],cwd,wait_ms}). Native permissions and approvals apply.\n\nSend user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. conversation_reminders / CONVERSATION REMINDER follows an existing task; reply in the terminal. Controller names are display attribution, not authentication.\n\nContinue authorized work unless the user explicitly agrees to end. When input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}); repeat after timed_out. Before ending, use request_finish or registered native ssmcp.ui.finish with a verified collab binding and wait for the local user's explicit Yes. ui.wait intent:'finish' only waits for further guidance. Only outer user_wait.received with matching user_messages confirms delivery; agent fields cannot grant user consent.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
@@ -1875,6 +1906,7 @@ pub(crate) fn tool_definitions() -> Value {
         },
         collaboration_tool(),
         finish_request::tool(),
+        await_tool::tool(),
         native_messages_tool(),
 
     ])
@@ -3176,7 +3208,14 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["list", "code_mode", "collab", "request_finish", "messages"]
+            [
+                "list",
+                "code_mode",
+                "collab",
+                "request_finish",
+                "await",
+                "messages"
+            ]
         );
         let mut value =
             json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list"}});
