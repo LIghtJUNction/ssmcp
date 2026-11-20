@@ -20,14 +20,18 @@ impl Finalizer {
     }
 
     async fn join(&mut self) {
-        if let Self::Thread(task) = self {
-            let task = task.take().unwrap();
-            *self = Self::Runtime(tokio::task::spawn_blocking(move || {
-                let _ = task.join();
-            }));
-        }
-        if let Self::Runtime(task) = self {
-            let _ = task.await;
+        match self {
+            Self::Runtime(task) => {
+                let _ = task.await;
+            }
+            Self::Thread(task) => {
+                while task.as_ref().is_some_and(|task| !task.is_finished()) {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                if let Some(task) = task.take() {
+                    let _ = task.join();
+                }
+            }
         }
     }
 
@@ -62,14 +66,34 @@ impl Finalizers {
         self.insert(Finalizer::Runtime(task));
     }
 
-    pub(super) fn run(&self, work: impl FnOnce() + Send + 'static) {
-        let task = match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => Finalizer::Runtime(runtime.spawn_blocking(work)),
-            // Destruction outside a runtime must still retain the partial capture.
-            // It must not perform disk I/O on the thread dropping the transport.
-            Err(_) => Finalizer::Thread(Some(std::thread::spawn(work))),
+    pub(super) fn run(self: &Arc<Self>, work: impl FnOnce() + Send + 'static) {
+        let mut work = DeferredWork {
+            action: Some(Box::new(work)),
+            finalizers: self.clone(),
         };
-        self.insert(task);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            self.insert(Finalizer::Runtime(runtime.spawn_blocking(move || {
+                work.action.take().unwrap()();
+            })));
+        }
+        // Without a runtime, Drop sends the work directly to its fallback.
+    }
+}
+
+struct DeferredWork {
+    action: Option<Box<dyn FnOnce() + Send>>,
+    finalizers: Arc<Finalizers>,
+}
+
+impl Drop for DeferredWork {
+    fn drop(&mut self) {
+        if let Some(work) = self.action.take() {
+            // A runtime may discard a queued blocking closure during shutdown.
+            // Keep its capture and completion ownership instead of losing bytes
+            // or falling back to disk I/O in the transport's destructor.
+            self.finalizers
+                .insert(Finalizer::Thread(Some(std::thread::spawn(work))));
+        }
     }
 }
 
@@ -105,6 +129,15 @@ impl Shutdown {
             let _ = task.await;
         }
         self.streams.clear();
+        self.drain_finalizers().await;
+        // Cancelled stream destructors have now published all their finalizers.
+        // Close the event archive only after their partial-artifact records exist.
+        let events = self.events.take().unwrap();
+        self.finalizers.run(move || events.close());
+        self.drain_finalizers().await;
+    }
+
+    async fn drain_finalizers(&mut self) {
         loop {
             self.pending = self.finalizers.take();
             if self.pending.is_empty() {
@@ -115,10 +148,6 @@ impl Shutdown {
             }
             self.pending.clear();
         }
-        // Cancelled stream destructors have now published all their finalizers.
-        // Close the event archive only after their partial-artifact records exist.
-        let events = self.events.take().unwrap();
-        let _ = tokio::task::spawn_blocking(move || events.close()).await;
     }
 
     pub(super) fn dispatch(self) {
@@ -154,5 +183,50 @@ impl Drop for Shutdown {
             }
             events.close();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn queued_archive_survives_runtime_shutdown_exactly_once() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (started, running) = std::sync::mpsc::channel();
+        let (release, waiting) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            let _ = waiting.recv_timeout(std::time::Duration::from_secs(10));
+        });
+        running
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let finalizers = Arc::new(Finalizers::default());
+        let count = Arc::new(AtomicUsize::new(0));
+        let actual = count.clone();
+        let (finished, completed) = std::sync::mpsc::channel();
+        {
+            let _entered = runtime.enter();
+            finalizers.run(move || {
+                actual.fetch_add(1, Ordering::AcqRel);
+                finished.send(()).unwrap();
+            });
+        }
+        runtime.shutdown_background();
+        completed
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("queued archive must survive cancellation of the blocking pool");
+        assert_eq!(count.load(Ordering::Acquire), 1);
+        release.send(()).unwrap();
+        for task in finalizers.take() {
+            task.join_blocking();
+        }
+        assert_eq!(count.load(Ordering::Acquire), 1);
     }
 }
