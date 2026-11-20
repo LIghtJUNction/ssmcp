@@ -566,8 +566,11 @@ class InputHistory(Composer):
         saved = self.observe("ssmcp.ui.history", {"action": "list"})["sessions"]
         selected = next(index for index, item in enumerate(saved) if item["id"] == session_id)
         resumed.send("/resume\r")
-        resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot),
+        resumed.until(lambda shot: column(shot) == ("history", 6, 8) and session_id in text(shot)
+                      and shot["hide_cursor"],
                       "the persisted conversation in the /resume picker")
+        self.check(self.ui("/display/conversation")["focus"] == "content",
+                   "/resume gives keyboard focus to the history picker")
         resumed.send(HOME + DOWN * selected + ENTER)
         resumed.until(lambda shot: column(shot) == ("history", 6, 8)
                       and "HISTORY_REPLY_FIXTURE" in text(shot) and not shot["hide_cursor"],
@@ -614,9 +617,12 @@ class InputHistory(Composer):
                    "archiving keeps the original JSONL bytes and does not enqueue any requirement")
         front.send("/archived\r")
         front.until(lambda shot: "Archived conversations" in text(shot)
-                    and session_id in text(shot), "the explicit archived-conversation picker")
-        self.check(self.ui("/display/conversation")["history_archived"],
-                   "the history canvas exposes its archive filter")
+                    and session_id in text(shot) and shot["hide_cursor"],
+                    "the explicit archived-conversation picker")
+        picker = self.ui("/display/conversation")
+        self.check(picker["history_archived"] and picker["focus"] == "content"
+                   and not picker["draft"]["text"],
+                   "the history canvas exposes its archive filter and focuses the picker after clearing the command")
         draft = "ARCHIVE_DRAFT_KEEP 界"
         front.send(draft)
         self.wait_state(front, lambda state: state["draft"]["text"] == draft,
@@ -652,11 +658,18 @@ class InputHistory(Composer):
                    and path.read_bytes() == original,
                    "archive state survives a new process without rewriting the conversation")
         restored_front.send("/resume\r")
-        restored_front.until(lambda shot: "No active history" in text(shot),
+        restored_front.until(lambda shot: "No active history" in text(shot) and shot["hide_cursor"],
                              "the normal history picker excluding the persisted archive")
+        self.check(self.ui("/display/conversation")["focus"] == "content",
+                   "the empty active-history picker still owns keyboard focus")
         restored_front.send("/archived\r")
         restored_front.until(lambda shot: "Archived conversations" in text(shot)
-                             and session_id in text(shot), "the persisted archive in its own picker")
+                             and session_id in text(shot) and shot["hide_cursor"],
+                             "the persisted archive in its own picker")
+        picker = self.ui("/display/conversation")
+        self.check(picker["history_archived"] and picker["focus"] == "content"
+                   and not picker["draft"]["text"],
+                   "/archived refocuses the existing history column before Home and Enter restore it")
         restored_front.send(HOME + ENTER)
         restored_front.until(lambda shot: "HISTORY_CONTINUATION" in text(shot)
                              and "History restored" in text(shot),
