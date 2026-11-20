@@ -124,6 +124,29 @@ async fn link_metrics_observer_drop_cancels_task_and_releases_owned_socket() {
 }
 
 #[test]
+fn link_metrics_buffer_exhaustion_is_retryable_without_hiding_other_failures() {
+    let error = send_error(io::Error::from_raw_os_error(libc::ENOBUFS));
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(
+        error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .and_then(io::Error::raw_os_error),
+        Some(libc::ENOBUFS)
+    );
+    for code in [libc::EAGAIN, libc::ECONNREFUSED, libc::EBADF, libc::ENOMEM] {
+        let original = io::Error::from_raw_os_error(code);
+        let kind = original.kind();
+        let error = send_error(original);
+        assert_eq!(error.raw_os_error(), Some(code));
+        assert_eq!(error.kind(), kind);
+    }
+    let error = send_error(io::Error::other("metrics fixture error"));
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(error.to_string(), "metrics fixture error");
+}
+
+#[test]
 fn link_metrics_reporter_is_one_hertz_bounded_and_never_waits_for_a_subscriber() {
     let (prepared, reporter) = pair();
     let mut recorder = Recorder::new(Some(reporter));
@@ -155,6 +178,25 @@ fn link_metrics_reporter_is_one_hertz_bounded_and_never_waits_for_a_subscriber()
         recorder.enabled(),
         "a full queue drops one sample, not the transport"
     );
+    let mut drained = 0;
+    loop {
+        match prepared.socket.recv(&mut buffer) {
+            Ok(_) => drained += 1,
+            Err(error) => {
+                assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+                break;
+            }
+        }
+    }
+    assert!(drained > 0, "the full queue held actual samples");
+    recorder.sent(5);
+    recorder.received(7);
+    recorder.last_report = Some(Instant::now() - Duration::from_secs(2));
+    recorder.publish();
+    let n = prepared.socket.recv(&mut buffer).unwrap();
+    let recovered = Sample::decode(&buffer[..n]).unwrap();
+    assert_eq!((recovered.uploaded, recovered.downloaded), (12, 16));
+    assert!(recorder.enabled(), "draining resumes the same reporter");
     drop(prepared);
     recorder.last_report = Some(Instant::now() - Duration::from_secs(2));
     recorder.publish();
