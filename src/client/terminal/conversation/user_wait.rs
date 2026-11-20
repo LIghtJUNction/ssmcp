@@ -399,7 +399,7 @@ mod tests {
             state.conversation.composer.set_text("/wa");
             let rendered = screen(&mut state);
             assert!(
-                rendered.contains("› /wait") && rendered.contains("查看用户等待"),
+                rendered.contains("› /wait") && rendered.contains("查看计时和用户等待"),
                 "{rendered}"
             );
             assert!(
