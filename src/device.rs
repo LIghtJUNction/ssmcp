@@ -1071,6 +1071,10 @@ mod tests {
             "schema": 1, "version": "0.10.99", "wire_version": wire::VERSION,
             "targets": {"x86_64-unknown-linux-gnu": {"size": 7, "sha256": format!("{:x}", Sha256::digest(b"fixture"))}},
         })).unwrap()).unwrap();
+        std::fs::set_permissions(&assets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for path in [&binary, &assets.join("release.json")] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
         let mut broker = Broker::with_identity_config(
             "https://ssmcp.test".into(),
             crate::oauth::OAuthConfig::default(),
