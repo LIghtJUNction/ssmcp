@@ -1934,9 +1934,10 @@ mod tests {
         let retained = vec![first.messages[0].clone(), first.messages[2].clone()];
         let first_id = first.metadata.id;
         // Switching the active history must not make recall edit the wrong file.
-        history.active = None;
+        history.release_current();
         history.record("assistant", "SECOND_CONVERSATION").unwrap();
         let second = history.current().unwrap().unwrap();
+        assert_ne!(second.metadata.id, first_id);
         assert!(
             !history
                 .recall_request("request_recalled", "different source")
