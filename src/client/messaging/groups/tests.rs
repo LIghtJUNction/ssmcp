@@ -200,6 +200,57 @@ fn partial_group_retry_keeps_child_ids_and_never_resends_an_accepted_target() {
 }
 
 #[test]
+fn failed_status_query_cannot_rearm_a_service_accepted_queued_child() {
+    let recipients = vec![recipient(1, false)];
+    let (mut manager, mut receiver) = ready(recipients.clone());
+    manager
+        .group_send(&recipients, "one dispatch", "queued-child")
+        .unwrap();
+    let sent = receiver.try_recv().unwrap();
+    let confirmed = accepted(&sent, 1);
+    manager.reply(sent.id, Err("send response lost".into()));
+
+    // A retry encounters a local error before the delayed service receipt is
+    // observed. This leaves the child marked failed even after confirmation.
+    manager.recipients[0].online = false;
+    manager.group_retry("queued-child").unwrap();
+    assert!(receiver.try_recv().is_err());
+    manager.recipients[0].online = true;
+
+    let status = Command::Status {
+        message_id: confirmed.message_id.clone(),
+    };
+    manager.request(status.clone()).unwrap();
+    let query = receiver.try_recv().unwrap();
+    assert_eq!(query.command, status);
+    manager.reply(
+        query.id,
+        Ok(Reply {
+            receipts: vec![confirmed.clone()],
+            ..Default::default()
+        }),
+    );
+    manager.request(status.clone()).unwrap();
+    let query = receiver.try_recv().unwrap();
+    assert_eq!(query.command, status);
+    manager.reply(query.id, Err("status response lost".into()));
+    assert_eq!(manager.error.as_deref(), Some("status response lost"));
+
+    let groups = manager.group_snapshots();
+    let child = &groups[0]["targets"][0];
+    assert_eq!(child["status"], "failed");
+    assert_eq!(child["confirmed_status"], "queued");
+    assert_eq!(child["message_id"], confirmed.message_id);
+    assert_eq!(child["connection_closed"], false);
+    let error = manager.group_retry("queued-child").unwrap_err();
+    assert!(error.contains("No unconfirmed failed targets"));
+    assert!(
+        receiver.try_recv().is_err(),
+        "the accepted child was not rearmed"
+    );
+}
+
+#[test]
 fn a_disconnected_group_does_not_resume_or_rebind_after_reconnect() {
     let recipients: Vec<_> = (1..=32).map(|index| recipient(index, false)).collect();
     let (mut manager, _receiver) = ready(recipients.clone());

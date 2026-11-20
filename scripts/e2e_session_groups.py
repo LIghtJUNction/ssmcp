@@ -105,6 +105,7 @@ class SessionGroups(Interactions):
         return expected
 
     def submit_group(self, front, body, selected, *, compose=False, previous=()):
+        source = ("/group send " if compose else "/send ") + body
         if compose:
             front.send(b"g")
             self.wait_state(
@@ -113,8 +114,7 @@ class SessionGroups(Interactions):
                 "g opens a group draft without sending")
             self.send_stream(front, PASTE_START + body.encode() + PASTE_END)
         else:
-            self.replace_short(front, "/group send " + body)
-        source = "/group send " + body
+            self.replace_short(front, source)
         self.wait_state(
             front, lambda state: state["draft"]["text"] == source
             and set(state["group_selected"]) == selected,

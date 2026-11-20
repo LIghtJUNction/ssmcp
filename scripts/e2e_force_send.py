@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check explicit listener receipts through a private account router and real PTY.
+"""Check explicit listener and native inbox receipts through a private router and real PTY.
 
 Consumes already-built client/library-fixture/VT-decoder binaries. This script
 never invokes Cargo, an installed model, or the user's active connection.
@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 from pathlib import Path
 import subprocess
@@ -16,7 +17,7 @@ import tempfile
 import time
 
 from e2e_input_history import (
-    InputHistory, ENTER, HOME, PASTE_START, PASTE_END,
+    InputHistory, ENTER, PASTE_START, PASTE_END,
     REFERENCE_BEGIN, REFERENCE_END, text,
 )
 
@@ -145,7 +146,7 @@ class ForceSend(InputHistory):
                    "the server lists one exact available account inbox for this owned client")
         native_recipient = inboxes[0]["id"]
         self.check(native_recipient == "client:" + self.client_id,
-                   "the native routing guard uses an authoritative stable recipient ID")
+                   "the native inbox has an authoritative stable recipient ID")
         ordinary = self.submit_source(front, "Ordinary request stays in its own queue")
 
         original = '  /send @"' + path + '"\n    code\n'
@@ -279,16 +280,16 @@ class ForceSend(InputHistory):
         front.until(lambda shot: shot["size"] == [24, 48], "the narrow force-send fixture")
         self.save_shot("force-unknown-48", front, cells=True)
 
-        # Account relay recipients now come from native messaging, not the
-        # legacy steering roster. Exercise that real picker here; the existing
-        # Rust exact-agent/thread tests retain the legacy listener-scope guard.
+        # The local inbox is merged into the Next caller row. /message changes
+        # how Enter selects that row, while its canvas key stays member:next.
         front.resize(28, 120)
-        front.until(lambda shot: shot["size"] == [28, 120], "the native recipient guard viewport")
+        front.until(lambda shot: shot["size"] == [28, 120], "the native recipient viewport")
         self.draft(front, "/message " + native_recipient)
         front.send(ENTER)
         self.wait_state(front, lambda state: state["view"] == "agents"
-                        and state["selected_agent"] == "native:" + native_recipient,
-                        "the real message command did not select the exact native inbox row")
+                        and state["focus"] == "content" and state["process_id"] == self.client_id
+                        and state["selected_agent"] == "member:next",
+                        "the real picker did not highlight the merged local process inbox row")
         front.send(ENTER)
         selected = self.wait_state(
             front, lambda state: state["native_recipient"] == native_recipient
@@ -301,34 +302,68 @@ class ForceSend(InputHistory):
         self.check(inbox_before["messages"] == [] and not inbox_before.get("user_messages"),
                    "the owned native inbox starts empty without consuming the ordinary queue")
         listener_before = self.listener("status")
-        original = "/send Do not change this recipient\n    @missing.txt $missing-skill\n"
-        before = self.draft(front, original)
+        body = f'@{native_recipient}  中文原文\n    @"{path}" $missing-skill  \n'
+        self.draft(front, "/send " + body)
         front.send(ENTER)
-        front.until(lambda shot: "此收件人不支持 /send" in text(shot),
-                    "the explicit native-recipient force-send rejection")
-        state = self.ui("/display/conversation")
+        front.until(lambda shot: "Queued by service" in shot["rows"][-1],
+                    "the native service's queued receipt reaches the sender")
+        state = self.wait_state(front, lambda state: not state["draft"]["text"]
+                                and not state["native_pending"],
+                                "the native service receipt clears the accepted draft")
         self.check(state["native_recipient"] == native_recipient
                    and state["target"] == selected["target"]
-                   and state["draft"] == before["draft"],
-                   "rejected force-send preserves the exact native recipient, UTF-8 draft and cursor")
-        self.check(not state["native_pending"] and not state["force_pending"],
-                   "rejected force-send starts neither a native send nor a listener task")
-        listener_after = self.listener("status")
-        self.check(listener_before["pending"] is None and listener_after["pending"] is None
-                   and listener_after["receipts"] == listener_before["receipts"],
-                   "the default listener receives no rerouted delivery or new receipt")
+                   and not state["force_pending"],
+                   "native /send keeps its exact selection and starts no listener task")
+
+        # The public inbox includes native messages without making an ordinary
+        # client tool call, which could take the fixture's steering request.
         inbox_after = self.public_call("messages", {
             "action": "inbox", "client_id": self.client_id,
         })
-        self.check(inbox_after["messages"] == [] and not inbox_after.get("user_messages"),
-                   "the native inbox receives zero ordinary messages from the rejected /send")
+        self.check(len(inbox_after["messages"]) == 1 and not inbox_after.get("user_messages"),
+                   "the exact inbox receives one native message and no steering request")
+        native = inbox_after["messages"][0]
+        self.check(native["text"] == body
+                   and native["recipient"]["id"] == native_recipient
+                   and native["recipient"]["client_id"] == self.client_id
+                   and native["recipient"]["kind"] == "account_inbox"
+                   and native["recipient"]["agent_id"] is None
+                   and native["recipient"]["account"] == inboxes[0]["account"]
+                   and native["sender"]["kind"] == "local_user"
+                   and native["sender"]["client_id"] == self.client_id,
+                   "the inbox receives the literal mention, Unicode, reference and whitespace")
+        receipt = native["receipt"]
+        self.check(receipt["recipient_id"] == native_recipient
+                   and re.fullmatch(r"ui-[0-9a-f]{32}", receipt["request_id"])
+                   and re.fullmatch(r"native_[0-9a-f]{32}", receipt["message_id"])
+                   and receipt["status"] == "included" and receipt["included_at_ms"] is not None,
+                   "inbox inclusion returns the exact native UI request and recipient receipt")
+        acknowledged = self.public_call("messages", {
+            "action": "ack", "client_id": self.client_id, "message_id": receipt["message_id"],
+        })["receipts"]
+        self.check(len(acknowledged) == 1 and acknowledged[0]["status"] == "acknowledged"
+                   and acknowledged[0]["acknowledged_at_ms"] is not None
+                   and all(acknowledged[0][key] == receipt[key]
+                           for key in ("request_id", "message_id", "recipient_id", "created_at_ms")),
+                   "the inbox acknowledges the same native message and request")
+        front.until(lambda shot: "Acknowledged by recipient" in shot["rows"][-1],
+                    "the same native receipt refreshes the sender")
+        self.check(self.listener("read", **lease, wait_ms=0)["delivery"] is None,
+                   "the live local listener receives no native /send delivery")
+        listener_after = self.listener("status")
+        self.check(listener_before["pending"] is None and listener_after["pending"] is None
+                   and listener_after["receipts"] == listener_before["receipts"],
+                   "the live local listener records no receipt for native /send")
         self.ordinary_unchanged(ordinary)
-        self.save_shot("force-native-recipient-rejected-120", front, cells=True)
-        self.draft(front, "")
-        self.agents(front)
-        front.send(HOME + ENTER)
-        self.wait_state(front, lambda state: state["target"] is None
-                        and state["native_recipient"] is None,
+        self.save_resized_shots("force-native-recipient-accepted", front, "Acknowledged by recipient")
+        self.draft(front, "/sessions")
+        front.send(ENTER)
+        self.wait_state(front, lambda state: state["view"] == "agents"
+                        and state["focus"] == "content" and state["selected_agent"] == "member:next",
+                        "the Sessions picker did not highlight the local Next caller")
+        front.send(ENTER)
+        self.wait_state(front, lambda state: state["view"] == "activity"
+                        and state["target"] is None and state["native_recipient"] is None,
                         "the fixture did not explicitly restore Next caller")
         self.listener("read", **lease, wait_ms=0)
 
@@ -403,7 +438,7 @@ def main():
         "status": "failed",
         "transport": "production account router over loopback HTTP/WebSocket; synthetic GitHub provider",
         "scope": "real CLI/PTY and explicit synthetic listener; no model invocation",
-        "routing_scenario": "real native account inbox picker rejection; registered-thread scope remains covered by Rust regressions",
+        "routing_scenario": "literal native /send to the exact merged local inbox, with inclusion and acknowledgement receipts",
         "binary_sha256": hashlib.file_digest((args.bin_dir / "ssmcp").open("rb"), "sha256").hexdigest(),
         "script_sha256": hashlib.file_digest(Path(__file__).open("rb"), "sha256").hexdigest(),
     }
