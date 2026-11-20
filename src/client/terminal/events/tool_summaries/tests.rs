@@ -511,6 +511,80 @@ async fn exec_reminder_summary_and_retention_never_reopen_an_explicit_fold() {
 }
 
 #[tokio::test]
+async fn inactive_canvas_keeps_group_choice_after_every_saved_command_is_evicted() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let first = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&first);
+        for request in 1..=12 {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        let id = group_id(&view, &first);
+        view.tool_summary_set(&first, &id, "Keep this group folded", Some(0))
+            .unwrap();
+        view.select(isize::MIN);
+        assert!(view.back());
+        let first_canvas = view.position();
+        assert_eq!(first_canvas.tool_groups.len(), 1);
+        let saved_ids = view.events.iter().map(|event| event.id).collect::<Vec<_>>();
+        let ui = Ui {
+            color: false,
+            ..Ui::default()
+        };
+
+        // A second canvas has its own default, while the first stays inactive.
+        view.restore_position(&super::super::EventPosition::default());
+        view.render(120, 24, &ui, false);
+        assert!(view.tool_groups()[0].expanded);
+        let second_canvas = view.position();
+        for request in 13..=(MAX_EVENTS as u64 + 12) {
+            command_call(&mut view, &fixture.runtime, request).await;
+        }
+        assert_eq!(view.events.len(), MAX_EVENTS);
+        assert!(view.events.iter().all(|event| !saved_ids.contains(&event.id)));
+        assert_eq!(view.tool_groups().len(), 1);
+        assert_eq!(group_id(&view, &first), id);
+        assert_eq!(
+            view.snapshot()["tool_groups"][0]["call_count"],
+            MAX_EVENTS as u64 + 12
+        );
+        assert!(view.tool_groups()[0].expanded);
+        assert!(view.position().tool_groups.len() <= MAX_EVENTS);
+
+        // Reload may capture the inactive canvas before it is visited again.
+        // Rebase its group reading state to current ordinals, not stale IDs.
+        let reading = serde_json::to_value(first_canvas.for_reload(&view)).unwrap();
+        assert_eq!(reading["reading"]["selected"], 0);
+        assert_eq!(reading["reading"]["selected_group"], 0);
+        let panels = reading["reading"]["panels"].as_array().unwrap();
+        assert_eq!(panels.len(), MAX_EVENTS);
+        assert!(panels.iter().all(|panel| {
+            panel[1]["group_expanded"] == false && panel[1]["group_automatic"] == false
+        }));
+        assert!(!reading.to_string().contains(&id));
+
+        for width in [120, 48] {
+            view.restore_position(&first_canvas);
+            let text = view.render(width, 24, &ui, true).join("\n");
+            let group = view.tool_groups()[0].clone();
+            assert!(!group.expanded);
+            assert!(!view.events[group.start].group_automatic);
+            assert_eq!(view.selected, Some(group.head));
+            assert_eq!(view.selected_group, Some(group.head));
+            assert_eq!(text.matches("Keep this group folded").count(), 1, "{text}");
+            assert!(!text.contains("printf"), "{text}");
+
+            view.restore_position(&second_canvas);
+            let text = view.render(width, 24, &ui, false).join("\n");
+            assert!(view.tool_groups()[0].expanded);
+            assert!(view.events[view.tool_groups()[0].start].group_automatic);
+            assert!(text.contains("Ran printf command-"), "{text}");
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn exact_account_connection_history_and_binding_authorize_edits() {
     let fixture = Fixture::new().await;
     let other_connection = Fixture::new().await;
