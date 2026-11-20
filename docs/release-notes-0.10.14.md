@@ -60,4 +60,6 @@ Linux 私有桌面改用显式高位 X11 显示号，在启动时核对实际子
 
 通过官方安装器安装的客户端可运行 `ssmcp update --check` 查看新版本，再运行 `ssmcp update`。通过 Cargo、Homebrew、Scoop 或系统包管理器安装的客户端，请用原包管理器升级。安装器替换磁盘上的程序，正在运行的会话仍需从已更新入口重启或按现有受控重载流程接管；服务端需要单独部署。
 
+正式资产发布和生产服务切换分别保留回执。发布归档不代表已有服务器或正在运行的会话已经升级；若运行中的受管作业需要先交接，可以显式暂缓服务器部署，再使用同一正式 tag 与源码执行既有部署流程。
+
 归档、安装器、SHA256SUMS 和 release-manifest.json 随正式 Release 提供。manifest 固定发布源码、子模块及归档摘要；正式工作流另记录六个平台构建、安装验证、crate 发布与服务器部署结果。具体检查和实际覆盖范围见[本轮恢复与验收报告](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.14/docs/reports/history-resume-20261120/README.md)。
