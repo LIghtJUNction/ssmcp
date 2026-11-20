@@ -8,6 +8,7 @@ mod clipboard;
 pub(crate) mod completion;
 mod composer;
 mod config;
+mod connection_context;
 pub(crate) mod context_memory;
 
 pub(crate) use config::BrowserSettings;
@@ -79,12 +80,13 @@ Start
 
 Manage
   config · whoami · logout      Account and server settings
+  context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
   setup · ui · 007             Setup, appearance and recovery
 
 Options
-  --name NAME   --title TEXT   --server URL   --context-root PATH
+  --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -102,6 +104,7 @@ Usage: ssmcp username@server [options]
        ssmcp -i [--server URL] [--client ID]
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
+       ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
@@ -115,6 +118,7 @@ Usage: ssmcp username@server [options]
        ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
 
   --server URL         Relay for this command; overrides config and last login
+  --context NAME       Named local or HTTPS target; overrides SSMCP_CONTEXT and context use
   --username NAME      Named account on the selected server
   --no-browser         Print the GitHub authorization link without opening it
   -i, --interactive    Select an authorized account session and open its terminal
@@ -391,10 +395,16 @@ struct Options {
 }
 
 impl Options {
+    #[cfg(test)]
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
         Self::parse_with_default(args, None)
     }
 
+    fn parse_new(args: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, String> {
+        Self::parse_with_policy(args, None, true, false, true)
+    }
+
+    #[cfg(test)]
     fn parse_with_default(
         args: impl IntoIterator<Item = OsString>,
         default_destination: Option<&str>,
@@ -404,6 +414,7 @@ impl Options {
             default_destination,
             true,
             default_destination.is_some(),
+            false,
         )
     }
 
@@ -415,6 +426,7 @@ impl Options {
             None,
             spec.watchdog,
             true,
+            false,
         )
     }
 
@@ -423,9 +435,10 @@ impl Options {
         default_destination: Option<&str>,
         default_watchdog: bool,
         legacy_destination: bool,
+        new_connection: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter().peekable();
-        let local_mode = args.peek().is_some_and(|arg| arg == "local");
+        let mut local_mode = args.peek().is_some_and(|arg| arg == "local");
         if local_mode {
             args.next();
         }
@@ -434,9 +447,10 @@ impl Options {
             return Err("ssmcp local currently requires Linux".into());
         }
         #[cfg(target_os = "linux")]
-        let mut local = local_mode.then(local::Settings::default);
+        let (mut listen, mut public_url) = (None, None);
         let mut destination = None;
         let mut server = None;
+        let mut context = None;
         let mut username = None;
         let mut no_browser = false;
         let mut account_compat = false;
@@ -493,20 +507,18 @@ impl Options {
                 #[cfg(target_os = "linux")]
                 Some("--listen") => {
                     let value = args.next().ok_or("--listen requires IP:PORT")?;
-                    local
-                        .as_mut()
-                        .ok_or("--listen is only available with ssmcp local")?
-                        .set_listen(value.to_str().ok_or("--listen must be UTF-8")?)?;
+                    listen = Some(value.into_string().map_err(|_| "--listen must be UTF-8")?);
                 }
                 #[cfg(target_os = "linux")]
                 Some("--public-url") => {
                     let value = args
                         .next()
                         .ok_or("--public-url requires https://NAME.local")?;
-                    local
-                        .as_mut()
-                        .ok_or("--public-url is only available with ssmcp local")?
-                        .set_public_url(value.to_str().ok_or("--public-url must be UTF-8")?)?;
+                    public_url = Some(
+                        value
+                            .into_string()
+                            .map_err(|_| "--public-url must be UTF-8")?,
+                    );
                 }
                 Some("--no-browser") => no_browser = true,
                 Some("--account-compat") => account_compat = true,
@@ -517,12 +529,27 @@ impl Options {
                     )?);
                 }
                 Some("--server") => {
+                    if server.is_some() {
+                        return Err("--server may be supplied only once".into());
+                    }
                     let value = args
                         .next()
                         .ok_or("--server requires an HTTPS origin")?
                         .into_string()
                         .map_err(|_| "--server must be UTF-8")?;
                     server = Some(account::normalize_server(&value).map_err(|e| e.to_string())?);
+                }
+                Some("--context") => {
+                    let value = args.next().ok_or("--context requires a name")?;
+                    connection_context::set_name(
+                        &mut context,
+                        value.to_str().ok_or("--context must be UTF-8")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Some(value) if value.starts_with("--context=") => {
+                    connection_context::set_name(&mut context, &value["--context=".len()..])
+                        .map_err(|e| e.to_string())?;
                 }
                 Some("--name") => {
                     name = Some(
@@ -656,6 +683,51 @@ impl Options {
                     destination = Some(value.to_owned())
                 }
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
+            }
+        }
+        if context.is_some() && !new_connection {
+            return Err("saved sessions must record a concrete server, not --context".into());
+        }
+        if context.is_some() && list_tools {
+            return Err("--list-tools does not select a connection context".into());
+        }
+        if new_connection && !list_tools {
+            let explicit_target = local_mode
+                || server.is_some()
+                || destination.is_some()
+                || ssh
+                || identity.is_some()
+                || port.is_some()
+                || config.is_some();
+            if let Some(selection) =
+                connection_context::resolve(context.as_deref(), explicit_target)
+                    .map_err(|e| e.to_string())?
+            {
+                match selection.endpoint {
+                    connection_context::Endpoint::Local => local_mode = true,
+                    connection_context::Endpoint::Https(origin) => server = Some(origin),
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        if local_mode {
+            return Err("ssmcp local currently requires Linux".into());
+        }
+        #[cfg(target_os = "linux")]
+        let mut local = local_mode.then(local::Settings::default);
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(value) = listen {
+                local
+                    .as_mut()
+                    .ok_or("--listen is only available with a local connection")?
+                    .set_listen(&value)?;
+            }
+            if let Some(value) = public_url {
+                local
+                    .as_mut()
+                    .ok_or("--public-url is only available with a local connection")?
+                    .set_public_url(&value)?;
             }
         }
         if local_mode
@@ -1126,7 +1198,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
             _ => connection.push(arg),
         }
     }
-    let Some(mut options) = Options::parse(connection)? else {
+    let Some(mut options) = Options::parse_new(connection)? else {
         return Ok(());
     };
     if options.destination.is_some() {
@@ -1155,6 +1227,7 @@ fn connection_option_takes_value(option: &str) -> bool {
         option,
         "--name"
             | "--server"
+            | "--context"
             | "--username"
             | "--identity"
             | "--title"
@@ -1357,8 +1430,12 @@ pub async fn run() -> crate::Result<()> {
         #[cfg(not(target_os = "linux"))]
         return Err("007 recovery mode currently requires Linux and systemd".into());
     }
+    connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
-    if browser_setup::dispatch(&args).await? || config::dispatch(&args)? || trust::dispatch(&args)?
+    if connection_context::dispatch(&args)?
+        || browser_setup::dispatch(&args).await?
+        || config::dispatch(&args)?
+        || trust::dispatch(&args)?
     {
         return Ok(());
     }
@@ -1407,7 +1484,7 @@ pub async fn run() -> crate::Result<()> {
     let parsed = if let Some(runner) = &service {
         Options::parse_saved(runner.spec())?
     } else {
-        Options::parse(args)?
+        Options::parse_new(args)?
     };
     let Some(mut options) = parsed else {
         return Ok(());

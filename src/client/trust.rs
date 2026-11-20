@@ -26,10 +26,10 @@ const KEY_LIMIT: usize = 16 * 1024;
 const MAX_SERVERS: usize = 128;
 const MAX_KEYS: usize = 16;
 const HELP: &str = "Usage:
-  ssmcp trust add --server URL --public-key FILE
-  ssmcp trust add --server URL --pin sha256//BASE64
+  ssmcp trust add [--context NAME | --server URL] --public-key FILE
+  ssmcp trust add [--context NAME | --server URL] --pin sha256//BASE64
   ssmcp trust list
-  ssmcp trust remove --server URL
+  ssmcp trust remove [--context NAME | --server URL]
   ssmcp trust path
 
 Import the HTTPS endpoint's PEM PUBLIC KEY or its SHA-256 SPKI fingerprint.
@@ -390,6 +390,7 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool> {
         return Err("unknown trust command or options; see ssmcp trust --help".into());
     }
     let mut server = None;
+    let mut context = None;
     let mut keys = Vec::new();
     let mut fingerprints = Vec::new();
     let mut index = 2;
@@ -397,6 +398,12 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool> {
         match args[index].to_str() {
             Some("--server") if server.is_none() => {
                 server = Some(https_origin(argument(args, &mut index)?)?);
+            }
+            Some("--context") => {
+                super::connection_context::set_name(&mut context, argument(args, &mut index)?)?;
+            }
+            Some(value) if value.starts_with("--context=") => {
+                super::connection_context::set_name(&mut context, &value["--context=".len()..])?;
             }
             Some("--public-key") if action == "add" => {
                 let key_path = Path::new(argument(args, &mut index)?);
@@ -413,7 +420,8 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool> {
         }
         index += 1;
     }
-    let server = server.ok_or("trust add/remove requires --server URL")?;
+    let server = super::connection_context::remote_server(context.as_deref(), server.as_deref())?
+        .ok_or("trust add/remove requires --server URL or a selected HTTPS context")?;
     let mut store = load_at(&path)?;
     if action == "remove" {
         let original = store.servers.len();

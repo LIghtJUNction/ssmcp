@@ -98,6 +98,7 @@ struct Document {
     client: ClientSettings,
     browser: BrowserSettings,
     git: GitSettings,
+    contexts: super::connection_context::Store,
 }
 
 pub(super) fn config_path() -> Result<PathBuf> {
@@ -120,7 +121,7 @@ pub(super) fn config_path() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn read_config(path: &Path, required: bool) -> Result<String> {
+pub(super) fn read_config(path: &Path, required: bool) -> Result<String> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if !required && error.kind() == io::ErrorKind::NotFound => {
@@ -147,7 +148,16 @@ fn parse_document(text: &str) -> Result<Document> {
     doc.client.validate()?;
     doc.browser.validate()?;
     doc.git.validate()?;
+    doc.contexts.validate()?;
     Ok(doc)
+}
+
+pub(super) fn contexts() -> Result<super::connection_context::Store> {
+    let text = read_config(
+        &config_path()?,
+        std::env::var_os("SSMCP_CLIENT_CONFIG").is_some(),
+    )?;
+    Ok(parse_document(&text)?.contexts)
 }
 
 pub(super) fn git() -> Result<GitSettings> {
@@ -253,7 +263,7 @@ fn set_server_at(path: &Path, server: Option<&str>) -> Result<()> {
     save_document(path, &text, document)
 }
 
-fn save_document(path: &Path, text: &str, document: DocumentMut) -> Result<()> {
+pub(super) fn save_document(path: &Path, text: &str, document: DocumentMut) -> Result<()> {
     let output = document.to_string();
     parse_document(&output)?;
     if output.len() as u64 > CONFIG_LIMIT {
