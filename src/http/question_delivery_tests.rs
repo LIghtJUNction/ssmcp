@@ -227,9 +227,14 @@ impl Fixture {
                         let attribution = attribution.expect("authenticated native attribution");
                         assert_eq!(attribution.account.subject, "42");
                         assert_eq!(attribution.agent.as_ref().unwrap().id, expected_agent);
-                        if matches!(name.as_str(), "ssmcp.fs.stat" | "ssmcp.exec.wait" | "ssmcp.ui.tool_summary") {
+                        if matches!(
+                            name.as_str(),
+                            "ssmcp.fs.stat" | "ssmcp.exec.wait" | "ssmcp.ui.tool_summary"
+                        ) {
                             assert_eq!(
-                                code_context.as_ref().and_then(|context| context.thread_id.as_deref()),
+                                code_context
+                                    .as_ref()
+                                    .and_then(|context| context.thread_id.as_deref()),
                                 Some(expected_agent.as_str()),
                             );
                         }
@@ -635,17 +640,21 @@ async fn finalizer_validates_the_envelope_and_budget_before_claiming_exact_typed
     );
 }
 
-
 // Passive await shares the authenticated native wire, but must not opt into
 // the other delivery channels merely because its eleventh call earns a summary.
 impl Fixture {
     async fn ten_summary_calls(&self) {
         let run = self.run();
         for _ in 0..10 {
-            self.native_call(run.clone(), "ssmcp.fs.stat").await.unwrap();
+            self.native_call(run.clone(), "ssmcp.fs.stat")
+                .await
+                .unwrap();
         }
         assert_eq!(self.native.lock().unwrap().summary_calls, 10);
-        assert!(run.tool_summary_notices(self.session.client_id(), Some(&self.agent_id)).is_empty());
+        assert!(
+            run.tool_summary_notices(self.session.client_id(), Some(&self.agent_id))
+                .is_empty()
+        );
         assert!(!self.session.tool_summary_advertised());
     }
 
@@ -671,26 +680,36 @@ impl Fixture {
     }
 
     fn publish_summary_requirement(&self) {
-        self.session.steering.command(
-            self.session.client_id(),
-            self.session.collaboration.presence().unwrap(),
-            wire::SteeringCommand::Publish {
-                command_id: "publish-summary-requirement".into(),
-                message_id: "summary-requirement".into(),
-                expected_revision: 0,
-                text: "Keep this user requirement queued during passive observation.".into(),
-                target: self.agent_id.clone(),
-            },
-        ).unwrap();
+        self.session
+            .steering
+            .command(
+                self.session.client_id(),
+                self.session.collaboration.presence().unwrap(),
+                wire::SteeringCommand::Publish {
+                    command_id: "publish-summary-requirement".into(),
+                    message_id: "summary-requirement".into(),
+                    expected_revision: 0,
+                    text: "Keep this user requirement queued during passive observation.".into(),
+                    target: self.agent_id.clone(),
+                },
+            )
+            .unwrap();
     }
 
     fn summary_requirement_state(&self) -> wire::SteeringState {
-        self.session.steering.command(
-            self.session.client_id(),
-            vec![],
-            wire::SteeringCommand::Snapshot {},
-        ).unwrap().messages.into_iter()
-            .find(|message| message.id == "summary-requirement").unwrap().state
+        self.session
+            .steering
+            .command(
+                self.session.client_id(),
+                vec![],
+                wire::SteeringCommand::Snapshot {},
+            )
+            .unwrap()
+            .messages
+            .into_iter()
+            .find(|message| message.id == "summary-requirement")
+            .unwrap()
+            .state
     }
 
     fn assert_summary_observation_did_not_consume_questions(&self) {
@@ -698,14 +717,20 @@ impl Fixture {
         assert!(state.pending);
         assert!(state.acknowledgements.is_empty());
         assert!(!state.calls.iter().any(|name| matches!(
-            name.as_str(), "ssmcp.ui.question_delivery" | "ssmcp.ui.question_ack"
+            name.as_str(),
+            "ssmcp.ui.question_delivery" | "ssmcp.ui.question_ack"
         )));
-        assert_eq!(self.summary_requirement_state(), wire::SteeringState::Queued);
+        assert_eq!(
+            self.summary_requirement_state(),
+            wire::SteeringState::Queued
+        );
     }
 }
 
 fn assert_await_summary(response: &Value, client_id: &str) {
-    let notices = response["structuredContent"]["tool_summary_reminders"].as_array().unwrap();
+    let notices = response["structuredContent"]["tool_summary_reminders"]
+        .as_array()
+        .unwrap();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0]["client_id"], client_id);
     assert_eq!(notices[0]["group_id"], "await-fixture-group");
@@ -713,8 +738,11 @@ fn assert_await_summary(response: &Value, client_id: &str) {
     assert_eq!(notices[0]["covered_call_count"], 0);
     assert_eq!(notices[0]["revision"], 0);
     assert_eq!(notices[0]["threshold"], 10);
-    assert!(response["content"].as_array().unwrap().iter().any(|part|
-        part["text"].as_str().is_some_and(|text| text.starts_with("TOOL SUMMARY REMINDER"))));
+    assert!(response["content"].as_array().unwrap().iter().any(|part| {
+        part["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("TOOL SUMMARY REMINDER"))
+    }));
     assert!(response.to_string().len() < wire::MAX_FRAME);
 }
 
@@ -725,29 +753,60 @@ async fn tool_summary_public_await_delivers_the_eleventh_call_without_consuming_
     fixture.publish_summary_requirement();
     let inbox_id = fixture.send_message(0).await;
 
-    let response = fixture.public_await(json!({
-        "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
-    })).await;
+    let response = fixture
+        .public_await(json!({
+            "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
+        }))
+        .await;
     assert_eq!(response["structuredContent"]["status"], "ready");
-    assert_eq!(response["structuredContent"]["results"][0]["data"]["job_id"], "summary-job");
+    assert_eq!(
+        response["structuredContent"]["results"][0]["data"]["job_id"],
+        "summary-job"
+    );
     assert_await_summary(&response, fixture.session.client_id());
     assert!(fixture.session.tool_summary_advertised());
-    for field in ["user_messages", "question_answers", "native_messages", "conversation_reminders"] {
-        assert!(response["structuredContent"].get(field).is_none(), "{field}");
+    for field in [
+        "user_messages",
+        "question_answers",
+        "native_messages",
+        "conversation_reminders",
+    ] {
+        assert!(
+            response["structuredContent"].get(field).is_none(),
+            "{field}"
+        );
     }
     fixture.assert_summary_observation_did_not_consume_questions();
     assert_eq!(fixture.message_status(&inbox_id).await, "queued");
     let state = fixture.native.lock().unwrap();
     assert_eq!(state.summary_calls, 11);
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.ui.tool_summary").count(), 1);
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.exec.wait").count(), 1);
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.ui.tool_summary")
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.exec.wait")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
     let fixture = Fixture::new().await;
     fixture.ten_summary_calls().await;
-    let authorization = fixture.broker.authenticate("mcp", &fixture.token).await.unwrap();
+    let authorization = fixture
+        .broker
+        .authenticate("mcp", &fixture.token)
+        .await
+        .unwrap();
     let arguments: CodeArguments = serde_json::from_value(json!({
         "code":format!("return await waitFor({},{{targets:[{{type:'exec',job_id:'summary-job'}}],timeout_ms:1000}});",
             serde_json::to_string(fixture.session.client_id()).unwrap()),
@@ -755,15 +814,35 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
         "agent":{"client_id":fixture.session.client_id(),"id":fixture.agent_id,"token":fixture.agent_token}
     })).unwrap();
     let response = execute(
-        fixture.broker.clone(), "mcp".into(), authorization, fixture.token.clone(), arguments,
-    ).await.unwrap();
+        fixture.broker.clone(),
+        "mcp".into(),
+        authorization,
+        fixture.token.clone(),
+        arguments,
+    )
+    .await
+    .unwrap();
     assert_eq!(response["structuredContent"]["result"]["status"], "ready");
     assert_await_summary(&response, fixture.session.client_id());
     fixture.wait_for_ack().await;
     let state = fixture.native.lock().unwrap();
     assert_eq!(state.summary_calls, 11);
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.exec.wait").count(), 1);
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.ui.tool_summary").count(), 1);
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.exec.wait")
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.ui.tool_summary")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -774,32 +853,58 @@ async fn tool_summary_passive_await_rechecks_oauth_and_binding_after_probe() {
         fixture.publish_summary_requirement();
         let arrived = Arc::new(Notify::new());
         let resume = Arc::new(Notify::new());
-        fixture.native.lock().unwrap().summary_probe_pause = Some((arrived.clone(), resume.clone()));
+        fixture.native.lock().unwrap().summary_probe_pause =
+            Some((arrived.clone(), resume.clone()));
         let broker = fixture.broker.clone();
         let token = fixture.token.clone();
         let arguments = fixture.await_arguments(json!({
             "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
         }));
         let observing = tokio::spawn(async move {
-            await_tool::execute(broker, "mcp".into(), token, arguments).await.unwrap()
+            await_tool::execute(broker, "mcp".into(), token, arguments)
+                .await
+                .unwrap()
         });
-        timeout(Duration::from_secs(3), arrived.notified()).await
+        timeout(Duration::from_secs(3), arrived.notified())
+            .await
             .expect("the final native summary probe must reach the authenticated peer");
         match revoked {
             "oauth" => fixture.broker.oauth.revoke_subject("42").unwrap(),
             "agent" => {
-                fixture.session.collaboration.dispatch(
-                    &fixture.owner, "leave",
-                    json!({"agent_id":fixture.agent_id,"token":fixture.agent_token}),
-                ).await.unwrap();
+                fixture
+                    .session
+                    .collaboration
+                    .dispatch(
+                        &fixture.owner,
+                        "leave",
+                        json!({"agent_id":fixture.agent_id,"token":fixture.agent_token}),
+                    )
+                    .await
+                    .unwrap();
             }
             _ => unreachable!(),
         }
         resume.notify_one();
-        let response = timeout(Duration::from_secs(3), observing).await.unwrap().unwrap();
-        assert_eq!(response["structuredContent"]["status"], "unauthorized", "{revoked}");
-        assert!(response["structuredContent"]["results"][0].get("data").is_none(), "{revoked}");
-        assert!(response["structuredContent"].get("tool_summary_reminders").is_none(), "{revoked}");
+        let response = timeout(Duration::from_secs(3), observing)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response["structuredContent"]["status"], "unauthorized",
+            "{revoked}"
+        );
+        assert!(
+            response["structuredContent"]["results"][0]
+                .get("data")
+                .is_none(),
+            "{revoked}"
+        );
+        assert!(
+            response["structuredContent"]
+                .get("tool_summary_reminders")
+                .is_none(),
+            "{revoked}"
+        );
         fixture.assert_summary_observation_did_not_consume_questions();
         assert_eq!(fixture.native.lock().unwrap().summary_calls, 11);
     }
@@ -813,28 +918,59 @@ async fn tool_summary_passive_timeout_resume_and_cancel_do_not_redeliver_or_cons
     let inbox_id = fixture.send_message(0).await;
     fixture.native.lock().unwrap().exec_running = true;
 
-    let first = fixture.public_await(json!({
-        "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
-    })).await;
+    let first = fixture
+        .public_await(json!({
+            "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
+        }))
+        .await;
     assert_eq!(first["structuredContent"]["status"], "timed_out");
     assert_eq!(first["structuredContent"]["continue_wait"], true);
     assert_await_summary(&first, fixture.session.client_id());
     let wait_id = first["structuredContent"]["wait_id"].clone();
 
-    let resumed = fixture.public_await(json!({"wait_id":wait_id,"timeout_ms":1000})).await;
+    let resumed = fixture
+        .public_await(json!({"wait_id":wait_id,"timeout_ms":1000}))
+        .await;
     assert_eq!(resumed["structuredContent"]["status"], "timed_out");
     assert_eq!(resumed["structuredContent"]["wait_id"], wait_id);
-    assert!(resumed["structuredContent"].get("tool_summary_reminders").is_none());
+    assert!(
+        resumed["structuredContent"]
+            .get("tool_summary_reminders")
+            .is_none()
+    );
     for _ in 0..2 {
-        let cancelled = fixture.public_await(json!({"wait_id":wait_id,"op":"cancel"})).await;
+        let cancelled = fixture
+            .public_await(json!({"wait_id":wait_id,"op":"cancel"}))
+            .await;
         assert_eq!(cancelled["structuredContent"]["status"], "cancelled");
         assert_eq!(cancelled["structuredContent"]["wait_id"], wait_id);
-        assert!(cancelled["structuredContent"].get("tool_summary_reminders").is_none());
+        assert!(
+            cancelled["structuredContent"]
+                .get("tool_summary_reminders")
+                .is_none()
+        );
     }
     fixture.assert_summary_observation_did_not_consume_questions();
     assert_eq!(fixture.message_status(&inbox_id).await, "queued");
     let state = fixture.native.lock().unwrap();
-    assert_eq!(state.summary_calls, 12, "only the resumed native wait is a new logical call");
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.ui.tool_summary").count(), 1);
-    assert_eq!(state.calls.iter().filter(|name| name.as_str() == "ssmcp.exec.wait").count(), 2);
+    assert_eq!(
+        state.summary_calls, 12,
+        "only the resumed native wait is a new logical call"
+    );
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.ui.tool_summary")
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|name| name.as_str() == "ssmcp.exec.wait")
+            .count(),
+        2
+    );
 }
