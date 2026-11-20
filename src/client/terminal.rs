@@ -860,7 +860,8 @@ pub(crate) fn snapshot() -> serde_json::Value {
     let Some(shared) = shared() else {
         return serde_json::json!({"active": false});
     };
-    let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    state.chat_poll_goal();
     let g = state.geometry;
     let chat = state.ui.layout == Layout::Chat;
     let conversation = state.conversation.snapshot();

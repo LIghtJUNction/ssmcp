@@ -70,6 +70,7 @@ fn local_command(text: &str) -> bool {
                 | "/paste"
                 | "/paste-retry"
                 | "/group"
+                | "/goal"
                 | "/sessions"
                 | "/attach"
                 | "/select"
