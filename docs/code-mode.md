@@ -10,6 +10,10 @@ Read ssmcp://limits for relay budgets and ssmcp://collaboration for session coor
 
 Select an authorized live client by task identity and use its returned id. Discover only the needed names with tools.search, requesting include_schemas:true before a call. Keep the same query, name_prefix, limit and schema options when continuing a cursor.
 
+Batch the independent steps you can already determine into one `code_mode` request. For a typical inspection, group 4–8 checks with `exec.parallel` and bounded concurrency. This is a planning example; use the current helper contracts and `ssmcp://limits` for actual budgets. Discovery, each command's start/read/wait operations and output reads all consume the request's budget.
+
+Keep dependent edits, approvals and operations on the same mutable resource ordered. Return a compact result for every item, preserving errors, job IDs and output completeness. Start long work with `exec.start`, return its job ID, and use later requests to observe that job.
+
 Send human updates through say and keep diagnostic output in print/console. Inspect response errors, new user requirements, running jobs and output completeness before deciding the next action.
 
 ## Conversation reminders
@@ -45,6 +49,58 @@ await tools.search(clientId,{query,name_prefix,limit:20,include_schemas:false,cu
 ### exec
 
 exec.run(clientId,{command:[...],cwd,wait_ms}) runs a command and collects output; exec.parallel(clientId,[{command:[...]},...],{concurrency:4}) settles bounded parallel runs. exec.start(clientId,{command:[...]}) starts background work. exec.status/read/write/wait/cancel/forget(clientId,{job_id,...options}) manage it; legacy (clientId,jobId,options) also works. exec.list(clientId) lists jobs. Local parallel option errors mark that item not_started and leave its worker available. wait_ms only limits waiting; timeout_ms limits execution. Reuse job_id; commands survive code_mode completion.
+
+#### Batch independent checks
+
+`clientId` below is the live ID already selected from `list`; its working directory is the Git worktree being inspected. These six read-only checks use four workers and bounded output. Git's optional index refresh and pager are disabled for this inspection.
+
+```js
+const checks = [
+  {label: "Working tree", args: ["status", "--short"]},
+  {label: "Unstaged changes", args: ["diff", "--no-ext-diff", "--stat"]},
+  {label: "Staged changes", args: ["diff", "--no-ext-diff", "--cached", "--stat"]},
+  {label: "Recent commits", args: ["log", "-5", "--oneline"]},
+  {label: "Local branches", args: ["branch", "--list", "--no-color"]},
+  {label: "Worktrees", args: ["worktree", "list", "--porcelain"]},
+];
+const results = await exec.parallel(clientId, checks.map(check => ({
+  title: check.label,
+  command: ["git", "--no-pager", ...check.args],
+  env: {GIT_OPTIONAL_LOCKS: "0"},
+  wait_ms: 1000,
+  max_bytes: 1024,
+})), {concurrency: 4});
+const stream = (value, name) => ({
+  preview: value[name] ?? "",
+  cursor: value[name + "_cursor"] ?? null,
+  eof: value[name + "_eof"] ?? null,
+  truncated: value[name + "_truncated"] ?? null,
+  capture: value.snapshot?.[name] ?? null,
+});
+return results.map((result, index) => {
+  const check = checks[index].label;
+  if (result.status === "rejected") return {
+    check, status: result.status, reason: result.reason,
+    job_id: result.job_id ?? null, not_started: result.not_started ?? null,
+  };
+  const value = result.value;
+  return {
+    check, status: result.status, job_id: value.job_id,
+    state: value.state, running: value.running, exit_code: value.exit_code,
+    timed_out: value.timed_out, cancelled: value.cancelled, error: value.error,
+    duration_ms: value.duration_ms,
+    stdout: stream(value, "stdout"), stderr: stream(value, "stderr"),
+  };
+});
+```
+
+`fulfilled` means the helper returned a result. Inspect `running`, `exit_code`, `state`, `timed_out`, `cancelled` and `error` before deciding whether a check succeeded. A rejected item with `not_started: true` was not launched; a rejected item without that flag may have started. Recover its returned `job_id`, or inspect `exec.list` when the start reply was lost, before retrying.
+
+The stream summaries retain each returned byte cursor, page EOF and truncation flag. `capture` preserves the native stream metadata, including capture errors and the saved artifact's completeness when available. The bounded `preview` is only the current output page. When `eof` is false, continue with `exec.read` using both returned cursors. If a stream was truncated and `capture.artifact` is available, read its ID with `outputs.read` to recover saved bytes and follow `next_offset`. Check artifact `complete` and capture `error` before calling the log complete; missing captures and capture errors remain incomplete evidence.
+
+Keep discovery, command observation and any follow-up reads within the current call and time budgets. Raising every item's `max_bytes` can exceed the aggregate result budget; return compact fields and read only the extra output needed to decide the next step. If orchestration times out, inspect the existing jobs rather than submitting the batch again.
+
+#### Name complex commands
 
 For complex inline scripts, provide an optional `title` describing the operation:
 
