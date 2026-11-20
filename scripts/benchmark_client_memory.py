@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Linux client RSS benchmark using a local fake SSH transport and no model calls.
+"""Linux client CPU/RSS benchmark using a private HTTP/WebSocket relay.
 
 Run with --binary target/release/ssmcp. --providers chooses a minimal client,
-a synthetic paginated MCP catalog (default), or installed native providers.
+a synthetic paginated MCP catalog (default), or the installed PATH with lazy bridges.
+Bubblewrap isolates network, process, desktop and state paths before any client
+starts. The fixture uses no real credentials, desktop input or model calls.
 Foreground TUI is measured at 120x38; --no-tty measures redirected output.
 --max-footprint-mib gates sampled RSS + swap after discovery, through catalog
 scans, verified commands, and subsequent idle. Startup peak is also reported.
-Use --idle-seconds 35 to exercise the installed Codex 30-second catalog refresh;
 A final catalog scan checks stable fixtures and preservation of installed tools.
+Phase CPU is sampled as client user+system time (100% is one core).
+--draft and --completion-fixtures exercise an unsent editor without sending work.
+Raw keyboard and exact conversation draft checks precede both timed idle windows.
+Actual phase durations, sampled CPU windows and source/binary hashes are reported.
 Completed jobs are retained by default; --forget-jobs reproduces older benchmarks.
 The paginated search workload filters pages like code_mode's server-side helper;
 the helper itself and native child processes are outside the client RSS metric.
@@ -18,11 +23,14 @@ import argparse
 import base64
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import platform
 from pathlib import Path
 import pty
+import queue
+import shutil
 import signal
 import statistics
 import struct
@@ -80,14 +88,17 @@ def native():
         send({"jsonrpc": "2.0", "id": request["id"], "result": result})
 
 
-def relay():
-    root = directory()
+def relay(root, connection, prepare_draft):
     config = json.loads((root / "config.json").read_text())
-    identifier = 0
     current_phase = "startup"
+    phase_started = time.monotonic()
 
     def phase(name):
-        nonlocal current_phase
+        nonlocal current_phase, phase_started
+        ended = time.monotonic()
+        with (root / "phase-durations.jsonl").open("a") as stream:
+            stream.write(json.dumps({"phase": current_phase, "started_monotonic": phase_started,
+                                     "ended_monotonic": ended, "seconds": ended - phase_started}) + "\n")
         if current_phase not in ("startup", "discovery"):
             pid = int((root / "client.pid").read_text())
             checkpoint = {"elapsed_seconds": time.monotonic(), "phase": current_phase, **memory(pid)}
@@ -97,29 +108,25 @@ def relay():
                 save(root / f"mappings-{current_phase}.json", memory_details(pid))
         save(root / "phase.json", name)
         current_phase = name
+        phase_started = time.monotonic()
 
     def request(operation):
-        nonlocal identifier
-        identifier += 1
-        send({"type": "call", "id": identifier, "operation": operation})
-        while True:
-            line = sys.stdin.readline()
-            if not line:
-                raise RuntimeError("client closed the local transport")
-            response = json.loads(line)
-            if response.get("type") == "steering":
-                if hello.get("version", 0) < 7 or response.get("command") != {"op": "snapshot"}:
-                    raise RuntimeError("unexpected steering command")
-                send({"type": "steering_reply", "id": response["id"], "result": {"Ok": {
-                    "schema_version": 1, "client_id": "b" * 64, "revision": 0,
-                    "agents": [], "messages": []}}})
-                continue
-            if response.get("type") != "reply" or response.get("id") != identifier:
-                raise RuntimeError("unexpected reply envelope")
-            result = response["result"]
-            if "Err" in result:
-                raise RuntimeError(result["Err"])
-            return result["Ok"]
+        # Reuse the exercised account fixture's reader and connection-bound reply
+        # queues. Only this workload sends native calls; no model is involved.
+        with connection.state.lock:
+            connection.sequence += 1
+            identifier = connection.sequence
+            result = queue.Queue(maxsize=1)
+            connection.pending[identifier] = result
+        try:
+            connection.send({"type": "call", "id": identifier, "operation": operation})
+            reply = result.get(timeout=15)
+        finally:
+            with connection.state.lock:
+                connection.pending.pop(identifier, None)
+        if "Err" in reply:
+            raise RuntimeError(reply["Err"])
+        return reply["Ok"]
 
     def call(name, arguments=None):
         result = request({"op": "call_tool", "name": name, "arguments": arguments or {}})
@@ -158,12 +165,11 @@ def relay():
             cursors.add(cursor)
 
     try:
-        hello = json.loads(sys.stdin.readline())
-        if hello.get("type") != "hello":
-            raise RuntimeError("expected client hello")
         phase("discovery")
-        send({"type": "ready", "url": "https://ssmcp.example/memory", "login_code": "a" * 64,
-              "login_expires_in": 600, "client_id": "b" * 64})
+        # Optional providers are lazy. Loading this Python fixture registers a
+        # deterministic MCP catalog without starting a real model turn.
+        if config["providers"] == "synthetic":
+            call("ssmcp.harnesses.load", {"provider": "claude"})
         deadline = time.monotonic() + config["discovery_timeout"]
         while True:
             harnesses = call("ssmcp.harnesses.list")["harnesses"]
@@ -176,6 +182,8 @@ def relay():
             found = next(h for h in harnesses if h["provider"] == "claude")
             if found["status"] != "ready" or found["tools"] < config["tools"]:
                 raise RuntimeError("synthetic catalog was not registered")
+        phase("prepare_draft")
+        prepare_draft(connection, "idle")
         phase("idle")
         time.sleep(config["idle_seconds"])
         phase("catalog_scan_and_search")
@@ -206,9 +214,15 @@ def relay():
             byte_count += len(actual)
             if config.get("forget_jobs", True):
                 call("ssmcp.exec.forget", {"job_id": job})
+        phase("prepare_after_workload_idle")
+        prepare_draft(connection, "after_workload_idle")
         phase("after_workload_idle")
         time.sleep(config["idle_seconds"])
         phase("post_idle_verification")
+        if not config["no_tty"]:
+            actual = call("ssmcp.ui.get", {"path": "/display/conversation"})["value"]["draft"]["text"]
+            if actual != config["draft"]:
+                raise RuntimeError("unsent TUI draft changed during the measured workload")
         gathered = [] if config.get("catalog_metrics", False) else None
         final_names = set()
         final_scan = scan(gathered, final_names)
@@ -236,6 +250,7 @@ def relay():
         elif final_scan["sha256"] != scans[-1]["sha256"] or final_names != scanned_names[-1]:
             raise RuntimeError("minimal/synthetic catalog changed after idle")
         save(root / "result.json", {"ok": True, "catalog_scans": scans,
+             "draft_after_workload_verified": not config["no_tty"],
              "post_idle_catalog": final_scan, "catalog_transition": transition,
              "post_idle_harnesses": [{k: h.get(k) for k in ("provider", "status", "tools", "version")}
                                      for h in final_harnesses],
@@ -282,7 +297,9 @@ def memory(pid):
     if rss is None:
         raise ProcessLookupError(pid)
     swap = values.get("Swap", values.get("VmSwap", 0))
-    return {"rss_kib": rss, "swap_kib": swap, "rss_swap_kib": rss + swap,
+    stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    cpu_seconds = (int(stat[11]) + int(stat[12])) / os.sysconf("SC_CLK_TCK")
+    return {"cpu_seconds": cpu_seconds, "rss_kib": rss, "swap_kib": swap, "rss_swap_kib": rss + swap,
             "pss_kib": values.get("Pss"), "swap_pss_kib": values.get("SwapPss"),
             "resident_high_water_kib": values.get("VmHWM")}
 
@@ -345,6 +362,16 @@ def summarize(samples):
     for phase in dict.fromkeys(s["phase"] for s in samples):
         rows = [s for s in samples if s["phase"] == phase]
         result[phase] = {"samples": len(rows)}
+        timed = [row for row in rows if "cpu_seconds" in row]
+        if len(timed) >= 2:
+            duration = timed[-1]["elapsed_seconds"] - timed[0]["elapsed_seconds"]
+            cpu = timed[-1]["cpu_seconds"] - timed[0]["cpu_seconds"]
+            if duration > 0:
+                result[phase]["cpu"] = {
+                    "observed_seconds": round(duration, 6),
+                    "user_system_seconds": round(cpu, 6),
+                    "one_core_percent": round(cpu / duration * 100, 4),
+                }
         for key in ("rss_kib", "swap_kib", "rss_swap_kib", "pss_kib", "resident_high_water_kib"):
             values = [s[key] for s in rows if s.get(key) is not None]
             if values:
@@ -367,6 +394,74 @@ def binary_identity(path):
             "ctime_ns": before.st_ctime_ns, "device": before.st_dev, "inode": before.st_ino}
 
 
+def namespace_id(name):
+    return os.stat(f"/proc/self/ns/{name}").st_ino
+
+
+def run_isolated(args):
+    """Mount source and candidate read-only; keep every client outside host state."""
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        raise RuntimeError("bubblewrap is required; no benchmark client was started")
+    source = Path(__file__).resolve()
+    with tempfile.TemporaryDirectory(prefix="ssmcp-benchmark-report-") as temporary:
+        output = Path(temporary)
+        command = [bwrap, "--unshare-user", "--unshare-pid", "--unshare-net", "--die-with-parent",
+                   "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+                   "--tmpfs", "/var/tmp", "--tmpfs", "/tmp", "--dir", "/var/tmp/benchmark-bin",
+                   "--ro-bind", str(args.binary), "/var/tmp/benchmark-bin/ssmcp",
+                   "--ro-bind", str(source.parent), "/var/tmp/benchmark-src",
+                   "--bind", str(output), "/var/tmp/benchmark-report"]
+        for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK",
+                    "SSMCP_PLAYWRIGHT_COMMAND", "SSMCP_PLAYWRIGHT_ARGS", "SSMCP_CONTEXT_ROOTS"):
+            command += ["--unsetenv", key]
+        for key, suffix in (("XDG_CONFIG_HOME", "config"), ("XDG_STATE_HOME", "state"),
+                            ("XDG_DATA_HOME", "data"), ("XDG_CACHE_HOME", "cache"),
+                            ("XDG_RUNTIME_DIR", "runtime")):
+            command += ["--setenv", key, "/tmp/ssmcp-benchmark-" + suffix]
+        command += [sys.executable, "/var/tmp/benchmark-src/" + source.name, "--inside",
+                    "--parent-mountns", str(namespace_id("mnt")),
+                    "--parent-netns", str(namespace_id("net")),
+                    "--parent-pidns", str(namespace_id("pid")),
+                    "--binary", "/var/tmp/benchmark-bin/ssmcp",
+                    "--report", "/var/tmp/benchmark-report/report.json"]
+        for key, value in vars(args).items():
+            if key in ("binary", "report", "inside", "parent_mountns", "parent_netns", "parent_pidns"):
+                continue
+            if value is None or value is False or value == "":
+                continue
+            command.append("--" + key.replace("_", "-"))
+            if value is not True:
+                command.append(str(value))
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout + 45)
+        report = output / "report.json"
+        if report.exists() and args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_bytes(report.read_bytes())
+        sys.stdout.write(completed.stdout)
+        sys.stderr.write(completed.stderr)
+        return completed.returncode
+
+
+def verify_isolation(args):
+    changed = {name: parent is not None and namespace_id(name) != parent
+               for name, parent in (("mnt", args.parent_mountns), ("net", args.parent_netns),
+                                    ("pid", args.parent_pidns))}
+    mounts = Path("/proc/self/mountinfo").read_text().splitlines()
+    private_state = all(any(line.split()[4] == path and " - tmpfs " in line for line in mounts)
+                        for path in ("/var/tmp", "/tmp"))
+    if not all(changed.values()) or not private_state:
+        raise RuntimeError("benchmark needs private mount/network/PID namespaces and tmpfs state")
+    if any(os.environ.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK")):
+        raise RuntimeError("host desktop/socket environment reached the private fixture")
+    runtime = Path("/tmp/ssmcp-benchmark-runtime")
+    if os.environ.get("XDG_RUNTIME_DIR") != str(runtime):
+        raise RuntimeError("private XDG runtime directory is required")
+    runtime.mkdir(mode=0o700)
+    return {"namespace_changed": changed, "private_state_tmpfs": private_state,
+            "desktop_environment_removed": True, "xdg_runtime_mode": "0700"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", type=Path, required=True)
@@ -387,6 +482,14 @@ def main():
     parser.add_argument("--max-footprint-mib", type=float)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--no-tty", action="store_true")
+    parser.add_argument("--draft", default="",
+                        help="Paste this unsent draft during the idle TUI phase")
+    parser.add_argument("--completion-fixtures", type=int, default=0,
+                        help="Create up to 1024 small reference-* files in the private workspace")
+    parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--parent-mountns", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--parent-netns", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--parent-pidns", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if sys.platform != "linux":
         parser.error("this benchmark uses Linux /proc memory accounting")
@@ -398,11 +501,26 @@ def main():
         parser.error("command-bytes must be 0..30000; sample-ms must be 10..1000")
     if not 0.2 <= args.idle_seconds <= 60:
         parser.error("idle-seconds must be 0.2..60")
-    binary = args.binary.resolve(strict=True)
+    if args.draft and args.no_tty:
+        parser.error("--draft requires a TUI")
+    if len(args.draft.encode("utf-8")) > 4096 or any(ord(c) < 32 and c not in "\n\t" for c in args.draft):
+        parser.error("draft must be at most 4096 UTF-8 bytes and contain no terminal controls")
+    if not 0 <= args.completion_fixtures <= 1024:
+        parser.error("completion-fixtures must be 0..1024")
+    args.binary = args.binary.resolve(strict=True)
+    if not args.inside:
+        return run_isolated(args)
+    isolation = verify_isolation(args)
+    binary = args.binary
     provenance = binary_identity(binary)
-    help_text = subprocess.run([str(binary), "--help"], capture_output=True, text=True, check=True).stdout
-    ssh_flag = ["--ssh"] if "--ssh " in help_text else []
-    settings = {k: v for k, v in vars(args).items() if k not in ("binary", "report")}
+    fixture_path = Path(__file__).with_name("e2e_account_relay.py")
+    source_paths = {"benchmark": Path(__file__).resolve(), "relay_fixture": fixture_path.resolve()}
+    source_files = {name: {"path": str(path), **binary_identity(path)} for name, path in source_paths.items()}
+    spec = importlib.util.spec_from_file_location("memory_account_relay", fixture_path)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    settings = {k: v for k, v in vars(args).items()
+                if k not in ("binary", "report", "inside", "parent_mountns", "parent_netns", "parent_pidns")}
     samples, started = [], time.monotonic()
     owned = {}
     with tempfile.TemporaryDirectory(prefix="ssmcp-memory-") as temporary:
@@ -410,43 +528,115 @@ def main():
         bindir, workspace = root / "bin", root / "workspace"
         bindir.mkdir()
         workspace.mkdir()
+        (root / "runtime").mkdir(mode=0o700)
+        for index in range(args.completion_fixtures):
+            (workspace / f"reference-{index:04d}.txt").write_text("Benchmark reference fixture.\n")
         (root / "config.toml").write_text("[ui]\ndashboard = true\n")
         save(root / "config.json", settings)
         save(root / "phase.json", "startup")
-        for name, handler in (("ssh", "relay"), ("claude", "native")):
-            if name == "claude" and args.providers != "synthetic":
-                continue
-            path = bindir / name
-            path.write_text(f"#!{sys.executable}\nimport runpy\nrunpy.run_path({str(Path(__file__).resolve())!r})[{handler!r}]()\n")
+        if args.providers == "synthetic":
+            path = bindir / "claude"
+            path.write_text(f"#!{sys.executable}\nimport runpy\nrunpy.run_path({str(Path(__file__).resolve())!r})['native']()\n")
             path.chmod(0o700)
-        env = os.environ.copy()
+        env = {key: value for key, value in os.environ.items() if not key.startswith("SSMCP_")}
         env.update({"SSMCP_MEMORY_DIR": str(root), "SSMCP_AUTH_HOME": str(root / "auth"),
+                    "SSMCP_SESSION_HOME": str(root / "sessions"),
                     "SSMCP_CLIENT_CONFIG": str(root / "config.toml"), "SSMCP_UI_CONFIG": str(root / "config.toml"),
+                    "XDG_CONFIG_HOME": str(root / "config"), "XDG_STATE_HOME": str(root / "state"),
+                    "XDG_DATA_HOME": str(root / "data"), "XDG_CACHE_HOME": str(root / "cache"),
+                    "XDG_RUNTIME_DIR": str(root / "runtime"),
                     "TERM": "xterm-256color", "PATH": str(bindir) +
                     (os.pathsep + env.get("PATH", "") if args.providers == "installed" else "")})
-        for key in ("SSMCP_PLAYWRIGHT_COMMAND", "SSMCP_PLAYWRIGHT_ARGS", "SSMCP_CONTEXT_ROOTS"):
-            env.pop(key, None)
+        state = fixture.State()
+        server = fixture.ThreadingHTTPServer(("127.0.0.1", 0), fixture.Handler)
+        server.daemon_threads = True
+        server.state = state
+        state.origin = f"http://127.0.0.1:{server.server_address[1]}"
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        draft_injected = False
+        ui_readiness = {"dashboard_active": False, "draft_verified": False}
+
+        def prepare_draft(connection, phase):
+            nonlocal draft_injected
+            if args.no_tty:
+                return
+
+            def keyboard_ready():
+                settings = termios.tcgetattr(master)
+                return not settings[0] & (termios.ICRNL | termios.INLCR | termios.IGNCR) and not settings[3] & (termios.ICANON | termios.ECHO)
+
+            fixture.wait_for(keyboard_ready, "dashboard raw keyboard", timeout=10)
+            fields = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+            if not (int(fields[4]) != 0 and fields[2] == fields[3] == fields[5] == str(process.pid)):
+                raise RuntimeError("client does not own the controlling terminal's foreground process group")
+            ui_readiness["controlling_terminal"] = {
+                "pid": process.pid, "process_group": int(fields[2]), "session": int(fields[3]),
+                "tty_device": int(fields[4]), "foreground_process_group": int(fields[5]),
+            }
+            if args.draft and phase == "idle":
+                data = b"\x1b[200~" + args.draft.encode("utf-8") + b"\x1b[201~"
+                if os.write(master, data) != len(data):
+                    raise RuntimeError("partial draft input write")
+                draft_injected = True
+
+            def exact_draft():
+                value = connection.call("ssmcp.ui.get", {"path": "/display/conversation"})["value"]
+                return value if value.get("draft", {}).get("text") == args.draft else None
+
+            actual = fixture.wait_for(exact_draft, "exact real conversation draft", timeout=10)
+            ui_readiness.update(dashboard_active=True, draft_verified=True, keyboard_raw=True,
+                                verified_draft=actual["draft"]["text"], verified_before_idle=True)
+            ui_readiness.setdefault("phase_ready_at_monotonic", {})[phase] = time.monotonic()
+            save(root / "ui-readiness.json", ui_readiness)
+
+        def workload():
+            connection = None
+            try:
+                def connected():
+                    with state.lock:
+                        return next(iter(state.sessions.values()), None)
+                connection = fixture.wait_for(connected, "local benchmark connection", timeout=15)
+                relay(root, connection, prepare_draft)
+            except Exception as error:
+                save(root / "result.json", {"ok": False, "error": str(error)})
+            finally:
+                if connection is not None:
+                    connection.close()
+
         master = slave = None
         drain = None
+        client_tail = bytearray()
         if not args.no_tty:
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 38, 120, 0, 0))
 
             def discard():
                 try:
-                    while os.read(master, 65536):
-                        pass
+                    while chunk := os.read(master, 65536):
+                        client_tail.extend(chunk)
+                        del client_tail[:-16384]
                 except OSError:
                     pass
 
             drain = threading.Thread(target=discard, daemon=True)
             drain.start()
         with (root / "client.log").open("wb") as logfile:
-            process = subprocess.Popen([str(binary), *ssh_flag, "--no-watchdog", "--no-setup",
-                "--shell", "/bin/sh", "--ui-config", str(root / "config.toml"), "memory@fixture"], cwd=workspace, env=env, start_new_session=True,
+            command = [str(binary), "--no-watchdog", "--no-setup", "--no-browser",
+                "--server", state.origin, "--allow", state.allow_principal,
+                "--shell", "/bin/sh", "--ui-config", str(root / "config.toml")]
+            if not args.no_tty:
+                bootstrap = ("import fcntl,os,sys,termios; os.setsid(); "
+                             "fcntl.ioctl(0,termios.TIOCSCTTY,0); os.tcsetpgrp(0,os.getpgrp()); "
+                             "os.execv(sys.argv[1],sys.argv[1:])")
+                command = [sys.executable, "-c", bootstrap, *command]
+            process = subprocess.Popen(command, cwd=workspace, env=env, start_new_session=args.no_tty,
                 stdin=slave if slave is not None else subprocess.DEVNULL,
                 stdout=slave if slave is not None else logfile, stderr=slave if slave is not None else logfile)
             (root / "client.pid").write_text(str(process.pid))
+            workload_thread = threading.Thread(target=workload, daemon=True)
+            workload_thread.start()
             if slave is not None:
                 os.close(slave)
             timed_out = False
@@ -475,14 +665,22 @@ def main():
                     os.close(master)
                     drain.join(timeout=1)
                 remaining = cleanup_children(owned)
+                workload_thread.join(timeout=16)
+                server.shutdown()
+                server.server_close()
+                server_thread.join(timeout=2)
             result = json.loads((root / "result.json").read_text()) if (root / "result.json").exists() else {
                 "ok": False, "error": "client exited before the fixture finished"}
+            if workload_thread.is_alive() or state.errors:
+                result = {"ok": False, "error": "local relay fixture did not finish cleanly",
+                          "fixture_errors": state.errors, "workload_thread_alive": workload_thread.is_alive()}
             if remaining:
                 result = {"ok": False, "error": "owned child processes did not stop", "pids": remaining}
             if timed_out:
                 result = {"ok": False, "error": "benchmark timed out"}
-            if not result["ok"] and args.no_tty:
-                result["client_log_tail"] = (root / "client.log").read_text(errors="replace")[-3000:]
+            if not result["ok"]:
+                result["client_log_tail"] = ((root / "client.log").read_text(errors="replace")[-3000:]
+                                             if args.no_tty else client_tail.decode("utf-8", errors="replace")[-3000:])
         metrics_file = root / "catalog-for-metrics.json"
         descriptor_metrics = catalog_metrics(json.loads(metrics_file.read_text())) if metrics_file.exists() else None
         checkpoints = root / "checkpoints.jsonl"
@@ -492,20 +690,42 @@ def main():
                 checkpoint["elapsed_seconds"] = round(checkpoint["elapsed_seconds"] - started, 3)
                 samples.append(checkpoint)
             samples.sort(key=lambda sample: sample["elapsed_seconds"])
-        active = [s for s in samples if s["phase"] not in ("startup", "discovery")]
+        active = [s for s in samples if s["phase"] not in ("startup", "discovery", "prepare_draft", "prepare_after_workload_idle")]
         active_max = max((s["rss_swap_kib"] for s in active), default=None)
         binary_unchanged = binary_identity(binary) == provenance
-        passed = binary_unchanged and result["ok"] and active_max is not None and (args.max_footprint_mib is None or
+        sources_unchanged = all(binary_identity(path) == {key: value for key, value in source_files[name].items() if key != "path"}
+                                for name, path in source_paths.items())
+        phases = summarize(samples)
+        durations_file = root / "phase-durations.jsonl"
+        durations = {row["phase"]: row for row in (json.loads(line) for line in durations_file.read_text().splitlines())} if durations_file.exists() else {}
+        timing_verified = all(durations.get(phase, {}).get("seconds", 0) >= args.idle_seconds
+                              and phases.get(phase, {}).get("cpu", {}).get("observed_seconds", 0) > 0
+                              for phase in ("idle", "after_workload_idle"))
+        ready_at = ui_readiness.get("phase_ready_at_monotonic", {})
+        prepared_before_idle = args.no_tty or all(phase in ready_at and durations.get(phase, {}).get("started_monotonic", 0) >= ready_at[phase]
+                                                for phase in ("idle", "after_workload_idle"))
+        ui_readiness["draft_preserved_after_workload"] = result.get("draft_after_workload_verified", False)
+        ui_verified = args.no_tty or (ui_readiness["dashboard_active"] and ui_readiness["draft_verified"]
+                                     and ui_readiness["draft_preserved_after_workload"] and (not args.draft or draft_injected))
+        passed = binary_unchanged and sources_unchanged and timing_verified and prepared_before_idle and ui_verified and result["ok"] and active_max is not None and (args.max_footprint_mib is None or
                                                            active_max <= args.max_footprint_mib * 1024)
-        report = {"schema": "ssmcp.client-memory.v1", "binary": str(binary), "providers": args.providers,
+        report = {"schema": "ssmcp.client-memory.v1", "transport": "owned_loopback_http_websocket", "binary": str(binary), "providers": args.providers,
                   "binary_file": provenance, "binary_unchanged_during_run": binary_unchanged,
+                  "source_files": source_files, "sources_unchanged_during_run": sources_unchanged,
+                  "isolation": isolation,
                   "platform": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                   "memory_details_capture": "end_of_phase",
+                  "cpu_measurement": "Client process user+system time from /proc/PID/stat; children excluded; 100% is one core",
+                  "cpu_clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
+                  "draft_injected": draft_injected,
+                  "ui_readiness": ui_readiness,
                   "tty": not args.no_tty, "measurement": "client process RSS + swap; child runtimes excluded",
                   "units": "KiB", "sample_interval_ms": args.sample_ms, "settings": settings,
                   "elapsed_seconds": round(time.monotonic() - started, 3), "client_exit_code": process.returncode,
                   "workload": result, "catalog_payload_estimates": descriptor_metrics,
-                  "phases": summarize(samples), "budget_mib": args.max_footprint_mib,
+                  "phases": phases, "phase_durations": durations,
+                  "timing_verified": timing_verified, "prepared_before_idle": prepared_before_idle,
+                  "budget_mib": args.max_footprint_mib,
                   "memory_details": {p.stem.removeprefix("mappings-"): json.loads(p.read_text())
                                      for p in root.glob("mappings-*.json")},
                   "sampled_peak_rss_kib": max((s["rss_kib"] for s in samples), default=None),
