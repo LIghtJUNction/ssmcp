@@ -203,10 +203,22 @@ class Frontend:
     def disconnect(self):
         self.send(b"\x03")
         deadline = time.monotonic() + 8
+        confirmed = set()
         while self.process.poll() is None and time.monotonic() < deadline:
             self.pump(0.05)
+            if self.process.poll() is not None:
+                break
+            footer = "\n".join(self.snapshot()["rows"][-2:])
+            # Chat keeps queued work when Ctrl-C clears a draft, then requires
+            # a visible exit reminder and one explicit confirmation. Other
+            # terminal layouts may still exit on the first interrupt.
+            for notice in ("cleared · queued requests kept", "Press Ctrl+C again to exit"):
+                if notice in footer and notice not in confirmed:
+                    confirmed.add(notice)
+                    self.send(b"\x03")
+                    break
         if self.process.poll() is None:
-            raise AssertionError("Ctrl-C did not disconnect this owned frontend")
+            raise AssertionError("Ctrl-C and visible exit confirmation did not disconnect this owned frontend")
         self.pump(0.1)
         return self.snapshot(), termios.tcgetattr(self.slave)
 
