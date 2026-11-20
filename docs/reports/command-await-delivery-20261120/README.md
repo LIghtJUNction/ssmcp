@@ -60,6 +60,17 @@ PR #125 阶段实现了相邻命令各自显示实际 argv，带有运行状态�
 
 先前一次只读剪贴板诊断的调用虽然超时，后来按原任务 ID 找回了完整结果：原生任务退出 0，总时长 51 毫秒，其中列出剪贴板格式用时 1.15 毫秒。该探针没有读取剪贴板内容；当前格式样本也不是最初的文本粘贴，因此不能用它反推原始故障原因，或将调用超时算成剪贴板读取耗时。详见[回收的诊断回执](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/clipboard-format-probe-recovered.json)。
 
+
+### 测量入口与基线构建
+
+终端粘贴和 Ctrl+V 需要分别测量。带终端粘贴标记的字节经过此次批处理路径；Ctrl+V 则由剪贴板适配器取得完整文本，直接进入异步保存。两条路径都会执行文件持久化，不能把终端字节处理的改善直接当作 Ctrl+V 的加速。现有剪贴板功能测试没有覆盖八行以上纯文本的性能样本，正在补充独立的 2,738 字节 Ctrl+V 用例：真实客户端只接收一个触发字节，私有模拟 wl-paste 提供合成内容。它检验实际客户端适配器与保存路径，不代表真实系统剪贴板性能。
+
+实测前还发现临时目录位置会改变测量对象：默认 /tmp 是 tmpfs，用户工作区位于 /home 的 btrfs。基线与候选必须把测试目录放到与工作区相同的文件系统，并记录实际位置、st_dev 和文件系统类型；内存盘结果不足以证明磁盘持久化延迟已经改善。btrfs 子卷的 st_dev 与 mountinfo 设备字段可能不同，文件系统类型按路径所属挂载点判断。[目录与文件系统记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/paste-benchmark-filesystem-observation.json)保存原始观察及范围。
+
+修复前基线 `b156254b45c015a3994b8be1475b423167ac980f` 的 library fixture 编译实际失败，Cargo 返回 101：时间模块不能访问仅限上级模块的 invalidate，以及测试给需要 Path 的参数传入了字符串。完整输出只有这两个编译错误，未生成绑定该源码的根包可执行产物，后续 release bins 和 decoder 构建尚未进行。因此 b156 不能作为性能比较基线。[独立失败核验](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/baseline-b156-failure-review-20261120.json)保留源码、依赖、日志与精确时间；失败记录不会改写为成功。
+
+截至本检查点，唯一集成负责人已形成新的本地提交 `c53c5ea681cb0840f1c41c9e8d31489abac4fd37`：仅将 invalidate 的可见性改为 crate 内可用，并在原有 TTY 测试中显式构造 Path，两处各一行。已读完整差异及提交回执，Cargo.lock 摘要保持 `6c76ff5b75b161aeb691ebc6be129ba719aae82b09c8c0d50ae42f6d817c604d`。格式检查记录通过；新提交的编译成功、可执行产物和测速结果仍须等待实际构建回执。
+
 ## 验证证据
 
 | 范围 | 实际结果 | 对应源码或范围 |
@@ -120,6 +131,14 @@ Canvas 修复已通过 [PR #140](https://github.com/LIghtJUNction/ssmcp/pull/140
 
 HTTP 封装的独立审查也限定为静态结论：预配置 TLS 只替换 TLS 配置，调用点原有超时、重定向、代理与 HTTPS-only 策略必须随迁移保留。自定义账户证书配置仍需作为完整配置覆盖；私有 CA 的替换测试不能替代真实 SPKI 固定路径的验证。最终以同一候选源码上的调用点、锁文件和执行回执为准。
 
+### 新版 25 套验收控制器的准备状态
+
+独立审查核对了冻结 runner `2e9179768f8537f4a23323ed262f6460b8f57cc459130da3e35ba6400cafb399`、contracts `611a58b0680a09c4f57dadfaca3dcbf20c3d55e3770ec1d140a848ffb9a41022` 和归档的全部 28 个条目。25 套列表包含新增 time_wait；原有延迟检查的 250/500 ms 门槛未改。时间场景要求五种场景、两种宽度的十个完整帧，并核对真正的 composer 标题行。动态等待检查读取自有终端输出，观察期间没有额外按键或 UI/native RPC。
+
+旧版本兼容场景继续使用原来构建的 daemon；清理后的 Git tree/blob 只提供经过摘要核对的相同 runner 字节，没有把历史程序描述为重新构建的产物。现有 47 项离线合同测试的输入和日志已核对，但这些是验收工具测试，不能代替产品执行。
+
+[独立控制器审查](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/independent-review-final25-2e917-v1.json)明确保留剩余门禁：Gate10 adapter 尚未纳入冻结包，实际通过的 gate、外层 launcher 与最终源码/依赖/二进制身份仍需接通。当前控制器中的旧 r3 provenance 不能认证 Gate10。25 套产品验收、单独的 P1 集成与粘贴性能样本也尚不能写成已通过。
+
 ## 历史清理与证据位置
 
 第一轮协调清理已完成，详见[历史清理记录](https://github.com/LIghtJUNction/ssmcp/blob/0128c356746b6a29b2cee811c3374c2f891c581f/docs/reports/history-cleanup-20261121.json)。独立比较清理前后的完整 endpoint tree，确认产品源码、Cargo.toml、Cargo.lock、发布与 CI 工作流、Makefile 和固定子模块内容未变；清理没有改变既有测试结果。后续提交以清理后的历史为基础。
@@ -136,6 +155,8 @@ HTTP 封装的独立审查也限定为静态结论：预配置 TLS 只替换 TLS
 第二轮清理已完成远端分支映射，清理协调者随后报告 29 个标签的带租约原子更新完成，并恢复文档分支写入。主线的兼容证明与规则提交已独立读回为 `4b73e6b339cd1880c6c7327295189fc96d74cb42`，本报告分支以映射后的 `4478fd74a0d7f050945957066068cc49da3e6ae9` 为继续提交的基础。对清理前 `7ddaeab` 与映射后 `0128c356` 两个完整主线端点树的比较显示，只有 91 个生成文件删除，零新增和零内容修改；产品源码、脚本、Cargo 文件、工作流和 gitlink 相同。[端点校验记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/second-cleanup-endpoint-verification.json)记录完整差异。该独立比较只覆盖这两个当前主线端点，不等于逐项重验全部历史路径、媒体内容或 29 个标签。
 
 针对 `4b73e6b` 中五组发布来源兼容映射，独立静态审阅读取了十个完整 Git tree、五个清理后 commit 以及五份 Release 资产元数据。原始 commit 对象摘要、保留条目摘要、证明文件 pin、删除路径清单和内置映射表均吻合；五组只删除文档媒体，没有改变保留的产品条目。此审阅没有下载 manifest 原字节或媒体，也没有执行部署；当前部署 helper 所需的现代 portal 文件在两个较老版本中原本就不存在，因此映射证明不等于这两个版本可由现代 helper 部署。完整范围见[来源兼容静态记录](https://github.com/LIghtJUNction/ssmcp/blob/docs/command-await-delivery-20261120/docs/reports/command-await-delivery-20261120/history-compat-static-review.json)。
+
+随后另一次实际发布兼容检查下载了五份旧版 manifest 原字节，确认清理前后完全相同，并核对五组 tag 映射与十项 Linux 资产元数据。根审查读取了该回执，并将五组源码和 manifest pin 与上述独立静态记录逐项对齐。此阶段没有重新下载二进制归档，也没有部署。[实际发布兼容回执](https://github.com/LIghtJUNction/ssmcp/blob/ccb91955c25969f4779588d4cebb09b72c00f829/docs/reports/post-publication-release-check-20261121.json) SHA256 为 `f5d16fde47598d5ffa790f43ebfaa3b795ce1eed41b0720f6e122da8bec169f4`。
 
 文本报告、清单和测试输入保留在 Git；生成截图、归档和编译产物存于外部归档或 Release 资产。最终发布报告另需填入实际发布记录，不以这些历史材料替代最终候选的门禁。
 

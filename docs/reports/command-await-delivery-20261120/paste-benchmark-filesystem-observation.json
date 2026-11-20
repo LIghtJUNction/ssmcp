@@ -1,0 +1,51 @@
+{
+  "schema": "ssmcp.paste-measurement-storage.v1",
+  "status": "read_only_environment_observation",
+  "native_job_id": "1c828d2fc3165848bd0b270a25c57148-171",
+  "observed": {
+    "default_temp_directory": "/tmp",
+    "mounts": [
+      {
+        "path": "/tmp",
+        "device": 65,
+        "mountpoint": "/tmp",
+        "mount_device": "0:65",
+        "filesystem": "tmpfs"
+      },
+      {
+        "path": "/var/tmp",
+        "device": 34,
+        "mountpoint": "/",
+        "mount_device": "0:32",
+        "filesystem": "btrfs"
+      },
+      {
+        "path": "/home/lightjunction/Documents/GITHUB/ssmcp",
+        "device": 68,
+        "mountpoint": "/home",
+        "mount_device": "0:57",
+        "filesystem": "btrfs"
+      }
+    ]
+  },
+  "frozen_driver": {
+    "sha256": "07af1a3298ee75bbd5be31624a344aa265eb4a6ff73474020f8eff451cfe297e",
+    "temporary_directory": "tempfile.TemporaryDirectory(prefix='ssmcp-paste-performance-') without explicit dir"
+  },
+  "execution_requirement": {
+    "temporary_root": "Private directory on the same st_dev as the user's home workspace; set TMPDIR before Python starts",
+    "record": [
+      "actual temporary and workspace path/device",
+      "source workspace device",
+      "filesystem type",
+      "same placement for baseline and candidate"
+    ],
+    "product_patch_changed": false,
+    "measurement_executed": false
+  },
+  "limitations": [
+    "st_dev identifies a filesystem or subvolume, not necessarily a distinct physical drive.",
+    "A tmpfs result cannot establish the user's btrfs durable-file latency.",
+    "This observation runs no PTY, storage benchmark, Cargo, or product tests."
+  ]
+}
