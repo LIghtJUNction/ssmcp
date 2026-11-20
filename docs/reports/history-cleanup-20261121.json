@@ -1,0 +1,299 @@
+{
+  "status": "completed",
+  "operation": "remove generated iteration evidence from all branch histories",
+  "completed_at": "2026-11-20T16:57:07.567879+00:00",
+  "removed_path_count": 42,
+  "removed_paths": [
+    "artifacts/iteration-evidence-20261120/final24-controller-5da61c1d-prepared.zip",
+    "artifacts/iteration-evidence-20261120/ssmcp-p1-r3-handoff-18d13760-20261120.zip",
+    "docs/reports/canvas-command-contract-20261120/ui-canvas-conversation.png",
+    "docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-detail.png",
+    "docs/reports/canvas-command-contract-20261120/ui-canvas-tasks-narrow.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-120.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-missing-accepted-48.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-120.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-missing-before-send-48.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-120.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-mixed-accepted-48.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-skill-picker-120.png",
+    "docs/reports/message-references-20261120/screenshots/message-references-skill-picker-48.png",
+    "docs/reports/questions-history-readiness-20261120/archive-restored-120.png",
+    "docs/reports/questions-history-readiness-20261120/archive-restored-48.png",
+    "docs/reports/readable-commands-20261120/commands-120.png",
+    "docs/reports/readable-commands-20261120/commands-48.png",
+    "docs/reports/readable-commands-20261120/preview-120-collapsed.png",
+    "docs/reports/readable-commands-20261120/preview-120-expanded.png",
+    "docs/reports/send-reference-completion-20261120/message-references-send-file-accepted-120.png",
+    "docs/reports/send-reference-completion-20261120/message-references-send-file-picker-48.png",
+    "docs/reports/send-reference-completion-20261120/message-references-send-missing-file-48.png",
+    "docs/reports/send-reference-completion-20261120/message-references-send-skill-picker-120.png",
+    "docs/reports/ssmcp-zcalld-iteration-20261120/native-ef439-gates32-20261120.zip",
+    "docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-120.png",
+    "docs/reports/tool-group-summaries-20261120/commands/exec-only/summary-commands-exec-only-folded-48.png",
+    "docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-120.png",
+    "docs/reports/tool-group-summaries-20261120/commands/mixed/summary-commands-mixed-folded-48.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-120.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-head-48.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-120.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-output-48.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-120.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-expanded-source-tail-48.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-120.png",
+    "docs/reports/tool-group-summaries-20261120/readable/readable-commands-folded-48.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-120.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-final-folded-48.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-120.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-first-folded-48.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-120.png",
+    "docs/reports/tool-group-summaries-20261120/tool-summary-updated-expanded-48.png"
+  ],
+  "updated_refs": [
+    {
+      "ref": "refs/heads/chore/latest-z-dependencies-20261120",
+      "old": "436dce4d43c84106bfc6a796cdc93d418c5a90d2",
+      "new": "05d2a507074346a05e479c8d13cd40413c92b2e0",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/docs/batch-execution-guidance-20261120",
+      "old": "184408d9fd91224f1673b61ddaa85b4ccc1a7b7e",
+      "new": "c0bb145b081160da137249b5093d8be166557726",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/docs/command-await-delivery-20261120",
+      "old": "a2a38e1ac57f0d2a55417f70dcf95935f75143db",
+      "new": "2731f628483af76080f61a2c1b9a8d9f039fd50f",
+      "removed_count": 42
+    },
+    {
+      "ref": "refs/heads/docs/questions-history-readiness-20261120",
+      "old": "f635e48e1ce287cbfd1deeb97a462409592e642a",
+      "new": "0550f65fcc452268df493b1b81549f361abc24de",
+      "removed_count": 42
+    },
+    {
+      "ref": "refs/heads/docs/release-0.10.21-iteration-20261120",
+      "old": "47f61950225de13a8fde1e437dc96b96d9b1ce9b",
+      "new": "73b216eeee13a20fc4d730115a8cb19c36e1426e",
+      "removed_count": 16
+    },
+    {
+      "ref": "refs/heads/docs/release21-boundaries-20261120",
+      "old": "2166693c513d70c3c80e415e58a8e9359b875e06",
+      "new": "f2f8d274f1c44031476481856a4da555e1ac68b5",
+      "removed_count": 16
+    },
+    {
+      "ref": "refs/heads/docs/send-reference-evidence-20261120",
+      "old": "4eb6bb92d243449ffe1c51ccdb2462eb624b39e7",
+      "new": "12dcd0a1c237109f0d27003721763118a84862ff",
+      "removed_count": 12
+    },
+    {
+      "ref": "refs/heads/docs/ssmcp-idempotent-retries-root-20261120",
+      "old": "b1549d395138f4fd4edb163b4ff1ad060bb0608f",
+      "new": "9040004e9e202bc8773927a66545c3d37e2e6ac0",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/feat/conversation-goal-20261120",
+      "old": "17f7fa32e01e327a73efd54a3fbe2abe69868eb7",
+      "new": "06fc550de0a1d8213c72ccbc18be4a5382ebf701",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/feat/message-references-20261120",
+      "old": "611770abef67e8229b0e151386aebad71fe79cce",
+      "new": "bebe251d6aade33623575f08576291295d354a77",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/feat/readable-command-rows-20261120",
+      "old": "77b80b138033dd91e7e4c6b6a4a8bb70d31678c5",
+      "new": "40cb3a78a227ce51de9fb5237155b0fe719708f7",
+      "removed_count": 12
+    },
+    {
+      "ref": "refs/heads/feat/startup-version-check-20261120",
+      "old": "3af7f90e38f4f8ff64edf7797fe2eaa3bea880b4",
+      "new": "760fa8f2e21f19cfc208e322a7566500e10bcaa8",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/feat/tool-group-summaries-20261120",
+      "old": "0ed23e64c4e9edbd1801777670d8fdc1d23b8007",
+      "new": "f2d4963eb3c2eaffcae08a9484db3547a301050f",
+      "removed_count": 37
+    },
+    {
+      "ref": "refs/heads/fix/batch-guidance-reminder-order-20261120",
+      "old": "3162f0f765c8ba9c1d3dc8d60d05b8b7b5ea77d9",
+      "new": "9c78b906e0d858eb0fb868db421764602fb25e40",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/canvas-command-contract-20261120",
+      "old": "6af1287f4130edcc47cf05bb1003f1f439038f8f",
+      "new": "5eea923d0a72958913244dc3a186baf72c838bc1",
+      "removed_count": 19
+    },
+    {
+      "ref": "refs/heads/fix/ci-final7-inventory-reap-20261120",
+      "old": "22ba8c878c00d976672fcda051119aab4f029615",
+      "new": "9df0fbabca500bf2b347e1bb49736a24ff958983",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/ci-focus-fixture-20261120",
+      "old": "c768ea689316e4e96052f7cb36dd9000306bb593",
+      "new": "7ad396911fac63648c07f96ad23ac3336b889b34",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/ci-integrated-ui-20261120",
+      "old": "f2ac2f5cb0c65ee96d570fe16f4a0352bf0a76a1",
+      "new": "e3fdb52014e704dae2b9a7f1c34354cbfe8d6f62",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/ci-private-history-fixture-20261120",
+      "old": "ca9a13ecd3918817d543b027506c48a1a49c960d",
+      "new": "809b5cf899e9448dc0ce7c34bfc3bf419e55861e",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/e2e-sessions-20261120",
+      "old": "f98a2048fa72ed33937458993d94c6427e6b686f",
+      "new": "5841ccae5db92ce7d366e7a244d5237e3a5c366c",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/e2e-tool-summary-inventory-20261120",
+      "old": "5c1ee97fa3773af7e23fd97f6dd3633f234ac6fe",
+      "new": "cb83ad5a980cf8c9deac6f9ed239ee7278f394ff",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/finish-observer-history-20261120",
+      "old": "5bcd03afbd3ba7181d3167d882cc4c824be08366",
+      "new": "b7164ce1bcc5ddb99c9cd6637996d58c31359e65",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/logout-revocation-reason-20261120",
+      "old": "053fc99a0d4c81e4e6ac3bc3a36d65935595267c",
+      "new": "963516f7c25abff7e80072b46a1da99c8a9615fa",
+      "removed_count": 16
+    },
+    {
+      "ref": "refs/heads/fix/passive-await-summary-20261120",
+      "old": "8d34b061ba951fc8ef14ed9263b10f0382cc1cba",
+      "new": "3c9fd0e224fe5eb91c13977d1093f6b187aa5052",
+      "removed_count": 19
+    },
+    {
+      "ref": "refs/heads/fix/release-drain-016-20261120",
+      "old": "e2170f71089be7064b271bdab3e178ff8b7331a9",
+      "new": "99a0268d06bd065adda77eed559a9694047dc469",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/release21-strict-ui-fixtures-20261120",
+      "old": "ffae49e14a8c24882f9ac0815c1b8dac47cc1384",
+      "new": "db343cc1873cc0ea4002529f01ba44f3dd44348f",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/tool-summary-delivery-p2-20261120",
+      "old": "aa2a54916e3df5756e780eef8eac3e25df96d8e8",
+      "new": "0c854e189b4390de3d8f0cdda94fe2bcfff2493d",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/fix/windows-browser-smoke-diagnostics-20261120",
+      "old": "5846caf22a4456d3309bcb929744f5996e5aebb4",
+      "new": "ad1eb6971ea8bf4b705ebeb035200a1e655a0298",
+      "removed_count": 19
+    },
+    {
+      "ref": "refs/heads/integrate/next-message-desktop-20261120",
+      "old": "268eb08c6fdc0cd2e4e7b32a99b356fb29417cbd",
+      "new": "8b73befcad446946076b41d08924b6e3ddad2675",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/integrate/tool-summary-command-cards-20261120",
+      "old": "d9a32931fa2eef90f95cc5224e751fe5426a7f1e",
+      "new": "3b969aaa99f6cc99fca4e521e4f64986d145f9fe",
+      "removed_count": 37
+    },
+    {
+      "ref": "refs/heads/integrate/v0.10.15-20261120",
+      "old": "4ae22ea828ee2647b44c275f79679963ba7e88a9",
+      "new": "fc686ae080c6eb8e2d9439cde7ca6419b242decc",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/main",
+      "old": "55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a",
+      "new": "0c95d39305864bf129ec247f790575bb1e9e6cc6",
+      "removed_count": 42
+    },
+    {
+      "ref": "refs/heads/perf/ui-input-history-owner-20261120",
+      "old": "145b5da544a2050ca4765bd06e6a48e1cb84b01d",
+      "new": "761f46624a53a8212196ae4810c5de6b4438f71e",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/test/goal-startup-pty-20261120",
+      "old": "abc6699e6e8a55ea02825ccb9dea256fadea528c",
+      "new": "f014d805f7b91efbb47a345c1916d2b455f0017b",
+      "removed_count": 16
+    },
+    {
+      "ref": "refs/heads/test/human-finish-native-receipts-20261120",
+      "old": "254562967f49579bda9d57ec66b1c50dcda507aa",
+      "new": "a39cb15429e3c8eb9aa15bc0fc1025efd0639454",
+      "removed_count": 8
+    },
+    {
+      "ref": "refs/heads/test/human-finish-pty-20261120",
+      "old": "5f4001128d2a6201a68b8b3159c1cc3059b8f04c",
+      "new": "41551799c3b68fb13eb14beecda4d8c1da3b6004",
+      "removed_count": 16
+    },
+    {
+      "ref": "refs/heads/test/send-reference-session-navigation-20261120",
+      "old": "daa2cc9ca82d3acf8094ff4978e73ea495fcf524",
+      "new": "7301dbeb1f2d634aa0c911f8aea755fcf57e65e2",
+      "removed_count": 8
+    }
+  ],
+  "unchanged_original_commits": 981,
+  "rewritten_commits": 219,
+  "verification": {
+    "remote_refs_match": true,
+    "source_bytes_unchanged": true,
+    "selected_paths_remaining_in_branch_history": 0,
+    "tags_unchanged": true,
+    "selected_paths_in_tag_history": []
+  },
+  "mapped_bases": {
+    "407084c4fcc582f5fef01b772de838f04e2d5484": "303b7a37cf91b6b859c97533661aa5ef7ed01597",
+    "4d15c3a2f2846adaaf7ddf7c1166e5a014afcbbd": "ae0e41a21a2a9e6d474401f58e4e2e73c879504f",
+    "47b9ca9bb83646c8fa8678a095e7dacdd3783572": "f17c4b737c14f62b7945b7c919fcb8595acce57a",
+    "55056d332fb2fa20e7bf2ee6a8f5610581ac9f2a": "0c95d39305864bf129ec247f790575bb1e9e6cc6",
+    "2f396f44483bd1ded2686e8ebc5a4858dfb646e8": "2f396f44483bd1ded2686e8ebc5a4858dfb646e8",
+    "1c84a96f2241e99256120dc3315f22387c1292c6": null,
+    "4221d5594b8ee0bd1fb9ea1d9783d0bb1bebd3f7": null,
+    "0f112c5386d519e525ee46f4370f8193976f75a6": null
+  },
+  "artifact_folder": "https://drive.google.com/drive/folders/1ucs2jIoPsRxNW2ELvLDO0TU5JILqw7C9",
+  "notes": [
+    "The operation updates repository branch refs. GitHub-managed pull-request refs and server object retention are outside this verification.",
+    "Old unpublished source changes must be transferred onto the cleaned history without restoring old ancestry.",
+    "The cleanup does not change earlier build outcomes or turn prepared acceptance controllers into executed tests."
+  ]
+}
