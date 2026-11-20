@@ -226,7 +226,7 @@ class Composer(Dashboard):
         front.send(HOME + DOWN * index + ENTER)
         # The default recipient is shown in the compact footer; exact agents
         # retain the explicit recipient label above the input.
-        visible_recipient = "To Next caller" if member is None else f"To · {label}"
+        visible_recipient = "To Next caller" if member is None else f"To {label}"
         front.until(lambda shot: visible_recipient in text(shot)
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
@@ -419,7 +419,7 @@ class Composer(Dashboard):
                    "horizontal navigation preserves the independently highlighted member")
         front.send(ENTER)
         front.until(lambda shot: column(shot) == ("conversation", 2, 8)
-                                 and "To · Shared name" in text(shot) and not shot["hide_cursor"],
+                                 and "To Shared name" in text(shot) and not shot["hide_cursor"],
                     "Enter choosing the member and returning to the conversation")
         chosen = self.ui("/display/conversation")
         self.check(chosen["target"] == members[0]["agent_id"]
