@@ -1,0 +1,33 @@
+{
+  "schema": "ssmcp.library-gate.v1",
+  "source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "product_source_commit": "f9acbfc0102fa77b2e44c95724a05d6e55ea74bf",
+  "version": "0.10.14",
+  "command": [
+    "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "--test-threads=2"
+  ],
+  "exit_code": 101,
+  "duration_seconds": 147.923,
+  "status": "failed",
+  "libtest": {
+    "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/frozen/debug/deps/ssmcp-da29c9e7034e9a42",
+    "source": "$WORKTREE/target/debug/build/ssmcp/da29c9e7034e9a42/out/ssmcp-da29c9e7034e9a42",
+    "sha256": "09831320a7591b4c06f60b0c7f5475376af73aee3f8219b827701da0cdd9c1d9",
+    "bytes": 282671696
+  },
+  "log": {
+    "path": "$WORKTREE/target/zuse-validation/f9acbfc0102fa77b2e44c95724a05d6e55ea74bf/library-default-suite.log",
+    "sha256": "18f09c5604eb678d29e27f7ff7814ec2ffe3c4763d48982c0cf2f600d1379bcf"
+  },
+  "finished_at_utc": "2026-11-20T00:10:03.182413+00:00",
+  "results": {
+    "passed": 1501,
+    "failed": 1,
+    "ignored": 18,
+    "measured": 0,
+    "filtered_out": 0
+  },
+  "all_frozen_artifacts_unchanged": true,
+  "source_commit_unchanged": true
+}
