@@ -1,7 +1,8 @@
 //! A bounded viewport over adjacent retained tool events; no output is copied
 //! into a second history and individual event identities remain selectable.
 use super::{
-    Event, Ui, clip_plain, conversation_body, correlation::Kind, paint, semantic_text, styled_rows,
+    DiffMode, Event, Ui, clip_plain, conversation_body, correlation::Kind, diff, paint, semantic_text,
+    styled_rows,
 };
 use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
@@ -107,6 +108,7 @@ pub(super) struct Options<'a> {
     pub(super) page: usize,
     pub(super) palette: &'a str,
     pub(super) ui: &'a Ui,
+    pub(super) diff_mode: DiffMode,
     pub(super) selected: Option<u64>,
     pub(super) selected_group: Option<u64>,
     pub(super) focused: bool,
@@ -126,6 +128,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
         page,
         palette,
         ui,
+        diff_mode,
         selected,
         selected_group,
         focused,
@@ -273,7 +276,7 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
             0
         };
         let content_width = detail_width.saturating_sub(inset).max(1);
-        let cache_palette = format!("{palette}:tool-window:{expanded}");
+        let cache_palette = format!("{palette}:tool-window:{}:{expanded}", diff_mode.name());
         if event
             .cache
             .as_ref()
@@ -307,11 +310,15 @@ pub(super) fn render(events: &mut VecDeque<Event>, group: &Group, options: Optio
                 let text = detail
                     .as_deref()
                     .unwrap_or_else(|| conversation_body(&event.text));
-                styled_rows(
-                    &semantic_text(text, ui, event.meta.language),
-                    detail_width,
-                    ui.color,
-                )
+                if event.meta.diff {
+                    diff::rows(text, detail_width, ui, event.meta.language, diff_mode)
+                } else {
+                    styled_rows(
+                        &semantic_text(text, ui, event.meta.language),
+                        detail_width,
+                        ui.color,
+                    )
+                }
             } else {
                 let mut preview = event.chat_preview(detail_width);
                 // One shared footer describes expansion for the whole window.

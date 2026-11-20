@@ -623,6 +623,7 @@ async fn updating_summary_preserves_fold_scroll_and_fits_both_widths() {
                     page: 24,
                     palette: "",
                     ui: &ui,
+                    diff_mode: super::super::DiffMode::Single,
                     selected: view.selected,
                     selected_group: view.selected_group,
                     focused: true,
