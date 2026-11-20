@@ -435,6 +435,32 @@ fn validate_reference_warnings(warnings: &[String]) -> Result<(), String> {
 }
 
 impl Manager {
+    fn set_draft(&mut self, text: &str, cursor: usize) -> Result<(), String> {
+        if text.len() > MAX_USER_MESSAGE_BYTES || !text.is_char_boundary(cursor) {
+            return Err("invalid or oversized composer draft".into());
+        }
+        if self.outbox.draft.text != text {
+            self.outbox.draft.text.clear();
+            self.outbox.draft.text.push_str(text);
+        }
+        self.outbox.draft.cursor = cursor;
+        Ok(())
+    }
+
+    fn update_draft_context(
+        &mut self,
+        unchanged: impl FnOnce(&DraftContext) -> bool,
+        build: impl FnOnce() -> DraftContext,
+    ) -> Result<(), String> {
+        if unchanged(&self.outbox.context) {
+            return Ok(());
+        }
+        let context = build();
+        context.validate()?;
+        self.outbox.context = context;
+        Ok(())
+    }
+
     fn event(&mut self, event: UiEvent) {
         if self.events.len() == 256 {
             self.events.pop_front();
@@ -1548,22 +1574,16 @@ pub(super) fn draft() -> (String, usize) {
 pub(super) fn draft_context() -> DraftContext {
     with(|manager| manager.outbox.context.clone())
 }
-pub(super) fn set_draft_context(context: DraftContext) -> Result<(), String> {
-    context.validate()?;
-    with(|manager| manager.outbox.context = context);
-    Ok(())
+/// Compare borrowed UI fields before constructing owned strings. Callbacks must
+/// only inspect local editor data and must not re-enter the steering manager.
+pub(super) fn update_draft_context(
+    unchanged: impl FnOnce(&DraftContext) -> bool,
+    build: impl FnOnce() -> DraftContext,
+) -> Result<(), String> {
+    with(|manager| manager.update_draft_context(unchanged, build))
 }
 pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
-    if text.len() > MAX_USER_MESSAGE_BYTES || !text.is_char_boundary(cursor) {
-        return Err("invalid or oversized composer draft".into());
-    }
-    with(|manager| {
-        manager.outbox.draft = Draft {
-            text: text.into(),
-            cursor,
-        }
-    });
-    Ok(())
+    with(|manager| manager.set_draft(text, cursor))
 }
 pub(super) fn take_events() -> Vec<UiEvent> {
     with(|manager| manager.events.drain(..).collect())
@@ -3439,6 +3459,106 @@ mod tests {
                 recalled: false,
             })
         );
+    }
+
+    #[test]
+    fn draft_persistence_reuses_storage_and_preserves_utf8_cursor() {
+        let mut manager = Manager::default();
+        let text = "保留草稿 while idle";
+        manager.set_draft(text, text.len()).unwrap();
+        let storage = manager.outbox.draft.text.as_ptr();
+        for _ in 0..100 {
+            for cursor in [0, "保留".len(), text.len()] {
+                manager.set_draft(text, cursor).unwrap();
+                assert_eq!(manager.outbox.draft.text.as_ptr(), storage);
+                assert_eq!(manager.outbox.draft.cursor, cursor);
+            }
+        }
+        assert!(manager.set_draft(text, 1).is_err());
+        assert_eq!(manager.outbox.draft.cursor, text.len());
+        assert_eq!(manager.outbox.draft.text, text);
+        assert!(
+            manager
+                .set_draft(&"x".repeat(MAX_USER_MESSAGE_BYTES + 1), 0)
+                .is_err()
+        );
+        manager.set_draft("新草稿", "新".len()).unwrap();
+        let restored: Outbox =
+            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.draft.text, "新草稿");
+        assert_eq!(restored.draft.cursor, "新".len());
+        manager.set_draft("", 0).unwrap();
+        assert!(manager.outbox.draft.text.is_empty());
+    }
+
+    #[test]
+    fn draft_context_skips_unchanged_copies_but_persists_edits_and_destinations() {
+        let mut manager = Manager::default();
+        let mut expected = DraftContext {
+            editing: Some("editing_one".into()),
+            target: Some("agent_one".into()),
+            parked: Some(SavedDraft {
+                text: "保留原草稿".into(),
+                cursor: "保留".len(),
+                target: Some("agent_two".into()),
+                ..SavedDraft::default()
+            }),
+            ..DraftContext::default()
+        };
+        manager
+            .update_draft_context(|stored| stored == &expected, || expected.clone())
+            .unwrap();
+        let storage = manager
+            .outbox
+            .context
+            .parked
+            .as_ref()
+            .unwrap()
+            .text
+            .as_ptr();
+        for _ in 0..100 {
+            manager
+                .update_draft_context(
+                    |stored| stored == &expected,
+                    || panic!("unchanged draft context must remain borrowed"),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            manager
+                .outbox
+                .context
+                .parked
+                .as_ref()
+                .unwrap()
+                .text
+                .as_ptr(),
+            storage
+        );
+        expected.editing = None;
+        expected.target = Some("agent_two".into());
+        expected.send_group = Some(vec![]);
+        manager
+            .update_draft_context(|stored| stored == &expected, || expected.clone())
+            .unwrap();
+        assert_eq!(manager.outbox.context, expected);
+        let restored: Outbox =
+            serde_json::from_value(serde_json::to_value(&manager.outbox).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.context, expected);
+        assert!(
+            manager
+                .update_draft_context(
+                    |_| false,
+                    || DraftContext {
+                        editing: Some("invalid identifier".into()),
+                        ..DraftContext::default()
+                    },
+                )
+                .is_err()
+        );
+        assert_eq!(manager.outbox.context, expected);
     }
 
     #[test]

@@ -276,10 +276,51 @@ struct Service {
     runtime: Weak<Runtime>,
     handle: Option<tokio::runtime::Handle>,
     generation: u64,
+    revision: u64,
     cache: VecDeque<Cached>,
     pending: Option<Key>,
     running: bool,
 }
+/// A version belongs to one unchanged query. The deadline still refreshes a
+/// quiet directory, while generation/revision changes expose asynchronous work.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Version {
+    generation: u64,
+    revision: u64,
+    available: bool,
+    refresh_after: Instant,
+}
+
+impl Version {
+    fn current(service: &Service, now: Instant) -> Self {
+        Self {
+            generation: service.generation,
+            revision: service.revision,
+            available: service.handle.is_some() && service.runtime.strong_count() != 0,
+            refresh_after: now + TTL,
+        }
+    }
+
+    fn unchanged(self, previous: Option<Self>, now: Instant) -> bool {
+        previous.is_some_and(|previous| {
+            self.generation == previous.generation
+                && self.revision == previous.revision
+                && self.available == previous.available
+                && now < previous.refresh_after
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_for_test(revision: u64) -> Self {
+        Self {
+            generation: 1,
+            revision,
+            available: true,
+            refresh_after: Instant::now() + TTL,
+        }
+    }
+}
+
 static SERVICE: OnceLock<Mutex<Service>> = OnceLock::new();
 
 pub(crate) fn bind(runtime: &Arc<Runtime>) {
@@ -290,55 +331,99 @@ pub(crate) fn bind(runtime: &Arc<Runtime>) {
     service.runtime = Arc::downgrade(runtime);
     service.handle = tokio::runtime::Handle::try_current().ok();
     service.generation = service.generation.wrapping_add(1);
+    service.revision = 0;
     service.cache.clear();
     service.pending = None;
     service.running = false;
 }
 
-/// Return immediately; one worker coalesces cache misses. Never hold the cache
-/// lock while updating the terminal, whose input path also reads this cache.
-pub(crate) fn lookup(query: &Query) -> Matches {
+/// Return immediately; one worker coalesces cache misses. Pass a previous
+/// version only for the same query. None means the caller can retain its menu.
+/// Never hold the cache lock while updating the terminal, whose input path also
+/// reads this cache.
+pub(crate) fn lookup(query: &Query, previous: Option<Version>) -> Option<(Version, Matches)> {
+    let now = Instant::now();
+    let Some(service) = SERVICE.get() else {
+        let version = Version::current(&Service::default(), now);
+        if version.unchanged(previous, now) {
+            return None;
+        }
+        return Some((
+            version,
+            Matches {
+                notice: Some(
+                    query
+                        .key()
+                        .err()
+                        .unwrap_or_else(|| "Connect a client to discover files and skills".into()),
+                ),
+                ..Matches::default()
+            },
+        ));
+    };
+    let mut service = service.lock().unwrap_or_else(|error| error.into_inner());
+    lookup_in(&mut service, query, previous, now)
+}
+
+fn lookup_in(
+    service: &mut Service,
+    query: &Query,
+    previous: Option<Version>,
+    now: Instant,
+) -> Option<(Version, Matches)> {
+    let mut version = Version::current(service, now);
+    if version.unchanged(previous, now) {
+        return None;
+    }
     let key = match query.key() {
         Ok(key) => key,
         Err(error) => {
-            return Matches {
-                notice: Some(error),
-                ..Matches::default()
-            };
+            return Some((
+                version,
+                Matches {
+                    notice: Some(error),
+                    ..Matches::default()
+                },
+            ));
         }
     };
-    let Some(service) = SERVICE.get() else {
-        return Matches {
-            notice: Some("Connect a client to discover files and skills".into()),
-            ..Matches::default()
-        };
-    };
-    let mut service = service.lock().unwrap_or_else(|error| error.into_inner());
     let cached = service
         .cache
         .iter()
         .find(|cached| cached.key == key)
-        .map(|cached| (cached.time.elapsed() < TTL, cached.result.clone()));
-    if let Some((true, result)) = &cached {
-        return match result {
-            Ok(listing) => matches(query, listing),
-            Err(error) => Matches {
-                notice: Some(error.clone()),
-                ..Matches::default()
+        .map(|cached| (cached.time, cached.result.clone()));
+    if let Some((time, result)) = &cached
+        && now.saturating_duration_since(*time) < TTL
+    {
+        version.refresh_after = *time + TTL;
+        return Some((
+            version,
+            match result {
+                Ok(listing) => matches(query, listing),
+                Err(error) => Matches {
+                    notice: Some(error.clone()),
+                    ..Matches::default()
+                },
             },
-        };
+        ));
     }
     let Some(handle) = service.handle.clone() else {
-        return Matches {
-            notice: Some("Reference discovery requires a live client runtime".into()),
-            ..Matches::default()
-        };
+        return Some((
+            version,
+            Matches {
+                notice: Some("Reference discovery requires a live client runtime".into()),
+                ..Matches::default()
+            },
+        ));
     };
     if service.runtime.strong_count() == 0 {
-        return Matches {
-            notice: Some("Reconnect before discovering references".into()),
-            ..Matches::default()
-        };
+        return Some((
+            version,
+            Matches {
+                notice: Some("Reconnect before discovering references".into()),
+                ..Matches::default()
+            },
+        ));
     }
     service.pending = Some(key);
     if !service.running {
@@ -347,13 +432,16 @@ pub(crate) fn lookup(query: &Query) -> Matches {
         handle.spawn(worker(generation));
     }
     if let Some((_, Ok(listing))) = cached {
-        return matches(query, &listing);
+        return Some((version, matches(query, &listing)));
     }
-    Matches {
-        notice: Some("Loading reference suggestions…".into()),
-        loading: true,
-        ..Matches::default()
-    }
+    Some((
+        version,
+        Matches {
+            notice: Some("Loading reference suggestions…".into()),
+            loading: true,
+            ..Matches::default()
+        },
+    ))
 }
 async fn worker(generation: u64) {
     loop {
@@ -399,6 +487,7 @@ async fn worker(generation: u64) {
                 time: Instant::now(),
                 result,
             });
+            service.revision = service.revision.wrapping_add(1);
             while service.cache.len() > MAX_CACHE {
                 service.cache.pop_front();
             }
@@ -548,6 +637,106 @@ pub(crate) async fn enumerate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completion_versions_refresh_after_publish_rebind_and_ttl() {
+        let now = Instant::now();
+        let query = query("@docs", 5).unwrap();
+        let listing = |name: &str| {
+            Arc::new(Listing {
+                entries: vec![Entry {
+                    name: name.into(),
+                    description: "File".into(),
+                    directory: false,
+                }],
+                partial: false,
+            })
+        };
+        let mut service = Service {
+            generation: 1,
+            cache: VecDeque::from([Cached {
+                key: Key::Files(".".into()),
+                time: now,
+                result: Ok(listing("docs-old.md")),
+            }]),
+            ..Service::default()
+        };
+        let (version, initial) = lookup_in(&mut service, &query, None, now).unwrap();
+        assert_eq!(initial.items[0].name, "@docs-old.md");
+        for offset in 1..100 {
+            assert!(
+                lookup_in(
+                    &mut service,
+                    &query,
+                    Some(version),
+                    now + Duration::from_millis(offset),
+                )
+                .is_none()
+            );
+        }
+        service.cache[0].result = Ok(listing("docs-new.md"));
+        service.revision += 1;
+        let (version, updated) = lookup_in(
+            &mut service,
+            &query,
+            Some(version),
+            now + Duration::from_millis(100),
+        )
+        .unwrap();
+        assert_eq!(updated.items[0].name, "@docs-new.md");
+        let other = Query {
+            prefix: "missing".into(),
+            ..query.clone()
+        };
+        let (_, filtered) = lookup_in(&mut service, &other, None, now).unwrap();
+        assert!(filtered.items.is_empty());
+        service.generation += 1;
+        let (version, rebound) = lookup_in(&mut service, &query, Some(version), now).unwrap();
+        assert_eq!(rebound.items[0].name, "@docs-new.md");
+        let (_, expired) = lookup_in(&mut service, &query, Some(version), now + TTL).unwrap();
+        assert!(
+            expired
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("live client runtime"),
+            "expiry must retry discovery even without a cache publication"
+        );
+    }
+
+    #[test]
+    fn completion_versions_publish_errors_and_recheck_changed_queries() {
+        let now = Instant::now();
+        let mut service = Service::default();
+        let query = query("@docs", 5).unwrap();
+        let (version, disconnected) = lookup_in(&mut service, &query, None, now).unwrap();
+        assert!(disconnected.items.is_empty());
+        assert!(lookup_in(&mut service, &query, Some(version), now).is_none());
+        service.cache.push_back(Cached {
+            key: Key::Files(".".into()),
+            time: now,
+            result: Err("Discovery changed while idle".into()),
+        });
+        service.revision += 1;
+        let (version, error) = lookup_in(&mut service, &query, Some(version), now).unwrap();
+        assert_eq!(
+            error.notice.as_deref(),
+            Some("Discovery changed while idle")
+        );
+        assert!(lookup_in(&mut service, &query, Some(version), now).is_none());
+        let invalid = Query {
+            prefix: "../private".into(),
+            ..query
+        };
+        let (_, invalid) = lookup_in(&mut service, &invalid, None, now).unwrap();
+        assert!(
+            invalid
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("workspace-relative")
+        );
+    }
+
     #[test]
     fn cursor_query_respects_unicode_quotes_code_and_escapes() {
         let text = "检查 @\"docs/设计 文稿.md\" 然后继续";

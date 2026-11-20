@@ -412,11 +412,14 @@ impl Runtime {
         self.time.disconnect();
     }
     /// Local frontend methods, deliberately absent from the remote tool registry.
-    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
-        self.desktop.handoff_host_input_local(seconds)
+    pub(crate) fn set_host_input_local(&self, enabled: bool) -> Result<Value, String> {
+        self.desktop.set_host_input_local(enabled)
     }
-    pub(crate) fn revoke_host_input(&self) -> bool {
-        self.desktop.revoke_host_input()
+    pub(crate) fn toggle_host_input_local(&self) -> Result<Value, String> {
+        self.desktop.toggle_host_input_local()
+    }
+    pub(crate) fn cancel_host_input(&self) {
+        self.desktop.cancel_host_input();
     }
     pub(crate) fn host_input_status(&self) -> Value {
         self.desktop.host_input_status()

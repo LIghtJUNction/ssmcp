@@ -198,6 +198,14 @@ ssmcp 默认启用内置命令、文件、浏览器和会话工具，不要求�
 
 ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行连接的扩展端口。客户端浏览器扩展的安装记录、MCP 握手和浏览器配对分别确认；使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录选择可用路线，再调用原生接口。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
 
+### 前后台电脑控制
+
+首次创建本机状态时，前台和后台控制默认启用。前台开关由同一台机器、同一操作系统用户下的所有 ssmcp 会话共享；你明确关闭后，重连和重启都保持关闭。
+
+在聊天框输入 `/computer on` 或 `/computer off`，也可以用 **Super + Alt + C** 切换。界面持续显示前台 on/off 和后台 on，普通 Tab 的补全与焦点行为不变。桌面全局快捷键调用 `ssmcp computer toggle`，无需终端拥有焦点。
+
+后台控制独立于前台开关，按需启动私有桌面。完整命令、Hyprland 绑定和平台条件见[电脑控制说明](docs/computer-use.md)。
+
 ## 独立核心库
 
 [ztuio](https://github.com/LIghtJUNction/ztuio)、[zharness](https://github.com/LIghtJUNction/zharness) 和 [zplugin](https://github.com/LIghtJUNction/zplugin) 作为固定源码的 Rust 依赖参与构建，分别承担终端帧、扩展接口和本机动态库加载。三个库均使用固定 Git 子模块，ztuio 的包名与 Rust 导入名均为 `ztuio`，精确版本为 `0.1.0`。它们独立维护版本，不启动模型或外部 harness。源码构建请使用 `git clone --recurse-submodules`；已有 checkout 使用 `git submodule update --init --recursive`。[依赖与协同开发](docs/dependencies.md)

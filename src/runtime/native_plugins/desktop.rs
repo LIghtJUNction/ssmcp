@@ -29,12 +29,16 @@ impl Desktop {
 
     // These local-only controls act on the same Computer that handles remote
     // tools. They are deliberately absent from the plugin's native catalog.
-    pub(crate) fn handoff_host_input_local(&self, seconds: u64) -> Result<(), String> {
-        self.computer.handoff_host_input_local(seconds)
+    pub(crate) fn set_host_input_local(&self, enabled: bool) -> Result<Value, String> {
+        self.computer.set_host_input_local(enabled)
     }
 
-    pub(crate) fn revoke_host_input(&self) -> bool {
-        self.computer.revoke_host_input()
+    pub(crate) fn toggle_host_input_local(&self) -> Result<Value, String> {
+        self.computer.toggle_host_input_local()
+    }
+
+    pub(crate) fn cancel_host_input(&self) {
+        self.computer.cancel_host_input();
     }
 
     pub(crate) fn host_input_status(&self) -> Value {

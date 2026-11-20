@@ -1,93 +1,91 @@
-//! Operator-only terminal commands. These functions are not remote UI actions.
-use super::{harness, terminal};
+//! Operator-only controls. None of these commands is registered as a remote UI action.
+use serde_json::Value;
 
-#[derive(Debug, PartialEq, Eq)]
-enum Command {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Command {
     Status,
-    Stop,
-    Host(u64),
+    On,
+    Off,
+    Toggle,
 }
 
-fn parse(text: &str) -> Result<Command, String> {
+pub(crate) fn parse(text: &str) -> Result<Command, String> {
     let words = text.split_whitespace().collect::<Vec<_>>();
     match words.as_slice() {
         [] | ["status"] => Ok(Command::Status),
-        ["stop"] => Ok(Command::Stop),
-        ["host"] => Ok(Command::Host(15)),
-        ["host", seconds]
-            if !seconds.is_empty() && seconds.bytes().all(|byte| byte.is_ascii_digit()) =>
-        {
-            let seconds = seconds.parse::<u64>().map_err(|_| "use 1..=60 seconds")?;
-            if (1..=60).contains(&seconds) {
-                Ok(Command::Host(seconds))
-            } else {
-                Err("use 1..=60 seconds".into())
-            }
-        }
-        _ => Err("Use /computer status, /computer host [1..60 seconds], or /computer stop".into()),
+        ["on"] => Ok(Command::On),
+        ["off"] | ["stop"] => Ok(Command::Off),
+        ["toggle"] => Ok(Command::Toggle),
+        _ => Err("Use /computer on, /computer off, /computer toggle, or /computer status".into()),
     }
 }
 
-/// This is called only by the local terminal's slash-command path, never by ui.action/message.
-pub(crate) fn local_command(text: &str) -> Result<String, String> {
-    let command = parse(text)?;
-    if !terminal::active() {
-        return Err("host handoff requires the local interactive ssmcp terminal".into());
+/// Execute only a decoded local command or shortcut, outside the terminal State lock.
+/// This also serves attached frontends: the shared gate belongs to this OS user,
+/// independently of which connection currently owns a Runtime.
+pub(crate) fn execute(command: Command) -> Result<Value, String> {
+    if let Ok((runtime, _)) = super::harness::local_runtime() {
+        return match command {
+            Command::Status => Ok(runtime.host_input_status()),
+            Command::On => runtime.set_host_input_local(true),
+            Command::Off => runtime.set_host_input_local(false),
+            Command::Toggle => runtime.toggle_host_input_local(),
+        };
     }
-    let (runtime, _) = harness::local_runtime()?;
     match command {
-        Command::Status => {
-            let status = runtime.host_input_status();
-            Ok(if status["enabled"] == true {
-                format!(
-                    "Host input handed over for up to {}s · input in this terminal returns control",
-                    status["remaining_seconds"].as_u64().unwrap_or(0)
-                )
-            } else {
-                "Host input locked · isolated desktop and background browser control remain available".into()
-            })
-        }
-        Command::Stop => {
-            runtime.revoke_host_input();
-            Ok("Host input locked · control returned".into())
-        }
-        Command::Host(seconds) => {
-            runtime.handoff_host_input_local(seconds)?;
-            Ok(format!(
-                "Host input handed over for {seconds}s · any input in this terminal stops it · /computer stop"
-            ))
-        }
+        Command::Status => Ok(crate::computer::host_input_status()),
+        Command::On => crate::computer::set_host_input_local(true),
+        Command::Off => crate::computer::set_host_input_local(false),
+        Command::Toggle => crate::computer::toggle_host_input_local(),
     }
 }
 
-/// Called on decoded local key/mouse/paste input. Tool output cannot invoke this path.
-pub(crate) fn local_input() {
-    if let Ok((runtime, _)) = harness::local_runtime() {
-        runtime.revoke_host_input();
+pub(crate) fn describe(status: &Value) -> String {
+    if let Some(error) = status["error"].as_str() {
+        return format!("Foreground off · background on · shared control unavailable: {error}");
     }
+    format!(
+        "Foreground {} · background on · shared by this OS user's ssmcp sessions · Super+Alt+C toggles",
+        if status["enabled"] == true {
+            "on"
+        } else {
+            "off"
+        }
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn host_handoff_command_defaults_to_fifteen_seconds_and_has_no_unbounded_mode() {
-        assert_eq!(parse("host").unwrap(), Command::Host(15));
-        assert_eq!(parse("host 1").unwrap(), Command::Host(1));
-        assert_eq!(parse("host 60").unwrap(), Command::Host(60));
+    fn computer_commands_are_explicit_and_reject_expired_lease_syntax() {
+        assert_eq!(parse("").unwrap(), Command::Status);
+        assert_eq!(parse("status").unwrap(), Command::Status);
+        assert_eq!(parse("on").unwrap(), Command::On);
+        assert_eq!(parse("off").unwrap(), Command::Off);
+        assert_eq!(parse("stop").unwrap(), Command::Off);
+        assert_eq!(parse("toggle").unwrap(), Command::Toggle);
         for text in [
-            "host 0",
-            "host 61",
-            "host unlimited",
-            "host -1",
-            "host 15 extra",
-            "host 15; echo hi",
+            "host",
+            "host 15",
+            "on 15",
+            "on extra",
+            "on; echo hi",
+            "enable",
         ] {
             assert!(parse(text).is_err(), "{text}");
         }
-        assert_eq!(parse("").unwrap(), Command::Status);
-        assert_eq!(parse("status").unwrap(), Command::Status);
-        assert_eq!(parse("stop").unwrap(), Command::Stop);
+    }
+
+    #[test]
+    fn computer_status_distinguishes_shared_foreground_from_background() {
+        let on = describe(&json!({"enabled":true,"background_enabled":true}));
+        assert!(on.contains("Foreground on") && on.contains("background on"));
+        assert!(on.contains("OS user") && on.contains("Super+Alt+C"));
+        assert!(!on.contains("seconds") && !on.contains("any input"));
+        let failed = describe(&json!({"enabled":false,"error":"cannot read state"}));
+        assert!(failed.contains("Foreground off") && failed.contains("unavailable"));
     }
 }

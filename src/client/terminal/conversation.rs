@@ -559,14 +559,30 @@ impl State {
                 self.conversation.composer.text(),
                 self.conversation.composer.cursor(),
             );
-            let _ = steering::set_draft_context(steering::DraftContext {
-                editing: self.conversation.editing.clone(),
-                target: self.conversation.target.clone(),
-                parked: self.conversation.parked.clone(),
-                native_recipient: self.conversation.native_recipient.clone(),
-                native_account: self.chat_native_account().cloned(),
-                send_group: self.chat_saved_group(),
-            });
+            let _ = steering::update_draft_context(
+                |stored| {
+                    stored.editing == self.conversation.editing
+                        && stored.target == self.conversation.target
+                        && stored.parked == self.conversation.parked
+                        && stored.native_recipient == self.conversation.native_recipient
+                        && stored.native_account.as_ref() == self.chat_native_account()
+                        && match (&stored.send_group, self.conversation.send_to_group) {
+                            (None, false) => true,
+                            (Some(saved), true) => {
+                                self.conversation.groups.saved_selection_matches(saved)
+                            }
+                            _ => false,
+                        }
+                },
+                || steering::DraftContext {
+                    editing: self.conversation.editing.clone(),
+                    target: self.conversation.target.clone(),
+                    parked: self.conversation.parked.clone(),
+                    native_recipient: self.conversation.native_recipient.clone(),
+                    native_account: self.chat_native_account().cloned(),
+                    send_group: self.chat_saved_group(),
+                },
+            );
         }
     }
 
@@ -735,12 +751,8 @@ impl State {
                 self.notice = Some("Harness request queued · results appear here".into());
             }
             "/computer" => {
-                if self.preview {
-                    return Err(
-                        "Preview cannot grant host input; use the connected local terminal".into(),
-                    );
-                }
-                self.notice = Some(crate::client::interface::computer::local_command(rest)?);
+                let command = crate::client::interface::computer::parse(rest)?;
+                self.computer_command(command)?;
             }
             "/command" => {
                 if rest.split_whitespace().count() > 1 {
@@ -1365,6 +1377,11 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        if matches!(key, Key::ComputerToggle) {
+            self.sleep_key(key);
+            self.computer_toggle();
+            return;
+        }
         if self.sleep_key(key) {
             return;
         }
@@ -2385,9 +2402,6 @@ impl State {
         // Keep text and navigation in their original order, including coalesced reads.
         for byte in bytes {
             let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
-            if !self.preview && (!output.is_empty() || !keys.is_empty()) {
-                crate::client::interface::computer::local_input();
-            }
             self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
@@ -2396,9 +2410,6 @@ impl State {
         }
         if flush {
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
-            if !self.preview && (!output.is_empty() || !keys.is_empty()) {
-                crate::client::interface::computer::local_input();
-            }
             self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
@@ -2971,23 +2982,34 @@ impl State {
                 };
                 let clock_width = clock_label
                     .as_ref()
-                    .map_or(0, |label| label.width() as u16 + 1);
-                let title = fit(&title, width.saturating_sub(clock_width));
+                    .map_or(0, |label| label.width() as u16 + 3);
+                let computer = self
+                    .computer_badge(width.saturating_sub(mode.width() as u16 + 1 + clock_width));
+                let title_width = width
+                    .saturating_sub(clock_width)
+                    .saturating_sub(computer.width() as u16 + u16::from(!computer.is_empty()));
+                let title = fit(&title, title_width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if let Some(clock) = &clock_label {
-                    fit(clock, available.min(usize::from(u16::MAX)) as u16)
+                    let detail = if computer.is_empty() {
+                        clock.clone()
+                    } else {
+                        format!("{clock} · {computer}")
+                    };
+                    fit(&detail, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();
-                    let full = format!("{} · {}", account.trim(), quota.trim());
+                    let full = format!("{} · {} · {computer}", account.trim(), quota.trim());
+                    let short = format!("{} · {computer}", quota.trim());
                     if full.width() <= available {
                         full
-                    } else if quota.trim().width() <= available {
-                        quota.trim().into()
+                    } else if short.width() <= available {
+                        short
                     } else {
-                        String::new()
+                        computer
                     }
                 } else {
-                    String::new()
+                    computer
                 };
                 let gap = "─".repeat(available.saturating_sub(detail.width()));
                 self.chat_line(
