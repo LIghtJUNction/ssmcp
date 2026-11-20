@@ -17,7 +17,8 @@ import subprocess
 import tempfile
 import time
 
-from e2e_composer import DOWN, ENTER, ESC, HOME, RIGHT
+from e2e_client_ui import body_text, prompt_text
+from e2e_composer import DOWN, ENTER, ESC, HOME, LEFT, RIGHT, UP
 from e2e_dashboard import text
 from e2e_input_history import InputHistory, PASTE_START, PASTE_END
 
@@ -64,19 +65,19 @@ class Interactions(InputHistory):
         self.quiet_checks.append(description)
         return shot
 
-    def capture_pair(self, front, name, marker):
+    def capture_pair(self, front, name, marker, *, rows=32):
         for columns in (120, 48):
-            front.resize(32, columns)
+            front.resize(rows, columns)
             front.pump(0.15)
             shot = front.until(
-                lambda value: value["size"] == [32, columns] and marker in text(value),
+                lambda value: value["size"] == [rows, columns] and marker in text(value),
                 name + " at " + str(columns) + " columns", cells=True)
             stem = "interactions-" + name + "-" + str(columns)
             (self.output / (stem + ".json")).write_text(
                 json.dumps(shot, ensure_ascii=False, indent=2) + "\n")
             (self.output / (stem + ".txt")).write_text(text(shot) + "\n")
             self.frames.append(stem + ".json")
-        front.resize(32, 120)
+        front.resize(rows, 120)
         front.pump(0.15)
 
     def conversation(self, front):
@@ -142,6 +143,131 @@ class Interactions(InputHistory):
         return self.wait_state(
             front, lambda item: item["view"] == "questions" and item["answering"] == request_id,
             "Shift+Up opening the exact pending request")
+
+    def pending_recall(self, front):
+        delivered_text = "UP_ALREADY_DELIVERED"
+        original = "UP_PENDING_ORIGINAL 中文"
+        revised = "UP_EDITED_SENT 中文"
+        markers = (delivered_text, "UP_PENDING_ORIGINAL", "UP_EDITED_SENT")
+        self.conversation(front)
+        front.resize(58, 120)
+        front.pump(0.15)
+        initial = self.ui("/display/conversation")
+        before_ids = {item["id"] for item in self.queue()["queue"]}
+        self.check(initial["draft"]["text"] == "" and initial["target"] is None
+                   and initial["native_recipient"] is None,
+                   "pending recall starts with an empty next-caller composer")
+
+        def queue_state(record, status, source):
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                front.pump(0.05)
+                current = self.record(self.queue(), message_id=record["id"])
+                if current["status"] == status and current["text"] == source:
+                    return current
+            raise AssertionError("the exact recall fixture did not become " + status)
+
+        def frames(name, expected, draft_marker=None):
+            self.capture_pair(front, "pending-recall-" + name, delivered_text, rows=58)
+            for filename in self.frames[-2:]:
+                shot = json.loads((self.output / filename).read_text())
+                body, prompt = body_text(shot), prompt_text(shot)
+                self.check(tuple(body.count(marker) for marker in markers) == expected,
+                           name + ": real conversation has exact old/new/delivered body counts at "
+                           + str(shot["size"][1]) + " columns")
+                self.check(all(prompt.count(marker) == int(marker == draft_marker)
+                               for marker in markers),
+                           name + ": recalled text appears only in its intended physical composer")
+
+        delivered = self.submit_source(front, delivered_text)
+        self.expect_delivery(self.work(), delivered)
+        queue_state(delivered, "delivered", delivered_text)
+        pending = self.submit_source(front, original)
+        expected_ids = before_ids | {delivered["id"], pending["id"]}
+        self.quiet_until(
+            front, lambda shot: body_text(shot).count(markers[0]) == 1
+            and body_text(shot).count(markers[1]) == 1 and markers[1] not in prompt_text(shot),
+            "the acknowledged pending bubble is visible before Up")
+        frames("before-up", (1, 1, 0))
+
+        front.send(UP)
+        self.quiet_until(
+            front, lambda shot: original in prompt_text(shot)
+            and markers[1] not in body_text(shot) and body_text(shot).count(markers[0]) == 1,
+            "server-confirmed Up recall removes only the old pending bubble without another key")
+        recalled = self.ui("/display/conversation")
+        self.check(recalled["editing"] == pending["id"] and recalled["target"] == pending["target"]
+                   and recalled["draft"] == {"text": original, "cursor": len(original.encode())},
+                   "Up restores the exact request identity, source and UTF-8 end cursor")
+        queue_state(pending, "editing", original)
+        frames("recalled", (1, 0, 0), markers[1])
+
+        # Escape dismisses the notice; it does not cancel or republish an edit.
+        # Exercise a non-end UTF-8 cursor so preservation is not a default value.
+        front.send(LEFT)
+        cursor = len(original[:-1].encode())
+        before_escape = self.wait_state(
+            front, lambda state: state["draft"]["text"] == original and state["draft"]["cursor"] == cursor,
+            "move the recalled cursor left across one Chinese character")
+        front.send(ESC)
+        front.pump(0.12)
+        escaped = self.ui("/display/conversation")
+        self.check(escaped["draft"] == before_escape["draft"] and escaped["editing"] == pending["id"]
+                   and escaped["target"] == recalled["target"],
+                   "Escape preserves the held edit, its exact text, cursor and recipient")
+        queue_state(pending, "editing", original)
+        self.check(not self.messages(self.work()),
+                   "the held edit is not delivered and the earlier delivered message is not replayed")
+        self.check({item["id"] for item in self.queue()["queue"]} == expected_ids,
+                   "recall and Escape do not create or cancel a replacement request")
+        frames("escape-held", (1, 0, 0), markers[1])
+
+        self.replace_short(front, revised)
+        front.send(ENTER)
+        self.quiet_until(
+            front, lambda shot: body_text(shot).count(markers[2]) == 1
+            and markers[1] not in body_text(shot) and body_text(shot).count(markers[0]) == 1
+            and markers[2] not in prompt_text(shot),
+            "resubmitting the edit adds exactly one new bubble and keeps the delivered bubble")
+        edited = queue_state(pending, "queued", revised)
+        accepted = self.ui("/display/conversation")
+        self.check(edited["revision"] > pending["revision"] and edited["target"] == pending["target"]
+                   and accepted["editing"] is None and accepted["draft"]["text"] == "",
+                   "resubmission advances the same request revision and clears only its accepted edit")
+        self.check({item["id"] for item in self.queue()["queue"]} == expected_ids,
+                   "resubmission reuses the original message ID without an additional request")
+        frames("resubmitted", (1, 0, 1))
+        self.expect_delivery(self.work(), pending, request_text=revised)
+        queue_state(pending, "delivered", revised)
+        self.check(not self.messages(self.work()), "the revised request is delivered once without replay")
+
+        # With no queued request, Up is ordinary input-history navigation.
+        # Its copied text must not retract either already delivered chat card.
+        self.check(self.record(self.queue(), message_id=delivered["id"])["status"] == "delivered",
+                   "the earlier delivered request remains delivered throughout pending editing")
+        before_history = {item["id"]: {key: item[key] for key in ("text", "status", "revision", "target")}
+                          for item in self.queue()["queue"]}
+        front.send(UP)
+        self.quiet_until(
+            front, lambda shot: revised in prompt_text(shot)
+            and body_text(shot).count(markers[0]) == 1 and body_text(shot).count(markers[2]) == 1
+            and markers[1] not in body_text(shot),
+            "Up after delivery copies history while retaining the delivered conversation bodies")
+        history = self.ui("/display/conversation")
+        self.check(history["editing"] is None
+                   and history["draft"] == {"text": revised, "cursor": len(revised.encode())},
+                   "history recall of delivered text is an ordinary draft, not a queue takeback")
+        after_history = {item["id"]: {key: item[key] for key in ("text", "status", "revision", "target")}
+                         for item in self.queue()["queue"]}
+        self.check(after_history == before_history,
+                   "ordinary history recall cannot change delivered queue identities, revisions or states")
+        frames("delivered-history", (1, 0, 1), markers[2])
+        self.replace_short(front, "")
+        front.resize(32, 120)
+        front.pump(0.15)
+        return {"request_id": pending["id"], "preserved_delivered_id": delivered["id"],
+                "original_revision": pending["revision"], "edited_revision": edited["revision"],
+                "verified_widths": [120, 48], "rows": 58, "escape_preserves_edit": True, "delivered_once": True}
 
     def command_details(self, front):
         secret = "command-visibility-fixture-private"
@@ -611,6 +737,7 @@ class Interactions(InputHistory):
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=5,
         )
         front = self.start_front("PTY-interactions")
+        recalled = self.pending_recall(front)
         requester = self.public_call("collab", {
             "action": "join", "client_id": self.client_id, "name": "PTY requester", "role": "requester"})
         reviewer = self.public_call("collab", {
@@ -626,6 +753,7 @@ class Interactions(InputHistory):
         return {
             "status": "passed", "checks": len(self.checks), "passed_checks": self.checks,
             "frames": self.frames, "quiet_checks": self.quiet_checks,
+            "pending_recall": recalled,
             "transport": "real production account router, native tools, WebSocket and owned PTY",
             "upstream_provider": "synthetic GitHub fixture",
             "models_started": False, "existing_clients_reloaded": False,
