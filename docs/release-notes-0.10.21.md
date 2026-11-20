@@ -9,6 +9,7 @@
 - **引用与草稿取回。** 普通要求中的缺失 `@file` 或未知 `$skill` 会提示引用不可用，符合大小限制的正文仍可发送。空输入框按 ↑ 可取回仍待交付的要求，确认后移除对应的待交付记录。跨连接恢复去向未确认的要求时，原尝试保留，另起一份待编辑的请求。 [引用和队列](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/client-ui.md#输入要求与队列)
 - **身份与历史描述。** 界面区分操作系统 PID、中继连接 ID 和逻辑线程 ID。在线角色短摘要上限为 128 个 UTF-8 字节。本地历史标题与摘要可以单独保存，分别最多 256 和 2048 个 UTF-8 字节。 [成员身份](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/client-ui.md#agent-面板与成员身份) · [历史描述](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/client-ui.md#本地历史标题与摘要)
 - **历史与审计。** 对话按所选历史显示带归属的任务输出和原生回复，Logs 与 Tasks 保留跨会话审计。晚到的回复可写回仍可写的原会话，`/copy` 继续使用所选历史的回复。 [本地消息与历史归属](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/client-ui.md#本地消息与回答问题)
+- **历史列表的键盘焦点。** 打开 `/resume` 或 `/archived` 列表时，即使已经位于 History 页，也会把键盘焦点交给列表。Enter 恢复并继续所选会话后，焦点回到输入框。 [历史恢复操作](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/conversation-history.md)
 - **账号退出与撤销。** 修复账号连接在写入先报错时丢失最终授权失效通知的问题，避免退出或撤销登录后因这条竞态再用旧凭据重连。读取结束消息使用统一期限，普通断线、主动停止和重载保留各自的处理规则。 [账号连接修复](https://github.com/LIghtJUNction/ssmcp/pull/142)
 - **为会话设置目标。** `/goal set <text>`、`/goal show` 和 `/goal clear` 管理当前会话的单行目标，最多 256 个字符且不超过 1024 个 UTF-8 字节。目标记录用户意图，不会执行任务或授予批准。 [目标命令](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/terminal/conversation/goals.rs) · [保存与限制](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/interface/history/goals.rs)
 

@@ -1,0 +1,73 @@
+{
+  "status": "passed",
+  "platform": "Linux",
+  "transport": "isolated OpenSSH public-key + OAuth + owned PTY + independent vt100 decoder",
+  "scope": "nonblocking questions, local answers, independent drafts, Markdown display; no models",
+  "binaries": {
+    "ssmcp": "0f41062eec88ba35b4468b9a50ee6591790c5b651cb676ca90a6532e4f1ac4aa",
+    "ssmcpd": "d58e088bddb0e8d4b21d3a2db84485c3dbab05a2d78e0c2f7fbd7735762dedd9",
+    "vt_snapshot": "db7e12017c823f54a6f63451230e18f14c21e0088b44562ceb2c2c399d85c66f"
+  },
+  "sources": {
+    "e2e_questions.py": "28668eb039847aeb6afd891aa10d9824f233cdeb787ca7caed88205ef3176e42",
+    "e2e.py": "5778b6a583e370aa2a50e88fed7a010e5fab457aa88d72ec31a7d372549e6ab3",
+    "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+    "e2e_client_ui.py": "122f05d22963ab969142b1bedbc83a38e882e98a6c53035f8e09c128183b533d",
+    "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1"
+  },
+  "checks": [
+    "the owned account router keeps its credentials in a private ready record",
+    "the isolated account has the expected stable provider identity and handle",
+    "the real production account router is healthy",
+    "the account connection advertises its exact identity-scoped MCP resource",
+    "MCP 401 advertises protected-resource metadata",
+    "resource metadata binds the exact account endpoint and OAuth issuer",
+    "OAuth discovery advertises authorization-code PKCE S256",
+    "public MCP client registers through OAuth DCR",
+    "the account OAuth endpoint requires provider consent instead of a connection login code",
+    "the OAuth browser binding is Secure, HttpOnly and SameSite Lax",
+    "OAuth pages cannot be cached and bind same-origin form submission",
+    "real identity exchange validates provider PKCE and requires explicit consent",
+    "OAuth consent preserves the registered callback, state and issuer",
+    "the real OAuth endpoint issues an identity-scoped MCP access token",
+    "OAuth access expires in eight hours and supplies a refresh token",
+    "OAuth token responses cannot be cached",
+    "the account relay credential cannot authenticate as an MCP access token",
+    "question setup selects the exact local member rather than a native namesake",
+    "the parked draft has an exact recipient and a UTF-8 cursor before its final character",
+    "each ask call returns pending immediately without awaiting a user answer",
+    "multiple pending questions retain distinct identities",
+    "later tool calls complete while earlier questions remain unanswered",
+    "retrying an idempotent ask does not add another queued question",
+    "background questions do not steal or replace the normal draft",
+    "an agent can display a progress message while questions are pending",
+    "Markdown code content is rendered without executing a shell command",
+    "repeated Shift+Up changes questions without answering either one",
+    "two Escape transitions preserve normal text, cursor, recipient and edit identity",
+    "a numbered suggested answer stores the option text under the original question ID",
+    "answering a choice does not publish or alter the normal message",
+    "a free-form Unicode answer reaches the native read tool byte for byte",
+    "Delete in the question list skips a question without fabricating an answer",
+    "all three question outcomes remain readable after the pending list empties",
+    "all question interactions preserve the same ordinary draft and exact target",
+    "answering a question preserves a held request's draft, target and original edit ID",
+    "question Enter never republishes the normal request held for editing",
+    "ssmcp.ui.message rejects unsupported message input with the expected validation error",
+    "a rejected UI call does not consume user requirements",
+    "ssmcp.ui.message rejects unsupported message input with the expected validation error",
+    "a rejected UI call does not consume user requirements",
+    "rejected terminal escapes cannot clear the UI, leave the screen, or corrupt a draft",
+    "the question scenario restores the owned terminal on exit",
+    "the isolated question client exits successfully"
+  ],
+  "metrics": {
+    "ask_seconds": 0.316,
+    "questions": {
+      "bytes": 49779,
+      "sha256": "24146ea28da31c66325dbc6401127d115646c8fdb898b1cc92289b5f986cb52d",
+      "answered": 3,
+      "skipped": 1
+    }
+  },
+  "duration_seconds": 12.885
+}
