@@ -310,8 +310,10 @@ mod tests {
         view.scroll_tool_group(head, isize::MIN + 1);
         let mut result = Vec::new();
         let mut covered = 0usize;
+        let gutter = super::super::clip_plain("  │ ", 4.min(usize::from(width).saturating_sub(1)));
         loop {
             let rows = view.render(width, 40, &ui(), true);
+            assert!(rows.iter().all(|row| UnicodeWidthStr::width(unstyled(row).as_str()) <= usize::from(width)), "the complete rendered window must fit its width");
             let group = view.tool_groups()[0].clone();
             let panel = &view.events[group.start].group_panel;
             let offset = panel.offset();
@@ -325,7 +327,15 @@ mod tests {
                             && view.group_header_hit_rows[*row].is_none()
                     })
                     .skip(covered.saturating_sub(offset))
-                    .map(|(_, row)| row),
+                    .map(|(_, row)| {
+                        // Remove only the fixed window chrome after checking the
+                        // real row width. A path may itself contain a literal │.
+                        let plain = unstyled(&row);
+                        plain
+                            .strip_prefix(gutter.as_str())
+                            .expect("tool-window body retains its fixed gutter")
+                            .to_owned()
+                    }),
             );
             covered = offset + page;
             if offset == end {
@@ -452,7 +462,10 @@ mod tests {
                 .iter()
                 .map(|row| unstyled(row).replace(' ', ""))
                 .collect::<String>();
-            assert!(compact.contains("中文-tail/SKILL.md"));
+            assert!(
+                compact.contains("中文-tail/SKILL.md"),
+                "the complete path tail must remain readable at {width} columns: {compact}"
+            );
             assert!(!compact.contains(secret));
         }
         let expanded = all_window_rows(&mut view, 120).join("\n");
