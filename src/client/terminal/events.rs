@@ -18,6 +18,7 @@ pub(super) use reload_display::{ReloadPosition, Snapshot as ReloadDisplay};
 #[cfg(all(test, unix))]
 mod source_tests;
 mod tool_activity;
+mod tool_summaries;
 use correlation::{Kind, Meta, Status};
 pub(crate) use diff::DiffMode;
 
@@ -64,6 +65,7 @@ struct Event {
     interrupted: bool,
     reload_index: Option<usize>,
     reload_boundary: bool,
+    tool_group_id: Option<String>,
 }
 
 /// Independently bounded display metadata never becomes native output or log text.
@@ -435,6 +437,7 @@ impl Event {
                 .as_ref()
                 .map_or(0, |source| source.text.len())
             + self.history_id.as_ref().map_or(0, String::len)
+            + self.tool_group_id.as_ref().map_or(0, String::len)
     }
 
     fn owned_by(&self, selection: &DisplayHistory) -> bool {
@@ -523,6 +526,10 @@ pub(crate) struct EventView {
     level: u8,
     scope: EventScope,
     history_selection: DisplayHistory,
+    summary_groups: VecDeque<tool_summaries::Group>,
+    summary_calls: VecDeque<tool_summaries::Call>,
+    summary_observers: VecDeque<(u64, u64)>,
+    active_summary_group: Option<String>,
     reload_history_preview: bool,
     diff_mode: DiffMode,
     read_boundary: read_activity::Boundary,
@@ -554,9 +561,27 @@ impl EventView {
         if self.scope != EventScope::Conversation || !self.query.is_empty() || self.level != 0 {
             return Vec::new();
         }
-        tool_activity::groups(&self.events, |event| {
+        let mut groups = tool_activity::groups(&self.events, |event| {
             event.owned_by(&self.history_selection)
-        })
+        });
+        for group in &mut groups {
+            if let Some(id) = &self.events[group.start].tool_group_id {
+                group.info = self
+                    .summary_groups
+                    .iter()
+                    .find(|saved| &saved.display.group_id == id)
+                    .map(|saved| saved.display.clone());
+            }
+        }
+        // A single call keeps its existing card until it has a summary.
+        groups.retain(|group| {
+            group.members.len() > 1
+                || group
+                    .info
+                    .as_ref()
+                    .is_some_and(|info| info.summary.is_some())
+        });
+        groups
     }
 
     fn tool_group_for(&self, id: u64) -> Option<tool_activity::Group> {
@@ -1075,6 +1100,18 @@ impl EventView {
     }
 
     fn ingest_event_with_meta(&mut self, label: &str, event: &Value, bytes: &[u8], mut meta: Meta) {
+        // Read runs retain their request barriers even when orchestration is
+        // transparent in the outer tool window.
+        let read_bookkeeping = meta.read_bookkeeping;
+        // Code-mode audit records describe the envelope, not another native call.
+        // Keep them in Logs without adding to or splitting the tool window.
+        if matches!(
+            event["type"].as_str(),
+            Some("ssmcp.code_mode" | "ssmcp.controller.started" | "ssmcp.controller.finished")
+        ) {
+            meta.kind = Kind::Log;
+            meta.read_bookkeeping = true;
+        }
         if event["type"] == "ssmcp.message" && matches!(label, "message" | "agent" | "listener") {
             meta.history_message = true;
             meta.message_id = event["message_id"].as_str().map(str::to_owned);
@@ -1100,8 +1137,11 @@ impl EventView {
         } else {
             meta.read.as_mut()
         };
-        self.read_boundary
-            .observe(event, read, meta.read_bookkeeping);
+        self.read_boundary.observe(event, read, read_bookkeeping);
+        // Balance controller boundaries before hiding observer diagnostics.
+        if self.summary_observer_event(&meta) {
+            return;
+        }
         if meta.kind == Kind::Conversation
             && event["presentation"].is_null()
             && let Some(text) = event["text"].as_str()
@@ -1138,7 +1178,10 @@ impl EventView {
         if meta.skip {
             return;
         }
-        let mut matches = Vec::new();
+        let mut matches = self
+            .summary_event_for(&meta)
+            .into_iter()
+            .collect::<Vec<_>>();
         for key in &meta.keys {
             if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
                 event.meta.same_source(&meta)
@@ -1159,6 +1202,11 @@ impl EventView {
         let first = plain.lines().map(heading).find(|line| !line.is_empty());
         if first.is_none() && matches.is_empty() {
             return; // Empty stream chunks must not become separate UI cards.
+        }
+        if meta.kind == Kind::Conversation
+            || (meta.kind == Kind::Log && !meta.read_bookkeeping && matches.is_empty())
+        {
+            self.active_summary_group = None;
         }
         let first = first.unwrap_or("");
         let conversation = meta.kind == Kind::Conversation
@@ -1245,6 +1293,19 @@ impl EventView {
                 }
             }
             let event = &mut self.events[index];
+            // Replace the dispatch placeholder with the first native display
+            // body; later stdout/lifecycle updates append to the same logical row.
+            if event.tool_group_id.is_some()
+                && event.meta.keys.is_empty()
+                && event.text.starts_with("[RUN] ssmcp.")
+                && !plain.trim().is_empty()
+            {
+                event.text.clear();
+                event.lines = 0;
+                event.summary = event_summary(&plain, attention.unwrap_or(first));
+                event.meta.read = meta.read.clone();
+                event.tone = tone;
+            }
             event.append(text, truncated);
             if let Some(source) = command_source {
                 event.command_source = Some(source);
@@ -1290,6 +1351,7 @@ impl EventView {
                 interrupted: false,
                 reload_index: None,
                 reload_boundary: false,
+                tool_group_id: None,
             });
         }
         self.prune();
@@ -1306,16 +1368,43 @@ impl EventView {
     }
 
     fn prune(&mut self) {
-        self.bytes = self.events.iter().map(Event::retained_bytes).sum();
+        self.prune_summary_groups();
+        self.bytes = self.events.iter().map(Event::retained_bytes).sum::<usize>()
+            + self
+                .summary_groups
+                .iter()
+                .map(tool_summaries::Group::retained_bytes)
+                .sum::<usize>();
         while self.events.len() > MAX_EVENTS || self.bytes > MAX_BYTES {
-            if let Some(event) = self.events.pop_front() {
-                self.bytes -= event.retained_bytes();
-                self.dropped = self.dropped.saturating_add(1);
+            let Some(event) = self.events.pop_front() else {
+                break;
+            };
+            if let Some(group_id) = &event.tool_group_id
+                && let Some(next) = self
+                    .events
+                    .iter_mut()
+                    .find(|next| next.tool_group_id.as_ref() == Some(group_id))
+            {
+                next.group_expanded = event.group_expanded;
+                next.group_panel = event.group_panel;
+                if self.selected_group == Some(event.id) {
+                    self.selected_group = Some(next.id);
+                    self.selected = Some(next.id);
+                }
             }
+            self.dropped = self.dropped.saturating_add(1);
+            self.prune_summary_groups();
+            self.bytes = self.events.iter().map(Event::retained_bytes).sum::<usize>()
+                + self
+                    .summary_groups
+                    .iter()
+                    .map(tool_summaries::Group::retained_bytes)
+                    .sum::<usize>();
         }
         let events = &self.events;
         self.read_expanded
             .retain(|id| events.iter().any(|event| event.id == *id));
+        self.prune_summary_groups();
     }
 
     pub(crate) fn filter(&mut self, query: &str, level: u8) {
@@ -1370,6 +1459,7 @@ impl EventView {
     /// Attach only a decoded image from the native result path. Text containing
     /// "[IMAGE]" cannot manufacture a protocol placement.
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        self.active_summary_group = None;
         if let Some(event) = self.events.back_mut() {
             event.image = Some(preview);
             event.meta.kind = Kind::Tool;
@@ -1654,6 +1744,10 @@ impl EventView {
 
     pub(crate) fn clear(&mut self) {
         self.events.clear();
+        self.summary_groups.clear();
+        self.summary_calls.clear();
+        self.summary_observers.clear();
+        self.active_summary_group = None;
         self.read_boundary.interrupt();
         self.read_expanded.clear();
         self.bytes = 0;
@@ -1700,6 +1794,15 @@ impl EventView {
                 let panel = &self.events[group.start].group_panel;
                 json!({
                     "id":group.head,"count":group.members.len(),"expanded":group.expanded,
+                    "group_id":group.info.as_ref().map(|info|&info.group_id),
+                    "summary":group.info.as_ref().and_then(|info|info.summary.as_deref()),
+                    "revision":group.info.as_ref().map_or(0, |info|info.revision),
+                    "call_count":group.info.as_ref().map_or(group.members.len() as u64, |info|info.call_count),
+                    "covered_call_count":group.info.as_ref().map_or(0, |info|info.covered_call_count),
+                    "needs_summary":group.info.as_ref().is_some_and(|info|info.needs_summary()),
+                    "summary_editable":group.info.as_ref().is_some_and(|info|
+                        self.summary_groups.iter().any(|saved|
+                            saved.display.group_id == info.group_id && saved.editable())),
                     "stats":tool_activity::stats(&self.events, group),
                     "members":group.members.iter().map(|index|self.events[*index].id).collect::<Vec<_>>(),
                     "scroll":panel.offset(),"rows":panel.rows,"visible_rows":if group.expanded {panel.page} else {0},
