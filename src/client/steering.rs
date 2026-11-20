@@ -138,6 +138,8 @@ pub(super) struct SavedDraft {
     pub cursor: usize,
     #[serde(default)]
     pub target: Option<String>,
+    #[serde(default)]
+    pub native_recipient: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,6 +148,8 @@ pub(super) struct DraftContext {
     pub editing: Option<String>,
     pub target: Option<String>,
     pub parked: Option<SavedDraft>,
+    #[serde(default)]
+    pub native_recipient: Option<String>,
 }
 
 impl DraftContext {
@@ -163,6 +167,18 @@ impl DraftContext {
             if !valid_id(id) {
                 return Err("invalid draft context identifier".into());
             }
+        }
+        for recipient in [
+            self.native_recipient.as_deref(),
+            self.parked
+                .as_ref()
+                .and_then(|draft| draft.native_recipient.as_deref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            crate::wire::messages::parse_recipient(recipient)
+                .map_err(|_| "invalid native draft recipient")?;
         }
         if self.parked.as_ref().is_some_and(|draft| {
             draft.text.len() > MAX_USER_MESSAGE_BYTES || !draft.text.is_char_boundary(draft.cursor)
@@ -2273,10 +2289,12 @@ mod tests {
         manager.outbox.context = DraftContext {
             editing: Some(message.id.clone()),
             target: Some("agent_one".into()),
+            native_recipient: None,
             parked: Some(SavedDraft {
                 text: "parked request".into(),
                 cursor: 6,
                 target: Some("another_agent".into()),
+                native_recipient: None,
             }),
         };
         manager.begin_reload().unwrap();
@@ -2656,6 +2674,7 @@ mod tests {
                     text: "界".into(),
                     cursor: 1,
                     target: None,
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },
@@ -2664,6 +2683,7 @@ mod tests {
                     text: "x".repeat(MAX_USER_MESSAGE_BYTES + 1),
                     cursor: 0,
                     target: None,
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },
@@ -2672,6 +2692,7 @@ mod tests {
                     text: String::new(),
                     cursor: 0,
                     target: Some("bad target".into()),
+                    native_recipient: None,
                 }),
                 ..DraftContext::default()
             },

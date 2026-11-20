@@ -115,6 +115,7 @@ struct Queue {
     records: VecDeque<Record>,
     revision: u64,
     connection: Option<(String, u64)>,
+    finish_waiting: std::collections::HashMap<String, usize>,
 }
 
 fn state() -> &'static Mutex<Queue> {
@@ -565,6 +566,41 @@ pub(crate) fn get_view(id: &str) -> Option<QuestionView> {
         .iter()
         .find(|record| record.question.id == id)
         .map(Record::view)
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FinishWaitSnapshot {
+    pub connection_id: Option<String>,
+    pub active: Vec<FinishWaitEntry>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FinishWaitEntry {
+    pub request_id: String,
+}
+
+pub(crate) fn finish_wait_snapshot() -> FinishWaitSnapshot {
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    FinishWaitSnapshot {
+        connection_id: queue
+            .connection
+            .as_ref()
+            .map(|(id, generation)| format!("{id}:{generation}")),
+        active: queue
+            .records
+            .iter()
+            .filter(|record| {
+                queue.finish_waiting.contains_key(&record.question.id)
+                    && record.routing.as_ref().is_some_and(|routing| {
+                        !routing.scope_expired
+                            && routing.finish_status == Some(FinishStatus::Pending)
+                    })
+            })
+            .map(|record| FinishWaitEntry {
+                request_id: record.question.id.clone(),
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn decide_finish(
