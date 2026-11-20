@@ -33,7 +33,8 @@ import termios
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from e2e_account_relay import IDENTITY, wait_for
+from e2e_account_gateway import IDENTITY
+from e2e_account_relay import wait_for
 from e2e_composer import Composer, ENTER, LEFT, UP, input_text, visible_record
 from e2e_client_ui import empty_composer_ready
 from e2e_dashboard import Decoder, Frontend, sha256, text
@@ -173,8 +174,7 @@ class RelayComposer(Composer):
                 or address.path or address.query or address.fragment or address.username):
             raise AssertionError("router fixture must bind an explicit loopback HTTP origin")
         self.http_port = address.port
-        self.check(all(self.identity.get(key) == value for key, value in IDENTITY.items())
-                   and self.identity.get("username") == "relayfixture",
+        self.check(self.identity == IDENTITY,
                    "the isolated named account has the expected stable identity and handle")
         status, result, _ = self.request("GET", path="/healthz", secret="")
         self.check(status == 200 and result.strip() == "ok", "the real production router is healthy")
@@ -333,7 +333,7 @@ class RelayComposer(Composer):
 
         editable = self.submit(front, "RELAY_COMPOSER_EDIT_ORIGINAL")
         front.send(UP)
-        front.until(lambda shot: "Editing · next caller" in text(shot)
+        front.until(lambda shot: "Edit queue · Enter sends · next caller" in text(shot)
                                  and editable["text"] in input_text(shot),
                     "server-confirmed relay takeback before editing")
         self.check(self.record(self.queue(), message_id=editable["id"])["status"] == "editing",
@@ -341,6 +341,7 @@ class RelayComposer(Composer):
         self.check(not self.messages(self.work()), "an editing relay requirement is withheld at the actual response boundary")
         revised = "RELAY_COMPOSER_EDIT_REVISED 界"
         front.send(b"\x01\x0b" + revised.encode() + ENTER)
+        self.show_submitted_queue(front, revised)
         front.until(lambda shot: visible_record(shot, revised, "queued", editable["id"]),
                     "revised relay requirement acknowledged under the same identity")
         accepted = self.record(self.queue(), message_id=editable["id"])

@@ -201,12 +201,26 @@ class Frontend:
         self.decoder.request(op="resize", rows=rows, cols=cols)
 
     def disconnect(self):
-        self.send(b"\x03")
         deadline = time.monotonic() + 8
+        self.send(b"\x03")
+        presses = 1
+        cleared = False
+        confirmed = False
         while self.process.poll() is None and time.monotonic() < deadline:
             self.pump(0.05)
+            notice = self.decoder.request(op="snapshot")["rows"][-1].strip()
+            # Chat first clears only its active editor, then asks for an
+            # explicit confirmation. Split layout may exit on the first key.
+            if presses < 3 and not cleared and notice.startswith(("Input cleared", "Answer cleared")):
+                cleared = True
+                presses += 1
+                self.send(b"\x03")
+            elif presses < 3 and not confirmed and notice.startswith("Press Ctrl+C again to exit"):
+                confirmed = True
+                presses += 1
+                self.send(b"\x03")
         if self.process.poll() is None:
-            raise AssertionError("Ctrl-C did not disconnect this owned frontend")
+            raise AssertionError(f"Ctrl-C did not disconnect this owned frontend after {presses} keys; notice={notice!r}")
         self.pump(0.1)
         return self.snapshot(), termios.tcgetattr(self.slave)
 
