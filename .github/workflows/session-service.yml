@@ -45,7 +45,26 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo apt-get install --yes --no-install-recommends nodejs bubblewrap apparmor-profiles
+          if test -e /sys/module/apparmor/parameters/enabled && grep -q Y /sys/module/apparmor/parameters/enabled; then
+            if test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict; then
+              sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+              sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+            fi
+          fi
+      - name: Select and identify the installed system Node
+        if: runner.os == 'Linux'
+        run: |
+          # Only node is shadowed; cargo, gh and all other runner tools retain
+          # their original PATH lookup. Discovery still validates the real binary.
+          ssmcp_node_bin="$(mktemp -d "$RUNNER_TEMP/ssmcp-node.XXXXXX")"
+          ln -s /usr/bin/node "$ssmcp_node_bin/node"
+          printf '%s\n' "$ssmcp_node_bin" >> "$GITHUB_PATH"
+          export PATH="$ssmcp_node_bin:$PATH"
+          ssmcp_node_real="$(readlink -f "$(command -v node)")"
+          test "$ssmcp_node_real" = "$(readlink -f /usr/bin/node)"
+          printf 'Runtime executable: %s\n' "$ssmcp_node_real"
+          node --version
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
           toolchain: 1.100.0
