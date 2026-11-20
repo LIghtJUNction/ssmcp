@@ -5,13 +5,43 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 | 源码目录 | 固定库版本 | 在 ssmcp 中的职责 | 独立仓库 |
 |---|---|---|---|
 | `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
-| `crates/zharness` | `zharness = 0.5.1` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
+| `crates/zharness` | `zharness = 0.6.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
 | `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
 | `crates/zuse` | `zuse-computer = 0.2.2`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
 
 四个库的 Git 提交均由父仓库的 gitlink 固定，`.gitmodules` 记录公开仓库地址。ztuio 固定到 `9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e`，复用独立仓库合并后的公共 API、ANSI 帧优化与契约测试，父仓库不再保留另一份终端核心源码。新包名和 Rust 导入名均为 `ztuio`；其版本由独立仓库维护。精确版本写在 [Cargo.toml](../Cargo.toml)，依赖解析结果写在 [Cargo.lock](../Cargo.lock)，日常构建不会跟随任何子库的 `main` 自动更新。
 
 zuse-computer 0.2.2 固定到 `94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a`。Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，保留原有聚焦身份检查；各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
+
+## 每轮迭代与发布前核对 Project Z 依赖
+
+每轮迭代开始时以及最终发布前，都要核对实际使用的 Project Z 直接和间接依赖，采用当时最新、未撤回的稳定发布版，并验证消费者。这里的“最新”以查询时的官方发布记录为准；日常构建继续使用固定版本和源码，不自动跟随上游分支。
+
+1. 用 `cargo metadata --locked --format-version 1` 枚举实际解析图，再按包的 `repository` 身份确认 Project Z 范围。包名以 z 开头只供查找，第三方包另按自身维护流程处理。
+2. 查询 [crates.io API](https://crates.io/data-access) 的版本列表，排除 prerelease 与 yanked 版本，记录 UTC 查询时间、精确版本和仓库 tag。路径依赖还要核对发布归档摘要、包内源码记录与选定 gitlink。
+3. 对已发布的新版本一起更新消费者约束、子模块提交和锁文件；保持上游正式约束。上游尚未发布兼容版本时，记录完整依赖链、阻碍、后续发布顺序与负责仓库，继续完成可独立更新的部分。
+4. 对受影响的消费者执行本地定向编译、契约或集成检查，保留仍然适用的既有结果，再及时提交、推送。最终发布由验收负责人把应用与子模块固定到同一份最终源码，并执行正式发布门禁。依赖核对是一项每轮执行的维护要求，不是后台自动升级任务。
+
+### 2026-11-20 核对记录
+
+2026-11-20 12:34:23–12:36:53 UTC 查询官方 registry，并核对对应仓库 tag。基线是 `fd0c58018605871ba04119e22c2ce089698c3f1c`。本次将 zharness 从 0.5.1 更新为 0.6.0，固定到 `db4206d3b74e37d57ff052948962f55514081d4b`；其发布归档与 v0.6.0 tag 指向同一份源码，带入 zcall 0.4.0 和 zguard 0.1.0。其余直接依赖已处于查询时的最新稳定版。逐项版本、摘要和源码证据见[核对记录](reports/project-z-dependencies-20261120.json)。
+
+| 包 | 使用路径 | 更新后的解析版本 | 查询时最新稳定版与 tag |
+| --- | --- | --- | --- |
+| [z64](https://crates.io/crates/z64) | zuse | `0.1.2` | [0.1.2](https://github.com/LIghtJUNction/z64/tree/v0.1.2) |
+| [zcall](https://crates.io/crates/zcall) | zharness / zmcpio | `0.3.0、0.4.0` | [0.4.0](https://github.com/LIghtJUNction/zcall/tree/v0.4.0) |
+| [zclap](https://crates.io/crates/zclap) | zuse | `0.1.4` | [0.1.4](https://github.com/LIghtJUNction/zclap/tree/v0.1.4) |
+| [zconv](https://crates.io/crates/zconv) | zcall | `0.4.0` | [0.4.0](https://github.com/LIghtJUNction/zconv/tree/v0.4.0) |
+| [zguard](https://crates.io/crates/zguard) | zharness | `0.1.0` | [0.1.0](https://github.com/LIghtJUNction/zguard/tree/v0.1.0) |
+| [zharness](https://crates.io/crates/zharness) | 直接 | `0.6.0` | [0.6.0](https://github.com/LIghtJUNction/zharness/tree/v0.6.0) |
+| [zmcpio](https://crates.io/crates/zmcpio) | zuse | `0.4.0` | [0.4.0](https://github.com/LIghtJUNction/zmcpio/tree/v0.4.0) |
+| [zplugin](https://crates.io/crates/zplugin) | 直接 | `0.3.1` | [0.3.1](https://github.com/LIghtJUNction/zplugin/tree/v0.3.1) |
+| [zplugin-macros](https://crates.io/crates/zplugin-macros) | zplugin 的宏包 | `0.3.1` | [0.3.1](https://github.com/LIghtJUNction/zplugin/tree/v0.3.1) |
+| [zsys](https://crates.io/crates/zsys) | zplugin / zuse | `0.1.1` | [0.1.1](https://github.com/LIghtJUNction/zsys/tree/v0.1.1) |
+| [ztuio](https://crates.io/crates/ztuio) | 直接 | `0.1.0` | [0.1.0](https://github.com/LIghtJUNction/ztuio/tree/v0.1.0) |
+| [zuse-computer](https://crates.io/crates/zuse-computer) | 直接 | `0.2.2` | [0.2.2](https://github.com/LIghtJUNction/zuse/tree/v0.2.2) |
+
+`zcall 0.3.0` 暂由 `zuse-computer 0.2.2 → zmcpio 0.4.0` 保留；[zmcpio 当前发布源码](https://github.com/LIghtJUNction/zmcpio/blob/bc89d7fa3b0249b3a9037748e2113b31615e8c89/Cargo.toml) 精确要求 `=0.3.0`。新的 zharness 路径使用 0.4.0，两条调用链由 Cargo 分别解析。关闭这个例外需要 zmcpio 维护者先发布兼容 0.4.0 的版本，随后由 zuse 维护者发布新的精确依赖版本，再由 SSMCP 同步消费并验证。每轮核对都应重新检查该例外。
 
 ## 获取与构建
 

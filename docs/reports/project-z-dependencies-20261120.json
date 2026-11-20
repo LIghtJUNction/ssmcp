@@ -1,0 +1,499 @@
+{
+  "source_base": "fd0c58018605871ba04119e22c2ce089698c3f1c",
+  "registry_checked_from": "2026-11-20T12:34:23.597063+00:00",
+  "registry_checked_to": "2026-11-20T12:36:53.238627+00:00",
+  "scope": "Resolved package.repository identities under LIghtJUNction Project Z, including transitive dependencies; package-name prefixes alone are not used.",
+  "gitlinks": {
+    "crates/zharness": "db4206d3b74e37d57ff052948962f55514081d4b",
+    "crates/zplugin": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+    "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+    "crates/zuse": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+  },
+  "packages": [
+    {
+      "package": "z64",
+      "repository": "https://github.com/LIghtJUNction/z64",
+      "latest_stable": "0.1.2",
+      "yanked": false,
+      "checksum": "0ccc3887095be912cf1f99f655f49a5c9be993fa8873f4478c1784e4f7f15193",
+      "published_at": "2026-11-11T03:00:26.186704Z",
+      "url": "https://crates.io/api/v1/crates/z64",
+      "response_date": "Fri, 20 Nov 2026 12:34:23 GMT",
+      "checked_at": "2026-11-20T12:34:23.989040+00:00",
+      "resolved_before": [
+        "0.1.2"
+      ],
+      "resolved_after": [
+        "0.1.2"
+      ],
+      "tag_commit": "087fcf28a1e050dbbbbee678463dbbe233f337d7",
+      "tag_url": "https://github.com/LIghtJUNction/z64/tree/v0.1.2"
+    },
+    {
+      "package": "zcall",
+      "repository": "https://github.com/LIghtJUNction/zcall",
+      "latest_stable": "0.4.0",
+      "yanked": false,
+      "checksum": "f0305d70ee61611091b725c7e8e0571d580ed251d908c644e24ca60fb97b4b18",
+      "published_at": "2026-11-20T07:17:37.301067Z",
+      "url": "https://crates.io/api/v1/crates/zcall",
+      "response_date": "Fri, 20 Nov 2026 12:34:24 GMT",
+      "checked_at": "2026-11-20T12:34:24.754045+00:00",
+      "resolved_before": [
+        "0.3.0"
+      ],
+      "resolved_after": [
+        "0.3.0",
+        "0.4.0"
+      ],
+      "tag_commit": "45df84f93848a9f7dc66eb7da953d18d14bb08f7",
+      "tag_url": "https://github.com/LIghtJUNction/zcall/tree/v0.4.0",
+      "verified_archive": {
+        "name": "zcall",
+        "version": "0.4.0",
+        "vcs": {
+          "git": {
+            "sha1": "ff993cea6698a5628086882c81f9680e0d498695",
+            "dirty": true
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/zcall/0.4.0/download",
+        "bytes": 192810,
+        "checksum": "f0305d70ee61611091b725c7e8e0571d580ed251d908c644e24ca60fb97b4b18",
+        "repository": "https://github.com/LIghtJUNction/zcall",
+        "dependencies": {
+          "zconv": {
+            "version": "=0.4.0",
+            "default-features": false
+          }
+        },
+        "features": {
+          "default": [],
+          "server": [
+            "std"
+          ],
+          "std": []
+        }
+      }
+    },
+    {
+      "package": "zclap",
+      "repository": "https://github.com/LIghtJUNction/zclap",
+      "latest_stable": "0.1.4",
+      "yanked": false,
+      "checksum": "5efb5b25a7eb925fe9943888238d1e261224fa629456f4abe203b1deb34ac102",
+      "published_at": "2026-11-11T02:49:04.848314Z",
+      "url": "https://crates.io/api/v1/crates/zclap",
+      "response_date": "Fri, 20 Nov 2026 12:34:23 GMT",
+      "checked_at": "2026-11-20T12:34:23.597063+00:00",
+      "resolved_before": [
+        "0.1.4"
+      ],
+      "resolved_after": [
+        "0.1.4"
+      ],
+      "tag_commit": "4d87f3ae3743e81509d5ac5500909955667c860f",
+      "tag_url": "https://github.com/LIghtJUNction/zclap/tree/v0.1.4"
+    },
+    {
+      "package": "zconv",
+      "repository": "https://github.com/LIghtJUNction/zconv",
+      "latest_stable": "0.4.0",
+      "yanked": false,
+      "checksum": "fb4c2c557b09be10a449b44d4034059837ab1980e8f89b830aedefcc9d0bbc15",
+      "published_at": "2026-11-15T08:54:32.944818Z",
+      "url": "https://crates.io/api/v1/crates/zconv",
+      "response_date": "Fri, 20 Nov 2026 12:34:23 GMT",
+      "checked_at": "2026-11-20T12:34:23.811992+00:00",
+      "resolved_before": [
+        "0.4.0"
+      ],
+      "resolved_after": [
+        "0.4.0"
+      ],
+      "tag_commit": "1488f0abab5c4f926f6ac258f62108a5cb7f4ff9",
+      "tag_url": "https://github.com/LIghtJUNction/zconv/tree/v0.4.0"
+    },
+    {
+      "package": "zharness",
+      "repository": "https://github.com/LIghtJUNction/zharness",
+      "latest_stable": "0.6.0",
+      "yanked": false,
+      "checksum": "4a4aff31bc0430ef21ac873c24985ecaa5dbe559aa1090e0339bea82cd1b31ef",
+      "published_at": "2026-11-20T10:20:54.777628Z",
+      "url": "https://crates.io/api/v1/crates/zharness",
+      "response_date": "Fri, 20 Nov 2026 12:34:23 GMT",
+      "checked_at": "2026-11-20T12:34:24.268433+00:00",
+      "resolved_before": [
+        "0.5.1"
+      ],
+      "resolved_after": [
+        "0.6.0"
+      ],
+      "tag_commit": "db4206d3b74e37d57ff052948962f55514081d4b",
+      "tag_url": "https://github.com/LIghtJUNction/zharness/tree/v0.6.0",
+      "verified_archive": {
+        "name": "zharness",
+        "version": "0.6.0",
+        "vcs": {
+          "git": {
+            "sha1": "db4206d3b74e37d57ff052948962f55514081d4b"
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/zharness/0.6.0/download",
+        "bytes": 207692,
+        "checksum": "4a4aff31bc0430ef21ac873c24985ecaa5dbe559aa1090e0339bea82cd1b31ef",
+        "repository": "https://github.com/LIghtJUNction/zharness",
+        "dependencies": {
+          "zcall": {
+            "version": "=0.4.0",
+            "default-features": false
+          },
+          "zguard": {
+            "version": "=0.1.0",
+            "default-features": false
+          },
+          "zplugin": {
+            "version": "=0.3.1",
+            "features": [
+              "macros"
+            ],
+            "default-features": false
+          }
+        },
+        "features": {
+          "default": [
+            "std"
+          ],
+          "std": [
+            "zplugin/std"
+          ],
+          "wasm": [
+            "zplugin/wasm"
+          ]
+        }
+      }
+    },
+    {
+      "package": "zmcpio",
+      "repository": "https://github.com/LIghtJUNction/zmcpio",
+      "latest_stable": "0.4.0",
+      "yanked": false,
+      "checksum": "1530747e76256c89865b521c407c520766fc93badae9c8b573e5a4e0c4e820ad",
+      "published_at": "2026-11-15T09:31:21.379012Z",
+      "url": "https://crates.io/api/v1/crates/zmcpio",
+      "response_date": "Fri, 20 Nov 2026 12:34:24 GMT",
+      "checked_at": "2026-11-20T12:34:24.882766+00:00",
+      "resolved_before": [
+        "0.4.0"
+      ],
+      "resolved_after": [
+        "0.4.0"
+      ],
+      "tag_commit": "bc89d7fa3b0249b3a9037748e2113b31615e8c89",
+      "tag_url": "https://github.com/LIghtJUNction/zmcpio/tree/v0.4.0",
+      "verified_archive": {
+        "name": "zmcpio",
+        "version": "0.4.0",
+        "vcs": {
+          "git": {
+            "sha1": "bc89d7fa3b0249b3a9037748e2113b31615e8c89"
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/zmcpio/0.4.0/download",
+        "bytes": 151699,
+        "checksum": "1530747e76256c89865b521c407c520766fc93badae9c8b573e5a4e0c4e820ad",
+        "repository": "https://github.com/LIghtJUNction/zmcpio",
+        "dependencies": {
+          "zcall": {
+            "version": "=0.3.0",
+            "default-features": false
+          }
+        },
+        "features": {
+          "default": [],
+          "std": []
+        }
+      }
+    },
+    {
+      "package": "zplugin",
+      "repository": "https://github.com/LIghtJUNction/zplugin",
+      "latest_stable": "0.3.1",
+      "yanked": false,
+      "checksum": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+      "published_at": "2026-11-19T22:07:54.343703Z",
+      "url": "https://crates.io/api/v1/crates/zplugin",
+      "response_date": "Fri, 20 Nov 2026 12:34:24 GMT",
+      "checked_at": "2026-11-20T12:34:24.865649+00:00",
+      "resolved_before": [
+        "0.3.1"
+      ],
+      "resolved_after": [
+        "0.3.1"
+      ],
+      "tag_commit": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "tag_url": "https://github.com/LIghtJUNction/zplugin/tree/v0.3.1",
+      "verified_archive": {
+        "name": "zplugin",
+        "version": "0.3.1",
+        "vcs": {
+          "git": {
+            "sha1": "00d566eedcff7b2932e90b9dfeb44910c783d305"
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/zplugin/0.3.1/download",
+        "bytes": 59748,
+        "checksum": "094cd57c6b7759cbbf7834e96aed75c9d025558a7d2cc4b742e78b33f8e7a448",
+        "repository": "https://github.com/LIghtJUNction/zplugin",
+        "dependencies": {
+          "wasmi": {
+            "version": "=2.0.0",
+            "features": [
+              "stable",
+              "validate",
+              "portable-dispatch",
+              "libm"
+            ],
+            "optional": true,
+            "default-features": false
+          },
+          "zplugin-macros": {
+            "version": "=0.3.1",
+            "optional": true
+          },
+          "zsys": {
+            "version": "=0.1.1",
+            "features": [
+              "dylib"
+            ],
+            "default-features": false
+          }
+        },
+        "features": {
+          "alloc": [],
+          "default": [],
+          "hot-reload": [
+            "alloc"
+          ],
+          "macros": [
+            "dep:zplugin-macros"
+          ],
+          "std": [
+            "alloc"
+          ],
+          "wasm": [
+            "alloc",
+            "dep:wasmi"
+          ]
+        }
+      }
+    },
+    {
+      "package": "zplugin-macros",
+      "repository": "https://github.com/LIghtJUNction/zplugin",
+      "latest_stable": "0.3.1",
+      "yanked": false,
+      "checksum": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+      "published_at": "2026-11-19T22:07:50.969909Z",
+      "url": "https://crates.io/api/v1/crates/zplugin-macros",
+      "response_date": "Fri, 20 Nov 2026 12:34:25 GMT",
+      "checked_at": "2026-11-20T12:34:25.818845+00:00",
+      "resolved_before": [
+        "0.3.1"
+      ],
+      "resolved_after": [
+        "0.3.1"
+      ],
+      "tag_commit": "00d566eedcff7b2932e90b9dfeb44910c783d305",
+      "tag_url": "https://github.com/LIghtJUNction/zplugin/tree/v0.3.1",
+      "verified_archive": {
+        "name": "zplugin-macros",
+        "version": "0.3.1",
+        "vcs": {
+          "git": {
+            "sha1": "00d566eedcff7b2932e90b9dfeb44910c783d305"
+          },
+          "path_in_vcs": "crates/zplugin-macros"
+        },
+        "download": "https://crates.io/api/v1/crates/zplugin-macros/0.3.1/download",
+        "bytes": 22487,
+        "checksum": "f39a8e67a3405ad54b2780d74360dabdbbcaa6f33fb44474e13433c0b34ca395",
+        "repository": "https://github.com/LIghtJUNction/zplugin",
+        "dependencies": {
+          "proc-macro2": {
+            "version": "1"
+          },
+          "quote": {
+            "version": "1"
+          },
+          "syn": {
+            "version": "2",
+            "features": [
+              "full"
+            ]
+          }
+        },
+        "features": {}
+      }
+    },
+    {
+      "package": "zsys",
+      "repository": "https://github.com/LIghtJUNction/zsys",
+      "latest_stable": "0.1.1",
+      "yanked": false,
+      "checksum": "929d282f08df7fbe2456414924e126a29dfde04e93eb2515721b596404610548",
+      "published_at": "2026-11-19T21:37:15.414438Z",
+      "url": "https://crates.io/api/v1/crates/zsys",
+      "response_date": "Fri, 20 Nov 2026 12:34:25 GMT",
+      "checked_at": "2026-11-20T12:34:25.218164+00:00",
+      "resolved_before": [
+        "0.1.1"
+      ],
+      "resolved_after": [
+        "0.1.1"
+      ],
+      "tag_commit": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+      "tag_url": "https://github.com/LIghtJUNction/zsys/tree/v0.1.1"
+    },
+    {
+      "package": "ztuio",
+      "repository": "https://github.com/LIghtJUNction/ztuio",
+      "latest_stable": "0.1.0",
+      "yanked": false,
+      "checksum": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca",
+      "published_at": "2026-11-19T21:44:49.677866Z",
+      "url": "https://crates.io/api/v1/crates/ztuio",
+      "response_date": "Fri, 20 Nov 2026 12:34:25 GMT",
+      "checked_at": "2026-11-20T12:34:25.650151+00:00",
+      "resolved_before": [
+        "0.1.0"
+      ],
+      "resolved_after": [
+        "0.1.0"
+      ],
+      "tag_commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "tag_url": "https://github.com/LIghtJUNction/ztuio/tree/v0.1.0",
+      "verified_archive": {
+        "name": "ztuio",
+        "version": "0.1.0",
+        "vcs": {
+          "git": {
+            "sha1": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/ztuio/0.1.0/download",
+        "bytes": 19644,
+        "checksum": "1349d024486abe9aa5d7e6ff4f62b118401a1da5627c63c57942617169e475ca",
+        "repository": "https://github.com/LIghtJUNction/ztuio",
+        "dependencies": {},
+        "features": {}
+      }
+    },
+    {
+      "package": "zuse-computer",
+      "repository": "https://github.com/LIghtJUNction/zuse",
+      "latest_stable": "0.2.2",
+      "yanked": false,
+      "checksum": "16d3bf8c73bf64721672bf0483899b796967c8d3b53fa0ea934b3e705d6e2fde",
+      "published_at": "2026-11-20T05:31:30.307923Z",
+      "url": "https://crates.io/api/v1/crates/zuse-computer",
+      "response_date": "Fri, 20 Nov 2026 12:34:25 GMT",
+      "checked_at": "2026-11-20T12:34:25.793160+00:00",
+      "resolved_before": [
+        "0.2.2"
+      ],
+      "resolved_after": [
+        "0.2.2"
+      ],
+      "tag_commit": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a",
+      "tag_url": "https://github.com/LIghtJUNction/zuse/tree/v0.2.2",
+      "verified_archive": {
+        "name": "zuse-computer",
+        "version": "0.2.2",
+        "vcs": {
+          "git": {
+            "sha1": "94c837551a7a2fd8ec9f577a3e2f57309bd5ce5a"
+          },
+          "path_in_vcs": ""
+        },
+        "download": "https://crates.io/api/v1/crates/zuse-computer/0.2.2/download",
+        "bytes": 387761,
+        "checksum": "16d3bf8c73bf64721672bf0483899b796967c8d3b53fa0ea934b3e705d6e2fde",
+        "repository": "https://github.com/LIghtJUNction/zuse",
+        "dependencies": {
+          "z64": {
+            "version": "=0.1.2",
+            "optional": true,
+            "default-features": false
+          },
+          "zclap": {
+            "version": "=0.1.4",
+            "optional": true,
+            "default-features": false
+          },
+          "zmcpio": {
+            "version": "=0.4.0",
+            "features": [
+              "std"
+            ],
+            "optional": true,
+            "default-features": false
+          },
+          "zsys": {
+            "version": "=0.1.1",
+            "features": [
+              "dylib"
+            ],
+            "optional": true,
+            "default-features": false
+          }
+        },
+        "features": {
+          "default": [
+            "std"
+          ],
+          "std": [
+            "dep:zmcpio",
+            "dep:zclap",
+            "dep:z64",
+            "dep:zsys"
+          ]
+        }
+      }
+    },
+    {
+      "package": "zguard",
+      "repository": "https://github.com/LIghtJUNction/zguard",
+      "latest_stable": "0.1.0",
+      "yanked": false,
+      "checksum": "641d20929078aba7e9eb6ae9c33ae89d9b23d3a0f12f0eebb8fd05dacc93eb40",
+      "published_at": "2026-11-20T09:49:12.966909Z",
+      "url": "https://crates.io/api/v1/crates/zguard",
+      "response_date": "Fri, 20 Nov 2026 12:36:53 GMT",
+      "checked_at": "2026-11-20T12:36:53.238627+00:00",
+      "resolved_before": [],
+      "resolved_after": [
+        "0.1.0"
+      ],
+      "tag_commit": "5cdd637edbb075f6611f88f8566e15de4b360cca",
+      "tag_url": "https://github.com/LIghtJUNction/zguard/tree/v0.1.0"
+    }
+  ],
+  "exception": {
+    "path": [
+      "ssmcp",
+      "zuse-computer 0.2.2",
+      "zmcpio 0.4.0",
+      "zcall 0.3.0"
+    ],
+    "constraint": "zmcpio 0.4.0 requires zcall =0.3.0; zharness 0.6.0 requires zcall =0.4.0 and zguard =0.1.0.",
+    "source": "https://github.com/LIghtJUNction/zmcpio/blob/bc89d7fa3b0249b3a9037748e2113b31615e8c89/Cargo.toml",
+    "next_step": "Upstream zmcpio must release a zcall 0.4-compatible version, followed by a zuse-computer release selecting it; then SSMCP updates the published version, gitlink and lockfile together."
+  }
+}
