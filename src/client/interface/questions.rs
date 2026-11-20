@@ -2,6 +2,8 @@
 mod delivery;
 mod requests;
 mod workflow;
+#[cfg(test)]
+mod human_finish_tests;
 pub(crate) use delivery::attach as attach_answers;
 #[cfg(test)]
 pub(crate) use requests::{AgentActor, FinishDecision, FinishView};

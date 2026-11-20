@@ -241,14 +241,21 @@ impl Routing {
             if !self.scope.same_account(caller) {
                 return Err("question_access_denied: another account or connection".into());
             }
-            if choice == FinishChoice::Yes && self.scope.same_thread(caller) {
+            if choice == FinishChoice::Yes {
                 return Err(
-                    "finish_self_approval_forbidden: the requesting agent cannot approve itself"
+                    "finish_human_approval_required: only the local user may approve completion"
                         .into(),
                 );
             }
         }
         Ok(())
+    }
+
+    fn human_approved(&self) -> bool {
+        self.finish_status == Some(FinishStatus::Approved)
+            && self.decision.as_ref().is_some_and(|decision| {
+                decision.choice == FinishChoice::Yes && decision.actor == DecisionActor::Human
+            })
     }
 
     pub(super) fn view(&self, question: Question) -> QuestionView {
@@ -257,7 +264,7 @@ impl Routing {
             default_decision: FinishChoice::No,
             decision: self.decision.clone(),
             status,
-            approved: status == FinishStatus::Approved,
+            approved: self.human_approved(),
             invalidation_reason: self.invalidation_reason.clone(),
         });
         QuestionView {
@@ -407,9 +414,9 @@ impl super::Queue {
         let record = self.records.iter_mut().find(|record| {
             record.routing.as_ref().is_some_and(|routing| {
                 routing.scope.same_thread(scope)
-                    && routing.finish_status == Some(FinishStatus::Approved)
+                    && routing.human_approved()
             })
-        }).ok_or("finish_approval_required: request_finish must be approved before an explicit final answer")?;
+        }).ok_or("finish_approval_required: the local user must approve request_finish before an explicit final answer")?;
         record
             .routing
             .as_mut()
@@ -565,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn only_another_verified_agent_in_the_same_account_can_approve() {
+    fn only_the_local_user_can_approve_completion() {
         let mut queue = queue();
         let requester = scope("42", "requester");
         let id = finish(&mut queue, requester.clone());
@@ -573,7 +580,7 @@ mod tests {
             queue
                 .decide_finish_for(&id, FinishChoice::Yes, None, Some(&requester))
                 .unwrap_err()
-                .contains("self_approval")
+                .contains("human_approval_required")
         );
         assert!(
             queue
@@ -589,16 +596,22 @@ mod tests {
         );
 
         let reviewer = scope("42", "reviewer");
+        assert!(
+            queue
+                .decide_finish_for(
+                    &id,
+                    FinishChoice::Yes,
+                    Some("Verified the regression."),
+                    Some(&reviewer),
+                )
+                .unwrap_err()
+                .contains("human_approval_required")
+        );
         let result = queue
-            .decide_finish_for(
-                &id,
-                FinishChoice::Yes,
-                Some("Verified the regression."),
-                Some(&reviewer),
-            )
+            .decide_finish_for(&id, FinishChoice::Yes, Some("Ready to finish."), None)
             .unwrap();
         let decision = result.finish.unwrap().decision.unwrap();
-        assert_eq!(decision.actor, reviewer.actor());
+        assert_eq!(decision.actor, DecisionActor::Human);
         assert_eq!(decision.choice, FinishChoice::Yes);
         assert_eq!(result.delivery, AnswerDelivery::Pending);
         assert!(queue.consume_finish(&reviewer).is_err());
@@ -642,19 +655,19 @@ mod tests {
         assert_eq!(finish(&mut queue, owner), id);
         let reviewer = scope("42", "reviewer");
         let first = queue
-            .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), Some(&reviewer))
+            .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), None)
             .unwrap();
         let revision = queue.revision;
         assert_eq!(
             queue
-                .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), Some(&reviewer))
+                .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), None)
                 .unwrap(),
             first
         );
         assert_eq!(queue.revision, revision);
         assert!(
             queue
-                .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), None)
+                .decide_finish_for(&id, FinishChoice::Yes, Some("checked"), Some(&reviewer))
                 .is_err()
         );
         assert!(
