@@ -4,6 +4,8 @@ use super::{super::ui::Ui, images};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+#[cfg(test)]
+mod command_visibility_tests;
 mod correlation;
 mod diff;
 mod read_activity;
@@ -754,6 +756,15 @@ impl EventView {
             // Redact only the display copy; the native message stays intact.
             let display = crate::audit::event(Value::String(text.to_owned()));
             self.ingest_inner(display.as_str().unwrap_or_default().as_bytes(), meta);
+        } else if meta.command
+            && let Some(source) = crate::client::render::interactive_command_source(event)
+        {
+            // A concise renderer omits inline scripts. Keep an independently
+            // audited display copy so Enter can reveal it. Normal bounded
+            // event retention still applies; native argv stays unchanged.
+            let display = String::from_utf8_lossy(bytes);
+            let (header, rest) = display.split_once('\n').unwrap_or((&display, ""));
+            self.ingest_inner(format!("{header}\n{source}{rest}").as_bytes(), meta);
         } else {
             self.ingest_inner(bytes, meta);
         }
@@ -2693,9 +2704,10 @@ mod tests {
             view.ingest_event(
                 "shell",
                 &json!({"type":"exec.started","job_id":"script",
-                    "command":["python3","-c","raw-metadata-secret"]}),
+                    "command":["python3","-c","API_TOKEN=raw-metadata-secret"]}),
                 text.as_bytes(),
             );
+            let initial_text = view.events[0].text.clone();
             view.set_scope(EventScope::Conversation);
             view.render(100, 24, &plain_ui(), true);
             if manual_scroll {
@@ -2737,7 +2749,7 @@ mod tests {
             assert!(view.open());
             let reopened = view.render(48, 24, &plain_ui(), true).join("\n");
             assert!(reopened.contains("1 import pathlib") && reopened.contains("Home cmd"));
-            assert_eq!(view.events[0].text, format!("{text}output-40\n"));
+            assert_eq!(view.events[0].text, format!("{initial_text}output-40\n"));
         }
     }
 

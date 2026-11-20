@@ -46,6 +46,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Local host-input handoff: status, host [1..60 seconds], stop",
     },
     SlashCommand {
+        name: "/command",
+        description: "View complete command and script: /command [JOB_ID]",
+    },
+    SlashCommand {
         name: "/tasks",
         description: "Open Tasks beside Logs; browse jobs or cancel an exact ID",
     },

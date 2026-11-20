@@ -68,6 +68,8 @@ fn local_command(text: &str) -> bool {
                 | "/attach"
                 | "/select"
                 | "/copy"
+                | "/command"
+                | "/tasks"
                 | "/logs"
                 | "/raw"
                 | "/clear"
