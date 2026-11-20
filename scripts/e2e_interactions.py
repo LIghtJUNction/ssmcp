@@ -640,7 +640,7 @@ class Interactions(InputHistory):
             self.check(failed["draft"] == before
                        and failed["native_recipient"] == recipient_id,
                        "a real storage error preserves the original draft, cursor and selected recipient")
-            self.capture_pair(front, "paste-retained", "Original paste retained")
+            self.capture_pair(front, "paste-retained", "Could not save the private input")
         finally:
             if inputs.is_file():
                 inputs.unlink()
