@@ -19,11 +19,11 @@
 <div class="container docs-layout">
 <aside class="docs-sidebar"><nav aria-label="Guide contents"><div class="nav-group"><p>Get started</p><ul><li><a href="#start">Three-step setup</a></li><li><a href="#devices">Another device</a></li></ul></div>
 <div class="nav-group"><p>Everyday use</p><ul><li><a href="#basics">Input and references</a></li><li><a href="#scenarios">Examples</a></li></ul></div>
-<div class="nav-group"><p>Technical reference</p><ul><li><a href="#tools">Calling tools</a></li><li><a href="#boundaries">State and permissions</a></li><li><a href="#help">Troubleshooting</a></li></ul></div></nav><a class="source-link" href="https://github.com/LIghtJUNction/ssmcp">Source and more documentation <span aria-hidden="true">↗</span></a></aside>
+<div class="nav-group"><p>Technical reference</p><ul><li><a href="#workers">Worker pools</a></li><li><a href="#extensions">Tool extensions</a></li><li><a href="#tools">Calling tools</a></li><li><a href="#boundaries">State and permissions</a></li><li><a href="#help">Troubleshooting</a></li></ul></div></nav><a class="source-link" href="https://github.com/LIghtJUNction/ssmcp">Source and more documentation <span aria-hidden="true">↗</span></a></aside>
 <main id="content">
 <details class="mobile-contents"><summary>On this page</summary><nav aria-label="Mobile contents"><div class="nav-group"><p>Get started</p><ul><li><a href="#start">Three-step setup</a></li><li><a href="#devices">Another device</a></li></ul></div>
 <div class="nav-group"><p>Everyday use</p><ul><li><a href="#basics">Input and references</a></li><li><a href="#scenarios">Examples</a></li></ul></div>
-<div class="nav-group"><p>Technical reference</p><ul><li><a href="#tools">Calling tools</a></li><li><a href="#boundaries">State and permissions</a></li><li><a href="#help">Troubleshooting</a></li></ul></div></nav></details>
+<div class="nav-group"><p>Technical reference</p><ul><li><a href="#workers">Worker pools</a></li><li><a href="#extensions">Tool extensions</a></li><li><a href="#tools">Calling tools</a></li><li><a href="#boundaries">State and permissions</a></li><li><a href="#help">Troubleshooting</a></li></ul></div></nav></details>
 <header class="doc-heading"><p class="eyebrow">User guide · ssmcp {{version}}</p><h1>Connect once.<br>Work in your own environment.</h1><p class="lead">ssmcp connects an MCP-compatible AI application to your computer. MCP is a protocol for calling tools: the application sends a request, your computer runs a command or handles a file, and the result returns over the connection.</p><p class="note">Connecting does not start a model. The terminal's guide QR code contains a public URL, not login credentials.</p></header>
 <section id="start" aria-labelledby="start-title">
   <div class="section-heading"><p class="eyebrow">Get started / 01</p><h2 id="start-title">Your first connection in three steps</h2></div>
@@ -49,7 +49,7 @@
   <div class="table-wrap"><table><thead><tr><th scope="col">Input</th><th scope="col">What it does</th></tr></thead><tbody>
     <tr><td><code>@src/main.rs</code></td><td>Reference a workspace file. Quote paths with spaces, such as <code>@"docs/usage notes.md"</code>. A missing file produces a warning; the literal message can still be sent.</td></tr>
     <tr><td><code>@assets/chart.png</code></td><td>Let the agent read an actual image. Native image reading supports PNG, JPEG, GIF, and WebP, up to 400 KiB per image.</td></tr>
-    <tr><td><code>$skill-name</code></td><td>Reference a project or user skill and include the complete skill file. Use Tab or Enter to accept a completion, then Enter again to send.</td></tr>
+    <tr><td><code>$skill-name</code></td><td>Reference a project or user skill with its source, metadata and reading information. Read the full skill before applying it; referencing it does not execute it. Use Tab or Enter to accept a completion, then Enter again to send.</td></tr>
     <tr><td><code>!git status --short</code></td><td>Run a local shell command in the workspace and show its output and exit status.</td></tr>
     <tr><td>Left arrow at the start of a draft</td><td>Open Agents and choose a member. Escape returns without discarding the draft.</td></tr>
     <tr><td><code>/queue</code> · <code>/copy</code></td><td>Inspect queued requests or copy the latest complete agent reply.</td></tr>
@@ -67,8 +67,26 @@ Run the relevant tests and show the diff.</code></pre></article>
 Report the exit code and any failure.</code></pre></article>
     <article><h3>Review an image</h3><p>Send the image with a specific question. Terminals with image support display pixels; other terminals display an attachment card.</p><pre><code>@assets/chart.png
 Explain the trend and unclear labels.</code></pre></article>
-    <article><h3>Continue with context</h3><p>In the chat composer, <code>/resume</code> opens saved conversations; <code>/context</code> and <code>/memory</code> show local branch memory; <code>/handoff</code> prepares a context draft for a recipient.</p><pre><code>/handoff Continue investigating the failing tests.</code></pre><p class="note">Restoring history does not replay tools or resend old requests.</p></article>
+    <article><h3>Continue with context</h3><p>In the chat composer, <code>/resume</code> opens saved conversations; <code>/context</code> and <code>/memory</code> show local branch memory; <code>/handoff</code> prepares a context draft for a recipient.</p><pre><code>/handoff Continue investigating the failing tests.</code></pre><p class="note">From a system terminal, <code>ssmcp resume</code> opens the same picker for the current workspace. With no saved history it gives a clear explanation. Restoring history does not replay tools or resend old requests.</p></article>
   </div>
+</section>
+<section id="workers" aria-labelledby="workers-title">
+    <div class="section-heading"><p class="eyebrow">Technical reference · Workers</p><h2 id="workers-title">Workers: a bounded local execution pool</h2></div>
+    <p>Worker mode prepares independent execution slots. Its monitor shows idle, working, offline, total and queued counts, with no chat composer. Select an installed and configured local executor explicitly:</p>
+    <pre><code>ssmcp yourname@{{gateway_authority}} --worker 10 --agent codex</code></pre>
+    <p>Execution currently requires Linux, cgroup v2 with CPU and memory controllers, and a usable user systemd manager. Supported executors are <code>codex</code>, <code>claude</code>, <code>opencode</code> and <code>exec</code>. The default <code>next-caller</code> does not launch a model. Missing executors or unavailable hard limits leave slots offline with a reason.</p>
+    <h3 class="subheading">Queue, results and cancellation</h3><p>A genuinely bound caller submits through <code>ssmcp.worker.submit</code>. Idle slots claim tasks in FIFO order. <code>status</code> inspects the pool, <code>result</code> reads the caller's task, and <code>cancel</code> requests cancellation. A running slot stays busy until owned processes and scopes are confirmed clean. An <code>unknown</code> outcome must not be replayed blindly.</p>
+    <h3 class="subheading">How resource shares work</h3><p>Per-slot CPU and RAM ceilings use “effective system capacity ÷ registered slots for this OS user × k.” The <code>--worker-k</code> default is 1. These are ceilings, not reserved resources. Other OS users and independently launched commands are outside that count.</p>
+    <p>Slots keep SSMCP context, not a promised persistent model-native thread, and tasks cannot rely on slot affinity. See the <a href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/workers.md">worker technical guide</a> for limits and cleanup behavior.</p>
+  </section>
+<section id="extensions" aria-labelledby="extensions-title">
+  <div class="section-heading"><p class="eyebrow">Technical reference · Extensions</p><h2 id="extensions-title">Editable tool helpers</h2></div>
+  <p><a href="https://github.com/LIghtJUNction/ssmcp-tools">ssmcp-tools</a> contains the JavaScript helpers for code_mode. New clients read registered local sources and return provenance with actual paths, Git state and content digests. Helpers compose calls; those calls still pass through the original authorization checks.</p>
+  <pre><code>ssmcp tools status
+ssmcp tools check
+ssmcp tools update</code></pre>
+  <p>The client RC is <code>$XDG_CONFIG_HOME/ssmcp/ssmcprc.toml</code>, or <code>~/.config/ssmcp/ssmcprc.toml</code> by default. Git must be available. Updates fast-forward a clean worktree without overwriting local edits. Editing a helper cannot forge server identity, authorization or finish approval.</p>
+  <p class="note">This guide follows the server build. The selected client's actual tool schema defines its capabilities. Installers fetch published releases; new features need a corresponding client process.</p>
 </section>
 <section id="tools" aria-labelledby="tools-title">
   <div class="section-heading"><p class="eyebrow">Technical reference / 01</p><h2 id="tools-title">Discover the interface before calling it</h2></div>
@@ -97,7 +115,7 @@ image(await call(clientId, "ssmcp.fs.read_image", {
 </section>
 <section id="boundaries" aria-labelledby="boundaries-title">
   <div class="section-heading"><p class="eyebrow">Technical reference / 02</p><h2 id="boundaries-title">Understand state and permissions</h2></div>
-  <div class="principles"><article><h3>Tools use local permissions</h3><p>General commands run with the operating-system permissions of the client process. Connection authorization controls access through SSMCP; it does not revoke the same user's permissions through other programs.</p></article><article><h3>Finishing needs a real decision</h3><p>The terminal shows a waiting state for user input or finish approval. A countdown ending, an ordinary message, or another agent finishing cannot replace actual user approval.</p></article><article><h3>Order state comes from the server</h3><p><a href="/account/traffic">Traffic and orders</a> shows the current price, allowance, and expiry. Check the page and checkout for the pre-tax amount and final amount including tax. Returning to the order page does not mean payment has been credited.</p></article></div>
+  <div class="principles"><article><h3>Tools use local permissions</h3><p>General commands run with the operating-system permissions of the client process. Connection authorization controls access through SSMCP; it does not revoke the same user's permissions through other programs.</p></article><article><h3>Finishing needs a real decision</h3><p>The activity page's pending-question badge means there is a question you can answer. Press Shift+↑ to open Questions. It is not proof of a blocking wait: only a real active <code>ui.wait</code> shows the red countdown.</p><p>Send a message with <code>finish_task: true</code>, or call <code>ui.wait</code> with <code>intent: "finish"</code>, to wait on the real finish question. Timeout, interruption and a plain “Yes” message are not approval. Without approval, the result instructs the agent to call the blocking wait again.</p></article><article><h3>Order state comes from the server</h3><p><a href="/account/traffic">Traffic and orders</a> shows the current price, allowance, and expiry. Check the page and checkout for the pre-tax amount and final amount including tax. Returning to the order page does not mean payment has been credited.</p></article></div>
 </section>
 <section class="help" id="help" aria-labelledby="help-title">
   <div class="section-heading"><p class="eyebrow">Reference</p><h2 id="help-title">Check these first</h2></div>
