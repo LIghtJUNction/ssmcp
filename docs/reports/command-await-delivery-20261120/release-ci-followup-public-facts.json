@@ -1,0 +1,294 @@
+{
+  "schema": "ssmcp-release-ci-followup.v1",
+  "snapshot_utc": "2026-11-21 18:21:42 UTC",
+  "released_version_completed": false,
+  "original_release": {
+    "tag": "v0.10.25",
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "workflow_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+    "tree": "9ab5ef5acaebec078441cfa8862bceffc0dae891",
+    "pr": 176,
+    "merge_parents": [
+      "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+      "4f73f5684279ecae1a8e8486e4332c20bdbaab95"
+    ],
+    "merge_time": "2026-11-21T18:11:02Z",
+    "root_actual_github_read_confirmed": true,
+    "tag_type": "commit",
+    "tag_unchanged": true,
+    "run": {
+      "id": 44934221685,
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+      "run_attempt": 1,
+      "created_at": "2026-11-21T18:12:20Z",
+      "updated_at": "2026-11-21T18:19:29Z",
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685"
+    },
+    "jobs": [
+      {
+        "id": 136937233483,
+        "name": "validate",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412816,
+        "name": "Build x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412832,
+        "name": "Build x86_64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412836,
+        "name": "Build aarch64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412871,
+        "name": "Build x86_64-pc-windows-msvc",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412885,
+        "name": "Build aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937412929,
+        "name": "Build aarch64-apple-darwin",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413125,
+        "name": "checks / linux (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136937413140,
+        "name": "checks / Client (macos-15)",
+        "status": "in_progress",
+        "conclusion": null
+      },
+      {
+        "id": 136937413183,
+        "name": "checks / linux (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136937413206,
+        "name": "checks / Client (windows-2025)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136937413219,
+        "name": "checks / Client (macos-15-intel)",
+        "status": "in_progress",
+        "conclusion": null
+      },
+      {
+        "id": 136937413350,
+        "name": "checks / Client (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": 136939220550,
+        "name": "Verify installed server x86_64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "id": 136939220635,
+        "name": "Verify installed server aarch64-unknown-linux-gnu",
+        "status": "completed",
+        "conclusion": "success"
+      }
+    ],
+    "CI_failures": {
+      "run_id": 44934221685,
+      "attempt": 1,
+      "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+      "workflow_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+      "linux_x86": {
+        "job": 136937413125,
+        "failed_step": 26,
+        "step_name": "Exercise discovered harness fixtures through account WebSocket and OAuth",
+        "command": "python3 scripts/e2e_agents.py --bin-dir target/debug",
+        "location": "scripts/e2e_agents.py:222",
+        "assertion": "shell: all optional providers have distinct lazy state records",
+        "earlier_clippy_and_cargo_test_passed": true,
+        "evidence": "Root actual GitHub logs and steps read"
+      },
+      "linux_arm": {
+        "job": 136937413183,
+        "failed_step": 26,
+        "assertion": "shell: all optional providers have distinct lazy state records",
+        "evidence": "Direct static agent actual GitHub logs and steps read"
+      },
+      "fixed_fixture_expected_providers": [
+        "codex",
+        "claude",
+        "pi",
+        "opencode",
+        "playwright",
+        "ssmcp"
+      ],
+      "windows_arm": {
+        "job": 136937413350,
+        "failed_step": 6,
+        "command": "cargo test --locked --lib --bin ssmcp --test release_client",
+        "private_result": {
+          "passed": 1289,
+          "failed": 5,
+          "ignored": 3,
+          "filtered": 0
+        },
+        "error": "No official Zuse release target is configured for this platform; no fallback was selected",
+        "locations": [
+          "src/computer/tests.rs:261:62",
+          "src/computer/tests.rs:371:57"
+        ],
+        "clippy_passed": true,
+        "evidence": "Direct static agent actual GitHub logs and steps read",
+        "failed_tests": [
+          "computer::tests::canonical_owned_path_keeps_receipt_identity_and_external_paths_stay_unmanaged",
+          "computer::tests::install_is_private_atomic_and_never_changes_an_external_entry",
+          "computer::tests::install_rechecks_cached_download_before_publishing_any_executable",
+          "computer::tests::uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match",
+          "computer::tests::uninstall_refuses_changed_bytes_replaced_identity_or_unrecorded_files"
+        ],
+        "library_elapsed_seconds": 82.11,
+        "subsequent_bin_and_release_client_execution_not_observed": true
+      },
+      "product_or_fixture_correction_pending": true,
+      "run_rerun_issued": false,
+      "tag_moved": false,
+      "linux_fixture_source_cause": {
+        "evidence": "Original source owner static production catalog review",
+        "actual_optional_provider_count": 5,
+        "stale_fixture_provider": "playwright",
+        "source_edit_pending": true
+      }
+    },
+    "dispatch_capture": {
+      "status": "Canonical raw HTTP capture recovered; original native exec.run flat result still missing",
+      "post_replayed": false,
+      "canonical_flat_result_reconstructed": false,
+      "H2_pass_claimed": false,
+      "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+      "workflow_sha": "d4887aee7117973f890e7806c429eabf2199856c",
+      "capture": {
+        "bytes": 2759,
+        "sha256": "3970a5777818f581a51ef3f817321c099c7911d28ececd23f8dba3bb54873f02"
+      },
+      "http_status": 200,
+      "process_exit": 0,
+      "request_window_start": "2026-11-21T18:12:19Z",
+      "request_window_end": "2026-11-21T18:12:21Z",
+      "run_id": 44934221685,
+      "native_result_file_exists": false,
+      "evidence": "Original source coordinator actual read of existing capture",
+      "second_POST_issued": false,
+      "original_job_identified": true,
+      "original_job_state": "completed",
+      "original_job_exit": 0,
+      "original_job_duration_ms": 2032,
+      "original_job_stdout_metadata_bytes": 2955,
+      "original_job_stderr_metadata_bytes": 0,
+      "native_original_flat_result_persisted": false,
+      "identity_evidence": "Original source coordinator read existing exec.list artifact; not a reconstructed native receipt"
+    },
+    "rerun_issued": false,
+    "H2_completed": false
+  },
+  "next_release": {
+    "tag": "v0.10.26",
+    "branch": "fix/release-0.10.26-20261121",
+    "base": "d4887aee7117973f890e7806c429eabf2199856c",
+    "source": null,
+    "workflow_sha": null,
+    "run": null,
+    "authorization": "Existing authenticated user release and CI bump request; original source owner carrying out bounded fixes",
+    "old_v25_tag_preserved": true,
+    "old_run_not_rerun": true,
+    "new_tests_gate_added": false,
+    "H2_preparation_only": true
+  },
+  "previous_local_validation": {
+    "report_commit": "f9d12db6fab4b353d4f9a89021484efa5648c5ec",
+    "report": "current-iteration-CLI-validation-complete.md",
+    "facts": "cli-validation-complete-public-facts.json",
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "six_groups_each_have_actual_pass": true,
+    "original_six_group_run_all_passed": false,
+    "real_Zuse_lifecycle_version": "v0.4.2",
+    "real_Zuse_lifecycle_six_steps_passed": true,
+    "old_results_inherited_as_v26_execution": false
+  },
+  "git_sync": {
+    "evidence": "Original source owner actual fetch/fast-forward and independent acceptance complete job read",
+    "fetch": {
+      "arguments": [
+        "fetch",
+        "--prune",
+        "--no-tags",
+        "origin"
+      ],
+      "previous_local_main": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+      "remote_main": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+      "ahead": 0,
+      "behind": 2,
+      "working_tree_unchanged_by_fetch": true
+    },
+    "main_update": {
+      "mode": "normal fast-forward; no recursive submodule update; no autostash",
+      "resulting_main": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+      "three_dependency_repo_HEAD_diff_untracked_list_hashes_unchanged": true,
+      "user_artifacts_and_modifications_preserved": true,
+      "removed_zuse_gitlink_directory_preserved_as_untracked": true,
+      "receipt": {
+        "bytes": 12510,
+        "sha256": "91486f0153136734ea7089fbbeb4f796522710bbaae36085b9fed2a51afe7464",
+        "file": "git-sync-main-20261121/receipt.json"
+      }
+    },
+    "owned_validation_worktree": {
+      "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+      "clean": true
+    },
+    "status": "Actual local synchronization completed to the observed remote main at this phase"
+  },
+  "final_main_sync": {
+    "target": "d4887aee7117973f890e7806c429eabf2199856c",
+    "actual_completed_receipt_received": false
+  },
+  "H2": {
+    "previous_package_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "previous_version": "0.10.25",
+    "new_version_only_static_preparation": "Pending exact version-bound references and actual v26 source recipe checks",
+    "old_files_preserved": true,
+    "executed_by_report_group": false,
+    "contract_relaxed": false,
+    "synthetic_native_receipt_allowed": false
+  },
+  "report_group": {
+    "native_product_or_Cargo": 0,
+    "source_writes": 0,
+    "H2_execution": 0,
+    "POST": 0
+  }
+}
