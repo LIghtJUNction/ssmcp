@@ -179,7 +179,7 @@ gh workflow run bump.yml --ref main -f level=patch -f publish=false
 python3 scripts/release.py bump custom --custom-version 0.10.0 --dry-run
 ```
 
-Bump **只更新 ssmcp 的版本**。ztuio、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有实际改动时先在自己的仓库处理版本与发布，再更新 SSMCP 的精确依赖和锁文件。脚本在任何写入前检查应用、本地库和 lockfile 的一致性。
+Bump **只更新 ssmcp 的版本**。ztuio、zharness、zplugin 的 manifest、版本与固定 gitlink 不随应用递增；独立库有改动时，从各自仓库的默认分支同步 Git 锁项与 gitlink。脚本在写入前核对应用版本、依赖源码和锁文件。
 
 GitHub Token 推送的 tag 不会自行触发另一个 push 工作流，因此 Bump 的 dispatch_release job 显式传入刚创建的 tag。失败后重跑已有 tag 的 Release，或只重跑失败的 dispatch_release job；不要重复点击 Bump 递增出第二个版本。[Bump 工作流](../.github/workflows/bump.yml) · [GitHub 触发规则](https://docs.github.com/en/actions/concepts/security/github_token)
 
@@ -192,13 +192,11 @@ git submodule update --init --recursive
 python3 scripts/release.py validate --build-only
 ```
 
-ztuio 的包名和 Rust 导入名均为 ztuio。ztuio、zharness 和 zplugin 均作为固定 Git 子模块，从父 workspace 排除；应用使用 path 加精确 registry version，根级 patch.crates-io 将 zharness 的传递 zplugin 依赖统一到同一份本地源码。发布脚本核对这个关系，避免本地加载两份不兼容的 Rust 类型。
-
-源码包仍须实际通过 `cargo package --locked --package ssmcp` 的验证。path 构建成功不等于发布后的 registry 依赖可用；独立依赖尚未发布、版本已撤回或打包字节不一致时必须停止，不能用本地 patch 掩盖。GitHub 自动生成的源码归档不展开 gitlink；需要完整源码时应递归 clone 固定 tag。
+应用开发使用 Project Z 仓库的 canonical Git URL，manifest 不指定 registry 版本、分支、标签或提交。一次发布使用已提交的 Cargo.lock 和 gitlink，不在各平台重新追踪默认分支。完整 Cargo metadata 校验实际 checkout、包版本、依赖边与启用的 features；ssmcp 与 zharness 必须解析到同一个 zplugin。GitHub 自动生成的源码归档不展开 gitlink；完整源码用递归检出的固定 tag。
 
 ### 正式发布顺序
 
-validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查和六个构建都成功后，重新核对身份、全部六个平台归档和两份安装脚本，打包验证 ssmcp 应用，并保存 verified-crates artifact。
+validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模块身份。checks 复用已有 CI；build 矩阵保留 Linux、macOS、Windows 各 x86_64/ARM64 的优化构建、可执行文件冒烟及安装器检查。finalize 在完整检查与六个构建成功后生成 verified-source 收据，记录源码提交、树、manifest、锁文件、递归子模块、工具链和完整依赖图。它校验六平台归档、各自的摘要文件和两份安装脚本，再生成 SHA256SUMS 与 release-manifest.json，共 16 个公开附件。源码收据留在独立的 Actions artifact 中。
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 
@@ -206,27 +204,17 @@ Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`�
 
 同一 Windows 正式发布矩阵还运行 [`scripts/smoke_windows_browser.ps1`](../scripts/smoke_windows_browser.ps1)：只导入生产安装器的依赖函数，在隔离临时目录真实安装官方 Node 24 LTS、Playwright 1.65.1 与 Chromium，再执行一次复用安装。它使用本 job 新构建的客户端核对 `setup browser --native --check --json` 的精确路径，并让 Chromium 无窗口渲染本地页面。父进程以 Windows Job Object 收口自有进程树，结束后恢复用户环境、删除临时依赖；失败、超时或清理异常都阻止该平台通过。独立 JSON 仅记录版本、摘要、架构与检查状态，不记录原环境或 npm 输出。Windows ARM64 的客户端和 Node 必须匹配 ARM64；Chromium 按 Playwright 实际产物运行并记录其 PE 架构，不能把系统支持的 x64 仿真写成原生 ARM64 浏览器。只有对应 Windows runner 的成功报告才算这项真实验证完成；本机语法检查和 Linux fixtures 不替代它。[Playwright 1.65.1 Chromium 下载映射](https://github.com/microsoft/playwright/blob/v1.65.1/packages/playwright-core/src/server/registry/index.ts)
 
-发布依赖顺序如下：
-
-| 包 | 发布责任与校验 |
-| --- | --- |
-| zplugin-macros → zplugin → zharness | 独立仓库发布；SSMCP 的发布预检要求使用的 zplugin、zharness 精确版本已存在且未撤回 |
-| ztuio → ssmcp | ztuio 由独立仓库发布；应用预检要求精确版本存在且未撤回，应用工作流只上传 ssmcp |
-| zuse-computer → ssmcp | 桌面引擎由独立仓库发布；当前精确依赖为 0.2.2，应用预检同样要求版本存在且未撤回，并核对固定子模块与锁文件；SSMCP 工作流不重新发布该依赖 |
-
-独立库的 registry 版本应对应其仓库的固定源码，SSMCP 不从消费方仓库重新发布依赖。应用源码包通过实际 registry 依赖打包验证；已发布应用的摘要必须与验证包一致，冲突时停止。
-
-publish_crates 在首次上传前核对整个已验证包集合，并先检查独立 registry 依赖。应用包尚未发布时上传 ssmcp；上传后再次查询 crates.io checksum。GitHub Release 与 crates.io job 在 finalize 后分别执行并报告结果；其中一个成功不会冒充另一个成功。
-
-GitHub Release 先创建或找回 draft，上传完整附件并检查大小、摘要后才公开。相同 tag 重跑会复用匹配资产，发现不同内容则停止，不覆盖已发布附件。release-manifest.json 记录应用 commit、递归子模块的 path/commit/tree，以及各归档和安装脚本的 SHA-256。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
+GitHub 发布任务从固定源码重新核对 verified-source 与所有附件。它先创建或找回 draft，读取实际附件大小和摘要，全部一致后才公开。重跑只复用相同内容的附件，发现不同内容时保留 draft 或既有发布。release-manifest.json 记录实际源码、依赖图、附件摘要，以及 registry 发布决策。已冻结的旧标签仍可从 main 显式指定标签重试，使用其原有验证协议。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
 
 ## crates.io 凭据与失败重跑
 
-仓库 Actions secret CARGO_REGISTRY_TOKEN 必须有权发布ssmcp 应用包。工作流保留历史拼写 CARGO_REGISTY_TOKEN 的兼容，标准名称优先；凭据只传入 crates 发布步骤，不写入源码或发行附件。没有启用未经配置的 OIDC 凭据替代。
+0.10.25 的 crates.io 发布明确延期，独立 registry 依赖与外部源码包还需要单独验证。清单记录延期理由，verified_crate 为 null。GitHub 二进制发布使用独立的 fixed-source 校验；build-only 不会进入任一发布任务。
 
-发布读取 finalize 留存的验证包，再以 `cargo publish --locked --no-verify --registry crates-io --package <包名>` 上传；no-verify 复用前一阶段完成的真实验证。相同版本只有在 registry checksum 与验证包完全一致时才跳过；版本已撤回或内容冲突则停止。ztuio、zharness、zplugin 的新版本必须先从各自仓库发布，SSMCP 工作流不会替它们递增版本或创建 release。
+采用 registry 发布的版本会从实际 Git manifest 与锁项导出精确版本，在独立目录生成 registry manifest 和锁文件。导出只改内部来源选择及其 Git overrides。脚本核对 Cargo 报告的 VCS 信息、Cargo.toml.orig、包内成员字节、规范化 manifest/lock 和实际 registry 依赖图，并让 Cargo 实际验证打包。独立包版本缺失、已撤回或不符合消费者依赖图时，registry 任务停止；SSMCP 只上传自己的包。[Cargo 打包说明](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 
-已有 tag 的任务失败时，使用该 tag 重试，保持同一套源码、子模块和制品。修复源码或依赖后需要新 commit、新版本和新 tag，不移动旧 tag。固定归档时间戳用于减少非源码差异，不构成跨任意机器的可重复二进制构建承诺。
+发布任务复用已验证的 registry 导出锁文件，先比较 Cargo dry-run 重新打包的字节，再调用实际上传并核对 registry checksum。仓库 Actions secret CARGO_REGISTRY_TOKEN 只传入上传步骤，历史拼写 CARGO_REGISTY_TOKEN 继续兼容。相同版本只在 checksum 一致时复用。
+
+固定标签失败后可用同一 tag 重试。修复源码或依赖需要新 commit、版本和 tag。固定归档时间戳用于减少时间戳差异。
 
 ## 发布证据如何判断
 
@@ -238,4 +226,4 @@ GitHub Release 先创建或找回 draft，上传完整附件并检查大小、�
 | crates 包已发布 | crates.io 精确版本、未撤回状态与匹配 checksum |
 | 已安装或已部署 | 目标机器上的安装/服务版本与独立回执 |
 
-发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。0.10.15–0.10.25 在当前工作流的 deferred_versions 中，正式发布仍保留预编译归档和包发布，但不会自动部署生产 relay。其他版本是否部署取决于工作流的部署策略与 deploy_server 输入；维护者应核对当次 validate 输出。发布、服务端部署和客户端安装分别记录结果，源码推送不代表服务或用户客户端已更新。
+发布说明保留安装方式，并附加匹配版本的 docs/release-notes-版本号.md。GitHub 预编译归档使用 release-manifest.json；网关 Publisher 的同源原始客户端 release.json 是独立制品，不能用一个清单冒充另一个。0.10.15–0.10.25 在当前工作流的 deferred_versions 中，这些版本的工作流不自动部署生产 relay。0.10.25 的 crates.io 延期是独立决策，GitHub 二进制归档仍按对应源码验证。其他版本是否部署取决于工作流的部署策略与 deploy_server 输入；维护者应核对当次 validate 输出。发布、服务端部署和客户端安装分别记录结果，源码推送不代表服务或用户客户端已更新。

@@ -26,11 +26,12 @@ ssmcp setup browser --playwright-mcp /absolute/path/to/cli.js [--json]
 It never installs, discovers or registers an external harness.
 
 The following explicit integration options discover browser extensions and tools.
-The default saves an available Playwright MCP CLI and enables background control.
+The default saves a Playwright MCP CLI and prefers background tabs.
 --check reports the environment without installing or changing settings.
 --install installs @playwright/mcp@0.0.85 in the ssmcp user directory using npm.
 --playwright-mcp selects an installed native or JavaScript MCP entry.
---foreground explicitly allows the extension to activate browser windows.
+--background and --foreground select legacy browser presentation preferences.
+Both require Computer Use On for control.
 
 Enable Playwright MCP Bridge and approve its first connection in the browser.
 A ChatGPT or Claude extension manifest alone exposes no supported ssmcp API.

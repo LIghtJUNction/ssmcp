@@ -1,4 +1,4 @@
-//! Explicit local foreground input switch, shared by this machine's OS user.
+//! Shared Computer Use switch for this machine's OS user.
 mod storage;
 
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,8 @@ use tokio::sync::Notify;
 pub(super) use storage::InputLease;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
-pub(super) const LOCKED: &str = "host input is off; the local operator can use /computer on or Super+Alt+C. Isolated desktop and background browser control remain enabled";
-pub(super) const ENDED: &str =
-    "host input was switched off or this connection closed; control returned to the operator";
+pub(crate) const LOCKED: &str = "Computer Use is Off; use /computer on or Super+Alt+C";
+pub(crate) const ENDED: &str = "Computer Use was revoked; effects already dispatched may have completed. Inspect state before retrying";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -39,12 +38,12 @@ impl Default for State {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Ticket {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Ticket {
     generation: [u8; 16],
 }
 
-pub(super) struct HostControl {
+pub(crate) struct HostControl {
     store: Result<Arc<Store>, String>,
     stopped: AtomicBool,
     changed: Notify,
@@ -84,11 +83,99 @@ pub(super) fn input_tool(name: &str) -> bool {
     )
 }
 
+pub(super) fn mutation_tool(name: &str) -> bool {
+    input_tool(name)
+        || matches!(
+            name,
+            "ssmcp.computer.desktop_start" | "ssmcp.computer.app_launch"
+        )
+}
+
+tokio::task_local! {
+    static PERMIT: Permit;
+}
+
+/// Bound to the generation accepted at ingress, including after a queue wait.
+#[derive(Clone)]
+pub(crate) struct Permit {
+    control: Arc<HostControl>,
+    ticket: Ticket,
+    // A detached CDP press/release keeps this lease through its final release.
+    lease: Option<Arc<InputLease>>,
+}
+
+impl Permit {
+    pub(crate) fn current() -> Option<Self> {
+        PERMIT.try_with(Clone::clone).ok()
+    }
+
+    pub(crate) fn check_current() -> Result<(), String> {
+        PERMIT.try_with(Self::check).unwrap_or(Ok(()))
+    }
+
+    pub(crate) fn check(&self) -> Result<(), String> {
+        if self.control.valid(self.ticket) {
+            Ok(())
+        } else {
+            Err(ENDED.into())
+        }
+    }
+
+    pub(crate) fn same_generation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.control, &other.control) && self.ticket == other.ticket
+    }
+
+    pub(crate) fn without_lease(&self) -> Self {
+        Self {
+            lease: None,
+            ..self.clone()
+        }
+    }
+
+    /// Publish a newly acquired handle while the persisted generation is locked.
+    pub(crate) fn commit<T>(&self, publish: impl FnOnce() -> T) -> Result<T, String> {
+        self.control.store()?.inspect(|state| {
+            if !self.control.stopped.load(Ordering::Acquire)
+                && state.enabled
+                && state.generation == self.ticket.generation
+            {
+                Ok(publish())
+            } else {
+                Err(ENDED.into())
+            }
+        })
+    }
+
+    pub(crate) async fn serialized(mut self) -> Result<Self, String> {
+        self.lease = Some(Arc::new(self.control.acquire(self.ticket).await?));
+        Ok(self)
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        self.control.cancelled(self.ticket).await;
+    }
+
+    pub(crate) async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
+        PERMIT.scope(self.clone(), future).await
+    }
+
+    pub(crate) async fn run<T>(
+        &self,
+        future: impl Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        self.control.run(self.ticket, self.scope(future)).await
+    }
+
+    pub(super) fn ticket(&self) -> Ticket {
+        self.ticket
+    }
+}
+
 fn generation() -> Result<[u8; 16], String> {
     let mut bytes = [0; 16];
     crate::platform::random_bytes(&mut bytes).map_err(|error| error.to_string())?;
     if bytes == [0; 16] {
-        return Err("could not create a foreground input generation".into());
+        return Err("could not create a computer-use generation".into());
     }
     Ok(bytes)
 }
@@ -115,8 +202,16 @@ impl HostControl {
         Self::with_store(Ok(Arc::new(Store::at(path))))
     }
 
-    /// Called only by decoded local operator commands, never a native tool.
-    pub(super) fn set_local(&self, enabled: bool) -> Result<Value, String> {
+    pub(crate) fn permit(self: &Arc<Self>) -> Result<Permit, String> {
+        Ok(Permit {
+            control: Arc::clone(self),
+            ticket: self.ticket()?,
+            lease: None,
+        })
+    }
+
+    /// Called by local UI and CLI entry points, never a native tool.
+    pub(crate) fn set_local(&self, enabled: bool) -> Result<Value, String> {
         self.update_local(Some(enabled))
     }
 
@@ -135,7 +230,7 @@ impl HostControl {
 
     /// Closing one connection cancels only its own tickets, not the user's
     /// persistent setting or other live ssmcp sessions.
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         self.stopped.store(true, Ordering::Release);
         self.changed.notify_waiters();
     }
@@ -212,7 +307,7 @@ impl HostControl {
         }
     }
 
-    pub(super) fn status(&self) -> Value {
+    pub(crate) fn status(&self) -> Value {
         match self.store().and_then(|store| store.read()) {
             Ok(state) => status_value(state, None),
             Err(error) => status_value(State::default(), Some(error)),
@@ -224,7 +319,9 @@ fn status_value(state: State, error: Option<String>) -> Value {
     let mut status = json!({
         "enabled":state.enabled,
         "mode":if state.enabled {"on"} else {"off"},
-        "background_enabled":true,
+        "background_enabled":state.enabled,
+        "enforcement_scope":"SSMCP computer, browser, Omarchy and Playwright mutations",
+        "os_permission_boundary":false,
         "scope":"machine_os_user",
         "generation":generation_text(state.generation),
         "local_on":"/computer on",

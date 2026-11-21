@@ -80,7 +80,7 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
                 .find(|row| row.contains("剩余 ") || row.contains("计时 "))
                 .unwrap();
             assert!(
-                divider.contains("电脑控制：未确认") || divider.contains("键鼠：?"),
+                divider.contains("电脑控制：未确认") || divider.contains("电脑：?"),
                 "{cols}: {divider}"
             );
         }

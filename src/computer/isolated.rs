@@ -193,7 +193,22 @@ fn surface(mut response: Value, desktop: &str) -> Value {
         metadata.insert("host_input_requires_explicit_target".into(), json!(true));
         metadata.insert("host_input_requires_local_handoff".into(), json!(false));
         metadata.insert("host_input_gate".into(), json!("shared_local_switch"));
-        metadata.insert("background_enabled".into(), json!(true));
+        let text = serde_json::to_string(metadata).unwrap_or_default();
+        if let Some(items) = response.get_mut("content").and_then(Value::as_array_mut)
+            && let Some(item) = items.iter_mut().find(|item| item["type"] == "text")
+        {
+            item["text"] = json!(text);
+        }
+    }
+    response
+}
+
+pub(super) fn control_status(mut response: Value, status: Value) -> Value {
+    if let Some(metadata) = response
+        .get_mut("structuredContent")
+        .and_then(Value::as_object_mut)
+    {
+        metadata.insert("computer_use".into(), status);
         let text = serde_json::to_string(metadata).unwrap_or_default();
         if let Some(items) = response.get_mut("content").and_then(Value::as_array_mut)
             && let Some(item) = items.iter_mut().find(|item| item["type"] == "text")
@@ -221,7 +236,7 @@ fn inactive_status() -> Value {
         "reason":if supported {
             "No private desktop is running. computer.app_launch starts one automatically; use computer.desktop_start first for a custom size."
         } else {
-            "Private desktops require Linux and Xvfb on this platform. Background browser control remains enabled. Explicit desktop: host permits inspection; input additionally needs the local operator's /computer on switch."
+            "Private desktops require Linux and Xvfb on this platform. Explicit desktop: host permits host inspection. All mutations require Computer Use On."
         }
     })
 }
@@ -255,6 +270,7 @@ pub(super) async fn dispatch(
                 return Err("private desktop dimensions must be 320..=3840 by 240..=2160".into());
             }
             let mut slot = computer.isolated.lock().await;
+            super::host_control::Permit::check_current()?;
             if let Some(desktop) = slot.as_mut() {
                 desktop.ensure_running()?;
                 if desktop.width != options.width || desktop.height != options.height {
@@ -262,13 +278,11 @@ pub(super) async fn dispatch(
                 }
                 return Ok(result(desktop.status()));
             }
-            let mut desktop = Desktop::start(&computer.root, options).await?;
-            if computer.closed.load(Ordering::Acquire) {
-                desktop.shutdown().await;
-                return Err("computer connection closed during desktop startup".into());
-            }
+            let permit =
+                super::host_control::Permit::current().ok_or("missing computer-use permit")?;
+            let desktop = permit.run(Desktop::start(&computer.root, options)).await?;
             let status = desktop.status();
-            *slot = Some(desktop);
+            permit.commit(|| *slot = Some(desktop))?;
             Ok(result(status))
         }
         "ssmcp.computer.desktop_status" => {
@@ -287,7 +301,7 @@ pub(super) async fn dispatch(
             status["supported"] = json!(cfg!(target_os = "linux"));
             status["helpers"] = required_helpers();
             status["default_input"] = json!(
-                "isolated; app_launch starts a private desktop; host input requires desktop: host and the local operator's shared /computer on switch"
+                "isolated; app_launch can start a private desktop when Computer Use is On; desktop: host selects the host"
             );
             Ok(result(status))
         }
@@ -308,25 +322,34 @@ pub(super) async fn dispatch(
             let launch: Launch = parse(args)?;
             let executable = launch_executable(&launch.command)?;
             let mut slot = computer.isolated.lock().await;
+            let permit =
+                super::host_control::Permit::current().ok_or("missing computer-use permit")?;
+            permit.check()?;
             let created = slot.is_none();
-            if created {
-                let mut desktop = Desktop::start(
-                    &computer.root,
-                    Start {
-                        width: default_width(),
-                        height: default_height(),
-                    },
-                )
-                .await?;
-                if computer.closed.load(Ordering::Acquire) {
-                    desktop.shutdown().await;
-                    return Err("computer connection closed during desktop startup".into());
+            let mut response = if let Some(desktop) = slot.as_mut() {
+                desktop.ensure_running()?;
+                desktop.launch(launch.command, executable).await?
+            } else {
+                let mut desktop = permit
+                    .run(Desktop::start(
+                        &computer.root,
+                        Start {
+                            width: default_width(),
+                            height: default_height(),
+                        },
+                    ))
+                    .await?;
+                match desktop.launch(launch.command, executable).await {
+                    Ok(response) => {
+                        permit.commit(|| *slot = Some(desktop))?;
+                        response
+                    }
+                    Err(error) => {
+                        desktop.shutdown().await;
+                        return Err(error);
+                    }
                 }
-                *slot = Some(desktop);
-            }
-            let desktop = slot.as_mut().expect("private desktop initialized");
-            desktop.ensure_running()?;
-            let mut response = desktop.launch(launch.command, executable).await?;
+            };
             response["structuredContent"]["desktop_started"] = json!(created);
             Ok(surface(response, "isolated"))
         }
@@ -349,19 +372,22 @@ pub(super) async fn dispatch(
                     .map(|r| surface(r, "host"));
             }
             let mut slot = computer.isolated.lock().await;
+            super::host_control::Permit::check_current()?;
             if let Some(desktop) = slot.as_mut() {
                 desktop.ensure_running()?;
-                return desktop
-                    .computer
-                    .perform_local(name, args)
-                    .await
-                    .map(|r| surface(r, "isolated"));
+                let operation = desktop.computer.perform_local(name, args);
+                let response = if let Some(permit) = super::host_control::Permit::current() {
+                    permit.run(operation).await?
+                } else {
+                    operation.await?
+                };
+                return Ok(surface(response, "isolated"));
             }
             if name == "ssmcp.computer.status" {
                 parse::<Empty>(args)?;
                 return Ok(surface(result(inactive_status()), "isolated"));
             }
-            Err("no private desktop is running; computer.app_launch starts one automatically, or call computer.desktop_start. Background browser control remains enabled; desktop: host permits observation, while host input also requires the local operator's /computer on switch".into())
+            Err("no private desktop is running. Use desktop: host to observe the host explicitly. Starting a private desktop or sending input requires Computer Use On".into())
         }
     }
 }
@@ -369,7 +395,7 @@ pub(super) async fn dispatch(
 impl Desktop {
     #[cfg(not(target_os = "linux"))]
     async fn start(_root: &Path, _options: Start) -> Result<Self, String> {
-        Err("private desktops currently require Linux and Xvfb; background browser control remains enabled. Host input requires the local operator's /computer on switch".into())
+        Err("private desktops currently require Linux and Xvfb; explicit desktop: host selects the host".into())
     }
 
     #[cfg(target_os = "linux")]
@@ -454,6 +480,7 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        super::host_control::Permit::check_current()?;
         let process = Managed::spawn(&mut command).map_err(|e| format!("Xvfb: {e}"))?;
         // Own startup from the first await: cancellation must retain the cookie
         // and any verified socket inode until this process tree has been reaped.
@@ -583,8 +610,14 @@ impl Desktop {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        super::host_control::Permit::check_current()?;
         let process = Managed::spawn(&mut command)
             .map_err(|e| format!("could not launch private application: {e}"))?;
+        let mut process = process;
+        if let Err(error) = super::host_control::Permit::check_current() {
+            process.shutdown().await;
+            return Err(error);
+        }
         let supervisor_pid = process.child.id();
         self.apps.push(process);
         Ok(result(
@@ -828,7 +861,7 @@ mod tests {
             assert_eq!(metadata["host_input_requires_explicit_target"], true);
             assert_eq!(metadata["host_input_requires_local_handoff"], false);
             assert_eq!(metadata["host_input_gate"], "shared_local_switch");
-            assert_eq!(metadata["background_enabled"], true);
+            assert!(metadata.get("background_enabled").is_none());
             let text = response["content"]
                 .as_array()
                 .unwrap()

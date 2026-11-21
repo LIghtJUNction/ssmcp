@@ -48,6 +48,7 @@ mod trust;
 pub(crate) mod ui;
 mod ui_command;
 mod update;
+mod version;
 #[cfg(target_os = "linux")]
 mod zero;
 
@@ -89,7 +90,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
-  computer on|off|status        Shared foreground computer switch
+  computer on|off|status        Shared Computer Use switch
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -98,6 +99,7 @@ Options
   --agent NAME  Chat recipient (next-caller by default)
   --load-harness NAME  Preload one native protocol
   --list-harnesses     List supported harness providers
+  --version [--all]    Show the version or the locked dependency tree
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -117,6 +119,7 @@ Usage: ssmcp username@server [options]
        ssmcp config path
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
        ssmcp setup [--server URL] [--no-browser]
@@ -267,8 +270,8 @@ or disable the dashboard when attaching to a saved session.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
-Use /computer on or /computer off in chat to set the foreground switch shared by
-all ssmcp sessions on this machine and OS user. Background control stays enabled.
+Use /computer on or /computer off to control SSMCP computer, browser and desktop
+mutations for this OS user. The switch does not restrict native shell programs.
 Super+Alt+C toggles the switch with a desktop binding or enhanced keyboard input.
 The local CLI `ssmcp computer toggle` is the desktop shortcut command.
 Background logs use JSONL without terminal colors; foreground display options
@@ -609,9 +612,9 @@ impl Options {
                     print!("{HELP_FULL}");
                     return Ok(None);
                 }
+                Some("--all") => return Err("--all requires a top-level --version request".into()),
                 Some("-V" | "--version") => {
-                    println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
-                    return Ok(None);
+                    return Err("use --version alone or with --all at the top level".into());
                 }
                 Some("-t" | "--type" | "--backend") => {
                     return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; optional harnesses load only when explicitly requested".into());
@@ -1588,8 +1591,13 @@ async fn retry_legacy_self_account(
 }
 
 pub async fn run() -> crate::Result<()> {
+    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(request) = version::request(&args)? {
+        print!("{}", version::render(request)?);
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__local-relay")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__local-relay")) {
         let code = match local::relay().await {
             Ok(()) => 0,
             Err(error) => {
@@ -1601,8 +1609,8 @@ pub async fn run() -> crate::Result<()> {
         // reader when the host closes first. It owns no tool processes.
         std::process::exit(code);
     }
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__tty-view")) {
-        let args: Vec<_> = std::env::args_os().skip(2).collect();
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__tty-view")) {
+        let args = &args[1..];
         if args.len() != 2 {
             return Err("terminal viewer requires endpoint directory and slot".into());
         }
@@ -1612,7 +1620,7 @@ pub async fn run() -> crate::Result<()> {
             .ok_or("invalid observer slot")?;
         return crate::observer::viewer(std::path::Path::new(&args[0]), slot).await;
     }
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__relay")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__relay")) {
         let code = match relay::run().await {
             Ok(()) => 0,
             Err(error) => {
@@ -1625,10 +1633,9 @@ pub async fn run() -> crate::Result<()> {
         std::process::exit(code);
     }
     #[cfg(target_os = "linux")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
     }
-    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if agent::dispatch(&args)? {
         return Ok(());
     }
@@ -1773,7 +1780,7 @@ pub async fn run() -> crate::Result<()> {
             "context",
             "Warning",
             &format!(
-                "Local memory unavailable; conversation history and drafts remain usable: {error}"
+                "Local memory unavailable: {error}. Saved conversation history also requires an accessible workspace."
             ),
         );
     }
@@ -1940,10 +1947,6 @@ pub async fn run() -> crate::Result<()> {
         {
             continue;
         }
-        let unsupported_protocol = result
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.downcast_ref::<UnsupportedWireProtocol>().is_some());
         let permanent = result
             .as_ref()
             .err()
@@ -1962,7 +1965,7 @@ pub async fn run() -> crate::Result<()> {
             apply_account(&mut options, true).await?;
             continue;
         }
-        if !options.watchdog || unsupported_protocol || permanent {
+        if !watchdog_retries(options.watchdog, result.as_ref().err().map(Box::as_ref)) {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
             }
@@ -2005,6 +2008,18 @@ pub async fn run() -> crate::Result<()> {
             },
         }
     }
+}
+
+pub(crate) fn watchdog_retries(
+    enabled: bool,
+    error: Option<&(dyn std::error::Error + Send + Sync + 'static)>,
+) -> bool {
+    enabled
+        && error.is_none_or(|error| {
+            !error.is::<UnsupportedWireProtocol>()
+                && !error.is::<relay::PermanentFailure>()
+                && !error.is::<crate::output::StartupDirectoryError>()
+        })
 }
 
 enum ConnectionExit {
@@ -3116,6 +3131,19 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watchdog_keeps_retrying_transient_transport_errors() {
+        let disconnected = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert!(watchdog_retries(true, Some(&disconnected)));
+        assert!(!watchdog_retries(false, Some(&disconnected)));
+        assert!(watchdog_retries(true, None));
+        assert!(!watchdog_retries(true, Some(&UnsupportedWireProtocol)));
+        assert!(!watchdog_retries(
+            true,
+            Some(&relay::PermanentFailure("rejected".into()))
+        ));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn local_socket_option_accepts_default_and_custom_paths_without_eating_flags() {

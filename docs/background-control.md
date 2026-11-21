@@ -7,7 +7,7 @@ input. Other tabs retain their independent operation locks. The implementation
 is in [browser.rs](../src/browser.rs) and [actions.rs](../src/browser/actions.rs).
 
 Existing browser setup, private desktops and explicit host input are described
-in [Background browser control and private desktops](browser-desktop.md).
+in [Browser control and private desktops](browser-desktop.md).
 
 ## Send a batch
 
@@ -36,7 +36,7 @@ a fresh snapshot that replaces the previous element references. Set
 
 Input actions use the same target focus emulation and press/release cleanup as
 standalone browser input. Focus emulation applies to the CDP target and is
-restored on disconnect; it does not activate a browser tab or move the system
+restored on Computer Use revocation or disconnect; it does not activate a browser tab or move the system
 pointer. Wait actions send no input.
 
 ## Continue after a partial failure
@@ -54,7 +54,8 @@ choose the remaining work from the observed state.
 | `replay_safe: false` | Reobserve the target before deciding which operation to issue |
 
 The client stops on the first failure and returns the partial report without
-replaying the batch or falling back to desktop input.
+replaying the batch or falling back to desktop input. Off uses the same partial
+report. Actions whose replies were interrupted may already have affected the page.
 
 ## Wait for a page condition
 

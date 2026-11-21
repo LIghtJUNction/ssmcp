@@ -53,6 +53,8 @@ jobs:
       publish: ${{ steps.tag.outputs.publish }}
       build_only: ${{ steps.tag.outputs.build_only }}
       deploy_server: ${{ steps.deployment.outputs.deploy_server }}
+      release_contract: ${{ steps.publication.outputs.release_contract }}
+      crate_publication: ${{ steps.publication.outputs.crate_publication }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,6 +68,55 @@ jobs:
       - name: Validate the tag, versions, main ancestry and pinned submodules
         id: tag
         run: python scripts/release.py validate --event
+      - name: Select the verified source and crate publication contract
+        id: publication
+        env:
+          RELEASE_PUBLISH: ${{ steps.tag.outputs.publish }}
+          RELEASE_BUILD_ONLY: ${{ steps.tag.outputs.build_only }}
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          RELEASE_CONTRACT: ${{ steps.tag.outputs.release_contract }}
+          CRATE_PUBLICATION: ${{ steps.tag.outputs.crate_publication }}
+        run: |
+          python - <<'PY'
+          # BEGIN release publication contract
+          import json
+          import os
+          import re
+
+          version = os.environ["RELEASE_VERSION"]
+          match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?", version)
+          if not match or any(part.isdigit() and len(part) > 1 and part.startswith("0")
+                              for part in (match.group(4) or "").split(".")):
+              raise ValueError("validated release version is invalid")
+          tag = os.environ["RELEASE_TAG"]
+          publish = os.environ["RELEASE_PUBLISH"]
+          build_only = os.environ["RELEASE_BUILD_ONLY"]
+          if (publish, build_only, tag) not in (("true", "false", "v" + version), ("false", "true", "")):
+              raise ValueError("invalid validated release mode or tag")
+
+          contract = os.environ["RELEASE_CONTRACT"]
+          crate = os.environ["CRATE_PUBLICATION"]
+          if contract == "git-source-v1":
+              expected = ("not_requested" if build_only == "true"
+                          else "deferred" if version == "0.10.25" else "registry")
+              if crate != expected:
+                  raise ValueError("validated crate policy does not match the Git source contract")
+          elif (not contract and not crate and publish == "true"
+                and tuple(map(int, match.groups()[:3])) <= (0, 10, 24)
+                and os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+                and os.environ["GITHUB_REF"] == "refs/heads/main"):
+              with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+                  inputs = json.load(stream).get("inputs")
+              if not isinstance(inputs, dict) or inputs.get("tag") != tag:
+                  raise ValueError("legacy publication requires an explicitly selected immutable tag")
+              contract, crate = "legacy-tag-v1", "registry"
+          else:
+              raise ValueError("unrecognized release verification contract")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(f"release_contract={contract}\ncrate_publication={crate}\n")
+          # END release publication contract
+          PY
       - name: Select deployment after validated publication
         id: deployment
         env:
@@ -291,6 +342,8 @@ jobs:
       actions: read
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      BUILD_ONLY: ${{ needs.validate.outputs.build_only }}
+      RELEASE_CONTRACT: ${{ needs.validate.outputs.release_contract }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -316,26 +369,53 @@ jobs:
           else
             python scripts/release.py validate --build-only
           fi
+      - name: Verify and record the fixed Git source and dependency graph
+        if: needs.validate.outputs.release_contract == 'git-source-v1'
+        run: python scripts/release.py verify-source
       - name: Verify the application source package and normalized registry graph
+        if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
         run: python scripts/release.py verify-crate
       - name: Require every verified target archive and record the release manifest
         run: |
           cp scripts/install.sh scripts/install.ps1 dist/
-          python scripts/release.py checksums
-      - name: Retain the verified application crate for publishing
+          if [[ "$RELEASE_CONTRACT" == git-source-v1 && "$BUILD_ONLY" == true ]]; then
+            python scripts/release.py checksums --build-only
+          else
+            python scripts/release.py checksums
+          fi
+      - name: Retain the verified Git source outside the public asset directory
+        if: needs.validate.outputs.release_contract == 'git-source-v1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-source
+          path: target/release-proof/verified-source.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain the finalized release assets
+        if: needs.validate.outputs.release_contract == 'git-source-v1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: finalized-release-assets
+          path: dist/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain the verified application crate and frozen registry lock
+        if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-crates
           path: |
             target/package/*.crate
             target/package/ssmcp-verified-crate.json
+            target/package/ssmcp-registry-Cargo.lock
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
 
   publish_crates:
     needs: [validate, finalize]
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.crate_publication == 'registry'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -380,6 +460,7 @@ jobs:
       actions: read
     env:
       RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_CONTRACT: ${{ needs.validate.outputs.release_contract }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -394,19 +475,35 @@ jobs:
         with:
           python-version: '3.13'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.validate.outputs.release_contract == 'git-source-v1'
+        with:
+          name: verified-source
+          path: target/release-proof
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.validate.outputs.release_contract == 'git-source-v1'
+        with:
+          name: finalized-release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.validate.outputs.release_contract == 'legacy-tag-v1'
         with:
           pattern: ssmcp-*
           merge-multiple: true
           path: dist
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.validate.outputs.crate_publication == 'registry'
         with:
           name: verified-crates
           path: target/package
       - name: Recheck tag identity and every target archive
         run: |
           python scripts/release.py validate --tag "$RELEASE_TAG"
-          cp scripts/install.sh scripts/install.ps1 dist/
-          python scripts/release.py checksums
+          if [[ "$RELEASE_CONTRACT" == git-source-v1 ]]; then
+            python scripts/release.py checksums --recheck
+          else
+            cp scripts/install.sh scripts/install.ps1 dist/
+            python scripts/release.py checksums
+          fi
       - name: Publish GitHub Release after uploading all verified assets
         env:
           GH_TOKEN: ${{ github.token }}

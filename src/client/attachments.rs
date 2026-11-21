@@ -50,7 +50,7 @@ pub(crate) enum Loaded {
 
 /// A local web effect produced by an explicit terminal command.
 pub(crate) enum WebAction {
-    Open(reqwest::Url),
+    Open(reqwest::Url, &'static str),
     Copy(String),
 }
 
@@ -61,8 +61,10 @@ impl WebAction {
         copy: impl AsyncFnOnce(&str) -> Result<(), String>,
     ) -> Result<Loaded, String> {
         let notice = match self {
-            Self::Open(url) => {
-                open(&url).await?;
+            Self::Open(url, fallback) => {
+                open(&url)
+                    .await
+                    .map_err(|error| format!("{error} · {fallback}"))?;
                 "Browser launch requested"
             }
             Self::Copy(url) => {
@@ -1151,7 +1153,7 @@ mod web_tests {
     #[tokio::test]
     async fn explicit_web_effects_report_real_launcher_and_clipboard_outcomes() {
         let url = reqwest::Url::parse("https://chatgpt.com/c/synthetic-fixture").unwrap();
-        let opened = WebAction::Open(url.clone())
+        let opened = WebAction::Open(url.clone(), "Use /chatgpt copy to open it manually")
             .run(
                 async |target| {
                     assert_eq!(target, &url);
@@ -1164,7 +1166,7 @@ mod web_tests {
             opened,
             Ok(Loaded::WebNotice("Browser launch requested"))
         ));
-        let error = WebAction::Open(url.clone())
+        let error = WebAction::Open(url.clone(), "Use /chatgpt copy to open it manually")
             .run(
                 async |target| {
                     assert_eq!(target, &url);
@@ -1174,7 +1176,22 @@ mod web_tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(error, "fixture failed to spawn");
+        assert_eq!(
+            error,
+            "fixture failed to spawn · Use /chatgpt copy to open it manually"
+        );
+        let docs = "https://developers.openai.com/plugins/reference";
+        let error = WebAction::Open(reqwest::Url::parse(docs).unwrap(), docs)
+            .run(
+                async |target| {
+                    assert_eq!(target.as_str(), docs);
+                    Err("fixture failed to spawn".into())
+                },
+                async |_| panic!("opening docs used the clipboard"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.ends_with(docs), "{error}");
         let error = WebAction::Copy(url.to_string())
             .run(
                 async |_| panic!("copying launched a browser"),

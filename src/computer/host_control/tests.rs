@@ -24,7 +24,10 @@ fn a_fresh_store_starts_on_and_explicit_off_persists_across_connections() {
     assert_eq!(enabled, peer(&control).status());
     assert_eq!(control.set_local(true).unwrap(), enabled);
     assert_eq!(control.set_local(false).unwrap()["enabled"], false);
-    assert_eq!(peer(&control).status()["enabled"], false);
+    let off = peer(&control).status();
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["background_enabled"], false);
+    assert_eq!(off["os_permission_boundary"], false);
     assert_eq!(control.ticket().unwrap_err(), LOCKED);
 }
 
@@ -137,19 +140,28 @@ async fn closing_one_connection_keeps_other_connections_enabled() {
 
 #[test]
 fn each_pointer_keyboard_and_focus_operation_requires_the_switch() {
-    for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
-        assert!(input_tool(&format!("ssmcp.computer.{suffix}")));
+    for suffix in [
+        "focus",
+        "move",
+        "click",
+        "drag",
+        "key",
+        "type",
+        "scroll",
+        "desktop_start",
+        "app_launch",
+    ] {
+        assert!(mutation_tool(&format!("ssmcp.computer.{suffix}")));
     }
     for suffix in [
         "status",
+        "monitors",
         "windows",
         "screenshot",
-        "desktop_start",
         "desktop_status",
         "desktop_stop",
-        "app_launch",
     ] {
-        assert!(!input_tool(&format!("ssmcp.computer.{suffix}")));
+        assert!(!mutation_tool(&format!("ssmcp.computer.{suffix}")));
     }
 }
 

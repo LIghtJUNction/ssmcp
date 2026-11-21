@@ -21,7 +21,7 @@ impl Control {
             Some(_) => ("关闭", "关"),
             None => ("未确认", "?"),
         };
-        [format!("电脑控制：{state}"), format!("键鼠：{short}")]
+        [format!("电脑控制：{state}"), format!("电脑：{short}")]
             .into_iter()
             .find(|text| text.width() <= usize::from(width))
             .unwrap_or_default()
@@ -102,7 +102,7 @@ fn refresh_with(
     }
     let status = status.unwrap_or_else(|| {
         execute(operator::Command::Status).unwrap_or_else(|message| {
-            serde_json::json!({"enabled":false,"background_enabled":true,"error":message})
+            serde_json::json!({"enabled":false,"background_enabled":false,"error":message})
         })
     });
     let notice = requested.then(|| error.unwrap_or_else(|| operator::describe(&status)));
@@ -152,7 +152,7 @@ mod tests {
                 operator::Command::Toggle => enabled.set(!enabled.get()),
                 operator::Command::Status => {}
             }
-            Ok(serde_json::json!({"enabled":enabled.get(),"background_enabled":true}))
+            Ok(serde_json::json!({"enabled":enabled.get(),"background_enabled":enabled.get()}))
         };
         let now = Instant::now();
         refresh_with(&first, now, execute);
