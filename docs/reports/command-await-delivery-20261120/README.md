@@ -1,8 +1,8 @@
-# SSMCP 当前迭代：Agents 修正已提交，扩展 worker 与文件清理
+# SSMCP 当前迭代：worker 模块与结束批准已提交，工具仓库已建立
 
-**更新于 2026-11-21 20:59:47 UTC。** 本次实际读取的开发分支头为 [f17e8fe](https://github.com/LIghtJUNction/ssmcp/commit/f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa)，尚未冻结为最终发布来源。Zuse 兼容基线 `58bf72e` 的六平台 CI 已全部通过；后续 Agents 修正已提交，本机五项回归取得四项通过、一项界面提示断言失败。该断言已修正，重跑结果待取得。**v0.10.26 标签和 Release 仍未创建。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
+**更新于 2026-11-21 21:26:26 UTC。** 本次开发来源为 [0afe0be](https://github.com/LIghtJUNction/ssmcp/commit/0afe0be61faf4b06785c26123318ed91769055e1)，尚未冻结为最终发布来源。Zuse 兼容基线 `58bf72e` 的六平台 CI 已全部通过；后继 `b6524ad` 已完成 22 次补充 CLI 调用的 64 项检查、真实 Zuse 0.6.0 六步生命周期与空历史 `resume`。后续 worker、结束批准和清理接线仍需在最终来源验证。**v0.10.26 标签和 Release 于本快照仍均返回 404。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
 
-用户随后新增 worker 池、资源限制、结束任务批准，以及文件记录与清理规则。本轮继续实现这些功能，并补齐全子命令验证。worker 首批配置与队列文件已提交，尚未接通完整执行流程；Linux 资源隔离机制已通过独立探测，也不等于 worker 功能完成。先前源码的通过成绩保留原身份。
+项目工作区现存 `.ssmcp` 中的旧发布临时目录已在逐文件核验归档后清理，输入文件保留；自动文件登记、清理规则与 reload 清理仍在实现。独立 [ssmcp-tools 仓库](https://github.com/LIghtJUNction/ssmcp-tools) 已创建并推送初始版本，rc 加载、覆盖与更新检查仍在接入。以下将实际执行结果、已提交代码与静态结论分别标明。
 
 ## Agents 历史与面板：范围已确定，正在验证
 
@@ -19,20 +19,66 @@
 
 首次格式检查在 `64b07e7` 失败，未开始编译；[b6524ad](https://github.com/LIghtJUNction/ssmcp/commit/b6524adaab83f593738433d1d401cd866802a6c9)仅整理三份 Rust 文件后，格式和库测试程序构建通过。五项实际界面测试四过一失：失败项期待的通用页脚在群组编辑状态下不可见。生产界面已有正确的详细提示；[f17e8fe](https://github.com/LIghtJUNction/ssmcp/commit/f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa)仅以一行变更检查可见提示，核心身份、草稿和输入断言保留。重跑及新 PTY 场景尚未记为通过。
 
-## 新增功能范围与当前进展
+新增 PTY 场景曾实际失败：夹具把首个 64-event 页当作完整历史，并拒绝了 65582 字节的有效原生 artifact；此前同名成员隔离和晚到事件的 cursor 断言已通过。回执 **18297 字节**／SHA-256 `c08c7ac6e2857b7c88e32f5c2f9525dc04129334ce5a95b6bda885ed03c560f7`。[443eecc](https://github.com/LIghtJUNction/ssmcp/commit/443eecc193d1101d5d6446c8ecba123febcc42dc)改用有界分页及同客户端的 artifact ID 读取，校验分块偏移、长度、EOF 和摘要，再解析完整结果；原身份、晚到事件及草稿断言保留。静态审查通过，实际重跑仍待取得。
 
-| 用户要求 | 预期行为与当前状态 |
+后续 `dc6e92b` 只在 monitor 测试的前后 JSON 副本中排除全局问题队列计数，未清空全局队列，其余状态、无 composer actions 与无隐藏 PTY 输入断言保留。`0afe0be` 为格式整理及两处等价语法变更，未改变批准条件。这些静态结果均不代替运行结果。
+
+## worker：模块已提交，完整执行循环仍待验证
+
+配置、FIFO 队列、Linux 资源登记与专用监视面板已分别提交。队列、资源及面板的固定增量静态审查未发现范围内的具体阻断；supervisor／executor 接线仍在进行，尚未声称领取、执行、完成、再等待及下一项领取的完整循环已通过。
+
+| 范围 | 已提交代码的行为与实际边界 |
 |---|---|
-| `--worker 10` | 会话管理多个执行槽；连接成功后空闲槽阻塞等待，任务到来即唤醒。首批配置、队列及测试文件已提交，尚未接通或执行验证 |
-| 调度与持续等待 | 默认全部忙时 FIFO 排队，一项任务只分给一个 worker；完成领取、执行、结束、重新等待和下一项领取。睡眠中断后的 hook 应促使执行者实际继续调用等待工具 |
-| 专用面板 | 显示空闲、工作中、离线及总数，颜色区分状态；无聊天输入框，由其他 agent 的工具调用控制。实现中 |
-| CPU、内存限额 | 分别按“系统资源 ÷ 系统总 worker 数 × k”计算，默认 `k=1`。分母覆盖同机各会话配置的存活槽，包含空闲槽；实际限额和平台能力应明示 |
-| `send` 结束参数 | true 后等待真实用户明确批准；超时或未批准时继续阻塞等待。送达或排队不是批准。实现中 |
-| 文件记录与清理 | 记录所创建文件，支持自定义规则；默认清理 `.ssmcp` 的可丢弃临时文件，reload 也清理。现存目录先盘点，保留活跃句柄、配置、认证、历史及验收证据。尚无清理完成结果 |
+| 配置 | `--worker N` 配置 1–128 个槽；`--worker-k` 接受有限正数，默认 1。最终 CLI 接线与实际运行仍待验证 |
+| FIFO 队列 | 同一锁内领取队首并占用一个 worker；新槽起初离线，握手确认后才能空闲。取消运行中任务不会提前释放槽 |
+| 完成与复用 | 核对 generation、slot、epoch、task、attempt，并要求实际清理完成；重复或旧领取结果被拒绝。失败或未知结果不自动重放 |
+| 等待及 hook | 连接后阻塞等待，任务唤醒，结束后重返等待；中断提示须接到真实执行流程，尚未取得完整循环结果 |
+| 专用面板 | 从实际 Snapshot 显示空闲、工作、离线、总数和任务；无快照时显示等待就绪。独立输入分支没有聊天 composer，不把普通文字传给隐藏 PTY |
+| CPU 与内存 | 按有效系统容量除以登记槽数再乘 k，向下取可执行值；读取实际 cgroup 限额核对。Linux 机制探测已通过，产品完整限额接线尚未验收 |
 
-仅登记多个成员或画出多个卡片不能证明 worker 执行成立。实现需要真实执行上下文或已连接并等待的外部 worker；开发验证先用自有替身，未启动十个真实外部模型。
+资源代码在同一系统账号的固定登记空间中汇总各会话，包括空闲槽；该范围不因 cwd、HOME 或 TMPDIR 改变。**当前分母不涵盖其他系统账号或独立挂载／进程命名空间中的 worker**，不能称为全机所有用户和容器的总数。用户要求的“系统总 worker 数”与实现的实际可见范围将明确区分。
 
-普通线程共用地址空间，无法分别硬隔离内存；限额需要落在独立的执行进程树。Linux 已通过受控 cgroup v2 探测：CPU `25000/100000`、内存 32 MiB、swap 0、进程数 16，随后确认清理。这只证明开发机具备机制，尚未证明产品按公式应用限额；其他平台的支持与降级行为需按实际实现说明。
+新增池前，既有 worker 须到空闲检查点且内存用量能容纳更小的份额，随后先调整旧限额，再准入新槽。原进程与 scope 使用启动时间、boot、generation 和 invocation 身份核对；只有确认进程树已清空才释放计数。普通线程共用地址空间，硬内存隔离需要独立执行进程树。Linux 已有一次受控 cgroup v2 探测并确认清理，但不能由此推导 Windows／macOS 的硬限额支持或完整 worker 运行通过。
+
+## 结束任务批准：实际接口与生效边界
+
+[cb2a8c4](https://github.com/LIghtJUNction/ssmcp/commit/cb2a8c42923584e1dea72abf8157b78437b27387)为 agent 消息工具加入严格布尔参数 `finish_task`，默认 false。覆盖 `say`、`ui.message` 和 code-mode 中直接调用 `ssmcp.ui.message` 的路径；未把它扩大成 CLI `send` 的新标志或所有协作消息的默认行为。
+
+设为 true 时，消息发送后由 code-mode 宿主进入最长 20 秒的现有批准等待流程。消息 ACK、普通输入或 agent 声称批准均不授予结束许可；最终许可要求真实 Human 的 Yes、已完成并消费的有效决定，以及账号、连接、线程和输入阶段仍一致。
+
+未获批准时返回 `task_active`、继续等待指令与 `next_wait`，要求下一次实际阻塞调用。超时、拒绝、取消和新用户输入不会隐式结束任务；仍活着的等待可复用，终态请求不被错误重用。静态审查未发现阻断，新增测试定义使用真实协调器和内存 Session，但 native wire 与 Human Yes 是合成夹具；本快照尚无这些新测试的执行通过记录。
+
+**阻塞行为需要配套的 code-mode 宿主实现。** 旧中继不会仅因客户端 schema 更新就自动获得该行为。当前仍保留生产服务部署延期的发布策略，不能声称现有在线服务已经启用。协议能返回许可和继续等待要求，外部模型的继续调用还依赖宿主遵守该协议。
+
+## 独立工具仓库与 rc 加载
+
+用户要求将预写工具存放在普通 Git 仓库，由 rc 加载，支持用户自写、覆盖官方版本和独立迭代；软件更新时还要检查工具仓库更新。
+
+[ssmcp-tools 初始版本 d80054c](https://github.com/LIghtJUNction/ssmcp-tools/tree/d80054cf16f38b93a94fb2867fbfbfde78832066)已推送，GitHub 实际读回其 main HEAD 与固定 commit／tree 一致。rc 加载与桥接仍在实现；仓库存在本身不等于已经被当前 code-mode 执行。
+
+固定旧源码的入口梳理确认，便捷 API 原来内嵌在 `src/code_mode.js`，实际 runner 沙箱位于中继侧，客户端本地目录不会自动可见。接线需要明确 rc 读取位置、实际模块内容和覆盖优先级，并保持宿主身份、权限和状态检查。更新检查也需独立于二进制是否最新的提前返回分支，保留用户本地修改和额外提交。上述为已确认的接入点与实施要求，尚未记为功能验收通过。
+
+## 现存目录清理已完成；自动清理功能继续开发
+
+执行侧先对项目工作区 `.ssmcp/release-v0.10.21-20261120` 进行归档并逐文件核验，再移除该旧发布临时目录。处理 **2023 项**，普通文件内容 **49873179 字节**；当前工作区 `.ssmcp` 留下 `inputs`，其中 **47 个输入文件保留**。
+
+归档为 **35655302 字节**，SHA-256 `07963d4c70279a6a9715c9951a794cb6f43721f7ec5756deef151cc9b7894c77`；完成回执 **1219 字节**，SHA-256 `681dcc44bab9c962d0ff3651767444c92c7642b93cb77539a5f4f347b64cb5d9`。此处描述的是已完成的现存工作区清理，不能扩展为其他目录也已删除。
+
+产品中的创建文件登记、自定义自动规则、默认临时文件清理和 reload 触发清理仍在实现。活跃资源、配置、认证、历史与验收证据继续区分保留；尚未取得这套自动清理功能的运行验收结果。
+
+## 新增的本机实际 CLI 验证
+
+以下回执来自原执行协调者的终态汇总，来源均为 `b6524ad`；报告侧未重跑相同命令或搬回重复完整日志。
+
+| 验证 | 实际结果 | 回执身份 |
+|---|---|---|
+| 补充 CLI 场景 | 22 次命令调用、64 项检查完成，无汇总错误；检查数不是子命令种类数 | 32136 字节；`44d5f08457f36c9869f195a878fbb355a4c32422537c0cd84dc4fb3c7e90c8d4` |
+| 空历史 `resume` | 退出 0，提示当前工作区没有已保存会话；stderr 空，未使用用户配置 | 576 字节；`61304d46c1d0d9ef43431baf58998267d69eeac6f91f9408306580226bdfe011` |
+| Zuse 0.6.0 | version-before、download、install、version-installed、uninstall、version-after 六步全部退出 0、无超时 | 13108 字节；`9dd775b78f3cd0c700819cf7afb8c0d6c3169973f3b315be60191dd8f5c16cfe` |
+
+同源候选构建已保存 `ssmcp`、`ssmcp-frontend`、`ssmcpd` 和 `vt_snapshot` 四个程序，回执 **7507 字节**／SHA-256 `0efef0e62f89e77fe409729f2fb0c071e8d73de9e1decc7ef5930cc7dd00e002`。`ssmcp` 为 **121408472 字节**，SHA-256 `99437d5888359c5378afbb780f9f9d96188cf4f7bdfbfec70020ba0984ddd168`，空历史 smoke 明确使用该文件。完整程序身份见事实记录。
+
+12 份分组 CLI 脚本及新功能最终矩阵在尚无新完成汇总的部分继续列为待补齐，未把 22 次补充调用写成所有 CLI 已完成。
 
 ## Zuse 兼容基线的六平台结果
 
@@ -70,7 +116,7 @@
 
 `58bf72e` 正常合并 `db6f14b` 和主线 `add39e1`，只增加归档解析和测试两个文件的变化，200 行增加、9 行删除。[实际差分](https://github.com/LIghtJUNction/ssmcp/compare/db6f14b5faea8d434f4107877005b7669c1c940e...58bf72e381bb07f28f399fd76adb96f105f72dac) 元数据有界校验后丢弃；路径、链接、去重、大小、成员数、ZIP、TAR、外层 digest 和可执行头保护保留。
 
-后继依次为 Agents 核心 `66ece5e`、PTY 回归 `64b07e7`、格式整理 `b6524ad`、worker 配置与队列首批 `43b757a`、提示断言修正 `f17e8fe`。worker 三文件仍未接入执行路径；分支继续开发，没有冻结。
+后继包含 Agents 核心与 PTY、格式与提示断言修正、worker 配置／队列／资源／面板、结束批准、历史大结果读取，以及测试隔离与格式整理，当前到 `0afe0be`。分支仍在接入 executor、工具仓库与自动清理，没有冻结。
 
 V15 在 `58bf72e` 等待共享 Cargo 资源 180 秒超时，未编译或测试。执行侧随后在共享拥有者锁保护下复制一致私有缓存，回执 **1014 字节**／SHA-256 `92166997ec74fa35dfd553f199eba554d8cef591026a5a49684bc5364cbe09da`；早期不一致缓存未使用，未终止其他拥有者。
 
@@ -103,7 +149,7 @@ Linux 安装检查在临时 `DESTDIR` 中完成，四项静默 shell 断言验�
 
 [Zuse v0.6.0](https://github.com/LIghtJUNction/zuse/releases/tag/v0.6.0) 于 18:54:10 UTC 发布。对其当前官方 Linux x64 资产的私有验证已完整读回：版本查询退出 0，下载退出 0，安装实际子命令退出 1，并返回 `isError: true`，错误为 `Unexpected member in the Zuse release archive: examples/session_client.py`。外层任务也退出 1；stdout 2116 字节、stderr 0 字节，均到 EOF 且未截断。
 
-下载资产为 1399658 字节，SHA-256 `6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15`，与实际 GitHub Release 资产身份一致。观察回执为 **5686 字节**，SHA-256 `9f8355ac9b705f613b608bf3f5b36c9edfe3538c41af30fe75e1ce401617776b`。这一实际失败促成当前窄范围合流；修复后的下载、安装和卸载结果仍待取得。
+下载资产为 1399658 字节，SHA-256 `6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15`，与实际 GitHub Release 资产身份一致。观察回执为 **5686 字节**，SHA-256 `9f8355ac9b705f613b608bf3f5b36c9edfe3538c41af30fe75e1ce401617776b`。这一实际失败促成当前窄范围合流；后继 `b6524ad` 已完成上文记录的六步私有生命周期，旧失败按原来源保留。
 
 ## 上一轮 CI 的失败及对应修正
 
@@ -140,7 +186,7 @@ Linux ARM 的具体 provider 断言来自执行协调者读取的原始 artifact
 | 信息与启动 | 帮助、版本与完整版本树、协议目录、列工具；裸启动、账号目标、服务器／context 选择、Linux local、CLI resume |
 | 账号与目录 | login／setup、whoami、logout、list／ls、远端会话目录和交互选择 |
 | 连接与终端 | 远程 process／thread attach、只读聊天、显式 PTY、本地保存会话 attach，及名称消歧 |
-| 消息 | send 的目标、stdin、请求 ID、等待形式及结束批准参数；wait 的 any／all／gather／count 及别名 |
+| 消息 | CLI send 的目标、stdin、请求 ID、等待形式；wait 的 any／all／gather／count 及别名 |
 | context 与 config | context 创建、列举、查看、检查、选择、移除；config path／get／set／unset，以及真实私有持久化后的读回 |
 | trust | add／list／remove／path，私有公钥或 pin 的写入与读回 |
 | Zuse 生命周期 | computer version／download／install／uninstall，成功、结构化失败和未安装状态 |
@@ -151,7 +197,7 @@ Linux ARM 的具体 provider 断言来自执行协调者读取的原始 artifact
 | 新增 worker 与清理 | 领取／执行／完成／再等待、队列、限额与真实状态；文件登记、规则、reload 清理与既有目录清理 |
 | 内部与退役入口 | 内部 helper 由对应夹具覆盖；invite、join、旧 browser setup 和电脑控制开关等退役形式应明确拒绝 |
 
-聊天 attach 与 Shell PTY、`sessions` 与 `service` 生命周期、`local --socket` 与聊天 `--input sock` 均是不同路径。TUI 的 `/resume` 等斜杠命令以及原生 MCP 工具不计作顶层 CLI 子命令。这里不把所有参数组合展开成笛卡尔积；结果表会明确每一条实际场景的覆盖边界。
+聊天 attach 与 Shell PTY、`sessions` 与 `service` 生命周期、`local --socket` 与聊天 `--input sock` 均是不同路径。TUI 的 `/resume` 等斜杠命令以及原生 MCP 工具不计作顶层 CLI 子命令。`finish_task` 属于 agent 原生消息工具，单独验证，没有假定 CLI send 新增同名标志。这里不把所有参数组合展开成笛卡尔积；结果表会明确每一条实际场景的覆盖边界。
 
 ## 依赖与发布核验
 

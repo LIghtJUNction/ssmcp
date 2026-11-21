@@ -1,19 +1,19 @@
 {
   "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
-  "snapshot_utc": "2026-11-21 20:59:47 UTC",
+  "snapshot_utc": "2026-11-21 21:26:26 UTC",
   "source": {
-    "commit": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
-    "tree": "03933bbd0e0e910f1c48333c386075ff21f231d6",
+    "commit": "0afe0be61faf4b06785c26123318ed91769055e1",
+    "tree": "279f733fc0f2a313b843d02812539c76da7f46bb",
     "parents": [
-      "43b757aed1d95b3e5c69bbd93978c70a3588d58b"
+      "dc6e92b40d735c2b772f1999a279578e09ca32d4"
     ],
     "branch": "fix/release-0.10.26-20261121",
     "version": "0.10.26",
     "frozen": false,
     "main_at_last_actual_read": "add39e18ff92680ff3ac0c3e911407956e20b228",
-    "previous_candidate": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "previous_candidate": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
     "changed_paths_since_previous_candidate": null,
-    "phase": "extended feature implementation"
+    "phase": "worker executor, tool loader and managed-file cleanup integration"
   },
   "release_notes": {
     "branch": "fix/release-0.10.26-20261121",
@@ -629,7 +629,7 @@
   },
   "current_release": {
     "planned_tag": "v0.10.26",
-    "candidate_source": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+    "candidate_source": "0afe0be61faf4b06785c26123318ed91769055e1",
     "S": null,
     "P": null,
     "run": null,
@@ -638,8 +638,8 @@
     "merge_tag_dispatch_started": false,
     "server_deployment": false,
     "registry_publication": false,
-    "actual_GitHub_release_404_at_utc": "2026-11-21 20:59:47 UTC",
-    "actual_GitHub_tag_404_at_utc": "2026-11-21 20:59:47 UTC",
+    "actual_GitHub_release_404_at_utc": "2026-11-21 21:26:26 UTC",
+    "actual_GitHub_tag_404_at_utc": "2026-11-21 21:26:26 UTC",
     "final_source_frozen": false
   },
   "exec_read_live_scope": {
@@ -654,7 +654,7 @@
     "H2_execution": 0,
     "POST": 0,
     "source_branch_release_note_followup_commits": 1,
-    "previous_snapshot_commit": "46a67fd304d2a20ebc408fd0fffb025b97079738"
+    "previous_snapshot_commit": "0438f29678a045a4e137f355c86c3371d757ecb8"
   },
   "successor_validation": {
     "source": "b6524adaab83f593738433d1d401cd866802a6c9",
@@ -1636,9 +1636,18 @@
     "current_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
     "extended_scope": [
       "worker actual lifecycle and limits",
-      "send finish approval",
-      "file tracking and cleanup/reload"
-    ]
+      "file tracking and cleanup/reload",
+      "tool repository update/check entry after actual interface is implemented"
+    ],
+    "native_finish_approval_is_separate_from_CLI_send": true,
+    "completed_supplement": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "commands": 22,
+      "checks": 64,
+      "empty_resume": true,
+      "zuse_lifecycle_steps": 6
+    },
+    "twelve_group_script_completion_not_yet_received": true
   },
   "docs_residue": {
     "status": "post-release patch prepared and independently reviewed; not applied",
@@ -1848,7 +1857,49 @@
       "receipt_relative_path_verified_from_native_stdout": true
     },
     "fix_merged_in_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
-    "current_source_lifecycle_result": "pending"
+    "current_source_lifecycle_result": "pending",
+    "fixed_source_actual_lifecycle": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "phase": "complete",
+      "steps": [
+        {
+          "exit_code": 0,
+          "name": "version-before",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "download",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "install",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-installed",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "uninstall",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-after",
+          "timed_out": false
+        }
+      ],
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/zuse-lifecycle-smoke/receipt.json",
+        "bytes": 13108,
+        "sha256": "9dd775b78f3cd0c700819cf7afb8c0d6c3169973f3b315be60191dd8f5c16cfe"
+      },
+      "live_user_installation_changed": false
+    }
   },
   "standalone_ci_history": [
     {
@@ -1933,6 +1984,52 @@
       "receipt_sha256": "6fa8753f69c41521a443ad05bbaa238d0e8816de0d4b056a8bf3f7b54bf66bc2",
       "corrected_source": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
       "corrected_rerun_observed": false
+    },
+    "pty": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "status": "failed",
+      "error": "64-event first page was not complete; 65582-byte valid native artifact rejected by fixture; member/lateA checks already passed",
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/agents-ui-pty/receipt.json",
+        "bytes": 18297,
+        "sha256": "c08c7ac6e2857b7c88e32f5c2f9525dc04129334ce5a95b6bda885ed03c560f7"
+      },
+      "fix_commit": "443eecc193d1101d5d6446c8ecba123febcc42dc",
+      "rerun_pass_observed": false
+    },
+    "post_fix_static_review": {
+      "history_artifact": {
+        "commit": "443eecc193d1101d5d6446c8ecba123febcc42dc",
+        "single_client_artifact_id": true,
+        "raw_paths_added": false,
+        "bounded_integrity_checked": true,
+        "identity_and_late_event_assertions_retained": true
+      },
+      "monitor": {
+        "commit": "37a7be4c7b615d84c669779904b14afa7867bd94",
+        "snapshot_derived": true,
+        "no_composer": true,
+        "no_hidden_pty_input": true,
+        "missing_snapshot_does_not_imply_idle": true
+      },
+      "proof_bytes": 6409,
+      "proof_sha256": "342e1a96faae6de5f7a62cdc6ebf1d3a4888aa59689c41206f08acb11d2dcaf4",
+      "tests_run": false
+    },
+    "later_test_isolation_and_format": {
+      "isolation_source": "dc6e92b40d735c2b772f1999a279578e09ca32d4",
+      "excluded_assertion": "global pending_questions count only, removed from local before/after JSON copies; actual shared queue not modified",
+      "core_local_state_and_no_composer_assertions_retained": true,
+      "format_source": "0afe0be61faf4b06785c26123318ed91769055e1",
+      "format_hunks": 32,
+      "whitespace_or_optional_comma_hunks": 30,
+      "other_equivalent_syntax_changes": [
+        "brace wrapper around matches! filter closure",
+        "semicolon after return receipt"
+      ],
+      "proof_bytes": 5529,
+      "proof_sha256": "ac388cf0c46fb88dd356d0e4222a09c6d42743f76a3ad24594d8918234427ff0",
+      "tests_run": false
     }
   },
   "consistent_private_cache": {
@@ -1953,7 +2050,7 @@
   "extended_user_scope": {
     "worker": {
       "required": true,
-      "status": "first config and queue committed; not wired or tested",
+      "status": "config, queue, Linux resource preparation and monitor committed; core executor integration in progress; no end-to-end lifecycle pass",
       "source_first": "43b757aed1d95b3e5c69bbd93978c70a3588d58b",
       "cli": "--worker N",
       "idle_wait": true,
@@ -1980,7 +2077,44 @@
         "composer": false,
         "tool_control": true
       },
-      "real_external_models_started": 0
+      "real_external_models_started": 0,
+      "core_components_sources": [
+        "43b757aed1d95b3e5c69bbd93978c70a3588d58b",
+        "55806eae010fe5c0fbefdb761000a39e97006e2c",
+        "37a7be4c7b615d84c669779904b14afa7867bd94"
+      ],
+      "queue_static_review": {
+        "source": "37a7be4c7b615d84c669779904b14afa7867bd94",
+        "status": "static READY",
+        "files": [
+          "src/worker/queue.rs",
+          "src/worker/queue/tests.rs"
+        ],
+        "tests_defined": 7,
+        "tests_run": false,
+        "properties": [
+          "atomic Mutex FIFO single claim",
+          "configured starts offline",
+          "cancel keeps busy",
+          "finish validates full lease and cleanup",
+          "close does not forge settled work",
+          "failed unknown not auto replay",
+          "Actor isolation and bounded idempotency"
+        ],
+        "runtime_boundaries": [
+          "supervisor must verify handshake",
+          "cleanup_complete must reflect real process cleanup",
+          "reusable and disconnection must match actual executor state"
+        ],
+        "worker_lifecycle_verified": false
+      },
+      "limits_static_status": "reviewed preparation only",
+      "configured_count_range": [
+        1,
+        128
+      ],
+      "factor_option": "--worker-k",
+      "CLI_wiring_verified": false
     },
     "resources": {
       "required": true,
@@ -1990,9 +2124,9 @@
         "CPU",
         "memory"
       ],
-      "denominator": "configured live worker slots across sessions on same host, including idle",
+      "denominator": "actual implemented visible same-UID registered slots including idle",
       "hard_ram_isolation": "owned process trees; ordinary threads share address space",
-      "status": "mechanism probe passed; product integration pending",
+      "status": "Linux preparatory implementation statically reviewed; complete executor integration pending",
       "linux_probe": {
         "cpu_max": "25000 100000",
         "memory_max_bytes": 33554432,
@@ -2002,17 +2136,83 @@
         "receipt_bytes": 2027,
         "receipt_sha256": "71fe16835579767a0a34000ada0d101246c014eca9d3ddee2b25edf313aee7fc"
       },
-      "platform_support_not_yet_claimed": true
+      "platform_support_not_yet_claimed": true,
+      "requested_denominator": "system total workers",
+      "implemented_registry_visibility": "current effective UID across cwd/HOME/TMPDIR and sessions in the visible namespace",
+      "covers_other_OS_users_or_private_namespaces": false,
+      "static_review": {
+        "source": "55806eae010fe5c0fbefdb761000a39e97006e2c",
+        "proof_bytes": 2792,
+        "proof_sha256": "0f937f1166d3cde92c2f9640d14fc196554262eb4ac7980cd6465426a4a71560",
+        "tests_run": false,
+        "concrete_formula_or_identity_bug_detected": false
+      },
+      "existing_caps_adjusted_before_new_admission": true,
+      "busy_or_memory_pressure_defers_admission": true,
+      "actual_cgroup_readback_required": true
     },
     "finish": {
       "required": true,
-      "status": "implementation in progress",
-      "exact_original_text_received": false,
-      "summary": "send end-task option true awaits explicit real user approval; timeout or missing approval prompts continued blocking wait and does not permit finish"
+      "status": "implemented and statically reviewed on cb2; runtime acceptance pending",
+      "exact_original_text_received": true,
+      "summary": "agent-facing message tool finish_task true awaits explicit Human approval; timeout/nonapproval returns actual continuation instruction and next_wait",
+      "proof": {
+        "source": "cb2a8c42923584e1dea72abf8157b78437b27387",
+        "tree": "c937a393deb9d99ae0f9ccb698f755f69b059a57",
+        "parent": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+        "status": "static READY, no concrete blocker detected; no test execution",
+        "interface": {
+          "parameter": "finish_task",
+          "type": "strict boolean",
+          "default": false,
+          "covered": [
+            "say",
+            "ui.message",
+            "code-mode call to ssmcp.ui.message"
+          ],
+          "cli_flag_added": false,
+          "collab_send_affected": false
+        },
+        "approval": {
+          "message_ack_may_finish": false,
+          "inner_wait_may_finish": false,
+          "outer_requirements": [
+            "decided",
+            "completed and consumed",
+            "Human Yes",
+            "valid revision and no invalidation",
+            "same authorization, connection, thread binding and input episode"
+          ],
+          "ordinary_input_is_approval": false,
+          "agent_yes_allowed": false
+        },
+        "waiting": {
+          "initial_host_budget_seconds": 20,
+          "nonapproval_receipt": [
+            "task_active",
+            "completion_instruction",
+            "next_wait"
+          ],
+          "reuse_pending_or_approved_only": true,
+          "terminal_request_reused": false
+        },
+        "compatibility": {
+          "normal_message_default_retained": true,
+          "kind_answer_does_not_auto_finish": true,
+          "idempotency_fingerprint_includes_finish_flag": true,
+          "requires_updated_code_mode_host": true,
+          "old_relay_gets_feature_from_client_schema_alone": false,
+          "external_model_can_be_forced_to_keep_running": false
+        },
+        "test_definition_scope": "actual HTTP coordinator/code_host and in-memory Session with synthetic native wire peer; Human Yes is synthetic receipt, not physical keyboard approval",
+        "native_executed": false,
+        "tests_executed": false,
+        "source_writes": false
+      }
     },
     "cleanup": {
       "required": true,
-      "status": "inventory and implementation pending",
+      "status": "existing workspace cleanup completed; automatic ledger/rules/reload feature implementation pending",
       "requirements": [
         "record created files",
         "custom automatic cleanup rules",
@@ -2028,11 +2228,202 @@
         "history",
         "acceptance evidence"
       ],
-      "destructive_cleanup_observed": false
+      "destructive_cleanup_observed": true,
+      "completion_evidence": "original execution coordinator completed receipt, archived content verified file-by-file",
+      "automatic_feature_verified": false,
+      "actual": {
+        "phase": "complete",
+        "error": null,
+        "removed_relative_workspace_path": ".ssmcp/release-v0.10.21-20261120",
+        "entry_count": 2023,
+        "regular_file_bytes": 49873179,
+        "preserved_input_files": 47,
+        "remaining_workspace_entries": [
+          "inputs"
+        ],
+        "archive_verified_file_by_file": true,
+        "archive": {
+          "filename": "release-v0.10.21-20261120.tar.gz",
+          "bytes": 35655302,
+          "sha256": "07963d4c70279a6a9715c9951a794cb6f43721f7ec5756deef151cc9b7894c77"
+        },
+        "receipt": {
+          "relative_path": "workspace-cleanup-verified-20261121/receipt.json",
+          "bytes": 1219,
+          "sha256": "681dcc44bab9c962d0ff3651767444c92c7642b93cb77539a5f4f347b64cb5d9"
+        }
+      }
     },
     "compact_reads": {
       "required": true,
       "summary": "read needed fields and errors; avoid repeated full exec.list, checkpoints, and duplicate logs"
+    },
+    "tool_repository": {
+      "required": true,
+      "user_requirements": [
+        "prewritten tools live in an ordinary Git repository",
+        "rc loads tools",
+        "user authored tools can override official tools",
+        "repository can iterate separately",
+        "encourage local agent iteration",
+        "software update also checks tool repository updates"
+      ],
+      "status": "official repository and seed published; companion loader/bridge and update integration in progress",
+      "repository": {
+        "full_name": "LIghtJUNction/ssmcp-tools",
+        "id": 1466967429,
+        "url": "https://github.com/LIghtJUNction/ssmcp-tools"
+      },
+      "head": "d80054cf16f38b93a94fb2867fbfbfde78832066",
+      "tree": "dddaa2d63bec3255191dacd6a97d62081a4a941a",
+      "github_commit_and_main_head_read": true,
+      "publication_receipt": {
+        "relative_path": "tools-repository-publication-20261121/receipt.json",
+        "bytes": 3124,
+        "sha256": "fc10a20a29bf9d49da4b20a94f5d0bf3cda100fd2c27262afb2f9284f6df3e43"
+      },
+      "loaded_in_current_runtime_claimed": false,
+      "static_source_map": {
+        "source": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+        "status": "completed read-only source mapping; no implementation verified",
+        "core_paths": [
+          "src/code_mode.js",
+          "src/code_mode.rs",
+          "src/runtime.rs",
+          "src/runtime/native_plugins/process.rs",
+          "src/runtime/plugins.rs",
+          "src/registry.rs",
+          "src/client/config.rs",
+          "src/client/update.rs",
+          "src/client/git_status/fetch.rs"
+        ],
+        "critical_fact": "Runner sandbox is relay-side; client repo contents require explicit resolution/transport into code-mode",
+        "suggestions": [
+          "official defaults then rc listed user sources",
+          "resolve overrides before freezing APIs",
+          "preserve host permission and state checks",
+          "consistent modules per call, dirty content digest not only HEAD",
+          "check tools even if main binary is current",
+          "preserve dirty files and local commits on update"
+        ],
+        "product_code_changed": false
+      }
+    }
+  },
+  "validation_native_supplement": {
+    "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+    "evidence_origin": "original execution coordinator compact terminal summaries and receipt identities; report writer did not rerun or re-read complete native logs",
+    "candidate_build": {
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/candidate-build/receipt.json",
+        "bytes": 7507,
+        "sha256": "0efef0e62f89e77fe409729f2fb0c071e8d73de9e1decc7ef5930cc7dd00e002"
+      },
+      "artifacts": {
+        "ssmcp": {
+          "relative_path": "cli-validation-20261121-v17/bin/ssmcp",
+          "bytes": 121408472,
+          "sha256": "99437d5888359c5378afbb780f9f9d96188cf4f7bdfbfec70020ba0984ddd168"
+        },
+        "ssmcp-frontend": {
+          "relative_path": "cli-validation-20261121-v17/bin/ssmcp-frontend",
+          "bytes": 5651664,
+          "sha256": "9b53489b67187ed547b1316b4ebaf1e54e0c6c0bbc7479ba58548b8fa57b5b07"
+        },
+        "ssmcpd": {
+          "relative_path": "cli-validation-20261121-v17/bin/ssmcpd",
+          "bytes": 59132024,
+          "sha256": "718bf184d1c6e6789542d94c3747a077e98132ab9d97de027deb64f3b3482212"
+        },
+        "vt_snapshot": {
+          "relative_path": "cli-validation-20261121-v17/bin/vt_snapshot",
+          "bytes": 1855496,
+          "sha256": "4f1a248c54414accad25780ab1eb634914b822f0dfecc4db864c8d4795e8ec3a"
+        }
+      }
+    },
+    "cli_gap": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "phase": "complete",
+      "error": null,
+      "command_count": 22,
+      "check_count": 64,
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/cli-gap/receipt.json",
+        "bytes": 32136,
+        "sha256": "44d5f08457f36c9869f195a878fbb355a4c32422537c0cd84dc4fb3c7e90c8d4"
+      },
+      "all_subcommands_claimed_complete": false
+    },
+    "empty_resume": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "command": "ssmcp resume",
+      "binary_sha256": "99437d5888359c5378afbb780f9f9d96188cf4f7bdfbfec70020ba0984ddd168",
+      "phase": "complete",
+      "exit_code": 0,
+      "stdout": "No saved conversations in this workspace. Start ssmcp to begin a conversation.\n",
+      "stderr": "",
+      "user_configuration_used": false,
+      "utc": "2026-11-21T21:00:42.549163+00:00",
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/resume-cli-smoke-v2/receipt.json",
+        "bytes": 576,
+        "sha256": "61304d46c1d0d9ef43431baf58998267d69eeac6f91f9408306580226bdfe011"
+      }
+    },
+    "zuse_lifecycle": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "phase": "complete",
+      "steps": [
+        {
+          "exit_code": 0,
+          "name": "version-before",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "download",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "install",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-installed",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "uninstall",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-after",
+          "timed_out": false
+        }
+      ],
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/zuse-lifecycle-smoke/receipt.json",
+        "bytes": 13108,
+        "sha256": "9dd775b78f3cd0c700819cf7afb8c0d6c3169973f3b315be60191dd8f5c16cfe"
+      },
+      "live_user_installation_changed": false
+    },
+    "agents_pty": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "status": "failed",
+      "error": "64-event first page was not complete; 65582-byte valid native artifact rejected by fixture; member/lateA checks already passed",
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v17/agents-ui-pty/receipt.json",
+        "bytes": 18297,
+        "sha256": "c08c7ac6e2857b7c88e32f5c2f9525dc04129334ce5a95b6bda885ed03c560f7"
+      },
+      "fix_commit": "443eecc193d1101d5d6446c8ecba123febcc42dc",
+      "rerun_pass_observed": false
     }
   }
 }
