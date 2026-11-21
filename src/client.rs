@@ -3269,23 +3269,26 @@ mod tests {
 
     #[test]
     fn resume_rejects_noninteractive_modes_and_help_does_not_start_a_session() {
-        for flags in [
-            vec!["--daemon"],
-            vec!["--list-tools"],
-            vec!["--input", "none"],
-            vec!["--input", "pipe"],
-            vec!["--raw"],
-            vec!["--log-format", "jsonl"],
+        let foreground_error = "ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output";
+        let pipe_error = if cfg!(unix) {
+            foreground_error
+        } else {
+            "pipe and MCP stdio chat input require Unix; use web or MCP HTTP on Windows"
+        };
+        for (flags, expected) in [
+            (vec!["--daemon"], foreground_error),
+            (vec!["--list-tools"], foreground_error),
+            (vec!["--input", "none"], foreground_error),
+            (vec!["--input", "pipe"], pipe_error),
+            (vec!["--raw"], foreground_error),
+            (vec!["--log-format", "jsonl"], foreground_error),
         ] {
             let mut args = vec!["resume", "--server", "https://relay.example"];
             args.extend(flags);
             let error = Options::parse_new(args.into_iter().map(OsString::from))
                 .err()
                 .unwrap();
-            assert!(
-                error.contains("foreground interactive dashboard"),
-                "{error}"
-            );
+            assert_eq!(error, expected);
         }
         for flag in ["--help", "--help-full"] {
             assert!(
