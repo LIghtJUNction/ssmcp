@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "kind": "Actual Gate16 failure on the PR167 merge source; original evidence retained",
+  "observed_utc": "2026-11-21T10:05:00Z",
+  "source": {
+    "commit": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "parents": [
+      "f69db30c3a9e461c48731c81dbde5a35ea176dc2",
+      "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc"
+    ],
+    "main_merge_pr": 167,
+    "source_branch_checks_are_separate": true
+  },
+  "execution": {
+    "owned_started_utc": "2026-11-21T09:44:50.651610+00:00",
+    "gate_started_at": 1795254292.2293944,
+    "gate_started_utc": "2026-11-21T09:44:52.229394+00:00",
+    "gate_finished_at": 1795254577.492112,
+    "gate_finished_utc": "2026-11-21T09:49:37.492112+00:00",
+    "owned_finished_utc": "2026-11-21T09:49:37.624439+00:00",
+    "status": "failed",
+    "failed_stage": "library-private",
+    "launcher_exit_code": 1,
+    "owned_exit_code": 1,
+    "owned_error": null,
+    "stage_contract": {
+      "integration_targets": 20,
+      "mandatory_ignored_tests": 14,
+      "rust_stages": 26,
+      "stages": 35
+    },
+    "started_stages": 5,
+    "passed_stages": 4,
+    "failed_stages": 1,
+    "unrun_stages": 30,
+    "rust_test_execution_started": true,
+    "complete_libtest_result_available": false,
+    "private_library_passed_test_total": null,
+    "full_35_stage_gate_passed": false
+  },
+  "checks": [
+    {
+      "name": "release-policy",
+      "exit_code": 0,
+      "seconds": 16.27,
+      "log_file": "candidate2-release-policy.log"
+    },
+    {
+      "name": "deployment-policy",
+      "exit_code": 0,
+      "seconds": 0.62,
+      "log_file": "candidate2-deployment-policy.log"
+    },
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "seconds": 8.04,
+      "log_file": "candidate2-fmt.log"
+    },
+    {
+      "name": "library-compile",
+      "exit_code": 0,
+      "seconds": 232.27,
+      "log_file": "candidate2-library-compile.log"
+    },
+    {
+      "name": "library-private",
+      "exit_code": 134,
+      "seconds": 7.88,
+      "log_file": "candidate2-library-private.log",
+      "test_validation_error": "last nonempty line is not a complete libtest result: 'fatal runtime error: stack overflow, aborting'"
+    }
+  ],
+  "failure": {
+    "test": "browser::tests::act_deadline_includes_time_queued_without_starting_input",
+    "stage_exit_code": 134,
+    "diagnostic": "The named test thread overflowed its stack; the runtime aborted.",
+    "fatal_diagnostic": "fatal runtime error: stack overflow, aborting",
+    "not_a_recorded_test_timeout": true,
+    "root_cause_confirmed": false,
+    "static_review": {
+      "test_block_byte_equal_as_strings": true,
+      "includes_tokio_test_attribute": true,
+      "production_deadline_seconds": 25,
+      "outer_deadline_extra_seconds": 3,
+      "stack_size_measured": false,
+      "crash_frames_obtained": false,
+      "root_cause_confirmed": false,
+      "source": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+      "comparison_source": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+      "candidate": "Additional by-value future layers in Browser::perform, Permit::scope/run and the act timeout/cancellation path; no runtime attribution established."
+    },
+    "source_references": {
+      "browser": "https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/browser.rs",
+      "permit": "https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/computer/host_control.rs",
+      "comparison_browser": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/browser.rs"
+    },
+    "interpretation_limits": "The unchanged test is designed to hold the page lock and call act. Static code describes its normal queued path; the actual crash phase (construction, poll or destruction) has not been determined. No future size or crash frame was measured by this reporting group."
+  },
+  "integrity": {
+    "input_file_count": 9,
+    "input_hashes_before": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "170dace91a73642f066b9d4c0be9101bccfc9bc02b39d4e1ea66d79a2a2bae73",
+      "git_heads": "b80d040cff9dd973e3741f4ab969659e70fe56c5b92cad4601761d69cf7d0ce0",
+      "owner_agreement": "0462cafaf3bdceaee0cde44878897ee00abaf1b7ba541daec7653c953cf8f762",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "input_hashes_after": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "170dace91a73642f066b9d4c0be9101bccfc9bc02b39d4e1ea66d79a2a2bae73",
+      "git_heads": "b80d040cff9dd973e3741f4ab969659e70fe56c5b92cad4601761d69cf7d0ce0",
+      "owner_agreement": "0462cafaf3bdceaee0cde44878897ee00abaf1b7ba541daec7653c953cf8f762",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "input_hashes_equal": true,
+    "gate_sha_matches_launcher_exit": true,
+    "worktree_head_after": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "worktree_status_after": "",
+    "shared_target_lock_held_for_entire_batch": true,
+    "source_lock_held_until_child_return": true,
+    "outer_controller_target_lock_acquired": false,
+    "all_descendants_independently_verified_reaped": false,
+    "reported_library_elf_sha256": "1a2b7d7f4cf830c7ca670ad43c2efbea9c911e8114e5dce67e5a9fad53c43610",
+    "library_elf_rehashed_by_reporting_root": false
+  },
+  "fresh_source_preparation": {
+    "started_utc": "2026-11-21T09:36:37.782600+00:00",
+    "finished_utc": "2026-11-21T09:36:49.235709+00:00",
+    "status": "prepared",
+    "source_revision": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "gitlinks": {
+      "crates/zharness": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "crates/zplugin": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "crates/ztuio": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "crates/zuse": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc"
+    },
+    "head_values": {
+      "https://github.com/LIghtJUNction/z64.git": "7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd",
+      "https://github.com/LIghtJUNction/zcall.git": "199678d08104bed588e5d10b2c0634a47d7c8417",
+      "https://github.com/LIghtJUNction/zclap.git": "4d87f3ae3743e81509d5ac5500909955667c860f",
+      "https://github.com/LIghtJUNction/zconv.git": "0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1",
+      "https://github.com/LIghtJUNction/zguard.git": "6772b932a65e18f64e13591dee6edb2f6b099406",
+      "https://github.com/LIghtJUNction/zharness.git": "fb2948f78467dd92b216aabda6f18a5645f0e7f6",
+      "https://github.com/LIghtJUNction/zmcpio.git": "04bb6cd05c5295ab41a892a76cbef10b8ac07402",
+      "https://github.com/LIghtJUNction/zplugin.git": "592a1be623b81a775026c470e6f0efe91fcf78f3",
+      "https://github.com/LIghtJUNction/zsys.git": "808fcfdb73584ca7ca122e20b76f0209f56ab0f7",
+      "https://github.com/LIghtJUNction/ztuio.git": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e",
+      "https://github.com/LIghtJUNction/zuse.git": "ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc"
+    },
+    "all_eleven_match_locked_sources": true,
+    "command_count": 26,
+    "exit_zero_count": 25,
+    "nonzero_commands": [
+      {
+        "index": 24,
+        "program": "git",
+        "operation": "cat-file -e on required zuse commit",
+        "exit_code": 128,
+        "reason": "Object missing in the existing object repository; the raw diagnostic is retained."
+      }
+    ],
+    "following_steps": [
+      {
+        "index": 25,
+        "operation": "fetch the exact ac5713c2 commit",
+        "exit_code": 0
+      },
+      {
+        "index": 26,
+        "operation": "rev-parse verifies that exact commit",
+        "exit_code": 0
+      }
+    ],
+    "all_twenty_six_commands_claimed_zero": false,
+    "cargo_or_product_started_by_preparation": false,
+    "heads_bound_utc": "2026-11-21T09:36:49.230762+00:00",
+    "cargo_lock_sha256": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992"
+  },
+  "binding_preparation": {
+    "prepared_utc": "2026-11-21T09:43:27.861080+00:00",
+    "source_revision": "64738751cb59af9ef0d467ce34c50f091d2f6fa4",
+    "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "stale_outcomes_copied": false,
+    "receipt_reports_literal_and_normalized_ast_equivalence": true,
+    "independently_reexecuted_by_reporting_root": false,
+    "temporary_path_namespace_exception": "Existing private gate prefix adds a private /var/tmp and binds back the shared Cargo target; this is test preparation, not the proposed system permission boundary.",
+    "stage_contract": {
+      "integration_targets": 20,
+      "mandatory_ignored_tests": 14,
+      "rust_stages": 26,
+      "stages": 35
+    },
+    "preparation_execution_started_flag_was_false_before_actual_launch": true
+  },
+  "evidence": {
+    "owned_launch": {
+      "file": "owned/launch.json",
+      "bytes": 1008,
+      "sha256": "d6fc6131adf6921c43282fac4ae987bbd5a4ad16483decd255afb9144f7a9f8a",
+      "read": "full original JSON"
+    },
+    "launcher_launch": {
+      "file": "launch/launch.json",
+      "bytes": 3636,
+      "sha256": "4268285e5da6c335328bdd652998770798ed24035de2972ed8ac60c85208cfb4",
+      "read": "full original JSON"
+    },
+    "binding_manifest": {
+      "file": "binding-manifest.json",
+      "bytes": 16560,
+      "sha256": "df2d200c1e4ba57d65c67e8963a9d1f1f5606262b2526b5cb35f53294107ef7a",
+      "read": "full bytes hashed; selected source, contract, expected inputs and preparation/equivalence fields read"
+    },
+    "git_preparation": {
+      "file": "preparation.json",
+      "bytes": 33498,
+      "sha256": "bcd13123984752cb509d9534e4ff0f28a9bd6c0ada88e5d287776967d968c6aa",
+      "read": "full bytes hashed; selected source, all eleven head values and all 26 command exit/error fields read; commands 24 to 26 and their nonempty original outputs read"
+    },
+    "git_heads": {
+      "file": "git-heads-v25-r16.json",
+      "bytes": 16302,
+      "sha256": "b80d040cff9dd973e3741f4ab969659e70fe56c5b92cad4601761d69cf7d0ce0",
+      "read": "full bytes hashed and matched to preparation record; source, tree, lock and header fields read; not all nested repository records independently reproduced"
+    },
+    "gate_result": {
+      "file": "candidate-gates.json",
+      "bytes": 923734,
+      "sha256": "a1c08eeec01ae6aef2d8ac7268a474707d667aca4df142989b81e6ebfc9d6f03",
+      "read": "full bytes hashed; selected source/run/status and all five completed check exit/time fields read; not all metadata, compilation provenance or test-name data independently reviewed"
+    },
+    "launcher_exit": {
+      "file": "launch/exit.json",
+      "bytes": 4862,
+      "sha256": "584dbe0ad38326f29425820b741893e279889d9f0bcd9c5089b55d3fd1d44991",
+      "read": "full original JSON"
+    },
+    "owned_exit": {
+      "file": "owned/exit.json",
+      "bytes": 1172,
+      "sha256": "279962c9dc135116a7b6a3b8e5bf3e5b7d3af0ddb9d37c899e3c8ed04d511969",
+      "read": "full original JSON"
+    },
+    "failed_library_log": {
+      "file": "candidate2-library-private.log",
+      "bytes": 254915,
+      "sha256": "72ff69dc6572408111d03cd6e85bfd5eb11cec9649cc36b4a00d79a6252848c8",
+      "read": "full bytes hashed; only stack-overflow diagnostic lines read for this report; full raw log not published or independently reviewed by this reporting root"
+    }
+  },
+  "next": {
+    "source_owner": "same original author for a narrow source correction after scoped diagnosis",
+    "changed_stack_size": false,
+    "changed_deadline": false,
+    "skipped_assertions": false,
+    "root_rerun_performed": false,
+    "old_W_results_reassigned": false,
+    "old_source_narrow_checks_reassigned": false,
+    "downstream_runtime": "not_run",
+    "downstream_ui": "not_run",
+    "P1": "not_run",
+    "multi_uid_runtime": "not_run",
+    "version_tree_command": "not_run",
+    "release_verifier_executed": false,
+    "formal_release_performed": false,
+    "production_deployment": false,
+    "e13_author_phase": {
+      "status": "completed_author_process_pending_patch_and_check_review",
+      "file": "author-exit.json",
+      "bytes": 2168,
+      "sha256": "4f23cf5754ae2055d9c79fef6119967acf342da67a6f6d3ac1078c75e53de84f",
+      "started_utc": "2026-11-21T09:59:42.389341+00:00",
+      "finished_utc": "2026-11-21T10:03:48.174407+00:00",
+      "exit_code": 0,
+      "error": null,
+      "source_start": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+      "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+      "author_wrapper_unchanged": true,
+      "rustc_wrapper_unchanged": true,
+      "final_acceptance_allowed": false,
+      "allowed_checks": [
+        "scripts/test_release.py",
+        "cargo check --tests --locked --offline --jobs 1"
+      ],
+      "launch_receipt": {
+        "file": "launch-receipt.json",
+        "bytes": 2008,
+        "sha256": "e680f3ab048bc3395e5f0e9fe9bd16d937fc2a9b58b37b7534db0693f2ca408d"
+      },
+      "root_read_scope": "Launch and exit JSON read in full. Source patch and checks are not yet independently accepted by this snapshot.",
+      "complete_gate_on_fixed_source_passed": false
+    }
+  }
+}

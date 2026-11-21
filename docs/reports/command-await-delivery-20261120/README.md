@@ -1,22 +1,26 @@
-# SSMCP 0.10.25：依赖同步已合并，完整验收准备中
+# SSMCP 0.10.25：完整检查遇到栈溢出，窄修复待复验
 
-**记录截止：2026-11-21 09:40 UTC。** 本文记录实际合并与各轮窄检查；完整验收状态以后续执行回执更新。
+**记录截止：2026-11-21 10:05 UTC。** 第 16 轮完整检查已经在合并提交 **`64738751cb59af9ef0d467ce34c50f091d2f6fa4`** 上实际运行并失败：35 个阶段中，**4 个通过、1 个失败、30 个未运行**。第五阶段 `library-private` 退出 **134**，原日志明确记录 `browser::tests::act_deadline_includes_time_queued_without_starting_input` 栈溢出并中止。这是实际栈溢出，不是已记录的测试超时；没有完整 libtest 汇总，不能给出整批库测试的通过数量。[Gate16 实际失败及原件摘要](gate-S647-r16-failure-public-facts.json)
 
-[PR #167](https://github.com/LIghtJUNction/ssmcp/pull/167) 已于 **2026-11-21 09:35:30 UTC** 正常合并，新的验收源码为 **`64738751cb59af9ef0d467ce34c50f091d2f6fa4`**，目录树为 `ad3d3ec97b6cf36ddd157fdd6d263614665c09cc`。两个真实父提交为 f69db30 与 01fbbcf，树与原作者提交一致。Git commit 的时间为 09:35:29，PR 的 merged_at 为 09:35:30，分别按原字段记录。[E12 源码、检查与实际合并事实](source-E12-merged-zuse-public-facts.json)
+Gate16 从 **09:44:52 UTC 至 09:49:37 UTC**。源码目录树为 `ad3d3ec97b6cf36ddd157fdd6d263614665c09cc`，九项固定输入前后相同，验收工作树仍干净并停留在 6473875。完整检查没有通过，此版本的后续真实进程、多用户、UI、P1、版本树命令和发布核验均未执行。此前 W 的成绩继续归属于 W。
 
-E12 已于 **09:31:02 UTC** 正常结束，只修改四个路径并普通推送一次：锁文件、zuse 子模块指针及两份说明。zuse 的实际来源从 830fcef 更新到 **ac5713c**，包版本仍为 **0.3.0**；SSMCP 继续仅声明 `std`，没有启用新的可选 `vision` 特性。合并前的 01fbbcf 通过 **106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1`**，源码和输入前后相同，检查进程清理完成。没有把这些窄检查转移为合并提交的完整验收。
+原作者沿原会话进行了 E13 窄修复阶段，**09:59:42 UTC 开始，10:03:48 UTC 正常退出**。本报告组已完整读取启动与退出回执；补丁及窄检查正在独立核对，尚无修复后完整检查结果。原失败、原测试断言和 25 秒产品期限继续保留；不能仅凭作者正常退出就认定根因已证实或修复已经通过。
 
-**截至 09:39 UTC 的已读状态，第 16 轮完整验收尚未启动。** 原执行者正在对新合并源码重新观察 11 个上游默认分支，并准备验收工作树与固定输入。本组已针对 6473875 重新确认构建和运行窗口空闲，旧 f69db30 的确认不复用。此前 f69db30 因 zuse 上游变化而停止的预检原件继续保留；新的完整构建、真实进程、界面和 P1 结果仍须等待实际回执。
+[PR #167](https://github.com/LIghtJUNction/ssmcp/pull/167) 于 **09:35:30 UTC** 正常合并了 E12，形成上述 Gate16 源码。两个真实父提交为 f69db30 与 01fbbcf，树与原作者提交一致；Git commit 时间为 09:35:29，PR merged_at 为 09:35:30，按原字段分别记录。[E12 源码、窄检查与合并事实](source-E12-merged-zuse-public-facts.json)
 
-统一控制的三项后继修正先经 [PR #165](https://github.com/LIghtJUNction/ssmcp/pull/165) 合并，Playwright 无效 JSON 夹具修正再经 [PR #166](https://github.com/LIghtJUNction/ssmcp/pull/166) 合并。E11 的 814c07c 窄检查仍独立保存；这些新增 Rust 回归尚未实际运行。[E10 事实](source-E10-merged-control-fixes-public-facts.json) · [E11 事实与依赖预检历史](source-E11-merged-fixture-public-facts.json)
+E12 只修改四个路径并普通推送一次：锁文件、zuse 子模块指针及两份说明。zuse 来源从 830fcef 更新到 **ac5713c**，包版本仍为 **0.3.0**；SSMCP 继续仅声明 `std`。合并前的 01fbbcf 通过 **106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1`**。这些窄检查独立保存，没有转移为合并提交的完整验收。
+
+统一控制的三项后继修正经 [PR #165](https://github.com/LIghtJUNction/ssmcp/pull/165) 合并，Playwright 无效 JSON 夹具修正经 [PR #166](https://github.com/LIghtJUNction/ssmcp/pull/166) 合并。各源码阶段仅做窄检查，Rust 回归在那些阶段没有执行；后来的 Gate16 已启动 Rust 库测试并中止，本报告未从部分日志推断每个新增定义的执行或通过状态。[E10 事实](source-E10-merged-control-fixes-public-facts.json) · [E11 事实与依赖预检历史](source-E11-merged-fixture-public-facts.json)
 
 E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
-E7 至 E12 的源码阶段均已结束，当前进入新合并源码的完整验收准备。此前 W 的通过结果和失败记录继续归属于 W，E9 至 E12 的窄检查也各自绑定当时源码，不替代后续合并结果的完整验收。
+E7 至 E12 的源码阶段均已结束。新合并源码的 Gate16 已实际失败，E13 后继修复须另行核对。E9 至 E12 的窄检查仍各自绑定当时源码；本报告按源码阶段、合并后完整检查和后续运行验收分别记录。
 
 ## 本轮实际提交
 
-| 提交 | 已提交的改动 | 当前验证范围 |
+下表的“未运行／未执行”限定为各次源码阶段的窄检查范围。6473875 后来已经开始执行 Rust 库测试，但因栈溢出缺少完整结果；这里没有逐项认定新增用例在该批次中的状态。
+
+| 提交 | 已提交的改动 | 源码阶段验证范围 |
 |---|---|---|
 | [7c1cd94](https://github.com/LIghtJUNction/ssmcp/commit/7c1cd94e08636617f4fded83f86048d3c012c7c3) | 本地输出目录被拒绝时停止反复重连；补充工作区、历史和网页打开失败诊断 | 源码、静态记录；没有运行测试 |
 | [a53a0c5](https://github.com/LIghtJUNction/ssmcp/commit/a53a0c5047833ded61193a0b0ce548937e89e959) | 匿名账户夹具完成服务端退出后再进入下一场景；保存脱敏失败上下文 | 原断言保留，尚未执行新脚本 |
@@ -75,7 +79,7 @@ E9 又在固定 `43fde19` 更新了实际锁定来源。源码回执记录 **08:
 
 当本地输出目录无法创建、打开或通过所有权与权限检查时，新源码会携带具体目录、操作和底层 I/O 错误，并停止 watchdog 对这种确定性本地拒绝的反复重连。瞬态传输错误仍按原 watchdog 设置处理。工作区解析错误也会说明失败步骤和路径；本地记忆失败时，不再笼统保证历史和草稿可用。
 
-这些改动补充了失败处理与诊断。原有普通 Unix 输出仍按有效用户身份分到 `/tmp/ssmcp-<有效 UID>`，终端回退仍验证控制终端身份和前台进程组。新增及扩展的回归用例已经写入源码，本轮尚未执行。[实现及回归定义](source-E7-startup-account-git-public-facts.json) · [已有隔离机制](linux-multiuser-source-findings.json)
+这些改动补充了失败处理与诊断。原有普通 Unix 输出仍按有效用户身份分到 `/tmp/ssmcp-<有效 UID>`，终端回退仍验证控制终端身份和前台进程组。新增及扩展的回归用例已经写入源码，在 E7 源码阶段没有执行；Gate16 中的逐项结果未在此另作认定。[实现及回归定义](source-E7-startup-account-git-public-facts.json) · [已有隔离机制](linux-multiuser-source-findings.json)
 
 现场只读记录发现了一个系统候选：`/usr/bin/ssmcp` 的 ELF 大小和摘要与包管理器记录相符，登记版本为 `0.9.1.r377.gee05244-1`。报错用户当时实际选中的 PATH、wrapper、会话固定入口及版本仍未知，因此没有把这个候选直接认定为报错程序。
 
@@ -105,7 +109,7 @@ E9 又在固定 `43fde19` 更新了实际锁定来源。源码回执记录 **08:
 
 官方文档中的 session、subject 是匿名关联标识；本实现把它们与真实网页地址分别保存，不从匿名标识拼接对话 URL。浏览器启动请求、实际网页加载和用户在网页发送“继续”也分别处理。新启动诊断提交还补充了打开失败时的复制或手动打开提示。[官方字段说明](https://developers.openai.com/plugins/reference#_meta-fields-the-client-provides) · [固定命令说明](https://github.com/LIghtJUNction/ssmcp/blob/1a2f7591ad0abb53907c048dcaed028434e17c47/docs/commands.md) · [已合并源码事实](source-openai-caller-C-C2-public-facts.json)
 
-f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSocket Frame，再通过生产 CallScope/sidecar 接口记录各自捕获的历史 owner；当前选择 B 时先完成 B、再完成 A，检查元数据仍归属原会话。它使用 fixture Reply，并非完整客户端连接循环或真实 exec.wait 作业的端到端运行。现有断言保留，该定义尚未执行。[准确范围](source-E8-completed-public-facts.json)
+f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSocket Frame，再通过生产 CallScope/sidecar 接口记录各自捕获的历史 owner；当前选择 B 时先完成 B、再完成 A，检查元数据仍归属原会话。它使用 fixture Reply，并非完整客户端连接循环或真实 exec.wait 作业的端到端运行。现有断言保留；E8 源码阶段没有执行该定义，Gate16 也没有形成可用于声明整批通过的汇总。[准确范围](source-E8-completed-public-facts.json)
 
 ## 原现场 socket 与独立的受控实测
 
@@ -119,7 +123,7 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 
 `--input none` 的现场报错仍是另一项未闭合结果：客户端未得到 relay 对关闭人工聊天能力的确认，启动退出 1。当前没有生产端能力确认的在线通过回执；本地 socket 测试不能证明这一模式已修复。服务器部署仍延期，也没有通过自动退回人工输入来绕过该要求。
 
-## 已有验收与当前未执行范围
+## 已有验收、Gate16 失败与未执行范围
 
 | 范围 | 实际对应源码 | 结果 |
 |---|---|---|
@@ -132,13 +136,14 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 | E11 最后窄检查 | 814c07c 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；不是 Rust 测试运行 |
 | 第 16 轮较早的来源预检 | 合并结果 f69db30 | zuse 默认分支新提交与当时锁定来源不一致，预备退出 1；原件保留，未启动完整 Gate |
 | E12 最后窄检查 | 01fbbcf 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；Rust 测试未运行 |
-| 当前完整验收准备 | 合并结果 6473875 | 重新核对上游来源与固定输入；截至 09:39 UTC 已读状态，完整 Gate 尚未启动 |
+| 第 16 轮完整检查 | 合并结果 6473875 | 实际运行后失败：4 阶段通过，library-private 栈溢出／退出 134，后 30 阶段未运行 |
 | 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
 | 首轮完整界面流程 | W | 24 套中启动 7 套：6 通过、1 失败、17 未执行；通过套件共 503 条记录 |
 | 单次账户诊断 | W 产物 | 69 条通过；未复现旧失败，未加入 503 |
-| 本轮完整构建、UI 与 P1 | 当前合并候选 6473875 | 尚无实际执行结果 |
+| Gate16 后续真实进程、多用户、UI 与 P1 | 合并结果 6473875 | 未执行；当前不得移用 W 的结果 |
+| E13 作者阶段 | 起点 01fbbcf，与 6473875 相同目录树 | 09:59:42 至 10:03:48，作者正常退出；补丁及窄检查仍在独立核对，尚无后继完整检查结果 |
 | 正式发布与公开产物核验 | 最终来源待绑定 | 尚未完成 |
 
 W 失败 producer 中的 61 条 true 与 1 条 false 单独保留，未并入 503；`human_finish` 仅由 `interactions` 覆盖。W 首轮未执行 `session_groups` 和 `composer`，所以没有用旧 V 的通过记录补齐 W。剩余 ignored 项与多用户驱动也按实际运行边界记录。
@@ -171,7 +176,7 @@ H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始�
 
 用户要求的 `ssmcp --version --all` 已在 71851cf 提交。它从二进制内嵌的构建期 Cargo.lock 显示从 ssmcp 可达的依赖树，按 name、version、source 区分包；重复身份、歧义和缺失依赖会报错，共享节点和环分别标记。完整字符串生成成功后才输出，普通 `--version` 继续只输出应用版本与换行。
 
-输出与文档明确说明：锁图包含构建、开发和各目标的依赖，实际链接代码仍随目标与 features 改变。已审阅的版本处理代码不在运行时读取工作区的锁文件、查询网络或执行 Cargo。版本树本身没有给出主仓 commit 或完整锁文件摘要，仍须结合发行 manifest 和源码回执判断构建来源。该增量完成独立静态审阅，后继 27e9733 已通过测试目标的类型检查；版本命令仍未实际执行；E10 又补入一个参数边界回归，版本模块共四个定义，尚未运行。[版本树固定源码](source-E9-version-tree-public-facts.json) · [E9 检查记录](source-E9-completed-control-review-public-facts.json) · [E10 参数边界及检查](source-E10-merged-control-fixes-public-facts.json)
+输出与文档明确说明：锁图包含构建、开发和各目标的依赖，实际链接代码仍随目标与 features 改变。已审阅的版本处理代码不在运行时读取工作区的锁文件、查询网络或执行 Cargo。版本树本身没有给出主仓 commit 或完整锁文件摘要，仍须结合发行 manifest 和源码回执判断构建来源。该增量完成独立静态审阅，后继 27e9733 已通过测试目标的类型检查；版本命令仍未实际执行；E10 又补入一个参数边界回归，版本模块共四个定义，在对应源码窄检查阶段没有执行。Gate16 中这些定义的逐项结果未由本报告另行核定。[版本树固定源码](source-E9-version-tree-public-facts.json) · [E9 检查记录](source-E9-completed-control-review-public-facts.json) · [E10 参数边界及检查](source-E10-merged-control-fixes-public-facts.json)
 
 统一 Computer Use On/Off 已在 2619686 进入源码，覆盖 SSMCP 内的 Computer host/isolated、CDP Browser、Omarchy，以及启用时的 Playwright 控制和变更路径。合同要求 Off 阻止新控制，并取消尚未发送的旧请求；再次 On 不恢复旧 generation 的 ticket。只读观察、自有资源清理与默认 isolated 路由保留，已经送达的动作不能承诺回滚。
 
@@ -179,12 +184,12 @@ H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始�
 
 | 路径 | 问题与当前状态 |
 |---|---|
-| CDP 同页操作 | 2951c06 让单动作与批次都先取得 page、再取得输入租约，等待后复核原会话。原锁顺序问题静态闭合，回归未运行。 |
+| CDP 同页操作 | 2951c06 让单动作与批次都先取得 page、再取得输入租约，等待后复核原会话。原锁顺序问题静态闭合；对应源码阶段没有运行回归，Gate16 的逐项结果未在此核定。 |
 | Playwright 写入队列 | 8ce982c 已在取得 writer 锁后、创建半帧清理 guard 和首次写入前重新检查 permit。固定 27e9733 调用链静态核对闭合；无 permit 的普通 RPC 检查为空操作。尚无运行验证。 |
-| Playwright 已发送但无回复 | 9b1581d 为控制调用跟踪可能开始的写入及有效回复。请求错误或撤权结束后，没有回复的写入报告未知或部分执行、replay_safe=false，并清理确切的自有驱动；实际返回的 native 结果保持。新增夹具已由 814c07c 修正为无效 JSON 注入，尚未执行。 |
+| Playwright 已发送但无回复 | 9b1581d 为控制调用跟踪可能开始的写入及有效回复。请求错误或撤权结束后，没有回复的写入报告未知或部分执行、replay_safe=false，并清理确切的自有驱动；实际返回的 native 结果保持。新增夹具已由 814c07c 修正为无效 JSON 注入；E11 窄检查未执行该夹具，Gate16 的逐项结果未在此核定。 |
 | Omarchy 取消与清理 | 4cd3940 用自有任务持有输入租约和串行锁，直到异步清理路径返回。正常取消生命周期静态闭合；Managed.shutdown 不向调用者传播 wait 错误这一既有限制仍在，不能概括所有异常清理都已确认成功。 |
 
-这些问题及后继修正均已按固定源码审阅，尚无对应运行复现或回归通过结果。写入队列修正也不意味着 Off 与首字节发送已经成为跨进程原子操作。深层取消仍可以关闭当前操作拥有的 Playwright driver，不能把发送层写前拒绝不污染通道扩大为永不清理 driver。[历史发现](source-E9-completed-control-review-public-facts.json) · [后继修正状态](source-E10-merged-control-fixes-public-facts.json)
+这些问题及后继修正均已按固定源码审阅，本报告没有据 Gate16 的不完整批次结果认定对应回归通过。写入队列修正也不意味着 Off 与首字节发送已经成为跨进程原子操作。深层取消仍可以关闭当前操作拥有的 Playwright driver，不能把发送层写前拒绝不污染通道扩大为永不清理 driver。[历史发现](source-E9-completed-control-review-public-facts.json) · [后继修正状态](source-E10-merged-control-fixes-public-facts.json)
 
 持久状态与配置迁移的窄审没有发现额外的旧 Off 自动开启或旧 ticket 复活问题；旧浏览器 focus_policy 只迁移展示设置，不写入控制开关。现有 e2e_computer_controls 定义覆盖 CLI、双终端状态同步、generation、草稿/快捷键和重启后 Off 持久性，没有执行真实的四类后端控制动作。此前“Background browser control remains enabled”旧错误文案已在 5623e52 修正，现在准确说明观察与控制所需的状态；该历史问题属于文案错配，没有被算作已证实的开关绕过。
 
@@ -194,7 +199,7 @@ H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始�
 
 原作者从 **07:58:56 UTC** 开始 E9，于 **08:30:20 UTC** 结束。原退出回执已完整读取，源码回执按整件字节计算摘要并读取了提交、依赖、检查尝试和未执行项等字段；没有宣称逐条独立审阅全部 199 条源码命令记录。
 
-最后一次检查从 **08:25:39 UTC 至 08:28:21 UTC**，两个实际命令均退出 0，源码和输入前后保持一致，自有进程回收完成。发布策略 stderr 明确记录 `Ran 106 tests` 与 `OK`，Cargo 输出明确完成 dev profile 的检查。策略夹具中的模拟发布文本不表示发生了真实 tag、crate 发布或 GitHub Release。13 个新增或扩展 Rust 回归定义尚未执行。
+最后一次检查从 **08:25:39 UTC 至 08:28:21 UTC**，两个实际命令均退出 0，源码和输入前后保持一致，自有进程回收完成。发布策略 stderr 明确记录 `Ran 106 tests` 与 `OK`，Cargo 输出明确完成 dev profile 的检查。策略夹具中的模拟发布文本不表示发生了真实 tag、crate 发布或 GitHub Release。13 个新增或扩展 Rust 回归定义在 E9 源码阶段没有执行。
 
 七次检查尝试全部保留：一次作者调用身份预检失败、两次 ProcessLookupError 停止、一次源码变化保护停止，以及三次窄检查通过。较早两次通过仅按各自记录的工作树指纹归档；本报告未将其独立核定为 71851cf 或 8ce982c 不可变提交的验收，也不转移给 27e9733。最后提交仅引用第七轮检查。此前 07:49:51 UTC 的 E9 启动锁预检失败也继续保留，它没有启动作者模型或执行 Cargo。[完整状态与原件摘要](source-E9-completed-control-review-public-facts.json) · [启动历史](source-E9-launch-public-facts.json)
 
@@ -204,7 +209,7 @@ H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始�
 
 E10 从 **08:39:28 UTC 至 08:49:59 UTC**，只修改十个路径并进行四次普通推送。原退出回执已完整读取；源码回执 51,715 字节，按整件字节计算摘要并读取了提交、未变化绑定、检查和新回归字段，没有宣称独立审阅全部 95 条源码命令记录。
 
-唯一一次窄检查从 **08:47:35 UTC 至 08:49:01 UTC**，两个实际命令均退出 0，无超时或错误，源码及输入前后相同，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取；发布策略记录 106 项通过，Cargo 仅检查测试目标。此次新增五个 Rust 回归定义，分别覆盖同页锁顺序、Omarchy 取消期间保留两把锁、Playwright On 时丢回复、写入排队后撤权，以及混合版本参数。它们尚未执行。[E10 原件摘要和读取范围](source-E10-merged-control-fixes-public-facts.json)
+唯一一次窄检查从 **08:47:35 UTC 至 08:49:01 UTC**，两个实际命令均退出 0，无超时或错误，源码及输入前后相同，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取；发布策略记录 106 项通过，Cargo 仅检查测试目标。此次新增五个 Rust 回归定义，分别覆盖同页锁顺序、Omarchy 取消期间保留两把锁、Playwright On 时丢回复、写入排队后撤权，以及混合版本参数。它们在 E10 源码阶段没有执行；Gate16 的逐项结果未在此核定。[E10 原件摘要和读取范围](source-E10-merged-control-fixes-public-facts.json)
 
 审阅期间另检查了一项回复与取消的竞态候选。实际客户端使用单线程 Tokio，reader 的取出请求、标记已回复及发送 oneshot 为连续同步代码，两个 task-local scope 不会创建线程；没有找到使所提出的直接交错成立的生产路径。同时，真实撤权错误已说明已派发效果可能完成，要求先观察再重试。因此未将该候选认定为新增阻断，也没有增加源修或 Gate。这个结论不等于全局无竞态证明；源码合同限定为保留 native future 实际返回的结果，不保证取消后所有内部或晚到回复仍交付调用者。
 
@@ -222,13 +227,31 @@ PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69d
 
 4b4cbff 的第 15 轮未运行记录保留，f69db30 的上述来源预检失败也单独保留。H2 的六份固定发布配方、Cargo manifest/lock 和四个 gitlink 在 E10、E11 均未变化；E12 随后仅更新 zuse 锁项与 gitlink，六份配方仍保持固定字节，核验器仍未执行。
 
-## E12 完成与新的完整验收准备
+## E12 完成与 Gate16 实际失败
 
 E12 从 **09:26:19 UTC 至 09:31:02 UTC**，原退出回执完整读取，退出码 0，作者和 rustc wrapper 保持原字节。源码回执 41,111 字节按整件计算摘要，已读取提交、锁项、gitlink、保护配方、推送、清理状态与检查字段；没有宣称独立审阅全部 82 条静态命令记录。
 
 唯一一次窄检查从 **09:29:06 UTC 至 09:30:26 UTC**，两个实际命令均退出 0、未超时，前后源码均为 01fbbcf／ad3d3ec，指纹 `6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82` 相同，输入未变、未跟踪文件为 0，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取；Cargo 日志明确检查了 zuse-computer 0.3.0／ac5713c2 与 ssmcp 0.10.25。这仍是测试目标的编译检查，不是 Rust 用例实际运行。
 
-新主仓合并结果 **6473875** 的 tree、两个真实父提交及 PR #167 已分别直接读取。接下来以这个实际合并结果和新的上游来源观察固定第 16 轮输入，由原执行者执行既定的 35 阶段、真实进程、多用户、完整界面与 P1 验收，随后核对正式发行及公开产物。此处只记录已经发生的源码、窄检查和合并；完整验收结果另凭实际原件更新。[E12 原件摘要、合并身份与未执行范围](source-E12-merged-zuse-public-facts.json)
+新主仓合并结果 **6473875** 的 tree、两个真实父提交及 PR #167 已分别直接读取。09:36:37 至 09:36:49 的重新准备确认 11 个上游默认分支与 E12 锁定来源一致。26 条 Git 命令中有 25 条退出 0；其中一次本地对象探测退出 128，随后按准确提交获取对象并复核成功。原探测失败保留，没有写成全部 26 条命令均通过。[E12 原件摘要和合并身份](source-E12-merged-zuse-public-facts.json)
+
+完整检查保持原 35 阶段、26 个 Rust 阶段、20 个 integration 目标和 14 个必跑 ignored 用例的合同。实际启动五个阶段：
+
+| Gate16 阶段 | 退出码 | 用时 |
+|---|---:|---:|
+| release-policy | 0 | 16.27 秒 |
+| deployment-policy | 0 | 0.62 秒 |
+| fmt | 0 | 8.04 秒 |
+| library-compile | 0 | 232.27 秒 |
+| library-private | **134** | **7.88 秒** |
+
+失败日志的末尾为 `fatal runtime error: stack overflow, aborting`。它没有完整 libtest 汇总；没有把被选择的用例数、部分输出中的 ok 行或过去 W 的通过数量当成本次通过数量。剩余 30 阶段没有运行，下游真实进程、多用户、UI 和 P1 没有据此启动。
+
+报告组已按原始字节核对最终 Gate JSON、两个退出回执和失败日志的摘要。Gate JSON 为 **923,734 字节**／`a1c08eeec01ae6aef2d8ac7268a474707d667aca4df142989b81e6ebfc9d6f03`；失败日志为 **254,915 字节**／`72ff69dc6572408111d03cd6e85bfd5eb11cec9649cc36b4a00d79a6252848c8`。两个退出 JSON 完整读取；Gate JSON 读取源码、状态、五项退出和时间等字段；日志只读取栈溢出诊断行，没有宣称全文审阅或公开原始日志。九项固定输入前后相同，源码保持干净。外层回执证明源码锁持有到子进程返回；仅凭该回执不能扩大为已独立确认所有遗留子进程回收。
+
+固定源码比较确认，该失败测试连同 `#[tokio::test]` 标记与此前 W 完全一致，仍使用 25 秒产品期限和外层额外 3 秒上限。正常测试路径先持有 page 锁，再调用 act 并检查队列等待也计入期限。新增的 `Permit::scope/run` 与 Browser 异步调用层把 future 按值嵌套，构成栈压力的候选解释；尚无 future 尺寸测量或实际崩溃帧，不能确定崩溃发生在构造、poll 还是销毁阶段，也不能称根因已确认。[失败版本 Browser](https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/browser.rs) · [权限封装](https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/computer/host_control.rs) · [W 对照](https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/browser.rs)
+
+E13 作者阶段的启动与退出回执已经读取，原作者正常退出、两个 wrapper 保持原字节。此快照尚未把后继补丁或窄检查列为独立核定完成，更没有修复后的完整验收结果。后继实际合并源码须重新绑定固定输入，由原执行者从原 35 阶段完整检查开始，再按既定顺序继续运行验收。H2 仍仅为静态准备，正式发布尚未完成。[Gate16 事实、读取范围与后继边界](gate-S647-r16-failure-public-facts.json)
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
 
