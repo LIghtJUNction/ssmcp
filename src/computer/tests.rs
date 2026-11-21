@@ -2,6 +2,8 @@ use super::*;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 struct Temporary(PathBuf);
 
@@ -130,6 +132,107 @@ fn package(target: &str) -> (release::Release, Vec<u8>, Vec<u8>) {
         )
     };
     (release(target, &bytes), bytes, executable)
+}
+
+#[tokio::test]
+async fn download_client_uses_explicit_tls_in_a_fresh_process() {
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "computer::tests::download_client_without_global_provider_fixture",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("SSMCP_COMPUTER_TLS_CLIENT_FIXTURE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(15), command.output())
+        .await
+        .expect("isolated download-client fixture exceeded its deadline")
+        .expect("could not start the isolated download-client fixture");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "isolated download-client fixture failed: {}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("SSMCP_COMPUTER_TLS_CLIENT_OK"),
+        "the exact download-client fixture did not run: {stdout}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated subprocess fixture; launched by download_client_uses_explicit_tls_in_a_fresh_process"]
+async fn download_client_without_global_provider_fixture() {
+    assert_eq!(
+        std::env::var("SSMCP_COMPUTER_TLS_CLIENT_FIXTURE").as_deref(),
+        Ok("1")
+    );
+    assert!(
+        rustls::crypto::CryptoProvider::get_default().is_none(),
+        "the fixture must start without another test's global TLS provider"
+    );
+    let _client = release::download_client().expect("the actual download client must build");
+    assert!(
+        rustls::crypto::CryptoProvider::get_default().is_none(),
+        "the download client must not install a process-global TLS provider"
+    );
+    println!("SSMCP_COMPUTER_TLS_CLIENT_OK");
+}
+
+#[test]
+fn release_target_selects_only_official_platforms() {
+    for (os, arch, gnu, expected) in [
+        ("linux", "x86_64", true, "x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64", true, "aarch64-unknown-linux-gnu"),
+        ("macos", "x86_64", false, "x86_64-apple-darwin"),
+        ("macos", "aarch64", false, "aarch64-apple-darwin"),
+        ("windows", "x86_64", false, "x86_64-pc-windows-msvc"),
+    ] {
+        assert_eq!(release::target_for(os, arch, gnu).unwrap(), expected);
+    }
+}
+
+#[test]
+fn release_target_rejects_unsupported_platforms_without_a_fallback() {
+    for (os, arch, gnu) in [
+        ("windows", "aarch64", false),
+        ("linux", "x86_64", false),
+        ("linux", "aarch64", false),
+        ("linux", "arm", true),
+        ("macos", "arm", false),
+        ("freebsd", "x86_64", false),
+    ] {
+        let error = release::target_for(os, arch, gnu)
+            .expect_err("unsupported platforms must not select another target");
+        assert!(error.contains("No official Zuse release target"));
+        assert!(error.contains("no fallback was selected"));
+    }
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+#[test]
+fn native_release_target_is_explicitly_unsupported() {
+    let error = release::target().unwrap_err();
+    assert!(error.contains("No official Zuse release target"));
+    assert!(error.contains("no fallback was selected"));
 }
 
 #[test]

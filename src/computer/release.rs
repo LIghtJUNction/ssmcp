@@ -51,9 +51,17 @@ pub(super) fn version(value: &str) -> Result<String, String> {
 }
 
 pub(super) fn target() -> Result<&'static str, String> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") if cfg!(target_env = "gnu") => Ok("x86_64-unknown-linux-gnu"),
-        ("linux", "aarch64") if cfg!(target_env = "gnu") => Ok("aarch64-unknown-linux-gnu"),
+    target_for(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cfg!(target_env = "gnu"),
+    )
+}
+
+pub(super) fn target_for(os: &str, arch: &str, gnu: bool) -> Result<&'static str, String> {
+    match (os, arch) {
+        ("linux", "x86_64") if gnu => Ok("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") if gnu => Ok("aarch64-unknown-linux-gnu"),
         ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         ("windows", "x86_64") => Ok("x86_64-pc-windows-msvc"),
@@ -230,10 +238,8 @@ async fn bounded(client: &reqwest::Client, url: &str, limit: usize) -> Result<Ve
     Ok(bytes)
 }
 
-pub(super) async fn download(requested: Option<&str>) -> Result<(Release, Vec<u8>), String> {
-    let requested = requested.map(version).transpose()?;
-    let target = target()?;
-    let client = crate::http_client::builder()
+pub(super) fn download_client() -> Result<reqwest::Client, String> {
+    crate::http_client::builder()
         .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .connect_timeout(Duration::from_secs(10))
@@ -246,7 +252,13 @@ pub(super) async fn download(requested: Option<&str>) -> Result<(Release, Vec<u8
             }
         }))
         .build()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+pub(super) async fn download(requested: Option<&str>) -> Result<(Release, Vec<u8>), String> {
+    let requested = requested.map(version).transpose()?;
+    let target = target()?;
+    let client = download_client()?;
     let metadata_url = match &requested {
         Some(version) => format!("{API}/releases/tags/v{version}"),
         None => format!("{API}/releases/latest"),
