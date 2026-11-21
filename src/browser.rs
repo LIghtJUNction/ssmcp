@@ -670,16 +670,20 @@ impl Browser {
             }
             _ => true,
         };
+        // HTTP/CDP branches form a large future even for a queued action.
+        // Keep it on the heap before wrapping it in permit cancellation.
         if !requires_control {
-            return self.perform_inner(name, args, None).await;
+            return Box::pin(self.perform_inner(name, args, None)).await;
         }
         let permit = self.control.permit()?;
         if matches!(name, "ssmcp.browser.launch" | "ssmcp.browser.connect") {
-            return permit.scope(self.perform_inner(name, args, None)).await;
+            return permit
+                .scope(Box::pin(self.perform_inner(name, args, None)))
+                .await;
         }
         // The target ID remains bound to the admitted connection through any input wait.
         let session = self.current_session().await?;
-        let operation = self.perform_inner(name, args, Some(session));
+        let operation = Box::pin(self.perform_inner(name, args, Some(session)));
         if name == "ssmcp.browser.act" {
             // The batch owns its progress and abort report.
             permit.scope(operation).await
@@ -2207,6 +2211,22 @@ const FILL_SCRIPT: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_dispatch_future_fits_a_small_stack_budget() {
+        let browser = Browser::new(std::env::temp_dir()).unwrap();
+        // Construct without polling: this must not connect or acquire input.
+        // The queued-action regression below also exercises the default stack.
+        let operation = browser.perform(
+            "ssmcp.browser.act",
+            json!({"target_id":"a","actions":[{"type":"key","key":"Enter"}],"snapshot":false}),
+        );
+        let bytes = std::mem::size_of_val(&operation);
+        assert!(
+            bytes <= 64 * 1024,
+            "browser dispatch future grew to {bytes} bytes; keep transport state on the heap"
+        );
+    }
 
     #[test]
     fn browser_override_is_checked_and_explicit_tool_argument_has_priority() {

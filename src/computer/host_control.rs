@@ -15,6 +15,7 @@ use storage::Store;
 use tokio::sync::Notify;
 
 pub(super) use storage::InputLease;
+pub(super) use storage::WorkerTicket;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(crate) const LOCKED: &str = "Computer Use is Off; use /computer on or Super+Alt+C";
@@ -75,9 +76,12 @@ pub(super) fn input_tool(name: &str) -> bool {
         name,
         "ssmcp.computer.focus"
             | "ssmcp.computer.move"
+            | "ssmcp.computer.move_path"
             | "ssmcp.computer.click"
             | "ssmcp.computer.drag"
             | "ssmcp.computer.key"
+            | "ssmcp.computer.num_lock"
+            | "ssmcp.computer.watch_until_click"
             | "ssmcp.computer.type"
             | "ssmcp.computer.scroll"
     )
@@ -170,6 +174,10 @@ impl Permit {
     pub(super) fn ticket(&self) -> Ticket {
         self.ticket
     }
+
+    pub(super) fn worker_ticket(&self) -> Result<WorkerTicket, String> {
+        self.control.worker_ticket(self.ticket)
+    }
 }
 
 fn generation() -> Result<[u8; 16], String> {
@@ -247,6 +255,13 @@ impl HostControl {
         Ok(Ticket {
             generation: state.generation,
         })
+    }
+
+    pub(super) fn worker_ticket(&self, ticket: Ticket) -> Result<WorkerTicket, String> {
+        if !self.valid(ticket) {
+            return Err(ENDED.into());
+        }
+        Ok(self.store()?.worker_ticket(ticket.generation))
     }
 
     fn valid(&self, ticket: Ticket) -> bool {

@@ -181,15 +181,22 @@ fn surface(mut response: Value, desktop: &str) -> Value {
         .and_then(Value::as_object_mut)
     {
         metadata.insert("desktop".into(), json!(desktop));
+        let browser_watch =
+            metadata.get("action").and_then(Value::as_str) == Some("watch_until_click");
         metadata.insert(
             "input_scope".into(),
-            json!(if desktop == "isolated" {
+            json!(if browser_watch {
+                "browser_page"
+            } else if desktop == "isolated" {
                 "private_display"
             } else {
                 "host_desktop"
             }),
         );
-        metadata.insert("moves_host_pointer".into(), json!(desktop == "host"));
+        metadata.insert(
+            "moves_host_pointer".into(),
+            json!(desktop == "host" && !browser_watch),
+        );
         metadata.insert("host_input_requires_explicit_target".into(), json!(true));
         metadata.insert("host_input_requires_local_handoff".into(), json!(false));
         metadata.insert("host_input_gate".into(), json!("shared_local_switch"));
@@ -365,6 +372,9 @@ pub(super) async fn dispatch(
                 }
                 _ => return Err("desktop must be isolated or host".into()),
             };
+            if name == "ssmcp.computer.watch_until_click" && target != "host" {
+                return Err("watch_until_click requires explicit desktop: host and Computer Use On; isolated desktops cannot select an external CDP endpoint".into());
+            }
             if target == "host" {
                 return computer
                     .perform_host(name, args)
@@ -375,9 +385,17 @@ pub(super) async fn dispatch(
             super::host_control::Permit::check_current()?;
             if let Some(desktop) = slot.as_mut() {
                 desktop.ensure_running()?;
-                let operation = desktop.computer.perform_local(name, args);
+                let operation = desktop.computer.perform_local(name, args, None);
                 let response = if let Some(permit) = super::host_control::Permit::current() {
-                    permit.run(operation).await?
+                    let response = permit.run(operation).await;
+                    // Revocation drops the worker future. Wait for its EOF and
+                    // release acknowledgement before returning the cancellation.
+                    desktop
+                        .computer
+                        .releases
+                        .wait(super::RELEASE_WAIT_TIMEOUT)
+                        .await?;
+                    response?
                 } else {
                     operation.await?
                 };
@@ -1115,6 +1133,42 @@ mod tests {
             assert_eq!(std::env::var_os(key), expected, "{key}");
         }
         assert!(computer.isolated.lock().await.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires Xvfb and xdotool; private display only"]
+    async fn private_pointer_trajectory_reaches_its_endpoint() {
+        let computer = Computer::new(std::env::temp_dir()).unwrap();
+        computer
+            .perform(
+                "ssmcp.computer.desktop_start",
+                json!({"width":640,"height":480}),
+            )
+            .await
+            .unwrap();
+        let r = computer.perform("ssmcp.computer.move_path", json!({
+            "path":[{"x":300,"y":140},{"x":380,"y":220},{"x":300,"y":300},{"x":220,"y":220},{"x":300,"y":140}],
+            "duration_ms":800,"speed_variation":0.3,"jitter":0.75,"seed":42
+        })).await.unwrap();
+        let observed = &r["structuredContent"];
+        assert_eq!(observed["samples"], 101);
+        assert!(observed["delivered"].as_u64().unwrap() >= 50, "{observed}");
+        {
+            let slot = computer.isolated.lock().await;
+            let pointer = slot
+                .as_ref()
+                .unwrap()
+                .computer
+                .text("xdotool", &["getmouselocation", "--shell"])
+                .await
+                .unwrap();
+            assert!(
+                pointer.contains("X=300") && pointer.contains("Y=140"),
+                "{pointer}"
+            );
+        }
+        computer.shutdown().await.unwrap();
     }
 
     #[cfg(target_os = "linux")]

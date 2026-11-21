@@ -124,7 +124,7 @@ async fn wayland_preflight_recovery_fixture() {
             true,
             0,
             false,
-            "unsupported_state: Num Lock is enabled; disable it before input",
+            "unsupported_state: cannot restore the same active keyboard after virtual input",
         ),
         (
             false,
@@ -151,12 +151,24 @@ async fn wayland_preflight_recovery_fixture() {
             state.dispatched
         };
         let error = computer
-            .perform_host("ssmcp.computer.key", json!({"key":"a"}))
+            .perform("ssmcp.computer.key", json!({"desktop":"host","key":"a"}))
             .await
             .unwrap_err();
         assert_eq!(error, expected);
         assert_eq!(state.lock().unwrap().dispatched, before);
         assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
+        if num {
+            let text_error = computer
+                .perform("ssmcp.computer.type", json!({"desktop":"host","text":"a"}))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                text_error,
+                "unsupported_state: Num Lock is enabled; disable it before input"
+            );
+            assert_eq!(state.lock().unwrap().dispatched, before);
+            assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
+        }
 
         {
             let mut state = state.lock().unwrap();
@@ -166,7 +178,7 @@ async fn wayland_preflight_recovery_fixture() {
             state.held = false;
         }
         computer
-            .perform_host("ssmcp.computer.key", json!({"key":"a"}))
+            .perform("ssmcp.computer.key", json!({"desktop":"host","key":"a"}))
             .await
             .unwrap();
         assert_eq!(state.lock().unwrap().dispatched, before + 1);
@@ -184,7 +196,7 @@ async fn wayland_preflight_recovery_fixture() {
     ] {
         let before = state.lock().unwrap().dispatched;
         let error = computer
-            .perform_host("ssmcp.computer.type", json!({"text":text}))
+            .perform("ssmcp.computer.type", json!({"desktop":"host","text":text}))
             .await
             .unwrap_err();
         // Without whole-text preflight, the first scalar instead tries to
@@ -193,7 +205,7 @@ async fn wayland_preflight_recovery_fixture() {
         assert_eq!(state.lock().unwrap().dispatched, before);
         assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
         computer
-            .perform_host("ssmcp.computer.key", json!({"key":"a"}))
+            .perform("ssmcp.computer.key", json!({"desktop":"host","key":"a"}))
             .await
             .unwrap();
         assert_eq!(state.lock().unwrap().dispatched, before + 1);
@@ -211,6 +223,7 @@ fn uncertain_wayland_errors_are_not_preflight_refusals() {
         "Wayland display disconnected",
         "input completed but keyboard keymap restoration failed: Wayland write failed",
         "unsupported_state: Caps Lock is enabled; disable it before input; keyboard keymap restoration failed: Wayland write failed",
+        "unsupported_state: cannot restore the same active keyboard after virtual input; keyboard keymap restoration failed: Wayland write failed",
         "unsupported_state: unrecognized keyboard state",
     ] {
         for typing in [false, true] {

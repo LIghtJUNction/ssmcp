@@ -2,21 +2,32 @@
 use super::{Session, capability, host_control};
 use serde_json::{Value, json};
 
-const OPERATIONS: [&str; 10] = [
+const OPERATIONS: [&str; 14] = [
     "monitors",
     "windows",
     "focus",
     "screenshot",
     "move",
+    "move_path",
     "click",
     "drag",
     "key",
+    "keyboard_state",
+    "num_lock",
     "type",
     "scroll",
+    "watch_until_click",
 ];
 
 pub(super) fn platform_input(platform: &str, name: &str) -> bool {
-    matches!(platform, "windows" | "macos") && host_control::input_tool(name)
+    matches!(platform, "windows" | "macos")
+        && !matches!(
+            name,
+            "ssmcp.computer.move_path"
+                | "ssmcp.computer.num_lock"
+                | "ssmcp.computer.watch_until_click"
+        )
+        && host_control::input_tool(name)
 }
 
 fn engine(platform: &str, session: Session, operation: &str, cursor: bool) -> &'static str {
@@ -63,6 +74,10 @@ pub(super) fn status(
     } else {
         library.clone()
     };
+    status["capabilities"]["watch_until_click"] = json!({
+        "available":true,"backend":"cdp","engine":"zuse","endpoint_probed":false,
+        "requires":"explicit loopback endpoint, existing tab, exact origin, bounded scope and the local host-input switch"
+    });
     let mut routes = serde_json::Map::new();
     for operation in OPERATIONS {
         let selected = engine(platform, session, operation, false);

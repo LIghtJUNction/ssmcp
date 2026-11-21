@@ -383,3 +383,16 @@ cargo test --lib computer::isolated::tests::private_display_input_capture_and_cl
 ```
 
 真实私有桌面回归需要前述 helpers；应用自动启动用 `true`，原有键入与截图回归还需要 `wish`。这两个入口分别检查自动创建/复用/清理，以及私有应用实际接收输入和截图。列出入口不等于已在当前平台执行成功；实测结果应另行记录。[回归实现](../src/computer/isolated.rs)
+
+### Continuous pointer paths (Linux)
+
+`ssmcp.computer.move_path` accepts 2–64 logical waypoints and `duration_ms`
+from 20 to 5000. It interpolates a smooth path and sends one timed operation
+to the local zuse worker. This tool never clicks or holds a button. Optional
+`jitter` (0–5 logical pixels), `speed_variation` (0–1), and `seed` tune a
+repeatable path; leave both effects at zero for exact unperturbed motion.
+
+The target defaults to `isolated`. With `desktop: "host"`, the operator must
+keep the local control switch on. `Super+Alt+C`, `/computer off`, or disconnect
+cancels the remaining path; already-delivered moves cannot be undone.
+All interpolated coordinates must fit the display layout before any input.

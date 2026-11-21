@@ -51,6 +51,64 @@ pub(in crate::computer) struct InputLease {
     store: Arc<Store>,
 }
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::computer) struct WorkerTicket {
+    root: PathBuf,
+    generation: [u8; 16],
+}
+
+/// An owned state-file lock for a library callback that outlives its caller's
+/// stack frame. Dropping it ends one input send, never an entire watch.
+pub(in crate::computer) struct InputDispatchGuard {
+    file: File,
+}
+
+impl Drop for InputDispatchGuard {
+    fn drop(&mut self) {
+        while let Err(error) = self.file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
+impl WorkerTicket {
+    pub(in crate::computer) fn submit<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _dispatch = self.acquire_input_dispatch()?;
+        operation()
+    }
+
+    pub(in crate::computer) fn acquire_input_dispatch(&self) -> Result<InputDispatchGuard, String> {
+        if !self.root.is_absolute() || self.generation == [0; 16] {
+            return Err(super::ENDED.into());
+        }
+        let store = Store {
+            root: self.root.clone(),
+            #[cfg(test)]
+            remove_on_drop: false,
+        };
+        let rejected = |_| super::ENDED.to_owned();
+        let directory = store.directory(false).map_err(rejected)?;
+        let mut file = open(&directory, STATE_FILE, Open::Existing).map_err(rejected)?;
+        lock_state(&file, STATE_LOCK_TIMEOUT, true).map_err(rejected)?;
+        let state = read_state(&mut file)
+            .map_err(|_| super::ENDED.to_owned())?
+            .unwrap_or_default();
+        if !state.enabled || state.generation != self.generation {
+            return Err(super::ENDED.into());
+        }
+        // Share the state inode lock with the local off/toggle operation.
+        // Once off commits, even a worker whose EOF monitor has not woken up
+        // cannot submit another frame. Keep native release cleanup outside it.
+        Ok(InputDispatchGuard { file })
+    }
+}
+
 #[cfg(unix)]
 impl Drop for InputLease {
     fn drop(&mut self) {
@@ -73,6 +131,12 @@ impl InputLease {
 }
 
 impl Store {
+    pub(super) fn worker_ticket(&self, generation: [u8; 16]) -> WorkerTicket {
+        WorkerTicket {
+            root: self.root.clone(),
+            generation,
+        }
+    }
     #[cfg(not(test))]
     pub(super) fn shared() -> Result<Self, String> {
         #[cfg(unix)]
@@ -154,7 +218,7 @@ impl Store {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
             Err(error) => return Err(context(error)),
         };
-        lock_state(&file, STATE_LOCK_TIMEOUT).map_err(context)?;
+        lock_state(&file, STATE_LOCK_TIMEOUT, false).map_err(context)?;
         if read_state(&mut file)?.is_some() {
             return Ok(());
         }
@@ -187,7 +251,7 @@ impl Store {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return read(State::default()),
             Err(error) => return Err(context(error)),
         };
-        lock_state(&file, STATE_LOCK_TIMEOUT).map_err(context)?;
+        lock_state(&file, STATE_LOCK_TIMEOUT, true).map_err(context)?;
         read(read_state(&mut file)?.unwrap_or_default())
     }
 
@@ -205,7 +269,7 @@ impl Store {
     ) -> Result<State, String> {
         let directory = self.directory(true).map_err(context)?;
         let mut file = open(&directory, STATE_FILE, Open::Create).map_err(context)?;
-        lock_state(&file, lock_timeout).map_err(context)?;
+        lock_state(&file, lock_timeout, false).map_err(context)?;
         let previous = match read_state(&mut file) {
             Ok(previous) => previous,
             // Explicit off is also the local repair path for an interrupted
@@ -314,10 +378,15 @@ fn lock_busy(error: &io::Error) -> bool {
     }
 }
 
-fn lock_state(file: &File, timeout: Duration) -> io::Result<()> {
+fn lock_state(file: &File, timeout: Duration, shared: bool) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        match crate::platform::lock_file(file, true) {
+        let attempt = if shared {
+            file.try_lock_shared().map_err(io::Error::from)
+        } else {
+            crate::platform::lock_file(file, true)
+        };
+        match attempt {
             Ok(()) => return Ok(()),
             Err(error) if lock_busy(&error) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(1));
@@ -422,6 +491,111 @@ fn open(directory: &Directory, name: &str, access: Open) -> io::Result<File> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn worker_submission_stops_at_the_committed_off_generation() {
+        let control = super::super::HostControl::default();
+        let ticket = control.worker_ticket(control.ticket().unwrap()).unwrap();
+        let mut submitted = 0;
+        ticket
+            .submit(|| {
+                submitted += 1;
+                Ok(())
+            })
+            .unwrap();
+
+        control.set_local(false).unwrap();
+        let error = ticket
+            .submit(|| {
+                submitted += 1;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error, super::super::ENDED);
+        assert_eq!(submitted, 1);
+
+        control.set_local(true).unwrap();
+        assert!(
+            ticket
+                .submit(|| {
+                    submitted += 1;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(submitted, 1, "turning on must not rearm an old trajectory");
+    }
+
+    #[test]
+    fn local_off_waits_for_the_inflight_frame_then_blocks_the_next() {
+        use std::sync::mpsc;
+        let control = super::super::HostControl::default();
+        let store = control.store().unwrap();
+        let ticket = control.worker_ticket(control.ticket().unwrap()).unwrap();
+        let next = ticket.clone();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let frame = std::thread::spawn(move || {
+            ticket
+                .submit(|| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            control.status()["enabled"],
+            true,
+            "read-only status remains available while a frame holds its shared lock"
+        );
+        let operator = super::super::HostControl::at(store.path().to_owned());
+        let (started_tx, started_rx) = mpsc::sync_channel(0);
+        let (off_tx, off_rx) = mpsc::sync_channel(1);
+        let off = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            off_tx.send(operator.set_local(false)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(
+                off_rx.recv_timeout(Duration::from_millis(20)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "off must not acknowledge while a frame is in flight"
+        );
+        release_tx.send(()).unwrap();
+        frame.join().unwrap();
+        assert_eq!(
+            off_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()["enabled"],
+            false
+        );
+        off.join().unwrap();
+        assert_eq!(
+            next.submit::<()>(|| panic!("frame submitted after off"))
+                .unwrap_err(),
+            super::super::ENDED
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_dispatch_guard_unlocks_before_an_inherited_descriptor_closes() {
+        let control = super::super::HostControl::default();
+        let ticket = control.worker_ticket(control.ticket().unwrap()).unwrap();
+        let permit = ticket.acquire_input_dispatch().unwrap();
+        let inherited = permit.file.try_clone().unwrap();
+        drop(permit);
+        // Waiting for a browser response must not keep the input-send permit
+        // alive, including when another open description was inherited.
+        control.set_local(false).unwrap();
+        assert!(ticket.acquire_input_dispatch().is_err());
+        drop(inherited);
+    }
+
     #[cfg(unix)]
     #[test]
     fn input_lease_drop_unlocks_while_an_inherited_descriptor_stays_open() {
@@ -459,7 +633,7 @@ mod tests {
             let lease = store.try_input().unwrap().unwrap();
             let directory = store.directory(false).unwrap();
             let mut held = open(&directory, STATE_FILE, Open::Existing).unwrap();
-            lock_state(&held, STATE_LOCK_TIMEOUT).unwrap();
+            lock_state(&held, STATE_LOCK_TIMEOUT, false).unwrap();
 
             let operator = super::super::HostControl::at(store.path().to_owned());
             let (ready_tx, ready_rx) = mpsc::sync_channel(0);
@@ -534,9 +708,9 @@ mod tests {
         let before = store.read().unwrap();
         let directory = store.directory(false).unwrap();
         let held = open(&directory, STATE_FILE, Open::Existing).unwrap();
-        lock_state(&held, STATE_LOCK_TIMEOUT).unwrap();
+        lock_state(&held, STATE_LOCK_TIMEOUT, false).unwrap();
         let competing = open(&directory, STATE_FILE, Open::Existing).unwrap();
-        let error = lock_state(&competing, Duration::ZERO).unwrap_err();
+        let error = lock_state(&competing, Duration::ZERO, false).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
 
         let operator = Store::at(store.path().to_owned());

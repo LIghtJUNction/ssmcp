@@ -246,13 +246,64 @@ fn default_quality() -> u8 {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MovePath {
+    path: Vec<Point>,
+    duration_ms: u32,
+    #[serde(default)]
+    jitter: f64,
+    #[serde(default)]
+    speed_variation: f64,
+    #[serde(default)]
+    seed: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Click {
     x: Option<i32>,
     y: Option<i32>,
+    #[cfg(target_os = "linux")]
+    window_id: Option<String>,
+    #[cfg(target_os = "linux")]
+    coordinate_space: Option<String>,
+    #[cfg(target_os = "linux")]
+    expected_window: Option<WindowGeometry>,
     #[serde(default)]
     button: Button,
     #[serde(default = "one")]
     count: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct WindowGeometry {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale: f64,
+}
+
+impl WindowGeometry {
+    fn region(&self) -> Result<Region, String> {
+        if !self.scale.is_finite() || self.scale <= 0.0 || self.scale > 16.0 {
+            return Err("window scale must be finite and in (0,16]".into());
+        }
+        Region {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
+        .validate()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NumLock {
+    state: String,
 }
 fn one() -> u8 {
     1
@@ -418,6 +469,13 @@ impl Computer {
                 false,
             ),
             tool(
+                "move_path",
+                "Play a continuous pointer path on the Linux client without clicking. Validate all interpolated points before input. On the real desktop the existing local input switch must remain enabled.",
+                json!({"path":{"type":"array","items":point,"minItems":2,"maxItems":64},"duration_ms":{"type":"integer","minimum":20,"maximum":5000},"jitter":{"type":"number","minimum":0,"maximum":5,"default":0},"speed_variation":{"type":"number","minimum":0,"maximum":1,"default":0},"seed":{"type":"integer","minimum":0,"default":0}}),
+                &["path", "duration_ms"],
+                false,
+            ),
+            tool(
                 "click",
                 "Click at the current pointer or optional global logical coordinates. Supply x and y together.",
                 json!({"x":coordinate,"y":coordinate,"button":button,"count":{"type":"integer","minimum":1,"maximum":3,"default":1}}),
@@ -439,10 +497,47 @@ impl Computer {
                 false,
             ),
             tool(
+                "keyboard_state",
+                "Read the current Hyprland keyboard state separately from other devices. Does not toggle lock keys or send input.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "num_lock",
+                "Explicitly set or toggle Num Lock on the current Hyprland keyboard and read back the result. Ordinary text input never calls this operation.",
+                json!({"state":{"type":"string","enum":["on","off","toggle"]}}),
+                &["state"],
+                false,
+            ),
+            tool(
                 "type",
                 "Type literal UTF-8 text into the focused window, without shell or clipboard interpretation.",
                 json!({"text":{"type":"string","maxLength":16384}}),
                 &["text"],
+                false,
+            ),
+            tool(
+                "watch_until_click",
+                "Wait for a unique visible selector inside one explicit scope of an existing browser tab, then send bounded trusted clicks. Requires desktop: host and the local input switch. Uses CDP events without screenshots, tab creation, navigation or focus changes; stops on origin, document, focus or target ambiguity changes. Only a new hidden-to-visible episode can be clicked again.",
+                json!({
+                    "endpoint":{"type":"string","minLength":1,"maxLength":8192,"description":"Explicit http:// or ws:// Chrome debugging endpoint on localhost or a literal loopback IP, with a nonzero port."},
+                    "tab_id":{"type":"string","minLength":1,"maxLength":1024,"description":"The ID of an existing page target; no page is created or activated."},
+                    "scope":{"type":"string","minLength":1,"maxLength":4096,"description":"CSS selector for one observed container."},
+                    "selector":{"type":"string","minLength":1,"maxLength":4096,"description":"Simple compound CSS selector within scope; no hierarchy or pseudo-classes."},
+                    "expected_origin":{"type":"string","minLength":1,"maxLength":4096,"description":"Exact observed http(s) origin, including a nondefault port if present; no path or credentials."},
+                    "max_clicks":{"type":"integer","minimum":1,"maximum":64},
+                    "timeout_ms":{"type":"integer","minimum":1,"maximum":60000}
+                }),
+                &[
+                    "endpoint",
+                    "tab_id",
+                    "scope",
+                    "selector",
+                    "expected_origin",
+                    "max_clicks",
+                    "timeout_ms",
+                ],
                 false,
             ),
             tool(
@@ -453,6 +548,27 @@ impl Computer {
                 false,
             ),
         ];
+        #[cfg(target_os = "linux")]
+        if let Some(click) = tools
+            .iter_mut()
+            .find(|descriptor| descriptor["name"] == "ssmcp.computer.click")
+        {
+            let properties = &mut click["inputSchema"]["properties"];
+            properties["window_id"] = json!({"type":"string","maxLength":32,"description":"Bind the click to a currently focused window returned by computer.windows. Window identity, geometry and scale are checked immediately before button input."});
+            properties["coordinate_space"] = json!({"type":"string","enum":["desktop","window"],"default":"desktop","description":"window requires window_id and x/y in current window-local logical coordinates. desktop preserves the existing global coordinates."});
+            properties["expected_window"] = json!({"type":"object","properties":{"x":coordinate,"y":coordinate,"width":{"type":"integer","minimum":1,"maximum":100000},"height":{"type":"integer","minimum":1,"maximum":100000},"scale":{"type":"number","exclusiveMinimum":0,"maximum":16}},"required":["x","y","width","height","scale"],"additionalProperties":false,"description":"Optional geometry observed while choosing the target; a change stops the click without reusing stale coordinates."});
+        }
+        #[cfg(not(target_os = "linux"))]
+        tools.retain(|descriptor| {
+            !matches!(
+                descriptor["name"].as_str(),
+                Some(
+                    "ssmcp.computer.move_path"
+                        | "ssmcp.computer.keyboard_state"
+                        | "ssmcp.computer.num_lock"
+                )
+            )
+        });
         for descriptor in &mut tools {
             let name = descriptor["name"].as_str().unwrap_or("");
             if !matches!(
@@ -468,10 +584,35 @@ impl Computer {
                 });
             }
         }
+        if let Some(watch) = tools
+            .iter_mut()
+            .find(|tool| tool["name"] == "ssmcp.computer.watch_until_click")
+        {
+            watch["inputSchema"]["properties"]["desktop"] = json!({
+                "type":"string","enum":["host"],"description":"Existing browser input requires Computer Use On. This operation does not move the OS pointer."
+            });
+            watch["inputSchema"]["required"]
+                .as_array_mut()
+                .expect("tool required fields")
+                .push(json!("desktop"));
+        }
         tools
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("computer connection is closed".into());
+        }
+        if !cfg!(target_os = "linux")
+            && matches!(
+                name,
+                "ssmcp.computer.move_path"
+                    | "ssmcp.computer.keyboard_state"
+                    | "ssmcp.computer.num_lock"
+            )
+        {
+            return Err("this operation currently requires a Linux client".into());
+        }
         let response = if host_control::mutation_tool(name) {
             let permit = self.host_control.permit()?;
             permit.scope(isolated::dispatch(self, name, args)).await?
@@ -537,14 +678,14 @@ impl Computer {
             // connection or process can act on the same physical desktop.
             let result = self
                 .host_control
-                .run(ticket, self.perform_local(name, args))
+                .run(ticket, self.perform_local(name, args, Some(ticket)))
                 .await;
             if let Err(error) = serial.finish().await {
                 return Err(format!("host input release cleanup incomplete: {error}"));
             }
             result?
         } else {
-            self.perform_local(name, args).await?
+            self.perform_local(name, args, None).await?
         };
         if let Some(metadata) = response
             .get_mut("structuredContent")
@@ -555,13 +696,23 @@ impl Computer {
         Ok(response)
     }
 
-    async fn perform_local(&self, name: &str, args: Value) -> Result<Value, String> {
+    async fn perform_local(
+        &self,
+        name: &str,
+        args: Value,
+        host_ticket: Option<host_control::Ticket>,
+    ) -> Result<Value, String> {
         let _lock = self.serial.lock().await;
         if self.closed.load(Ordering::Acquire) {
             return Err("computer connection is closed".into());
         }
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
         host_control::Permit::check_current()?;
+        let operation_timeout = if name == "ssmcp.computer.watch_until_click" {
+            zuse_backend::watch_operation_timeout(&args)?
+        } else {
+            Duration::from_secs(30)
+        };
         let operation = async {
             if name == "ssmcp.computer.status" {
                 parse::<Empty>(args)?;
@@ -609,7 +760,7 @@ impl Computer {
                 }
             }
             if name != "ssmcp.computer.monitors" {
-                return zuse_backend::perform(self, name, args).await;
+                return zuse_backend::perform(self, name, args, host_ticket).await;
             }
             // Monitor topology stays with the existing platform adapters until
             // zuse exposes a portable geometry API. Linux desktop effects use
@@ -689,9 +840,14 @@ impl Computer {
                 },
             }
         };
-        tokio::time::timeout(Duration::from_secs(30), operation)
+        tokio::time::timeout(operation_timeout, operation)
             .await
-            .map_err(|_| "computer operation timed out after 30 seconds".to_owned())?
+            .map_err(|_| {
+                format!(
+                    "computer operation timed out after {} seconds",
+                    operation_timeout.as_secs()
+                )
+            })?
     }
 
     pub async fn shutdown(&self) -> Result<(), String> {
@@ -1812,15 +1968,21 @@ mod tests {
     }
     #[tokio::test]
     async fn shutdown_revokes_input_before_dispatch() {
-        let computer = Computer::new(std::env::temp_dir()).unwrap();
-        computer.shutdown().await.unwrap();
-        assert!(
-            computer
-                .perform("ssmcp.computer.move", json!({"x":0,"y":0}))
-                .await
-                .unwrap_err()
-                .contains("closed")
-        );
+        for enabled in [true, false] {
+            let computer = Computer::new(std::env::temp_dir()).unwrap();
+            computer.host_control.set_local(enabled).unwrap();
+            computer.shutdown().await.unwrap();
+            for args in [json!({"x":0,"y":0}), json!({"desktop":"host","x":0,"y":0})] {
+                assert_eq!(
+                    computer
+                        .perform("ssmcp.computer.move", args)
+                        .await
+                        .unwrap_err(),
+                    "computer connection is closed"
+                );
+            }
+            assert_eq!(computer.host_input_status()["enabled"], enabled);
+        }
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -2154,7 +2316,8 @@ if root.exists():
         // Test local input serialization directly: the public dispatcher now
         // defaults to an isolated desktop and may reject before this queue.
         // An unknown operation cannot send input to any host desktop.
-        let mut next = Box::pin(computer.perform_local("ssmcp.computer.not_a_tool", json!({})));
+        let mut next =
+            Box::pin(computer.perform_local("ssmcp.computer.not_a_tool", json!({}), None));
         assert!(
             poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx)))
                 .await
@@ -2385,7 +2548,20 @@ mod host_handoff_tests {
     async fn remote_host_parameters_cannot_enable_any_input_operation() {
         let computer = computer();
         computer.set_host_input_local(false).unwrap();
-        for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
+        for suffix in [
+            "focus",
+            "move",
+            "move_path",
+            "click",
+            "drag",
+            "key",
+            "num_lock",
+            "type",
+            "scroll",
+        ] {
+            if !cfg!(target_os = "linux") && matches!(suffix, "move_path" | "num_lock") {
+                continue;
+            }
             let error = computer
                 .perform(
                     &format!("ssmcp.computer.{suffix}"),
