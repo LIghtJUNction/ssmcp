@@ -38,6 +38,8 @@ struct Request {
     kind: Kind,
     #[serde(default)]
     idempotency_key: Option<String>,
+    #[serde(default)]
+    finish_task: bool,
     #[serde(skip)]
     scope: Option<String>,
     #[serde(skip)]
@@ -45,7 +47,7 @@ struct Request {
 }
 fn parse(arguments: Value) -> Result<Request, String> {
     let request: Request = serde_json::from_value(arguments)
-        .map_err(|_| "message requires text and accepts kind and idempotency_key")?;
+        .map_err(|_| "message requires text and accepts kind, idempotency_key and boolean finish_task")?;
     // Keep the existing Markdown/terminal-control and 16 KiB input boundary.
     super::questions::parse_message(json!({"text":request.text})).map(|_| ())?;
     if let Some(key) = &request.idempotency_key
@@ -65,6 +67,7 @@ fn fingerprint(request: &Request, presentation: Option<&Presentation>) -> [u8; 3
     digest.update(request.kind.as_str().as_bytes());
     digest.update(b"\0");
     digest.update(request.text.as_bytes());
+    digest.update([u8::from(request.finish_task)]);
     if let Some(document) = presentation {
         digest.update(b"\0presentation\0");
         digest.update(serde_json::to_vec(document).expect("a typed presentation serializes"));
@@ -84,6 +87,7 @@ struct Receipt {
     kind: Kind,
     history_saved: bool,
     shown: bool,
+    finish_task: bool,
     finish_request_id: Option<String>,
 }
 struct Deduplication {
@@ -114,7 +118,7 @@ impl Cache {
         };
         if previous.fingerprint != fingerprint(request, presentation) {
             return Err(
-                "idempotency_key already identifies different message text, kind or presentation"
+                "idempotency_key already identifies different message text, kind, finish_task or presentation"
                     .into(),
             );
         }
@@ -154,14 +158,20 @@ fn cache() -> &'static Mutex<Cache> {
 }
 
 fn response(receipt: &Receipt, duplicate: bool) -> Value {
-    json!({
+    let mut value = json!({
         "shown":receipt.shown, "accepted":true, "message_id":receipt.id,
         "kind":receipt.kind, "duplicate":duplicate,
         "history_saved":receipt.history_saved,
         "finish_request_id":receipt.finish_request_id,
         "terminal_active":crate::client::terminal::active(),
         "note":if receipt.shown {"Accepted for local display; this does not prove the user read it."} else {"Saved to the original local conversation, which is not currently selected."}
-    })
+    });
+    if receipt.finish_task {
+        value["finish_task"] = json!(true);
+        value["may_finish"] = json!(false);
+        value["completion_instruction"] = json!("This message ACK is not permission to end the task. Only the final outer user_wait receipt with status decided and may_finish true grants permission. Otherwise keep the task active and, in a new tool call, await ui.wait(client_id, {intent:'finish'}); use its actual pending finish_request_id when supplied. Do not replace that blocking wait with a timer, background sleep, polling loop, or a final answer.");
+    }
+    value
 }
 
 /// Called only under interface::UPDATES, which serializes concurrent native writes.
@@ -185,6 +195,11 @@ fn send_with_presentation(
     request.scope = super::questions::message_scope();
     let source = crate::runtime::call_scope::Source::capture();
     request.owner = Some(source.require_owner()?.clone());
+    if request.finish_task {
+        // Validate before publishing; neither a display label nor message JSON
+        // can stand in for the authenticated asking thread.
+        super::questions::validate_finish(None, None)?;
+    }
     let previous = cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -205,6 +220,7 @@ fn send_with_presentation(
         kind: request.kind,
         history_saved: true,
         shown,
+        finish_task: request.finish_task,
         finish_request_id: None,
     };
     cache().lock().unwrap_or_else(|e| e.into_inner()).remember(
@@ -238,12 +254,13 @@ pub(super) fn restore_copy(messages: &[super::history::Message]) {
 pub(super) fn tool() -> Value {
     json!({
         "name":"ssmcp.ui.message",
-        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner; no completion approval is required. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text and kind within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
+        "description":"Display a Markdown progress report or final result to the local user with a fixed Agent label. kind is progress or answer. Progress and final replies require the authenticated conversation owner. finish_task defaults to false. Set finish_task:true to send this message and then block through the server finish approval wait (20 seconds per call, without holding the UI write lock). This requires the verified asking collab thread. Only the final outer user_wait receipt with status decided and may_finish:true after a consumed Human Yes permits ending. No, ordinary input, timeout, cancellation, disconnection and revocation keep the task active; follow completion_instruction and await ui.wait in a new tool call when approval is still required. A verified thread keeps its original local JSONL conversation across calls. When another history is selected, the original history receives the reply and shown is false. The returned message_id identifies the history record when history_saved is true. Optional idempotency_key deduplicates matching text, kind and finish_task within the last 64 retained keys of this client process; changed content with the same key is rejected. Restart clears this retry cache. /copy copies the latest visible Agent reply. shown and accepted do not prove the user read it. Use ssmcp.ui.ask for a nonblocking question and ssmcp.ui.questions to read its answer. External chat output is not intercepted.",
         "inputSchema":{
             "type":"object","required":["text"],"additionalProperties":false,
             "properties":{
                 "text":{"type":"string","minLength":1,"maxLength":16384,"description":"Markdown text, at most 16384 UTF-8 bytes. Newline and tab are the only permitted control characters."},
                 "kind":{"type":"string","enum":["progress","answer"],"default":"progress"},
+                "finish_task":{"type":"boolean","default":false,"description":"Send the message, then require a blocking Human finish decision. False preserves ordinary message behavior. A native message ACK never authorizes ending; inspect the final outer user_wait receipt and follow its continuation instruction."},
                 "idempotency_key":{"type":"string","minLength":1,"maxLength":MAX_KEY_BYTES,"pattern":"^[A-Za-z0-9_-]+$"}
             }
         },
@@ -264,6 +281,7 @@ mod tests {
             kind: Kind::Answer,
             history_saved: true,
             shown: true,
+            finish_task: false,
             finish_request_id: None,
         }
     }
@@ -285,6 +303,46 @@ mod tests {
             assert!(parse(value).is_err());
         }
     }
+    #[test]
+    fn finish_task_is_explicit_boolean_and_part_of_the_message_identity() {
+        let ordinary = parse(json!({"text":"Result"})).unwrap();
+        assert!(!ordinary.finish_task);
+        assert!(!parse(json!({"text":"Result","finish_task":false})).unwrap().finish_task);
+        let finish = parse(json!({"text":"Result","finish_task":true})).unwrap();
+        assert!(finish.finish_task);
+        for flag in [Value::Null, json!("true"), json!(1), json!({})] {
+            assert!(parse(json!({"text":"Result","finish_task":flag})).is_err());
+        }
+        let schema = tool();
+        assert_eq!(schema["inputSchema"]["properties"]["finish_task"]["type"], "boolean");
+        assert_eq!(schema["inputSchema"]["properties"]["finish_task"]["default"], false);
+
+        let mut cache = Cache::default();
+        let plain = request("Result", "answer", "same-result");
+        cache.remember(&plain, receipt(1), None);
+        let finish = parse(json!({
+            "text":"Result","kind":"answer","idempotency_key":"same-result","finish_task":true
+        })).unwrap();
+        assert!(cache.previous(&finish, None).unwrap_err().contains("finish_task"));
+        assert_eq!(cache.previous(&plain, None).unwrap(), Some(receipt(1)));
+
+        let mut waiting = receipt(2);
+        waiting.finish_task = true;
+        let mut finish_cache = Cache::default();
+        finish_cache.remember(&finish, waiting.clone(), None);
+        assert_eq!(finish_cache.previous(&finish, None).unwrap(), Some(waiting.clone()));
+        assert!(finish_cache.previous(&plain, None).is_err());
+        let ack = response(&waiting, false);
+        assert_eq!(ack["accepted"], true);
+        assert_eq!(ack["finish_task"], true);
+        assert_eq!(ack["may_finish"], false);
+        assert!(ack["finish_request_id"].is_null());
+        assert!(ack["completion_instruction"].as_str().unwrap().contains("await ui.wait"));
+        let plain_ack = response(&receipt(1), false);
+        assert!(plain_ack.get("completion_instruction").is_none());
+        assert!(plain_ack.get("may_finish").is_none());
+    }
+
     #[test]
     fn retry_receipts_bind_original_chinese_text_and_message_kind() {
         let mut cache = Cache::default();

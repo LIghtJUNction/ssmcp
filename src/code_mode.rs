@@ -2154,6 +2154,12 @@ mod tests {
                 theme: await ui.set('one',{theme:'nord'}),
                 action: await ui.action('one',{action:'audit.open'}),
                 filter: await ui.filter('one',{text:'cargo',level:'commands'}),
+                plain: await say('one','ordinary text'),
+                ordinary: await say('one',{text:'ordinary text',finish_task:false}),
+                finish: await say('one',{text:'result',kind:'answer',finish_task:true,idempotency_key:'result-1'}),
+                message: await ui.message('one',{text:'result',finish_task:true}),
+                direct: (await call('one','ssmcp.ui.message',{text:'result',finish_task:true})).structuredContent,
+                panel: await ui.present('one',{blocks:[{type:'text',text:'ordinary panel'}]}),
                 frozen: Object.isFrozen(ui)
             };
         "#,
@@ -2172,6 +2178,20 @@ mod tests {
             output["result"]["filter"]["arguments"],
             json!({"text":"cargo","level":"commands"})
         );
+        assert_eq!(output["result"]["plain"]["arguments"], json!({"text":"ordinary text"}));
+        assert_eq!(output["result"]["ordinary"]["arguments"],
+            json!({"text":"ordinary text","finish_task":false}));
+        assert_eq!(output["result"]["finish"]["name"], "ssmcp.ui.message");
+        assert_eq!(output["result"]["finish"]["arguments"],
+            json!({"text":"result","kind":"answer","finish_task":true,"idempotency_key":"result-1"}));
+        for entry in ["message", "direct"] {
+            assert_eq!(output["result"][entry]["name"], "ssmcp.ui.message");
+            assert_eq!(output["result"][entry]["arguments"],
+                json!({"text":"result","finish_task":true}));
+        }
+        assert_eq!(output["result"]["panel"]["name"], "ssmcp.ui.present");
+        assert_eq!(output["result"]["panel"]["arguments"],
+            json!({"blocks":[{"type":"text","text":"ordinary panel"}]}));
         assert_eq!(output["result"]["frozen"], true);
     }
 
