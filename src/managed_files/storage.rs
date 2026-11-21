@@ -118,10 +118,14 @@ impl Directory {
             }
             let dir = self.dir.open_dir_nofollow(name)?;
             let file = dir.try_clone()?.into_std_file();
-            // Windows uses the existing current-user, protected-DACL contract.
-            // This is deliberately stricter than accepting a public directory.
-            let _ = private;
-            crate::platform::windows::verify_directory(&file)?;
+            if private {
+                crate::platform::windows::verify_directory(&file)?;
+            } else {
+                // Ordinary workspace parents may inherit their access list.
+                // Do not change their ACL or require the registry's protected
+                // DACL bit; require the current owner and a real directory.
+                verify_owned_windows(&file, true)?;
+            }
             Ok(Self { dir, path })
         }
     }
@@ -180,6 +184,11 @@ impl Directory {
                 path: self.path.clone(),
             })
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn publication_lock(&self) -> io::Result<super::LockedFile> {
+        super::LockedFile::acquire(self.reopen()?.file)
     }
 
     pub(super) fn open(&self, name: &str, access: Access, private: bool) -> io::Result<File> {
@@ -397,9 +406,90 @@ pub(super) fn verify_file(file: &File, private: bool) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        let _ = private;
-        crate::platform::windows::verify_file(file)
+        if private {
+            crate::platform::windows::verify_file(file)
+        } else {
+            verify_owned_windows(file, false)
+        }
     }
+}
+
+#[cfg(windows)]
+fn verify_owned_windows(file: &File, directory: bool) -> io::Result<()> {
+    use std::{
+        ffi::c_void,
+        os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    };
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+            EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+            TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
+        },
+        Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+            GetFileInformationByHandle,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) != directory
+        || (!directory && (!file.metadata()?.is_file() || information.nNumberOfLinks != 1))
+    {
+        return Err(invalid("managed path must have its expected type, without reparse points or multiple links"));
+    }
+    let mut owner = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    let result = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+            &mut owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if result != 0 { return Err(io::Error::from_raw_os_error(result as i32)); }
+    struct SecurityMemory(*mut c_void);
+    impl Drop for SecurityMemory {
+        fn drop(&mut self) { unsafe { LocalFree(self.0); } }
+    }
+    let _descriptor = SecurityMemory(descriptor);
+    if owner.is_null() { return Err(invalid("managed path has no Windows owner")); }
+    let mut raw_token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw_token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(raw_token) };
+    for class in [TokenUser, TokenOwner] {
+        let mut needed = 0;
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(), class, std::ptr::null_mut(), 0, &mut needed,
+            );
+        }
+        if needed == 0 { return Err(io::Error::last_os_error()); }
+        // usize storage provides the alignment needed by TOKEN_USER/TOKEN_OWNER.
+        let mut buffer = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(), class, buffer.as_mut_ptr().cast(), needed, &mut needed,
+            )
+        } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let sid = if class == TokenUser {
+            unsafe { (*(buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid }
+        } else {
+            unsafe { (*(buffer.as_ptr().cast::<TOKEN_OWNER>())).Owner }
+        };
+        if unsafe { EqualSid(owner, sid) } != 0 { return Ok(()); }
+    }
+    Err(invalid("managed path is not owned by the current Windows user"))
 }
 
 pub(super) fn same_at(parent: &Directory, name: &str, expected: &FileIdentity) -> io::Result<bool> {
@@ -414,3 +504,4 @@ fn single_name(name: &str) -> io::Result<()> {
         Ok(())
     }
 }
+

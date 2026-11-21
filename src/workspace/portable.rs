@@ -31,6 +31,26 @@ fn lock_writes() -> Result<MutexGuard<'static, ()>, String> {
     }
 }
 
+fn lock_managed_writes(
+    root: &Path,
+    relative: &str,
+) -> Result<Option<crate::managed_files::WorkspaceWriteLease>, String> {
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        match crate::managed_files::try_workspace_write_lock(root, Path::new(relative)) {
+            Ok(guard) => return Ok(guard),
+            Err(failure) if failure.kind() == io::ErrorKind::Interrupted => continue,
+            Err(failure) if failure.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err("workspace cleanup or file write is busy; retry the file operation".into());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(failure) => return Err(error(failure)),
+        }
+    }
+}
+
 fn open_file(parent: &Dir, name: &OsStr) -> io::Result<File> {
     let mut options = CapOptions::new();
     options
@@ -179,8 +199,11 @@ impl Root {
         data: &[u8],
         overwrite: bool,
         create_parents: bool,
+        temporary: bool,
         expected_sha256: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
+        crate::managed_files::validate_user_write(Path::new(path)).map_err(error)?;
+        validate_temporary_write(path, overwrite, temporary)?;
         validate_hash(expected_sha256)?;
         if expected_sha256.is_some() && !overwrite {
             return Err("expected_sha256 requires overwrite=true and an existing file".into());
@@ -189,6 +212,7 @@ impl Root {
         let (name, parents) = parts.split_last().ok_or("write requires a file path")?;
         let _guard = lock_writes()?;
         let parent = self.directory(parents, create_parents)?;
+        let _managed_guard = lock_managed_writes(&self.path, path)?;
         let mut permissions = None;
         let mut before = audit::Snapshot::Missing;
         match open_file(&parent, name) {
@@ -209,12 +233,21 @@ impl Root {
             Err(e) if e.kind() == io::ErrorKind::NotFound && expected_sha256.is_none() => {}
             Err(e) => return Err(error(e)),
         }
-        publish(&parent, name, data, overwrite, permissions)?;
+        let created = matches!(&before, audit::Snapshot::Missing);
+        if let Some(guard) = &_managed_guard {
+            guard.check_current().map_err(error)?;
+        }
+        let identity = publish(&parent, name, data, overwrite, permissions)?;
         self.audit.written(tool, path, before, data);
-        Ok(())
+        Ok(if created {
+            self.creation_warning(path, &identity, tool, temporary)
+        } else {
+            None
+        })
     }
 
     pub(super) fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
+        crate::managed_files::validate_user_write(Path::new(&args.path)).map_err(error)?;
         validate_hash(args.expected_sha256.as_deref())?;
         if args.old_text.is_empty() {
             return Err("old_text must not be empty".into());
@@ -226,6 +259,7 @@ impl Root {
         let (name, parents) = parts.split_last().ok_or("edit requires a file path")?;
         let _guard = lock_writes()?;
         let parent = self.directory(parents, false)?;
+        let _managed_guard = lock_managed_writes(&self.path, &args.path)?;
         let mut existing = open_file(&parent, name).map_err(error)?;
         let permissions = regular_metadata(&existing)?.permissions();
         let bytes = whole_file(&mut existing)?;
@@ -255,6 +289,9 @@ impl Root {
         replacement.push_str(&args.new_text);
         replacement.push_str(&text[index + args.old_text.len()..]);
         drop(existing);
+        if let Some(guard) = &_managed_guard {
+            guard.check_current().map_err(error)?;
+        }
         publish(
             &parent,
             name,
@@ -328,7 +365,7 @@ fn publish(
     data: &[u8],
     overwrite: bool,
     permissions: Option<std::fs::Permissions>,
-) -> Result<(), String> {
+) -> Result<crate::managed_files::FileIdentity, String> {
     let temporary = format!(".ssmcp-{}.tmp", random_id().map_err(error)?);
     let mut options = CapOptions::new();
     options
@@ -364,6 +401,7 @@ fn publish(
         }
     }
     file.sync_all().map_err(error)?;
+    let identity = crate::managed_files::FileIdentity::from_file(&file).map_err(error)?;
     drop(file);
     if overwrite {
         parent.rename(&temporary, parent, name).map_err(error)?;
@@ -377,7 +415,7 @@ fn publish(
         .into_std_file()
         .sync_all()
         .map_err(error)?;
-    Ok(())
+    Ok(identity)
 }
 
 #[cfg(test)]
@@ -515,3 +553,4 @@ mod tests {
         assert!(Root::components("folder/file.txt").is_ok());
     }
 }
+

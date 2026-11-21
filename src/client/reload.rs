@@ -167,6 +167,16 @@ impl Restart {
         output: std::sync::Arc<crate::output::OutputStore>,
     ) -> crate::Result<()> {
         validate_executable(&self.program)?;
+        // Old requests, commands and backends have already stopped. Clean only
+        // registered temporary files before creating the new reload handoff.
+        // A cleanup error must not discard the draft or replace a reload error.
+        if let Err(error) = crate::managed_files::cleanup(&self.cwd, false, "reload") {
+            super::render::status(
+                "files",
+                "Warning",
+                &format!("Temporary-file cleanup was skipped: {error}"),
+            );
+        }
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.arguments).current_dir(&self.cwd);
         let _resume = output.prepare_reload(&mut command)?;
@@ -646,3 +656,4 @@ mod tests {
         );
     }
 }
+

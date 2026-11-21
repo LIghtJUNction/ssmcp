@@ -4,13 +4,15 @@
 //! are tracking warnings, not evidence that the preceding file write failed.
 //! Active users retain a Registration or FileLease; the independently opened file
 //! description is locked until that guard is dropped.
-pub mod command;
 mod config;
+mod native;
 mod storage;
+pub mod command;
 #[cfg(test)]
 mod tests;
 
 pub use config::{CleanupConfig, CleanupRule};
+pub use native::{perform, tools};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -27,6 +29,8 @@ const MAX_RECORDS: usize = 16_384;
 const REGISTRY: &str = "managed-files";
 const CONFIG: &str = "cleanup.json";
 const LOCK: &str = ".lock";
+#[cfg(not(target_os = "linux"))]
+const WRITES_LOCK: &str = ".writes.lock";
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -254,6 +258,21 @@ pub struct Registration {
     _lease: FileLease,
 }
 
+/// Cross-process publication exclusion for portable workspace writers.
+/// External editors do not participate in this cooperative lock.
+#[cfg(not(target_os = "linux"))]
+pub struct WorkspaceWriteLease {
+    store: ManagedFiles,
+    locked: LockedFile,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl WorkspaceWriteLease {
+    pub fn check_current(&self) -> io::Result<()> {
+        self.store.check_named_lock(WRITES_LOCK, &self.locked)
+    }
+}
+
 impl Registration {
     pub fn record(&self) -> &Record {
         &self.record
@@ -273,33 +292,11 @@ impl ManagedFiles {
     }
 
     fn open_impl(workspace: &Path, create: bool) -> io::Result<Option<Self>> {
-        let workspace_path = std::path::absolute(workspace)?;
-        let workspace = Directory::workspace(&workspace_path)?;
-        let state = match workspace.child(".ssmcp", create, false) {
-            Ok(directory) => directory,
-            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let registry = match state.child(REGISTRY, create, true) {
-            Ok(directory) => directory,
-            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let store = Self {
-            workspace_path,
-            workspace,
-            state,
-            registry,
-        };
-        store.check_attached()?;
+        let Some(store) = Self::open_directories(workspace, create)? else { return Ok(None); };
         if create {
-            match store.registry.open(LOCK, Access::Create, true) {
-                Ok(file) => file.sync_all()?,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    store.registry.open(LOCK, Access::ReadWrite, true)?;
-                }
-                Err(error) => return Err(error),
-            }
+            store.ensure_lock(LOCK)?;
+            #[cfg(not(target_os = "linux"))]
+            store.ensure_lock(WRITES_LOCK)?;
             // An existing configuration is never overwritten, including malformed JSON.
             match store.state.read(CONFIG, CONFIG_BYTES_LIMIT, false) {
                 Ok(_) => {}
@@ -317,6 +314,34 @@ impl ManagedFiles {
             }
         }
         Ok(Some(store))
+    }
+
+    fn open_directories(workspace: &Path, create: bool) -> io::Result<Option<Self>> {
+        let workspace_path = std::path::absolute(workspace)?;
+        let workspace = Directory::workspace(&workspace_path)?;
+        let state = match workspace.child(".ssmcp", create, false) {
+            Ok(directory) => directory,
+            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let registry = match state.child(REGISTRY, create, true) {
+            Ok(directory) => directory,
+            Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let store = Self { workspace_path, workspace, state, registry };
+        store.check_attached()?;
+        Ok(Some(store))
+    }
+
+    fn ensure_lock(&self, name: &str) -> io::Result<()> {
+        match self.registry.open(name, Access::Create, true) {
+            Ok(file) => file.sync_all(),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                self.registry.open(name, Access::ReadWrite, true).map(|_| ())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn check_attached(&self) -> io::Result<()> {
@@ -340,17 +365,33 @@ impl ManagedFiles {
     }
 
     fn check_lock(&self, lock: &LockedFile) -> io::Result<()> {
+        self.check_named_lock(LOCK, lock)
+    }
+
+    fn check_named_lock(&self, name: &str, lock: &LockedFile) -> io::Result<()> {
         self.check_attached()?;
         let expected = FileIdentity::from_file(&lock.0)?;
-        if !storage::same_at(&self.registry, LOCK, &expected)? {
+        if !storage::same_at(&self.registry, name, &expected)? {
             return Err(invalid("managed registry lock identity changed"));
         }
         Ok(())
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn write_lock(&self) -> io::Result<LockedFile> {
+        self.check_attached()?;
+        let locked = LockedFile::acquire(self.registry.open(WRITES_LOCK, Access::ReadWrite, true)?)?;
+        self.check_named_lock(WRITES_LOCK, &locked)?;
+        Ok(locked)
+    }
+
     pub fn config(&self) -> io::Result<CleanupConfig> {
         self.check_attached()?;
-        parse_config(&self.state.read(CONFIG, CONFIG_BYTES_LIMIT, false)?)
+        match self.state.read(CONFIG, CONFIG_BYTES_LIMIT, false) {
+            Ok(bytes) => parse_config(&bytes),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(CleanupConfig::default()),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn set_config(&self, config: &CleanupConfig) -> io::Result<()> {
@@ -529,6 +570,18 @@ impl ManagedFiles {
     fn cleanup_at(&self, dry_run: bool, trigger: &str, now: u64) -> io::Result<CleanupSummary> {
         label(trigger)?;
         let mut summary = CleanupSummary::new(dry_run, trigger, true);
+        // Portable writers take this OS lock before the registry lock as well.
+        // Keep it across the complete identity-check/unlink interval, not merely
+        // around the initial scan. Contention is a skip, never an unbounded wait.
+        #[cfg(not(target_os = "linux"))]
+        let write_lock = match self.write_lock() {
+            Ok(lock) => lock,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                summary.busy = true;
+                return Ok(summary);
+            }
+            Err(error) => return Err(error),
+        };
         let lock = match self.lock() {
             Ok(lock) => lock,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -621,11 +674,9 @@ impl ManagedFiles {
                 summary.decision(&record, "kept", "within age and capacity limits");
                 continue;
             }
-            let reason = if expired {
-                "maximum age"
-            } else {
-                "maximum total bytes"
-            };
+            let reason = if expired { "maximum age" } else { "maximum total bytes" };
+            #[cfg(not(target_os = "linux"))]
+            self.check_named_lock(WRITES_LOCK, &write_lock)?;
             // Reopen and reacquire immediately before deletion. No large scan
             // retains thousands of data-file descriptors or bypasses a new lease.
             let result = self.remove_candidate(&record, &lock, dry_run);
@@ -670,9 +721,7 @@ impl ManagedFiles {
 
     fn open_record(&self, record: &Record) -> io::Result<(Directory, String, File)> {
         let (parent, name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids {
-            return Err(invalid("registered parent directory was replaced"));
-        }
+        if identities != record.parent_ids { return Err(invalid("registered parent directory was replaced")); }
         let file = parent.open(&name, Access::Read, false)?;
         if FileIdentity::from_file(&file)? != record.identity {
             return Err(invalid("registered file was replaced or modified"));
@@ -680,39 +729,66 @@ impl ManagedFiles {
         Ok((parent, name, file))
     }
 
-    fn remove_candidate(
-        &self,
-        record: &Record,
-        lock: &LockedFile,
-        dry_run: bool,
-    ) -> io::Result<()> {
+    fn remove_candidate(&self, record: &Record, lock: &LockedFile, dry_run: bool) -> io::Result<()> {
         let (parent, name, file) = self.open_record(record)?;
+        // This is the same parent-directory flock used by workspace writers.
+        // Acquiring it nonblockingly avoids reversing a blocking lock order.
+        #[cfg(target_os = "linux")]
+        let _publication_lock = parent.publication_lock()?;
         let _lease = LockedFile::acquire(file)?;
         self.check_lock(lock)?;
-        let (current_parent, current_name, identities) =
-            self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids
-            || current_parent.identity()? != parent.identity()?
-            || current_name != name
-            || !storage::same_at(&parent, &name, &record.identity)?
+        let (current_parent, current_name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
+        if identities != record.parent_ids || current_parent.identity()? != parent.identity()?
+            || current_name != name || !storage::same_at(&parent, &name, &record.identity)?
         {
             return Err(invalid("registered path changed before cleanup"));
         }
-        if !dry_run {
-            parent.remove(&name)?;
-        }
+        if !dry_run { parent.remove(&name)?; }
         Ok(())
     }
+}
+
+/// Internal registry and lock files are not ordinary workspace write targets.
+/// cleanup.json deliberately remains editable through the normal file tool.
+pub fn validate_user_write(relative: &Path) -> io::Result<()> {
+    // Leave ordinary filename validation to the existing workspace API. The
+    // narrower portable registry syntax must not reject a legal Unix filename.
+    let mut components = relative.components().filter(|part| !matches!(part, Component::CurDir));
+    if matches!(components.next(), Some(Component::Normal(part))
+        if part.to_str().is_some_and(|part| component_eq(part, ".ssmcp")))
+        && matches!(components.next(), Some(Component::Normal(part))
+            if part.to_str().is_some_and(|part| component_eq(part, REGISTRY)))
+    {
+        return Err(invalid("managed-files metadata must be changed through its configuration API"));
+    }
+    Ok(())
+}
+
+/// Caller resolves the destination parent first, then retries WouldBlock using
+/// its existing bounded write budget. This prepares no default configuration.
+#[cfg(not(target_os = "linux"))]
+pub fn try_workspace_write_lock(
+    root: &Path, relative: &Path,
+) -> io::Result<Option<WorkspaceWriteLease>> {
+    validate_user_write(relative)?;
+    let first = relative.components().find(|part| !matches!(part, Component::CurDir));
+    if !matches!(first, Some(Component::Normal(part))
+        if part.to_str().is_some_and(|part| component_eq(part, ".ssmcp")))
+    {
+        return Ok(None);
+    }
+    let store = ManagedFiles::open_directories(root, true)?
+        .ok_or_else(|| invalid("missing managed workspace"))?;
+    store.ensure_lock(LOCK)?;
+    store.ensure_lock(WRITES_LOCK)?;
+    let locked = store.write_lock()?;
+    Ok(Some(WorkspaceWriteLease { store, locked }))
 }
 
 /// For successful creation hooks which have already captured the creator's FD.
 /// This does not grant a lasting active lease; retain Registration when needed.
 pub fn record_created(
-    root: &Path,
-    relative: &Path,
-    kind: Category,
-    source: &str,
-    expected: &FileIdentity,
+    root: &Path, relative: &Path, kind: Category, source: &str, expected: &FileIdentity,
 ) -> io::Result<Record> {
     let store = ManagedFiles::open(root)?;
     let owner = current_owner();
@@ -819,97 +895,63 @@ fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
 }
 
 fn now() -> io::Result<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(io::Error::other)?
-        .as_secs())
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH).map_err(io::Error::other)?.as_secs())
 }
 
 fn relative_path(path: &Path) -> io::Result<String> {
     let mut parts = Vec::new();
     for component in path.components() {
+        if matches!(component, Component::CurDir) { continue; }
         let Component::Normal(part) = component else {
-            return Err(invalid(
-                "managed path must be relative without dot, parent or prefix components",
-            ));
+            return Err(invalid("managed path must be relative without parent or prefix components"));
         };
-        let part = part
-            .to_str()
-            .ok_or_else(|| invalid("managed path must be UTF-8"))?;
-        if part.is_empty()
-            || part.contains(['/', '\\', '\0', ':'])
-            || part.chars().any(char::is_control)
-        {
+        let part = part.to_str().ok_or_else(|| invalid("managed path must be UTF-8"))?;
+        if part.is_empty() || part.contains(['/', '\\', '\0', ':']) || part.chars().any(char::is_control) {
             return Err(invalid("invalid managed path component"));
         }
         #[cfg(windows)]
         if part.ends_with(['.', ' ']) {
-            return Err(invalid(
-                "Windows managed paths cannot use trailing-dot or trailing-space aliases",
-            ));
+            return Err(invalid("Windows managed paths cannot use trailing-dot or trailing-space aliases"));
         }
         parts.push(part);
     }
     let path = parts.join("/");
-    if path.is_empty() || path.len() > 4096 {
-        return Err(invalid("invalid managed path length"));
-    }
+    if path.is_empty() || path.len() > 4096 { return Err(invalid("invalid managed path length")); }
     Ok(path)
+}
+
+fn component_eq(left: &str, right: &str) -> bool {
+    #[cfg(windows)]
+    { left.eq_ignore_ascii_case(right) }
+    #[cfg(not(windows))]
+    { left == right }
 }
 
 fn protected_path(path: &str) -> bool {
     let path = Path::new(path);
-    if path == Path::new(".ssmcp") {
-        return true;
-    }
-    let Some(name) = path
-        .strip_prefix(".ssmcp")
-        .ok()
-        .and_then(|path| path.components().next())
-    else {
+    if path == Path::new(".ssmcp") { return true; }
+    let Some(name) = path.strip_prefix(".ssmcp").ok().and_then(|path| path.components().next()) else {
         return false;
     };
     let name = name.as_os_str().to_string_lossy().into_owned();
     #[cfg(windows)]
     let name = name.to_lowercase();
     if [
-        REGISTRY,
-        CONFIG,
-        "inputs",
-        "webhooks.json",
-        "skills",
-        "config",
-        "configs",
-        "history",
-        "histories",
-        "sessions",
-        "conversations",
-        "credentials",
-        "secrets",
-        "auth",
-        "auth.json",
-        "tokens",
-        "token.json",
-    ]
-    .contains(&name.as_str())
-    {
+        REGISTRY, CONFIG, "inputs", "webhooks.json", "skills",
+        "config", "configs", "history", "histories", "sessions", "conversations",
+        "credentials", "secrets", "auth", "auth.json", "tokens", "token.json",
+    ].contains(&name.as_str()) {
         return true;
     }
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
-        })
+    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+        name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
+    })
 }
 
 fn label(value: &str) -> io::Result<()> {
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
-        Err(invalid(
-            "managed file labels must be nonempty, bounded text",
-        ))
-    } else {
-        Ok(())
-    }
+        Err(invalid("managed file labels must be nonempty, bounded text"))
+    } else { Ok(()) }
 }
 
 fn random_id() -> io::Result<String> {
@@ -921,3 +963,4 @@ fn random_id() -> io::Result<String> {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
+
