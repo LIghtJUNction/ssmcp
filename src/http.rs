@@ -1883,7 +1883,7 @@ fn append_user_messages(mut response: Value, messages: Vec<Value>) -> Value {
 fn tool_result(result: Result<Value, String>) -> Value {
     match result {
         Ok(value) => crate::backend::result(value),
-        Err(message) => json!({"content":[{"type":"text","text":message}],"isError":true}),
+        Err(message) => crate::backend::error_result(&message),
     }
 }
 

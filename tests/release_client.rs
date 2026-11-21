@@ -34,6 +34,95 @@ impl Drop for Scratch {
     }
 }
 
+#[test]
+fn computer_cli_keeps_json_operation_errors_and_local_diagnostics_distinct() {
+    use std::process::{Command, Output};
+
+    let scratch = Scratch::new();
+    let run = |args: &[&str], initialized: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ssmcp"));
+        command
+            .env_clear()
+            .env("PATH", &scratch.0)
+            .current_dir(&scratch.0)
+            .arg("computer")
+            .args(args);
+        if initialized {
+            command
+                .env("HOME", &scratch.0)
+                .env("XDG_DATA_HOME", &scratch.0)
+                .env("LOCALAPPDATA", &scratch.0);
+        }
+        command.output().unwrap()
+    };
+    let json_line = |output: &Output| {
+        let stdout = std::str::from_utf8(&output.stdout).unwrap();
+        assert!(stdout.ends_with('\n'));
+        assert_eq!(stdout.lines().count(), 1, "{stdout}");
+        assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+        serde_json::from_str::<Value>(stdout).unwrap()
+    };
+
+    let output = run(&["download", "invalid-version", "--json"], true);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        json_line(&output),
+        json!({"isError":true,"content":[{"type":"text","text":
+            "Zuse version must be a stable MAJOR.MINOR.PATCH release"}]})
+    );
+
+    let output = run(&["--json"], true);
+    assert!(output.status.success());
+    let body = json!({"available":false,"managed":false,"reason":"not_installed"});
+    assert_eq!(
+        json_line(&output),
+        json!({"isError":false,"structuredContent":body,"content":[{"type":"text","text":body.to_string()}]})
+    );
+
+    for (args, initialized, diagnostic) in [
+        (&["install", "--json"][..], true, "ssmcp computer --help"),
+        (
+            &["version", "--json"][..],
+            false,
+            "absolute user data directory",
+        ),
+        (
+            &["download", "invalid-version"][..],
+            true,
+            "stable MAJOR.MINOR.PATCH",
+        ),
+    ] {
+        let output = run(args, initialized);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{:?}",
+            output.stderr
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let program = scratch.0.join("zuse");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf '%s\\n' 'API_TOKEN=synthetic-placeholder' 'opaque-placeholder' >&2\nexit 7\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = run(&["version", "--json"], true);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            json_line(&output),
+            json!({"isError":true,"content":[{"type":"text","text":
+                "Zuse --version failed (exit status: 7)"}]})
+        );
+    }
+}
+
 async fn write(workspace: &Workspace, path: &str, text: &str) {
     workspace
         .perform(

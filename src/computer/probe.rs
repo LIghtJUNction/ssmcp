@@ -9,7 +9,7 @@ use tokio::io::AsyncReadExt;
 const OUTPUT_LIMIT: u64 = 4096;
 const DEADLINE: Duration = Duration::from_secs(3);
 
-pub(super) async fn version(path: &Path) -> Result<Value, String> {
+pub(super) async fn version(path: &Path, include_child_stderr: bool) -> Result<Value, String> {
     let (before, bytes) = storage::bytes(path, MAX_EXECUTABLE)?;
     let sha256 = release::digest(&bytes);
     let size = bytes.len();
@@ -48,10 +48,12 @@ pub(super) async fn version(path: &Path) -> Result<Value, String> {
             return Err("Zuse --version exceeded its output limit".to_string());
         }
         if !status.success() {
-            return Err(format!(
-                "Zuse --version failed ({status}): {}",
-                String::from_utf8_lossy(&err)
-            ));
+            let mut message = format!("Zuse --version failed ({status})");
+            if include_child_stderr {
+                message.push_str(": ");
+                message.push_str(&String::from_utf8_lossy(&err));
+            }
+            return Err(message);
         }
         let text = std::str::from_utf8(&out)
             .map_err(|error| error.to_string())?

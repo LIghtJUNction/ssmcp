@@ -20,7 +20,7 @@ async fn run() -> std::process::ExitCode {
     match ssmcp::client::run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            ssmcp::client::report_error(&error.to_string());
+            ssmcp::client::report_run_error(error.as_ref());
             std::process::ExitCode::FAILURE
         }
     }
