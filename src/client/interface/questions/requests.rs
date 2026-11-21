@@ -100,6 +100,7 @@ impl FinishReceipt {
         })
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn human_permission(&self) -> bool {
         self.consumed
             && self.status == FinishStatus::Completed
