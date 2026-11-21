@@ -597,9 +597,24 @@ class Dashboard(Harness):
         front.send(b"\x1b")
         # Both session and display decoders delay an ambiguous Escape prefix.
         # Observe its completed state change before sending the next sequence.
-        front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
-        self.check(self.ui("/display/log_scrollback") == 0,
-                   "End restores live logs and Escape never focuses a hidden shell")
+        front.until(lambda s: "Enter Apply" not in s["rows"][-1] and s["hide_cursor"],
+                    "Escape leaving filter editing")
+        panes = self.ui("/display/panes")
+        navigation = {
+            "focus": self.ui("/display/focus"),
+            "audit_visible": panes["audit"]["visible"],
+            "input_visible": panes["input"]["visible"],
+            "selection_mode": self.ui("/display/selection_mode"),
+            "audit_detail": self.ui("/display/audit/detail"),
+            "filter": self.ui("/display/filter"),
+            "log_scrollback": self.ui("/display/log_scrollback"),
+        }
+        self.check(navigation == {
+            "focus": "audit", "audit_visible": True, "input_visible": False,
+            "selection_mode": False, "audit_detail": False,
+            "filter": {"text": "", "level": "all"}, "log_scrollback": 0,
+        }, "End restores live logs and Escape keeps the audit list in control of input")
+        self.metrics["escape_navigation"] = navigation
         front.send(b"\x1b[5~x")
         front.until(lambda s: "DASH_AUDIT_0699" not in text(s) and "DASH_AUDIT_" in text(s),
                     "coalesced PageUp and text retaining scroll position")
