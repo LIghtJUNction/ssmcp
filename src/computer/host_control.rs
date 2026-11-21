@@ -76,6 +76,7 @@ pub(super) fn input_tool(name: &str) -> bool {
         name,
         "ssmcp.computer.focus"
             | "ssmcp.computer.move"
+            | "ssmcp.computer.move_path"
             | "ssmcp.computer.click"
             | "ssmcp.computer.drag"
             | "ssmcp.computer.key"

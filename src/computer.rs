@@ -246,6 +246,19 @@ fn default_quality() -> u8 {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MovePath {
+    path: Vec<Point>,
+    duration_ms: u32,
+    #[serde(default)]
+    jitter: f64,
+    #[serde(default)]
+    speed_variation: f64,
+    #[serde(default)]
+    seed: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Click {
     x: Option<i32>,
     y: Option<i32>,
@@ -411,6 +424,13 @@ impl Computer {
                 false,
             ),
             tool(
+                "move_path",
+                "Play a continuous pointer path on the Linux client without clicking. Validate all interpolated points before input. On the real desktop the existing local input switch must remain enabled.",
+                json!({"path":{"type":"array","items":point,"minItems":2,"maxItems":64},"duration_ms":{"type":"integer","minimum":20,"maximum":5000},"jitter":{"type":"number","minimum":0,"maximum":5,"default":0},"speed_variation":{"type":"number","minimum":0,"maximum":1,"default":0},"seed":{"type":"integer","minimum":0,"default":0}}),
+                &["path", "duration_ms"],
+                false,
+            ),
+            tool(
                 "click",
                 "Click at the current pointer or optional global logical coordinates. Supply x and y together.",
                 json!({"x":coordinate,"y":coordinate,"button":button,"count":{"type":"integer","minimum":1,"maximum":3,"default":1}}),
@@ -446,6 +466,8 @@ impl Computer {
                 false,
             ),
         ];
+        #[cfg(not(target_os = "linux"))]
+        tools.retain(|descriptor| descriptor["name"] != "ssmcp.computer.move_path");
         for descriptor in &mut tools {
             let name = descriptor["name"].as_str().unwrap_or("");
             if !matches!(
@@ -465,6 +487,9 @@ impl Computer {
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        if !cfg!(target_os = "linux") && name == "ssmcp.computer.move_path" {
+            return Err("continuous pointer paths currently require a Linux client".into());
+        }
         isolated::dispatch(self, name, args).await
     }
 
@@ -2365,7 +2390,19 @@ mod host_handoff_tests {
     async fn remote_host_parameters_cannot_enable_any_input_operation() {
         let computer = computer();
         computer.set_host_input_local(false).unwrap();
-        for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
+        for suffix in [
+            "focus",
+            "move",
+            "move_path",
+            "click",
+            "drag",
+            "key",
+            "type",
+            "scroll",
+        ] {
+            if !cfg!(target_os = "linux") && suffix == "move_path" {
+                continue;
+            }
             let error = computer
                 .perform(
                     &format!("ssmcp.computer.{suffix}"),

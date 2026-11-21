@@ -1086,6 +1086,42 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    #[ignore = "requires Xvfb and xdotool; private display only"]
+    async fn private_pointer_trajectory_reaches_its_endpoint() {
+        let computer = Computer::new(std::env::temp_dir()).unwrap();
+        computer
+            .perform(
+                "ssmcp.computer.desktop_start",
+                json!({"width":640,"height":480}),
+            )
+            .await
+            .unwrap();
+        let r = computer.perform("ssmcp.computer.move_path", json!({
+            "path":[{"x":300,"y":140},{"x":380,"y":220},{"x":300,"y":300},{"x":220,"y":220},{"x":300,"y":140}],
+            "duration_ms":800,"speed_variation":0.3,"jitter":0.75,"seed":42
+        })).await.unwrap();
+        let observed = &r["structuredContent"];
+        assert_eq!(observed["samples"], 101);
+        assert!(observed["delivered"].as_u64().unwrap() >= 50, "{observed}");
+        {
+            let slot = computer.isolated.lock().await;
+            let pointer = slot
+                .as_ref()
+                .unwrap()
+                .computer
+                .text("xdotool", &["getmouselocation", "--shell"])
+                .await
+                .unwrap();
+            assert!(
+                pointer.contains("X=300") && pointer.contains("Y=140"),
+                "{pointer}"
+            );
+        }
+        computer.shutdown().await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
     #[ignore = "requires installed Xvfb, xdotool, wish and dbus-run-session; private display only"]
     async fn private_display_input_capture_and_cleanup() {
         let host_display = std::env::var_os("DISPLAY");

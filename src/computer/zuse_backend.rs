@@ -382,6 +382,15 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
                 Some(json!({"x":point.x,"y":point.y,"coordinate_space":coordinate_space()})),
             )
         }
+        "ssmcp.computer.move_path" if cfg!(target_os = "linux") => {
+            let value: MovePath = parse(args)?;
+            let frames = timed_path(&value)?;
+            let geometry = monitors(computer).await?;
+            for frame in &frames {
+                validate_point(frame.point, &geometry)?;
+            }
+            ("move_path", json!(frames), None)
+        }
         "ssmcp.computer.click" => {
             let value: Click = parse(args)?;
             if !(1..=3).contains(&value.count) {
@@ -495,6 +504,131 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
         object.insert("backend".into(), native["backend"].clone());
     }
     Ok(result(metadata))
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct PointerFrame {
+    point: Point,
+    at_ms: u32,
+}
+
+fn timed_path(value: &MovePath) -> Result<Vec<PointerFrame>, String> {
+    use zuse::motion::{Curve, FunctionalMotion, PathOptions};
+    if !(2..=64).contains(&value.path.len()) || !(20..=5000).contains(&value.duration_ms) {
+        return Err("move_path requires 2–64 points and duration_ms 20..5000".into());
+    }
+    if !(0.0..=5.0).contains(&value.jitter) {
+        return Err("move_path jitter must be 0..5 logical pixels".into());
+    }
+    for &point in &value.path {
+        point.validate()?;
+    }
+    let points = &value.path;
+    let end = points.len() - 1;
+    let closed = points.len() > 3 && points[0] == points[end];
+    let motion = FunctionalMotion::new(
+        |t| {
+            let phase = t * end as f64;
+            let segment = (phase as usize).min(end - 1);
+            let u = phase - segment as f64;
+            let a = if segment == 0 && closed {
+                points[end - 1]
+            } else {
+                points[segment.saturating_sub(1)]
+            };
+            let b = points[segment];
+            let c = points[segment + 1];
+            let d = if segment + 2 > end && closed {
+                points[1]
+            } else {
+                points[(segment + 2).min(end)]
+            };
+            let spline = |a, b, c, d| {
+                let (a, b, c, d) = (f64::from(a), f64::from(b), f64::from(c), f64::from(d));
+                b + 0.5
+                    * u
+                    * ((c - a)
+                        + u * ((2.0 * a - 5.0 * b + 4.0 * c - d)
+                            + u * (-a + 3.0 * b - 3.0 * c + d)))
+            };
+            zuse::motion::Point {
+                x: spline(a.x, b.x, c.x, d.x),
+                y: spline(a.y, b.y, c.y, d.y),
+            }
+        },
+        PathOptions {
+            duration_ms: value.duration_ms,
+            steps: (value.duration_ms / 8).clamp(2, 600),
+            easing: if closed { Curve::Linear } else { Curve::Smooth },
+            jitter: value.jitter,
+            speed_variation: value.speed_variation,
+            seed: value.seed,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    motion
+        .map(|s| {
+            let s = s.map_err(|e| e.to_string())?;
+            let point = Point {
+                x: s.point.x.round() as i32,
+                y: s.point.y.round() as i32,
+            }
+            .validate()?;
+            Ok(PointerFrame {
+                point,
+                at_ms: s.at_ms,
+            })
+        })
+        .collect()
+}
+
+fn validate_timed_frames(frames: &[PointerFrame]) -> Result<(), String> {
+    if !(3..=601).contains(&frames.len())
+        || frames.first().map(|f| f.at_ms) != Some(0)
+        || !frames
+            .last()
+            .is_some_and(|f| (20..=5000).contains(&f.at_ms))
+        || frames
+            .windows(2)
+            .any(|pair| pair[1].at_ms.saturating_sub(pair[0].at_ms) < 8)
+    {
+        return Err("invalid timed pointer frames".into());
+    }
+    for f in frames {
+        f.point.validate()?;
+    }
+    Ok(())
+}
+
+fn play_timed_path(
+    frames: &[PointerFrame],
+    cancellation: &Cancellation,
+    mut move_to: impl FnMut(Point) -> Result<(), String>,
+) -> Result<usize, String> {
+    validate_timed_frames(frames)?;
+    let start = std::time::Instant::now();
+    let mut delivered = 0;
+    for (index, frame) in frames.iter().enumerate() {
+        let due = Duration::from_millis(u64::from(frame.at_ms));
+        let elapsed = start.elapsed();
+        // If a backend stalls, skip expired interior frames instead of
+        // replaying them in a burst. Always keep the endpoints.
+        if index > 0
+            && frames
+                .get(index + 1)
+                .is_some_and(|next| Duration::from_millis(u64::from(next.at_ms)) <= elapsed)
+        {
+            continue;
+        }
+        if let Some(delay) = due.checked_sub(elapsed) {
+            cancellation.delay(delay)?;
+        }
+        cancellation.check()?;
+        move_to(frame.point)?;
+        delivered += 1;
+    }
+    Ok(delivered)
 }
 
 fn validate_key(value: &Key) -> Result<(), String> {
@@ -703,6 +837,13 @@ fn execute(
             cancellation.check()?;
             desktop.move_to(value.x, value.y)?;
             json!({})
+        }
+        "move_path" if cfg!(target_os = "linux") => {
+            let frames: Vec<PointerFrame> = parse(args)?;
+            let delivered = play_timed_path(&frames, cancellation, |point| {
+                desktop.move_to(point.x, point.y)
+            })?;
+            json!({"samples":frames.len(),"delivered":delivered,"coordinate_space":coordinate_space()})
         }
         "click" => {
             #[derive(Deserialize)]
@@ -1137,6 +1278,45 @@ mod wayland_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timed_path_preserves_endpoints_and_bounds() {
+        let mut value = MovePath {
+            path: vec![Point { x: 30, y: 40 }, Point { x: 300, y: 340 }],
+            duration_ms: 240,
+            jitter: 0.5,
+            speed_variation: 0.3,
+            seed: 42,
+        };
+        let frames = timed_path(&value).unwrap();
+        assert_eq!(frames.len(), 31);
+        assert_eq!(frames.first().unwrap().point, value.path[0]);
+        assert_eq!(frames.last().unwrap().point, value.path[1]);
+        assert_eq!(frames.last().unwrap().at_ms, 240);
+        validate_timed_frames(&frames).unwrap();
+        value.jitter = f64::NAN;
+        assert!(timed_path(&value).is_err());
+    }
+
+    #[test]
+    fn timed_worker_does_not_move_after_cancellation() {
+        let point = Point { x: 30, y: 40 };
+        let frames = [
+            PointerFrame { point, at_ms: 0 },
+            PointerFrame { point, at_ms: 250 },
+            PointerFrame { point, at_ms: 500 },
+        ];
+        let cancellation = Cancellation::default();
+        let mut sent = 0;
+        let error = play_timed_path(&frames, &cancellation, |_| {
+            sent += 1;
+            cancellation.cancel();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error, CANCELLED);
+        assert_eq!(sent, 1);
+    }
 
     #[test]
     fn windows_enumeration_issues_the_identity_required_by_native_focus() {
