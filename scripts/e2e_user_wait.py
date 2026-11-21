@@ -123,7 +123,7 @@ class UserWait(InputHistory):
             if entry["agent_id"] == member["agent_id"]
         )
         front.send(HOME + DOWN * index + ENTER)
-        expected = None if member is None else member["agent_id"]
+        expected = "next" if member is None else member["agent_id"]
         self.wait_state(front, lambda state: state["target"] == expected,
                         "the owned fixture did not select its exact recipient")
 
