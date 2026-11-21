@@ -1,19 +1,25 @@
 # SSMCP 0.10.24
 
-## 启动选项和对话
+## 图片预览、输入租约与终端交互
 
-`--input` 选择聊天输入，默认 `terminal`。`--agent` 选择聊天处理方，默认 `next-caller`，由下一次符合条件的工具调用领取消息。用 `--list-harnesses` 查看原生协议，或用 `--load-harness codex` 在启动时加载 Codex 协议。原生尾参放在 `--` 后。只记录了旧协议含义 `--agent` 的会话需要用新选项重建。[客户端输入](client-input.md) · [原生协议加载](agent-entry.md)
+0.10.24 修复带工具调用关联的原生图片在终端丢失预览的问题。原先，图片说明可能被合并到已有工具摘要，但预览只会附加到新建记录，因此界面留下文字而没有图片。现在每张图片使用独立记录，保留原调用和会话归属；同一次调用返回多张图片时，各张预览分别保留。[图像记录实现](../src/client/terminal/events.rs)
 
-`--input none` 关闭所选连接的聊天框和人类问答。命令、已协商的时间工具、独立原生消息和重载仍可使用。聊天启用时，`ssmcp.ui.reply` 按已认证的线程输入回传进度或结果。普通最终回复继续按会话归属和幂等回执保存。旧的结束审批和代理代答入口已退役。[线程消息](thread-messaging.md) · [问题与回复](finish-and-questions.md)
+回归用例建立两个真实调用归属和独立历史，让读者停留在另一个会话，再送达同一调用的两张图片。检查包括预览数据、图片与调用的归属、摘要计数、当前选择与滚动位置，以及空说明不会把图片附到旧卡片。普通工具事件继续沿用现有摘要合并规则。[调用归属回归](../src/client/terminal/events/source_tests.rs)
 
-## 终端和电脑控制
+Unix 的电脑输入租约在拥有者结束时显式解锁。即使子进程暂时继承了同一个打开文件描述，原租约也不会继续占锁。回归测试保留复制句柄，检查租约释放后可以立即重新取得锁，以及关闭旧副本不会释放新租约的锁。[输入租约实现与回归](../src/computer/host_control/storage.rs)
 
-终端批量解码粘贴内容，保留按键顺序、输入限制和草稿。显式选择 Next caller 后，消息仍由下一次符合条件的调用领取。找不到的 `@文件` 保留正文中的原始引用并提示。[输入与引用](client-input.md) · [粘贴回归定义](../src/client/terminal/conversation/tests/paste_batch.rs)
+终端验收也与当前导航行为一致。底部一行显示连接状态和电脑控制开关，审计导航提示显示在面板标题；Escape 验收检查实际面板、焦点、选择模式和后续输入归属。Sessions 中的右击打开对应线程历史，F9 打开诊断日志，Escape 返回原列并保留草稿。帮助页验收检查实际末段内容；显式 `/handoff` 本地上下文导出仍保留。[仪表盘验收](../scripts/e2e_dashboard.py) · [日志导航验收](../scripts/e2e_canvas_logs.py) · [帮助页验收](../scripts/e2e_client_ui.py)
 
-显式切换电脑输入状态最多等待状态锁 2 秒。观察、初始化和自动撤销仍使用 100 毫秒预算。私有桌面分配器释放持有对象时会显式解锁。[状态锁](../src/computer/host_control/storage.rs) · [私有桌面分配锁](../src/computer/isolated/display.rs)
+本版继承 [0.10.23 的锁与跨平台修正](release-notes-0.10.23.md)，以及 [0.10.22 的本地 socket、Agent、线程消息和计时功能](release-notes-0.10.22.md)。0.10.23 的正式 Release 在 Linux 仪表盘验收停止，包发布未执行；其标签继续保留，本版使用新的版本身份。[0.10.23 发布运行](https://github.com/LIghtJUNction/ssmcp/actions/runs/44843331041)
 
-## 验证与发布状态
+## 客户端资源测量
 
-本次准备 0.10.24 源码版本。正式构建、运行验收、发布和安装结果待记录。0.10.23 Linux ARM 的 Dashboard 检查停在 Escape 后固定查找底栏快捷键文字，客户端当时仍在运行。0.10.24 需要复验关闭过滤编辑后光标保持隐藏、焦点留在审计面板的行为。早期粘贴对比只对应各自记录的源码版本。[0.10.23 正式运行](https://github.com/LIghtJUNction/ssmcp/actions/runs/44843331041) · [Dashboard 检查](../scripts/e2e_dashboard.py)
+已保留冻结 0.10.23 候选与本轮基线的 12 次配对测量。六对结果中，候选空闲 CPU 均较低，RSS/PSS 与 40 条短命令批次耗时均略高。每种负载只有三对，数据描述这一轮完整改动的取舍，不用于归因某个单独修改或声明统计显著性。源码、二进制摘要、原始数值、配对范围与未测范围见[历史报告](reports/client-resources-2026-11-21/performance-report.md)和[原始运行表](reports/client-resources-2026-11-21/raw-runs.csv)。
 
-发布工作流延后本版的生产 relay 部署。锁定依赖沿用 0.10.23，版本提交只调整 ssmcp 自身的包版本。[发布流程](releases.md) · [锁文件](../Cargo.lock)
+该测量保留原始 0.10.23 身份，不包含 0.10.24 的图片修复，不能作为本版重新测量的结果。新版资源测量使用独立记录。
+
+## 依赖与部署
+
+本版保持已冻结的依赖提交和源码 gitlink，Cargo.lock 只更新 ssmcp 自身版本。0.10.21、0.10.22、0.10.23 标签和历史验证记录均保持原样。[锁文件](../Cargo.lock)
+
+Release 工作流继续延后生产服务器部署，0.10.24 的 tag 与手动发布均输出 `deploy_server=false`。客户端安装、发布包和生产服务器切换分别记录结果；服务端新增接口随中继单独升级后启用。[发布流程](releases.md) · [部署策略](../.github/workflows/release.yml) · [策略测试](../scripts/test_release.py)

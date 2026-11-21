@@ -452,6 +452,115 @@ async fn native_job_late_output_stays_with_creator_history_and_in_global_logs_an
     runtime.shutdown().await;
 }
 
+#[tokio::test]
+async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_correlation() {
+    use crate::client::interface::history;
+    use crate::runtime::call_scope::Source;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let _serial = HISTORY_FIXTURES.lock().await;
+    let (root, _backend, runtime) = runtime().await;
+    history::with_test_history(root.0.join("image-history"), async {
+        history::record_request("image_fixture_a", "A image request").unwrap();
+        let a_call = verified(&runtime, 71, "123", 'a');
+        let a = a_call.scope(async { Source::capture() }).await;
+        history::release_current().unwrap();
+        history::record_request("image_fixture_b", "B keeps reading").unwrap();
+        let b_call = verified(&runtime, 72, "456", 'b');
+        let b = b_call.scope(async { Source::capture() }).await;
+        let a_history = a.require_owner().unwrap().display_id();
+        let b_history = b.require_owner().unwrap().display_id();
+        assert_ne!(a_history, b_history);
+
+        let mut view = EventView::new();
+        view.set_scope(EventScope::Conversation);
+        view.set_history_owner(Some(b_history.clone()));
+        view.summary_call_started(&a, "ssmcp.fs.read_image");
+        let summary_id = view.events.back().unwrap().id;
+        view.ingest_scoped_event(
+            "message",
+            &json!({"type":"ssmcp.message","text":"B keeps reading this reply"}),
+            b"",
+            b.display(),
+        );
+        let b_id = view.events.back().unwrap().id;
+        assert_ne!(
+            summary_id, b_id,
+            "the correlated call is not the back event"
+        );
+        view.follow = false;
+        view.selected = Some(b_id);
+        let old_scroll = view.scroll;
+
+        let block = json!({"type":"image","mimeType":"image/png",
+            "data":STANDARD.encode(crate::client::input::paste::fixture_png())});
+        let preview = || images::decode(&block, true).unwrap();
+        view.ingest_image(b"", preview(), Some(a.display()));
+        assert_eq!(view.events.len(), 2, "empty image placeholders are skipped");
+        assert!(view.events.iter().all(|event| event.image.is_none()));
+
+        for label in ["first", "second"] {
+            view.ingest_image(
+                format!("[IMAGE] {label}\n").as_bytes(),
+                preview(),
+                Some(a.display()),
+            );
+        }
+        view.summary_call_finished(&a, true);
+
+        let images = view
+            .events
+            .iter()
+            .filter(|event| event.image.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            images.len(),
+            2,
+            "two images from one call retain two previews"
+        );
+        assert_ne!(images[0].id, images[1].id);
+        for (event, label) in images.iter().zip(["first", "second"]) {
+            assert!(event.text.contains(label));
+            assert_eq!(event.meta.history, DisplayHistory::Local(a_history.clone()));
+            assert!(event.meta.scope.as_ref().unwrap().same_call(&a_call));
+            assert_eq!(event.meta.kind, Kind::Tool);
+            assert!(event.image.as_ref().unwrap().native.is_some());
+            assert!(event.tool_group_id.is_none());
+        }
+        let image_ids = images.iter().map(|event| event.id).collect::<Vec<_>>();
+        let summary = view
+            .events
+            .iter()
+            .find(|event| event.id == summary_id)
+            .unwrap();
+        assert!(
+            summary.image.is_none(),
+            "image payloads never replace the logical call row"
+        );
+        assert!(!summary.text.contains("[IMAGE]"));
+        assert_eq!(summary.meta.status, Some(Status::Done));
+        assert_eq!(
+            view.tool_summary_list(&a).unwrap()["groups"][0]["call_count"],
+            1
+        );
+        assert_eq!(view.visible_ids(), vec![b_id]);
+        assert_eq!(view.selected, Some(b_id));
+        assert_eq!(view.scroll, old_scroll);
+        assert!(!view.follow);
+        assert!(view.new_image.is_none());
+
+        view.set_history_owner(Some(a_history));
+        let visible = view.visible_ids();
+        assert!(visible.contains(&summary_id));
+        assert!(image_ids.iter().all(|id| visible.contains(id)));
+        assert!(!visible.contains(&b_id));
+        view.set_history_owner(Some(b_history));
+        assert_eq!(view.visible_ids(), vec![b_id]);
+    })
+    .await;
+    runtime.shutdown().await;
+}
+
 #[test]
 fn late_native_image_uses_its_own_placeholder_and_owner() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
