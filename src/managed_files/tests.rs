@@ -576,3 +576,93 @@ fn cleanup_without_a_registry_preserves_unknown_files_and_does_not_create_metada
     );
     assert!(!root.join(".ssmcp").exists());
 }
+
+#[test]
+fn captured_replacement_is_restored_instead_of_deleted_using_the_old_record() {
+    let root = TestRoot::new("captured-replacement");
+    let manager = ManagedFiles::open(root.path()).unwrap();
+    let relative = ".ssmcp/temporary/candidate.bin";
+    let original = ".ssmcp/temporary/original.bin";
+    let bytes = b"same bytes do not imply the same file";
+    register(&manager, &root, relative, bytes, Category::Temporary);
+    let record = manager.list().unwrap().pop().unwrap();
+    fs::rename(root.join(relative), root.join(original)).unwrap();
+    let replacement = root.create(relative, bytes);
+    let replacement_identity = FileIdentity::from_file(&replacement).unwrap();
+    assert!(!replacement_identity.same_file(&record.identity));
+    drop(replacement);
+
+    // Model the object present at the atomic capture after an external rename.
+    // Calling the actual capture/finish pair avoids failing an earlier preflight.
+    let (parent, name, _) = manager.workspace.parent_with_ids(relative).unwrap();
+    let parent_identity = parent.identity().unwrap();
+    let captured = parent.capture(&name).unwrap();
+    assert!(!root.join(relative).exists());
+    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None) else {
+        panic!("a captured replacement must never be reported as removed");
+    };
+
+    assert_eq!(recovery.original_path, relative);
+    assert!(recovery.restored);
+    assert!(recovery.recovery_path.is_none());
+    assert_eq!(recovery.parent_identity, Some(parent_identity));
+    assert!(!recovery.error.is_empty());
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", windows))]
+    assert!(recovery.restored_path.is_some());
+    if let Some(reported) = recovery.restored_path.as_deref() {
+        assert_eq!(fs::canonicalize(reported).unwrap(), fs::canonicalize(root.join(relative)).unwrap());
+    }
+    assert_eq!(fs::read(root.join(relative)).unwrap(), bytes);
+    assert_eq!(FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(),
+               replacement_identity);
+    assert_eq!(fs::read(root.join(original)).unwrap(), bytes);
+    assert_eq!(FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(),
+               record.identity);
+}
+
+#[test]
+fn captured_replacement_recovery_never_overwrites_a_new_occupant_and_reports_its_location() {
+    let root = TestRoot::new("recovery-conflict");
+    let manager = ManagedFiles::open(root.path()).unwrap();
+    let relative = ".ssmcp/temporary/candidate.bin";
+    let original = ".ssmcp/temporary/original.bin";
+    register(&manager, &root, relative, b"registered X", Category::Temporary);
+    let record = manager.list().unwrap().pop().unwrap();
+    fs::rename(root.join(relative), root.join(original)).unwrap();
+    let replacement = root.create(relative, b"unregistered replacement Y");
+    let replacement_identity = FileIdentity::from_file(&replacement).unwrap();
+    drop(replacement);
+    let (parent, name, _) = manager.workspace.parent_with_ids(relative).unwrap();
+    let parent_identity = parent.identity().unwrap();
+    let captured = parent.capture(&name).unwrap();
+    assert!(!root.join(relative).exists());
+
+    // The original name becomes occupied after capture and before recovery.
+    let occupant = root.create(relative, b"newer occupant Z");
+    let occupant_identity = FileIdentity::from_file(&occupant).unwrap();
+    assert!(!occupant_identity.same_file(&replacement_identity));
+    drop(occupant);
+    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None) else {
+        panic!("a recovery conflict must preserve both the captured object and the new occupant");
+    };
+
+    assert_eq!(recovery.original_path, relative);
+    assert!(!recovery.restored);
+    assert!(recovery.restored_path.is_none());
+    assert_eq!(recovery.parent_identity, Some(parent_identity));
+    assert!(!recovery.error.is_empty());
+    assert_eq!(Path::new(&recovery.recovery_directory).components().count(), 1);
+    let retained = root.join(relative).parent().unwrap()
+        .join(&recovery.recovery_directory).join("captured");
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", windows))]
+    assert!(recovery.recovery_path.is_some());
+    if let Some(reported) = recovery.recovery_path.as_deref() {
+        assert_eq!(fs::canonicalize(reported).unwrap(), fs::canonicalize(&retained).unwrap());
+    }
+    assert_eq!(fs::read(&retained).unwrap(), b"unregistered replacement Y");
+    assert_eq!(FileIdentity::from_file(&File::open(&retained).unwrap()).unwrap(), replacement_identity);
+    assert_eq!(fs::read(root.join(relative)).unwrap(), b"newer occupant Z");
+    assert_eq!(FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(), occupant_identity);
+    assert_eq!(fs::read(root.join(original)).unwrap(), b"registered X");
+    assert_eq!(FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(), record.identity);
+}

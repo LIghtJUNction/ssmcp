@@ -7,12 +7,14 @@
 pub mod command;
 mod config;
 mod native;
+mod retention;
 mod storage;
 #[cfg(test)]
 mod tests;
 
 pub use config::{CleanupConfig, CleanupRule};
 pub use native::{perform, tools};
+pub use retention::RetentionSummary;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -29,6 +31,7 @@ const MAX_RECORDS: usize = 16_384;
 const REGISTRY: &str = "managed-files";
 const CONFIG: &str = "cleanup.json";
 const LOCK: &str = ".lock";
+const RECOVERY_PREFIX: &str = ".ssmcp-cleanup-recovery-";
 #[cfg(not(target_os = "linux"))]
 const WRITES_LOCK: &str = ".writes.lock";
 
@@ -148,6 +151,34 @@ pub struct CleanupDecision {
     pub bytes: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CleanupRecovery {
+    pub original_path: String,
+    pub restored: bool,
+    pub recovery_path: Option<String>,
+    pub restored_path: Option<String>,
+    /// Still identifies the private recovery directory if handle path resolution
+    /// is unavailable. It is never a claim that an old ambient path is current.
+    pub recovery_directory: String,
+    pub parent_identity: Option<ObjectIdentity>,
+    pub error: String,
+}
+
+#[derive(Debug)]
+enum RemovalOutcome {
+    Eligible,
+    Removed { warning: Option<String> },
+    Preserved(CleanupRecovery),
+}
+
+struct PreparedRemoval {
+    parent: Directory,
+    name: String,
+    _lease: LockedFile,
+    #[cfg(target_os = "linux")]
+    _publication_lock: LockedFile,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct CleanupSummary {
     pub enabled: bool,
@@ -170,6 +201,9 @@ pub struct CleanupSummary {
     pub scan_truncated: bool,
     pub errors: Vec<CleanupIssue>,
     pub decisions: Vec<CleanupDecision>,
+    pub recoveries: Vec<CleanupRecovery>,
+    /// Completed registry metadata maintenance, separate from workspace deletion.
+    pub retention: RetentionSummary,
 }
 
 impl CleanupSummary {
@@ -425,50 +459,26 @@ impl ManagedFiles {
     }
 
     pub fn list(&self) -> io::Result<Vec<Record>> {
-        let _lock = self.lock()?;
-        let (names, truncated) = self.registry.names(MAX_RECORDS + 1)?;
-        if truncated {
-            return Err(invalid("managed registry scan limit reached"));
+        let lock = self.lock()?;
+        let scan = retention::scan(self, &lock, false)?;
+        if let Some(issue) = scan.summary.errors.first() {
+            return Err(invalid(&format!("{}: {}", issue.path, issue.error)));
         }
-        let mut records = Vec::new();
-        for name in names {
-            let Some(name) = name.to_str().filter(|name| record_name(name)) else {
-                continue;
-            };
-            records.push(self.read_record(name)?);
-        }
-        records.sort_by(|left, right| {
-            left.relative_path
-                .cmp(&right.relative_path)
-                .then(left.id.cmp(&right.id))
-        });
+        let mut records = scan.records.ok_or_else(|| invalid(
+            "managed registry scan is incomplete or changed; no complete list is available",
+        ))?;
+        records.sort_by(|left, right| left.relative_path.cmp(&right.relative_path).then(left.id.cmp(&right.id)));
         Ok(records)
     }
 
     pub fn register_created(
-        &self,
-        relative: &Path,
-        created: &File,
-        category: Category,
-        source: &str,
-        owner: &str,
+        &self, relative: &Path, created: &File, category: Category, source: &str, owner: &str,
     ) -> io::Result<Registration> {
-        self.register_expected(
-            relative,
-            &FileIdentity::from_file(created)?,
-            category,
-            source,
-            owner,
-        )
+        self.register_expected(relative, &FileIdentity::from_file(created)?, category, source, owner)
     }
 
     fn register_expected(
-        &self,
-        relative: &Path,
-        expected: &FileIdentity,
-        category: Category,
-        source: &str,
-        owner: &str,
+        &self, relative: &Path, expected: &FileIdentity, category: Category, source: &str, owner: &str,
     ) -> io::Result<Registration> {
         let relative_path = relative_path(relative)?;
         label(source)?;
@@ -476,29 +486,21 @@ impl ManagedFiles {
         if category == Category::Temporary
             && (!Path::new(&relative_path).starts_with(".ssmcp") || protected_path(&relative_path))
         {
-            return Err(invalid(
-                "temporary registration is restricted to unprotected .ssmcp files",
-            ));
+            return Err(invalid("temporary registration is restricted to unprotected .ssmcp files"));
         }
         let lock = self.lock()?;
         let (parent, name, parent_ids) = self.workspace.parent_with_ids(&relative_path)?;
         let file = parent.open(&name, Access::Read, false)?;
         let identity = FileIdentity::from_file(&file)?;
         if !identity.same_file(expected) || identity.bytes != expected.bytes {
-            return Err(invalid(
-                "published file no longer matches its creation identity",
-            ));
+            return Err(invalid("published file no longer matches its creation identity"));
         }
         // Windows may finalize last-write time only after the publishing writer
         // closes. Keep that finalized snapshot for cleanup; do not confuse it
         // with a different file at the publication boundary.
         #[cfg(unix)]
-        if identity != *expected {
-            return Err(invalid("published file changed before registration"));
-        }
-        let lease = FileLease {
-            _locked: LockedFile::acquire(file)?,
-        };
+        if identity != *expected { return Err(invalid("published file changed before registration")); }
+        let lease = FileLease { _locked: LockedFile::acquire(file)? };
         let (_, _, current_parent_ids) = self.workspace.parent_with_ids(&relative_path)?;
         if current_parent_ids != parent_ids || !storage::same_at(&parent, &name, &identity)? {
             return Err(invalid("published file changed before registration"));
@@ -569,7 +571,25 @@ impl ManagedFiles {
     }
 
     fn read_record(&self, name: &str) -> io::Result<Record> {
-        parse_record(name, &self.registry.read(name, RECORD_BYTES_LIMIT, true)?)
+        self.read_record_snapshot(name).map(|(record, _)| record)
+    }
+
+    fn read_record_snapshot(&self, name: &str) -> io::Result<(Record, FileIdentity)> {
+        let (bytes, identity) = self.registry.read_identified(name, RECORD_BYTES_LIMIT, true)?;
+        Ok((parse_record(name, &bytes)?, identity))
+    }
+
+    fn prune_record(
+        &self, name: &str, expected: &FileIdentity, lock: &LockedFile,
+    ) -> io::Result<RemovalOutcome> {
+        self.check_lock(lock)?;
+        if !record_name(name) || !storage::same_at(&self.registry, name, expected)? {
+            return Err(invalid("completed metadata identity changed"));
+        }
+        let captured = self.registry.reopen()?.capture(name)?;
+        Ok(finish_isolated(
+            &format!(".ssmcp/{REGISTRY}/{name}"), expected, captured, true, self.check_lock(lock), None,
+        ))
     }
 
     pub fn cleanup(&self, dry_run: bool, trigger: &str) -> io::Result<CleanupSummary> {
@@ -601,35 +621,23 @@ impl ManagedFiles {
         };
         let config = self.config()?;
         summary.enabled = config.enabled;
-        if !config.enabled {
+        if !config.enabled { return Ok(summary); }
+        let scan = retention::scan(self, &lock, !dry_run)?;
+        summary.scanned_records = scan.summary.active_records
+            .saturating_add(scan.summary.completed_records) as u64;
+        summary.kept_changed = scan.summary.invalid_records as u64;
+        summary.scan_truncated = scan.summary.raw_scan_truncated || scan.summary.active_limit_exceeded;
+        summary.errors.extend(scan.summary.errors.iter().cloned());
+        summary.retention = scan.summary;
+        let Some(records) = scan.records else {
+            summary.issue(REGISTRY, "registry view is incomplete or changed; no workspace files removed");
             return Ok(summary);
-        }
-        let (names, truncated) = self.registry.names(MAX_RECORDS + 1)?;
-        if truncated {
-            summary.scan_truncated = true;
-            summary.issue(REGISTRY, "registry scan limit reached; nothing removed");
-            return Ok(summary);
-        }
+        };
         let mut candidates = Vec::new();
         let mut total = 0u64;
-        for filename in names {
-            let Some(filename) = filename.to_str().filter(|name| record_name(name)) else {
-                continue;
-            };
-            let record = match self.read_record(filename) {
-                Ok(record) => record,
-                Err(error) => {
-                    summary.issue(filename, error);
-                    summary.kept_changed += 1;
-                    continue;
-                }
-            };
-            summary.scanned_records += 1;
-            if record.removed_at_unix.is_some() {
-                continue;
-            }
-            if record.category != Category::Temporary
-                || protected_path(&record.relative_path)
+        for record in records {
+            if record.removed_at_unix.is_some() { continue; }
+            if record.category != Category::Temporary || protected_path(&record.relative_path)
                 || !Path::new(&record.relative_path).starts_with(".ssmcp")
             {
                 summary.kept_protected += 1;
@@ -694,28 +702,29 @@ impl ManagedFiles {
             // retains thousands of data-file descriptors or bypasses a new lease.
             let result = self.remove_candidate(&record, &lock, dry_run);
             match result {
-                Ok(()) => {
+                Ok(RemovalOutcome::Eligible) => {
                     total = total.saturating_sub(record.identity.bytes);
-                    if dry_run {
-                        summary.would_remove_files += 1;
-                        summary.would_remove_bytes = summary
-                            .would_remove_bytes
-                            .saturating_add(record.identity.bytes);
-                        summary.decision(&record, "would_remove", reason);
-                    } else {
-                        summary.removed_files += 1;
-                        summary.removed_bytes =
-                            summary.removed_bytes.saturating_add(record.identity.bytes);
-                        summary.decision(&record, "removed", reason);
-                        record.removed_at_unix = Some(now);
-                        let saved = json_bytes(&record).and_then(|bytes| {
-                            self.registry
-                                .write_atomic(&format!("{}.json", record.id), &bytes)
-                        });
-                        if let Err(error) = saved {
-                            summary.issue(&record.relative_path, error);
-                        }
-                    }
+                    summary.would_remove_files += 1;
+                    summary.would_remove_bytes = summary.would_remove_bytes.saturating_add(record.identity.bytes);
+                    summary.decision(&record, "would_remove", reason);
+                }
+                Ok(RemovalOutcome::Removed { warning }) => {
+                    total = total.saturating_sub(record.identity.bytes);
+                    summary.removed_files += 1;
+                    summary.removed_bytes = summary.removed_bytes.saturating_add(record.identity.bytes);
+                    summary.decision(&record, "removed", reason);
+                    if let Some(warning) = warning { summary.issue(&record.relative_path, warning); }
+                    record.removed_at_unix = Some(now);
+                    let saved = json_bytes(&record).and_then(|bytes| {
+                        self.registry.write_atomic(&format!("{}.json", record.id), &bytes)
+                    });
+                    if let Err(error) = saved { summary.issue(&record.relative_path, error); }
+                }
+                Ok(RemovalOutcome::Preserved(recovery)) => {
+                    summary.kept_changed += 1;
+                    summary.issue(&record.relative_path, &recovery.error);
+                    summary.decision(&record, "kept", "isolated object did not match or could not be removed");
+                    summary.recoveries.push(recovery);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     summary.kept_active += 1;
@@ -734,9 +743,7 @@ impl ManagedFiles {
 
     fn open_record(&self, record: &Record) -> io::Result<(Directory, String, File)> {
         let (parent, name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids {
-            return Err(invalid("registered parent directory was replaced"));
-        }
+        if identities != record.parent_ids { return Err(invalid("registered parent directory was replaced")); }
         let file = parent.open(&name, Access::Read, false)?;
         if FileIdentity::from_file(&file)? != record.identity {
             return Err(invalid("registered file was replaced or modified"));
@@ -744,12 +751,7 @@ impl ManagedFiles {
         Ok((parent, name, file))
     }
 
-    fn remove_candidate(
-        &self,
-        record: &Record,
-        lock: &LockedFile,
-        dry_run: bool,
-    ) -> io::Result<()> {
+    fn prepare_removal(&self, record: &Record, lock: &LockedFile) -> io::Result<PreparedRemoval> {
         let (parent, name, file) = self.open_record(record)?;
         // This is the same parent-directory flock used by workspace writers.
         // Acquiring it nonblockingly avoids reversing a blocking lock order.
@@ -757,19 +759,96 @@ impl ManagedFiles {
         let _publication_lock = parent.publication_lock()?;
         let _lease = LockedFile::acquire(file)?;
         self.check_lock(lock)?;
-        let (current_parent, current_name, identities) =
-            self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids
-            || current_parent.identity()? != parent.identity()?
-            || current_name != name
-            || !storage::same_at(&parent, &name, &record.identity)?
+        let (current_parent, current_name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
+        if identities != record.parent_ids || current_parent.identity()? != parent.identity()?
+            || current_name != name || !storage::same_at(&parent, &name, &record.identity)?
         {
             return Err(invalid("registered path changed before cleanup"));
         }
-        if !dry_run {
-            parent.remove(&name)?;
+        Ok(PreparedRemoval {
+            parent, name, _lease,
+            #[cfg(target_os = "linux")]
+            _publication_lock,
+        })
+    }
+
+    fn remove_candidate(
+        &self, record: &Record, lock: &LockedFile, dry_run: bool,
+    ) -> io::Result<RemovalOutcome> {
+        let PreparedRemoval {
+            parent, name, _lease,
+            #[cfg(target_os = "linux")]
+            _publication_lock,
+        } = self.prepare_removal(record, lock)?;
+        if dry_run { return Ok(RemovalOutcome::Eligible); }
+        let captured = parent.capture(&name)?;
+        // Retain the data lease until the captured-object check and unlink.
+        // The publication guard remains held until this method returns.
+        Ok(self.finish_capture(record, captured, Some(_lease)))
+    }
+
+    fn finish_capture(
+        &self, record: &Record, captured: storage::Captured, lease: Option<LockedFile>,
+    ) -> RemovalOutcome {
+        let context = self.check_attached().and_then(|()| {
+            let (_, _, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
+            if identities == record.parent_ids { Ok(()) }
+            else { Err(invalid("registered parent directory changed during isolation")) }
+        });
+        finish_isolated(&record.relative_path, &record.identity, captured, false, context, lease)
+    }
+}
+
+fn finish_isolated(
+    original_path: &str,
+    expected: &FileIdentity,
+    captured: storage::Captured,
+    private: bool,
+    context: io::Result<()>,
+    lease: Option<LockedFile>,
+) -> RemovalOutcome {
+    let removed = context.and_then(|()| captured.remove_matching(expected, private));
+    // Windows may defer final unlink until every open handle closes. Release
+    // the original data handle after the check/unlink, before removing the now
+    // empty directory or restoring an object that must be preserved.
+    drop(lease);
+    match removed {
+        Ok(()) => RemovalOutcome::Removed {
+            warning: captured.remove_empty().err()
+                .map(|error| format!("file removed; empty recovery directory cleanup failed: {error}")),
+        },
+        Err(error) => {
+            let directory_name = captured.directory_name().to_owned();
+            let mut problems = vec![error.to_string()];
+            let parent_identity = match captured.parent_identity() {
+                Ok(identity) => Some(identity),
+                Err(error) => { problems.push(format!("recovery parent identity: {error}")); None }
+            };
+            let recovery_path = match captured.recovery_path() {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(error) => { problems.push(format!("recovery location: {error}")); None }
+            };
+            let original_location = match captured.original_path() {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(error) => { problems.push(format!("restore location: {error}")); None }
+            };
+            let restored = captured.restore_no_replace();
+            if let Some(error) = restored.error { problems.push(format!("restore without replacement: {error}")); }
+            if !restored.recovery_remains
+                && let Err(error) = captured.remove_empty()
+            {
+                problems.push(format!("empty recovery directory cleanup: {error}"));
+            }
+            RemovalOutcome::Preserved(CleanupRecovery {
+                original_path: original_path.to_owned(),
+                restored: restored.restored,
+                recovery_path: if restored.recovery_remains { recovery_path } else { None },
+                restored_path: if restored.restored { original_location } else { None },
+                recovery_directory: directory_name,
+                parent_identity,
+                error: problems.join("; "),
+            })
         }
-        Ok(())
     }
 }
 
@@ -778,17 +857,17 @@ impl ManagedFiles {
 pub fn validate_user_write(relative: &Path) -> io::Result<()> {
     // Leave ordinary filename validation to the existing workspace API. The
     // narrower portable registry syntax must not reject a legal Unix filename.
-    let mut components = relative
-        .components()
-        .filter(|part| !matches!(part, Component::CurDir));
-    if matches!(components.next(), Some(Component::Normal(part))
+    let mut components = relative.components().filter(|part| !matches!(part, Component::CurDir));
+    let managed = matches!(components.next(), Some(Component::Normal(part))
         if part.to_str().is_some_and(|part| component_eq(part, ".ssmcp")))
-        && matches!(components.next(), Some(Component::Normal(part))
-            if part.to_str().is_some_and(|part| component_eq(part, REGISTRY)))
+    ;
+    if !managed { return Ok(()); }
+    let first = components.next();
+    let metadata = matches!(first, Some(Component::Normal(part))
+        if part.to_str().is_some_and(|part| component_eq(part, REGISTRY)));
+    if metadata || first.is_some_and(recovery_component) || components.any(recovery_component)
     {
-        return Err(invalid(
-            "managed-files metadata must be changed through its configuration API",
-        ));
+        return Err(invalid("managed-files metadata must be changed through its configuration API"));
     }
     Ok(())
 }
@@ -931,111 +1010,73 @@ fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
 }
 
 fn now() -> io::Result<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(io::Error::other)?
-        .as_secs())
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH).map_err(io::Error::other)?.as_secs())
 }
 
 fn relative_path(path: &Path) -> io::Result<String> {
     let mut parts = Vec::new();
     for component in path.components() {
-        if matches!(component, Component::CurDir) {
-            continue;
-        }
+        if matches!(component, Component::CurDir) { continue; }
         let Component::Normal(part) = component else {
-            return Err(invalid(
-                "managed path must be relative without parent or prefix components",
-            ));
+            return Err(invalid("managed path must be relative without parent or prefix components"));
         };
-        let part = part
-            .to_str()
-            .ok_or_else(|| invalid("managed path must be UTF-8"))?;
-        if part.is_empty()
-            || part.contains(['/', '\\', '\0', ':'])
-            || part.chars().any(char::is_control)
-        {
+        let part = part.to_str().ok_or_else(|| invalid("managed path must be UTF-8"))?;
+        if part.is_empty() || part.contains(['/', '\\', '\0', ':']) || part.chars().any(char::is_control) {
             return Err(invalid("invalid managed path component"));
         }
         #[cfg(windows)]
         if part.ends_with(['.', ' ']) {
-            return Err(invalid(
-                "Windows managed paths cannot use trailing-dot or trailing-space aliases",
-            ));
+            return Err(invalid("Windows managed paths cannot use trailing-dot or trailing-space aliases"));
         }
         parts.push(part);
     }
     let path = parts.join("/");
-    if path.is_empty() || path.len() > 4096 {
-        return Err(invalid("invalid managed path length"));
-    }
+    if path.is_empty() || path.len() > 4096 { return Err(invalid("invalid managed path length")); }
     Ok(path)
 }
 
 fn component_eq(left: &str, right: &str) -> bool {
     #[cfg(windows)]
-    {
-        left.eq_ignore_ascii_case(right)
-    }
+    { left.eq_ignore_ascii_case(right) }
     #[cfg(not(windows))]
-    {
-        left == right
-    }
+    { left == right }
+}
+
+fn recovery_component(component: Component<'_>) -> bool {
+    component.as_os_str().to_str().is_some_and(|name| {
+        #[cfg(windows)]
+        { name.to_ascii_lowercase().starts_with(RECOVERY_PREFIX) }
+        #[cfg(not(windows))]
+        { name.starts_with(RECOVERY_PREFIX) }
+    })
 }
 
 fn protected_path(path: &str) -> bool {
     let path = Path::new(path);
-    if path == Path::new(".ssmcp") {
-        return true;
-    }
-    let Some(name) = path
-        .strip_prefix(".ssmcp")
-        .ok()
-        .and_then(|path| path.components().next())
-    else {
+    if path.components().any(recovery_component) { return true; }
+    if path == Path::new(".ssmcp") { return true; }
+    let Some(name) = path.strip_prefix(".ssmcp").ok().and_then(|path| path.components().next()) else {
         return false;
     };
     let name = name.as_os_str().to_string_lossy().into_owned();
     #[cfg(windows)]
     let name = name.to_lowercase();
     if [
-        REGISTRY,
-        CONFIG,
-        "inputs",
-        "webhooks.json",
-        "skills",
-        "config",
-        "configs",
-        "history",
-        "histories",
-        "sessions",
-        "conversations",
-        "credentials",
-        "secrets",
-        "auth",
-        "auth.json",
-        "tokens",
-        "token.json",
-    ]
-    .contains(&name.as_str())
-    {
+        REGISTRY, CONFIG, "inputs", "webhooks.json", "skills",
+        "config", "configs", "history", "histories", "sessions", "conversations",
+        "credentials", "secrets", "auth", "auth.json", "tokens", "token.json",
+    ].contains(&name.as_str()) {
         return true;
     }
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
-        })
+    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+        name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
+    })
 }
 
 fn label(value: &str) -> io::Result<()> {
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
-        Err(invalid(
-            "managed file labels must be nonempty, bounded text",
-        ))
-    } else {
-        Ok(())
-    }
+        Err(invalid("managed file labels must be nonempty, bounded text"))
+    } else { Ok(()) }
 }
 
 fn random_id() -> io::Result<String> {

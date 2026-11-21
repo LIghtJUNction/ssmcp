@@ -1,22 +1,17 @@
 //! No-follow, handle-anchored access. No cleanup operation follows a link.
 use super::{FileIdentity, ObjectIdentity, invalid};
-#[cfg(windows)]
-use std::path::PathBuf;
 use std::{
     ffi::OsString,
     fs::File,
     io::{self, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 #[cfg(unix)]
 use std::{
     ffi::{CStr, CString},
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd},
-        unix::{
-            ffi::OsStringExt,
-            fs::{MetadataExt, OpenOptionsExt},
-        },
+        unix::{ffi::OsStringExt, fs::{MetadataExt, OpenOptionsExt}},
     },
 };
 
@@ -34,6 +29,21 @@ pub(super) enum Access {
     Read,
     ReadWrite,
     Create,
+}
+
+/// The source name has been moved into a newly created private directory on
+/// the same filesystem. No deletion may target the old public name afterward.
+pub(super) struct Captured {
+    parent: Directory,
+    directory: Directory,
+    directory_name: String,
+    original_name: String,
+}
+
+pub(super) struct RestoreOutcome {
+    pub restored: bool,
+    pub recovery_remains: bool,
+    pub error: Option<String>,
 }
 
 impl Directory {
@@ -158,7 +168,7 @@ impl Directory {
         Ok((directory, (*name).to_owned(), identities))
     }
 
-    fn reopen(&self) -> io::Result<Self> {
+    pub(super) fn reopen(&self) -> io::Result<Self> {
         #[cfg(unix)]
         {
             // A new open description is intentional: dup shares directory offsets.
@@ -235,6 +245,12 @@ impl Directory {
     }
 
     pub(super) fn read(&self, name: &str, limit: usize, private: bool) -> io::Result<Vec<u8>> {
+        self.read_identified(name, limit, private).map(|(bytes, _)| bytes)
+    }
+
+    pub(super) fn read_identified(
+        &self, name: &str, limit: usize, private: bool,
+    ) -> io::Result<(Vec<u8>, FileIdentity)> {
         let mut file = self.open(name, Access::Read, private)?;
         let before = FileIdentity::from_file(&file)?;
         if file.metadata()?.len() > limit as u64 {
@@ -249,7 +265,7 @@ impl Directory {
             return Err(invalid("managed metadata changed while reading"));
         }
         verify_file(&file, private)?;
-        Ok(bytes)
+        Ok((bytes, before))
     }
 
     pub(super) fn write_new(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
@@ -307,9 +323,108 @@ impl Directory {
             Ok(())
         }
         #[cfg(windows)]
+        { self.dir.remove_file(name) }
+    }
+
+    fn private_child_new(&self, name: &str) -> io::Result<Self> {
+        single_name(name)?;
+        #[cfg(unix)]
         {
-            self.dir.remove_file(name)
+            let name = CString::new(name).map_err(io::Error::other)?;
+            if unsafe { libc::mkdirat(self.file.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
         }
+        #[cfg(windows)]
+        crate::platform::windows::create_private_directory(&self.path.join(name))?;
+        self.child(name, false, true)
+    }
+
+    fn move_to(&self, from: &str, to_directory: &Self, to: &str) -> io::Result<()> {
+        single_name(from)?;
+        single_name(to)?;
+        #[cfg(unix)]
+        {
+            let from = CString::new(from).map_err(io::Error::other)?;
+            let to = CString::new(to).map_err(io::Error::other)?;
+            if unsafe {
+                libc::renameat(self.file.as_raw_fd(), from.as_ptr(),
+                    to_directory.file.as_raw_fd(), to.as_ptr())
+            } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(windows)]
+        { self.dir.rename(from, &to_directory.dir, to) }
+    }
+
+    fn remove_directory(&self, name: &str) -> io::Result<()> {
+        single_name(name)?;
+        #[cfg(unix)]
+        {
+            let name = CString::new(name).map_err(io::Error::other)?;
+            if unsafe {
+                libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR)
+            } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(windows)]
+        { self.dir.remove_dir(name) }
+    }
+
+    /// Used only for a recovery receipt, never as authority for a file mutation.
+    fn actual_path(&self) -> io::Result<PathBuf> {
+        #[cfg(target_os = "linux")]
+        { std::fs::read_link(format!("/proc/self/fd/{}", self.file.as_raw_fd())) }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            let mut bytes = [0u8; libc::PATH_MAX as usize];
+            if unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETPATH, bytes.as_mut_ptr()) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let end = bytes.iter().position(|byte| *byte == 0)
+                .ok_or_else(|| invalid("directory recovery path was not terminated"))?;
+            Ok(PathBuf::from(OsString::from_vec(bytes[..end].to_vec())))
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+            let file = self.dir.try_clone()?.into_std_file();
+            let mut text = vec![0u16; 32_768];
+            let length = unsafe {
+                GetFinalPathNameByHandleW(file.as_raw_handle(), text.as_mut_ptr(), text.len() as u32, 0)
+            };
+            if length == 0 { return Err(io::Error::last_os_error()); }
+            if length as usize >= text.len() { return Err(invalid("directory recovery path is too long")); }
+            Ok(PathBuf::from(String::from_utf16(&text[..length as usize]).map_err(io::Error::other)?))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", windows)))]
+        { Err(io::Error::new(io::ErrorKind::Unsupported, "directory handle path unavailable")) }
+    }
+
+    pub(super) fn capture(self, name: &str) -> io::Result<Captured> {
+        single_name(name)?;
+        let directory_name = format!("{}{}", super::RECOVERY_PREFIX, super::random_id()?);
+        let directory = self.private_child_new(&directory_name)?;
+        let capture = Captured {
+            parent: self, directory, directory_name, original_name: name.to_owned(),
+        };
+        // The destination is inside a new EXCL-created, private, empty directory.
+        // rename is atomic and both directories are on the same filesystem.
+        if let Err(error) = capture.parent.move_to(name, &capture.directory, "captured") {
+            let location = capture.directory.actual_path().ok();
+            if let Err(cleanup) = capture.remove_empty() {
+                return Err(io::Error::other(format!(
+                    "{error}; empty recovery directory retained at {location:?}: {cleanup}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(capture)
     }
 
     pub(super) fn names(&self, limit: usize) -> io::Result<(Vec<OsString>, bool)> {
@@ -370,6 +485,112 @@ impl Directory {
             }
             Ok((names, false))
         }
+    }
+}
+
+impl Captured {
+    pub(super) fn remove_matching(&self, expected: &FileIdentity, private: bool) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        let _publication = self.directory.publication_lock()?;
+        let file = self.directory.open("captured", Access::Read, private)?;
+        if FileIdentity::from_file(&file)? != *expected
+            || !same_at(&self.directory, "captured", expected)?
+        {
+            return Err(invalid("isolated object does not match the registered file"));
+        }
+        // Only the verified object in the private isolation directory is unlinked.
+        // A new file at original_name is never touched.
+        self.directory.remove("captured")
+    }
+
+    pub(super) fn recovery_path(&self) -> io::Result<PathBuf> {
+        Ok(self.directory.actual_path()?.join("captured"))
+    }
+
+    pub(super) fn original_path(&self) -> io::Result<PathBuf> {
+        Ok(self.parent.actual_path()?.join(&self.original_name))
+    }
+
+    pub(super) fn directory_name(&self) -> &str { &self.directory_name }
+
+    pub(super) fn parent_identity(&self) -> io::Result<ObjectIdentity> {
+        self.parent.identity()
+    }
+
+    pub(super) fn restore_no_replace(&self) -> RestoreOutcome {
+        #[cfg(target_os = "linux")]
+        let result = {
+            let from = c"captured";
+            let to = CString::new(self.original_name.as_str()).expect("checked single component");
+            let result = unsafe {
+                libc::syscall(libc::SYS_renameat2, self.directory.file.as_raw_fd(), from.as_ptr(),
+                    self.parent.file.as_raw_fd(), to.as_ptr(), libc::RENAME_NOREPLACE)
+            };
+            if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+        };
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        let result = {
+            let from = c"captured";
+            let to = CString::new(self.original_name.as_str()).expect("checked single component");
+            let result = unsafe {
+                libc::renameatx_np(self.directory.file.as_raw_fd(), from.as_ptr(),
+                    self.parent.file.as_raw_fd(), to.as_ptr(), libc::RENAME_EXCL)
+            };
+            if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+        {
+            // On these platforms an exclusive hard link restores regular files.
+            // No replace/copy fallback is allowed. Nonregular objects or a
+            // filesystem without hard links remain intact in recovery storage.
+            let linked = self.restore_link();
+            return match linked {
+                Ok(()) => match self.directory.remove("captured") {
+                    Ok(()) => RestoreOutcome { restored: true, recovery_remains: false, error: None },
+                    Err(error) => RestoreOutcome {
+                        restored: true, recovery_remains: true,
+                        error: Some(format!("restored link; isolated link remains: {error}")),
+                    },
+                },
+                Err(error) => RestoreOutcome {
+                    restored: false, recovery_remains: true, error: Some(error.to_string()),
+                },
+            };
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+        match result {
+            Ok(()) => RestoreOutcome { restored: true, recovery_remains: false, error: None },
+            Err(error) => RestoreOutcome {
+                restored: false, recovery_remains: true, error: Some(error.to_string()),
+            },
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+    fn restore_link(&self) -> io::Result<()> {
+        // This refuses symlinks and special files; their recovery copy stays put.
+        let _file = self.directory.open("captured", Access::Read, false)?;
+        #[cfg(windows)]
+        { self.directory.dir.hard_link("captured", &self.parent.dir, &self.original_name) }
+        #[cfg(unix)]
+        {
+            let to = CString::new(self.original_name.as_str()).expect("checked single component");
+            if unsafe {
+                libc::linkat(self.directory.file.as_raw_fd(), c"captured".as_ptr(),
+                    self.parent.file.as_raw_fd(), to.as_ptr(), 0)
+            } != 0 { return Err(io::Error::last_os_error()); }
+            Ok(())
+        }
+    }
+
+    pub(super) fn remove_empty(self) -> io::Result<()> {
+        let expected = self.directory.identity()?;
+        let current = self.parent.child(&self.directory_name, false, true)?;
+        if current.identity()? != expected { return Err(invalid("recovery directory identity changed")); }
+        drop(current);
+        drop(self.directory);
+        // On Windows the open directory handle must be closed before rmdir.
+        self.parent.remove_directory(&self.directory_name)
     }
 }
 
