@@ -5,7 +5,7 @@ use crate::{
     client::interface::history,
     output::OutputStore,
     runtime::Runtime,
-    wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution},
+    wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution, Operation},
 };
 use std::{
     path::{Path, PathBuf},
@@ -367,6 +367,237 @@ async fn lifecycle_duplicates_do_not_count_but_new_poll_requests_do() {
         assert!(view.take_tool_summary_reminder(&call).is_none());
     })
     .await;
+}
+
+fn read_result(stdout: &str, stderr: &str) -> Value {
+    crate::backend::result(json!({
+        "job_id":"reader-job", "running":false, "exit_code":0,
+        "stdout":stdout, "stderr":stderr,
+        "stdout_cursor":stdout.len(), "stderr_cursor":stderr.len(),
+        "stdout_eof":true, "stderr_eof":true,
+        "stdout_truncated":false, "stderr_truncated":false,
+        "stdout_base64":"encoded-stdout-must-not-be-shown",
+        "stderr_base64":"encoded-stderr-must-not-be-shown",
+        "snapshot":{
+            "command":["private-command-must-not-be-shown"],
+            "cwd":"/private/cwd-must-not-be-shown",
+            "stdout":{"artifact":{"id":"stdout-artifact", "path":"/private/stdout"}},
+            "stderr":{"artifact":{"id":"stderr-artifact", "path":"/private/stderr"}}
+        }
+    }))
+}
+
+fn export_exec_read_fixture(view: &mut EventView, phase: &str) {
+    let Some(root) = std::env::var_os("SSMCP_EXEC_READ_FIXTURE") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    std::fs::create_dir_all(&root).unwrap();
+    let ui = Ui {
+        color: true,
+        ..Ui::default()
+    };
+    // Reserve one row for the fixture label within the 120 x 30 capture.
+    let rows = view.render(120, 29, &ui, true);
+    std::fs::write(
+        root.join(format!("{phase}.ansi")),
+        format!(
+            "\x1b[2J\x1b[HSSMCP exec.read renderer fixture: {phase}\r\n{}\x1b[0m",
+            rows.join("\r\n")
+        ),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn exec_read_native_result_expands_without_replaying_folded_output() {
+    let fixture = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let call = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let mut view = new_view(&call);
+        let job = fixture.runtime.perform(Operation::CallTool {
+            name: "ssmcp.exec.start".into(),
+            arguments: json!({"command":["/bin/sh", "-c", "printf 'reader-stdout\\nAPI_TOKEN=fixture-token-value\\n'; printf 'reader-stderr\\n' >&2"]}),
+        }).await.unwrap();
+        let job_id = &job["structuredContent"]["job_id"];
+        let finished = fixture.runtime.perform(Operation::CallTool {
+            name: "ssmcp.exec.wait".into(),
+            arguments: json!({"job_id":job_id,"wait_ms":5000}),
+        }).await.unwrap();
+        assert_eq!(finished["structuredContent"]["running"], false);
+        view.summary_call_started(&call, "ssmcp.exec.read");
+        let id = view.events[0].id;
+        // Populate the local projection with the actual native MCP envelope.
+        let result = call.clone().scope(fixture.runtime.perform(Operation::CallTool {
+            name: "ssmcp.exec.read".into(),
+            arguments: json!({"job_id":job_id}),
+        })).await.unwrap();
+        let original = result.clone();
+        assert!(result["structuredContent"]["stdout"].as_str().unwrap().contains("fixture-token-value"));
+        assert!(view.summary_exec_read_result(&call, &result));
+        view.summary_call_finished(&call, true);
+        assert_eq!(result, original);
+        assert_eq!(view.events.len(), 1);
+        assert_eq!(view.events[0].id, id);
+        assert!(view.events[0].meta.keys.is_empty());
+        assert_eq!(view.events[0].meta.status, Some(Status::Done));
+        let ui = Ui { color: false, ..Ui::default() };
+        for width in [48, 120] {
+            let folded = view.render(width, 24, &ui, true).join("\n");
+            assert!(folded.contains("ssmcp.exec.read"), "{folded}");
+            assert!(folded.contains("stdout cursor=44"), "{folded}");
+            assert!(folded.contains("stderr cursor=14"), "{folded}");
+            assert!(!folded.contains("reader-stdout"), "{folded}");
+            assert!(!folded.contains("reader-stderr"), "{folded}");
+            assert!(!folded.contains("fixture-token-value"), "{folded}");
+        }
+        assert!(view.open());
+        let expanded = view.render(120, 30, &ui, true).join("\n");
+        assert!(expanded.contains("reader-stdout"), "{expanded}");
+        assert!(expanded.contains("reader-stderr"), "{expanded}");
+        assert!(expanded.contains("eof=true truncated=false"), "{expanded}");
+        assert!(expanded.contains("API_TOKEN=[redacted]"), "{expanded}");
+        assert!(!expanded.contains("fixture-token-value"), "{expanded}");
+        assert!(view.back());
+        let saved = serde_json::to_value(view.reload_display()).unwrap();
+        let mut restored = new_view(&call);
+        restored.restore_reload_display(serde_json::from_value(saved).unwrap());
+        let folded = restored.render(120, 30, &ui, true).join("\n");
+        assert!(!folded.contains("reader-stdout"), "{folded}");
+        assert!(restored.open());
+        let expanded = restored.render(120, 30, &ui, true).join("\n");
+        assert!(expanded.contains("reader-stdout"), "{expanded}");
+        assert!(expanded.contains("reader-stderr"), "{expanded}");
+        assert!(!expanded.contains("fixture-token-value"), "{expanded}");
+
+        // The same details and two-line preview also work inside a tool window.
+        let group = group_id(&view, &call);
+        view.tool_summary_set(&call, &group, "Inspect command output", Some(0)).unwrap();
+        let group = view.tool_groups()[0].clone();
+        view.set_tool_expanded(&group, true);
+        view.selected_group = None;
+        view.selected = Some(id);
+        let folded = view.render(120, 30, &ui, true).join("\n");
+        assert!(folded.contains("stdout cursor=44"), "{folded}");
+        assert!(!folded.contains("reader-stdout"), "{folded}");
+        assert!(!folded.contains("reader-stderr"), "{folded}");
+        export_exec_read_fixture(&mut view, "collapsed");
+        assert!(view.open());
+        let expanded = view.render(120, 30, &ui, true).join("\n");
+        assert!(expanded.contains("reader-stdout"), "{expanded}");
+        assert!(expanded.contains("reader-stderr"), "{expanded}");
+        assert!(expanded.contains("API_TOKEN=[redacted]"), "{expanded}");
+        assert!(!expanded.contains("fixture-token-value"), "{expanded}");
+        export_exec_read_fixture(&mut view, "expanded");
+    }).await;
+    fixture.runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn exec_read_result_uses_current_call_identity_and_replaces_its_own_details() {
+    let fixture = Fixture::new().await;
+    let other = Fixture::new().await;
+    history::with_test_history(fixture.root.join("history"), async {
+        let creator = source(&fixture.runtime, 1, "123", None, "same-label").await;
+        let reader = source(&fixture.runtime, 2, "123", None, "same-label").await;
+        // Same request/display identity on a different live connection.
+        let foreign = source(&other.runtime, 2, "123", None, "same-label").await;
+        let mut view = new_view(&creator);
+        view.summary_call_started(&creator, "ssmcp.exec.start");
+        view.summary_call_started(&reader, "ssmcp.exec.read");
+        let reader_id = view.events[1].id;
+        view.summary_call_started(&foreign, "ssmcp.exec.read");
+        let selected = view.selected;
+        let original = read_result("only-current-reader\n", "");
+        assert!(!view.summary_exec_read_result(&creator, &original));
+        assert!(view.summary_exec_read_result(&reader, &original));
+        assert_eq!(view.events.len(), 3);
+        assert_eq!(view.events[1].id, reader_id);
+        assert_eq!(view.selected, selected);
+        assert!(view.events[1].text.contains("only-current-reader"));
+        assert!(!view.events[0].text.contains("only-current-reader"));
+        assert!(!view.events[2].text.contains("only-current-reader"));
+        assert!(view.events[1].meta.keys.is_empty());
+        assert!(view.summary_exec_read_result(&reader, &read_result("new-page\n", "")));
+        assert!(!view.events[1].text.contains("only-current-reader"));
+        assert_eq!(view.events[1].text.matches("new-page").count(), 1);
+        let missing = source(&fixture.runtime, 3, "123", None, "same-label").await;
+        assert!(!view.summary_exec_read_result(&missing, &original));
+        assert!(!view.summary_exec_read_result(&Source::capture(), &original));
+        assert_eq!(view.events.len(), 3);
+        assert_eq!(
+            view.bytes,
+            view.events
+                .iter()
+                .map(super::super::Event::retained_bytes)
+                .sum::<usize>()
+                + view
+                    .summary_groups
+                    .iter()
+                    .map(Group::retained_bytes)
+                    .sum::<usize>()
+        );
+    })
+    .await;
+}
+
+#[test]
+fn exec_read_details_are_redacted_bounded_and_exclude_encoded_and_snapshot_bodies() {
+    let output = format!(
+        "safe-prefix\nAPI_TOKEN=private-token-value\n{}\nsafe-tail\n",
+        "🦀".repeat(40_000)
+    );
+    let original = read_result(&output, "password=private-password\nordinary-stderr\n");
+    let (detail, truncated) = exec_read_detail(&original).unwrap();
+    assert!(truncated);
+    assert!(detail.len() <= super::super::MAX_DETAIL);
+    assert!(detail.contains("safe-prefix") && detail.contains("safe-tail"));
+    assert!(detail.contains("ordinary-stderr"));
+    assert!(detail.contains("preview truncated"));
+    assert!(detail.contains("artifact=stdout-artifact"));
+    assert!(detail.contains("artifact=stderr-artifact"));
+    assert!(detail.contains("[redacted]"));
+    for forbidden in [
+        "private-token-value",
+        "private-password",
+        "base64",
+        "encoded-stdout",
+        "encoded-stderr",
+        "private-command",
+        "/private/",
+    ] {
+        assert!(!detail.contains(forbidden), "{forbidden}");
+    }
+    assert!(
+        original["structuredContent"]["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("private-token-value")
+    );
+    assert_eq!(
+        original["structuredContent"]["stderr_base64"],
+        "encoded-stderr-must-not-be-shown"
+    );
+}
+
+#[test]
+fn exec_read_details_keep_empty_stream_state_and_reject_failed_or_unstructured_results() {
+    let mut original = read_result("", "");
+    original["structuredContent"]["stdout_truncated"] = true.into();
+    original["structuredContent"]["stderr_eof"] = false.into();
+    let (detail, truncated) = exec_read_detail(&original).unwrap();
+    assert!(!truncated);
+    assert!(detail.contains("stdout cursor=0 eof=true truncated=true"));
+    assert!(detail.contains("stderr cursor=0 eof=false truncated=false"));
+    assert_eq!(detail.matches("(empty)").count(), 2);
+    original["isError"] = true.into();
+    assert!(exec_read_detail(&original).is_none());
+    assert!(
+        exec_read_detail(&json!({"content":[{"type":"text", "text":"forged output"}]})).is_none()
+    );
+    original["isError"] = false.into();
+    original["structuredContent"]["stdout_cursor"] = "malformed".into();
+    assert!(exec_read_detail(&original).is_none());
 }
 
 #[tokio::test]

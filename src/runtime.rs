@@ -797,6 +797,11 @@ impl Runtime {
         };
         // Remove forged reserved fields before any response is archived or spilled.
         crate::client::interface::tool_summary::strip_metadata(&mut value);
+        // Only this verified native route may retain read output for local
+        // expansion. Generic RPC/audit responses remain metadata-only.
+        if tool.provider == Provider::Exec && tool.native_name == "ssmcp.exec.read" {
+            crate::client::terminal::tool_summary_exec_read_result(&source, &value);
+        }
         if crate::client::terminal::active()
             && let Some(content) = value.get("content").and_then(Value::as_array)
         {

@@ -182,6 +182,58 @@ fn counted(name: &str) -> bool {
         )
 }
 
+fn exec_read_detail(value: &Value) -> Option<(String, bool)> {
+    if value["isError"] == true {
+        return None;
+    }
+    let read = value.get("structuredContent")?;
+    let job = display_id(read.get("job_id")?.as_str()?);
+    let running = read.get("running")?.as_bool()?;
+    let exit_code = read.get("exit_code")?;
+    if !exit_code.is_null() && !exit_code.is_i64() {
+        return None;
+    }
+    let mut metadata = Vec::new();
+    let mut streams = Vec::new();
+    for stream in ["stdout", "stderr"] {
+        let text = read.get(stream)?.as_str()?;
+        let cursor = read.get(format!("{stream}_cursor"))?.as_u64()?;
+        let eof = read.get(format!("{stream}_eof"))?.as_bool()?;
+        let truncated = read.get(format!("{stream}_truncated"))?.as_bool()?;
+        let artifact = read["snapshot"][stream]["artifact"]["id"]
+            .as_str()
+            .map(display_id)
+            .unwrap_or_else(|| "none".into());
+        // These two fixed metadata lines are the folded preview. Output only
+        // follows them, so reading a job does not replay its body while folded.
+        metadata.push(format!(
+            "{stream} cursor={cursor} eof={eof} truncated={truncated} artifact={artifact}"
+        ));
+        // Strip terminal controls before redaction, then retain only this
+        // plaintext stream. Never copy encoded bytes or arbitrary snapshot fields.
+        let safe = crate::audit::event(Value::String(super::unstyled(text)));
+        let text = safe.as_str().unwrap_or_default();
+        streams.push(format!(
+            "[{}]\n{}\n",
+            stream.to_ascii_uppercase(),
+            if text.is_empty() { "(empty)" } else { text }
+        ));
+    }
+    let text = format!(
+        "[RUN] ssmcp.exec.read\n{}\njob={job} running={running} exit_code={exit_code}\n{}",
+        metadata.join("\n"),
+        streams.join("")
+    );
+    Some(super::retained_text(text.as_bytes()))
+}
+
+fn display_id(id: &str) -> String {
+    id.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        .take(128)
+        .collect()
+}
+
 impl EventView {
     pub(in crate::client::terminal) fn summary_call_started(
         &mut self,
@@ -293,6 +345,42 @@ impl EventView {
                 event.cache = None;
             }
         }
+    }
+
+    pub(in crate::client::terminal) fn summary_exec_read_result(
+        &mut self,
+        source: &Source,
+        value: &Value,
+    ) -> bool {
+        let Some(call) = source.call.as_ref() else {
+            return false;
+        };
+        let Some(id) = self
+            .summary_calls
+            .iter()
+            .find(|item| {
+                item.connection == call.connection() && item.request_id == call.request_id()
+            })
+            .map(|item| item.event_id)
+        else {
+            return false;
+        };
+        let Some(event) = self.events.iter_mut().find(|event| {
+            event.id == id && !event.historical && event.summary == "[RUN] ssmcp.exec.read"
+        }) else {
+            return false;
+        };
+        let Some((text, truncated)) = exec_read_detail(value) else {
+            return false;
+        };
+        // Keep the accepted caller's existing row, group and selection. Adding
+        // job keys here would merge the reader into the job creator's card.
+        event.text = text;
+        event.lines = event.text.lines().count().max(1);
+        event.truncated = truncated;
+        event.cache = None;
+        self.prune();
+        true
     }
 
     pub(super) fn summary_observer_event(&self, meta: &Meta) -> bool {

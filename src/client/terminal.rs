@@ -688,6 +688,23 @@ pub(crate) fn tool_summary_call_finished(
     state.dirty = true;
 }
 
+/// A display-only copy from the host's verified native Exec read route.
+pub(crate) fn tool_summary_exec_read_result(
+    source: &crate::runtime::call_scope::Source,
+    value: &serde_json::Value,
+) {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return;
+    };
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if state.events.summary_exec_read_result(source, value) {
+        state.dirty = true;
+    }
+}
+
 pub(crate) fn tool_summary_list(
     source: &crate::runtime::call_scope::Source,
 ) -> Result<serde_json::Value, String> {
