@@ -183,6 +183,10 @@ pub fn result(value: Value) -> Value {
     output
 }
 
+pub(crate) fn error_result(message: &str) -> Value {
+    json!({"content":[{"type":"text","text":message}],"isError":true})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,7 +28,9 @@ ssmcp computer uninstall INSTALLATION_ID_FROM_REPLY --json
 
 将示例中的 ID 占位符替换为前一步真实返回的值。省略子命令等同于 `version`。下载也可使用 `ssmcp computer download VERSION --json`，其中 VERSION 必须是稳定版的 `MAJOR.MINOR.PATCH` 或 `vMAJOR.MINOR.PATCH`。不指定版本时请求官方最新稳定版。
 
-`--json` 输出完整 MCP 结果；默认输出结果正文。下载结果正文中读取 `download_id`，安装结果正文中读取 `installation_id` 与可执行文件 `path`。这些命令不会自动把后续步骤串起来。SSMCP 自身的版本仍由 `ssmcp --version` 查询。
+`--json` 将完整 MCP 结果作为单行 JSON 写入 stdout。操作失败时，结果含 `isError: true` 和错误说明，进程以非零状态退出。命令语法和管理器初始化错误以非零状态退出，诊断写入 stderr。未安装 Zuse 时，版本查询仍成功并返回 `available: false`。
+
+省略 `--json` 时，成功命令输出结果正文。下载结果正文中读取 `download_id`，安装结果正文中读取 `installation_id` 与可执行文件 `path`。这些命令由调用方逐条执行。SSMCP 自身的版本仍由 `ssmcp --version` 查询。
 
 ## 版本、来源与平台
 
