@@ -267,7 +267,7 @@ class Composer(Dashboard):
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         selected = self.ui("/display/conversation")
-        self.check(selected["target"] == (None if member is None else member["agent_id"])
+        self.check(selected["target"] == ("next" if member is None else member["agent_id"])
                    and selected["native_recipient"] is None,
                    "Enter selects the exact steering recipient and closes Sessions")
         self.command(front, "/queue")
