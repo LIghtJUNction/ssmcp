@@ -1,5 +1,6 @@
 """Publication invariants: reject wrong tags, incomplete artifacts and collisions."""
 
+import base64
 import contextlib
 import json
 import io
@@ -17,6 +18,7 @@ from unittest import mock
 import urllib.error
 import zipfile
 
+import bump_release
 import release
 
 
@@ -615,6 +617,124 @@ class ReleaseTests(unittest.TestCase):
                 updated = (self.root / "Cargo.lock").read_text()
                 self.assertIn('name = "ssmcp"\nversion = "' + expected + '"', updated)
                 self.assertIn('name = "fixture"\nversion = "0.5.9"', updated)
+
+    @contextmanager
+    def bump_origin(self):
+        with tempfile.TemporaryDirectory(prefix="ssmcp-bump-origin-") as directory:
+            remote = Path(directory)
+            self.git("init", "--bare", "--quiet", "--template=", str(remote))
+            self.git("remote", "add", "origin", str(remote))
+            self.git("push", "--quiet", "origin", "main")
+            yield remote
+
+    def remote_commit(self, remote, ref="refs/heads/main"):
+        return subprocess.check_output(
+            ["git", "--git-dir", str(remote), "rev-parse", ref],
+            text=True, env=self.git_env
+        ).strip()
+
+    def test_bump_workflow_none_current_preserves_v25_without_an_empty_commit(self):
+        for name in ("Cargo.toml", "Cargo.lock"):
+            path = self.root / name
+            path.write_text(path.read_text().replace("0.5.0", "0.10.25"))
+        self.git("commit", "--quiet", "-am", "current v25 fixture")
+        baseline = self.git("rev-parse", "HEAD")
+        before = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
+        with self.bump_origin() as remote:
+            for level in ("none", "current"):
+                result = bump_release.prepare(level, baseline, self.root)
+                self.assertEqual(result["sha"], baseline)
+                self.assertEqual(result["tag"], "v0.10.25")
+                self.assertFalse(result["version_commit"])
+                self.assertTrue(result["tag_prepared"])
+                self.assertEqual(self.remote_commit(remote), baseline)
+                self.assertEqual(self.remote_commit(remote, "refs/tags/v0.10.25^{commit}"), baseline)
+                self.assertEqual(before, {name: (self.root / name).read_bytes() for name in before})
+                bump_release.verify_dispatch_source(self.root, baseline, baseline, "v0.10.25")
+        self.assertEqual(release.crate_publication("0.10.25")["status"], "deferred")
+
+    def test_bump_workflow_rerun_reuses_original_commit_even_after_main_advances(self):
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            first = bump_release.prepare("patch", baseline, self.root)
+            self.assertEqual(first["version"], "0.5.1")
+            self.assertEqual(first["status"], "prepared")
+            self.assertEqual(self.git("diff", "--name-only", baseline, first["sha"]).splitlines(),
+                             ["Cargo.lock", "Cargo.toml"])
+            (self.root / "new-work.txt").write_text("keep later work\n")
+            self.git("add", "new-work.txt")
+            self.git("commit", "--quiet", "-m", "concurrent work after the bump")
+            advanced = self.git("rev-parse", "HEAD")
+            self.git("push", "--quiet", "origin", "HEAD:main")
+            self.git("checkout", "--quiet", "--detach", baseline)
+            with mock.patch.dict(os.environ, {"GIT_AUTHOR_DATE": "2001-01-01T00:00:00Z",
+                                               "GIT_COMMITTER_DATE": "2001-01-01T00:00:00Z"}):
+                repeated = bump_release.prepare("patch", baseline, self.root)
+            self.assertEqual(repeated["sha"], first["sha"])
+            self.assertEqual(repeated["version"], "0.5.1")
+            self.assertEqual(repeated["status"], "reused")
+            self.assertEqual(self.remote_commit(remote), advanced)
+            self.assertEqual(self.remote_commit(remote, "refs/tags/v0.5.1^{commit}"), first["sha"])
+
+    def test_bump_workflow_stale_baseline_never_overwrites_new_main(self):
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            (self.root / "new-work.txt").write_text("keep another writer's change\n")
+            self.git("add", "new-work.txt")
+            self.git("commit", "--quiet", "-m", "main advanced before bump")
+            advanced = self.git("rev-parse", "HEAD")
+            self.git("push", "--quiet", "origin", "HEAD:main")
+            self.git("checkout", "--quiet", "--detach", baseline)
+            with self.assertRaisesRegex(ValueError, "main advanced"):
+                bump_release.prepare("patch", baseline, self.root)
+            self.assertEqual(self.remote_commit(remote), advanced)
+            absent = subprocess.run(
+                ["git", "--git-dir", str(remote), "show-ref", "--verify", "--quiet", "refs/tags/v0.5.1"],
+                env=self.git_env, check=False
+            )
+            self.assertEqual(absent.returncode, 1)
+
+    def test_bump_workflow_tag_collision_rejects_before_main_push(self):
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            self.git("tag", "v0.5.1", baseline)
+            self.git("push", "--quiet", "origin", "refs/tags/v0.5.1")
+            with self.assertRaisesRegex(ValueError, "another commit"):
+                bump_release.prepare("patch", baseline, self.root)
+            self.assertEqual(self.remote_commit(remote), baseline)
+            self.assertEqual(self.remote_commit(remote, "refs/tags/v0.5.1^{commit}"), baseline)
+
+    def test_bump_workflow_dry_run_never_writes_source_refs_or_tags(self):
+        baseline = self.git("rev-parse", "HEAD")
+        before = {name: (self.root / name).read_bytes() for name in ("Cargo.toml", "Cargo.lock")}
+        refs = self.git("show-ref")
+        # There is deliberately no remote: a dry run must not even fetch it.
+        for level in ("none", "patch", "minor", "major", "custom"):
+            with self.subTest(level=level):
+                result = bump_release.prepare(
+                    level, baseline, self.root, custom_version="0.6.1" if level == "custom" else None,
+                    dry_run=True
+                )
+                self.assertEqual(result["status"], "preview")
+                self.assertIsNone(result["sha"])
+                self.assertFalse(result["tag_prepared"])
+                self.assertEqual(self.git("rev-parse", "HEAD"), baseline)
+                self.assertEqual(self.git("show-ref"), refs)
+                self.assertEqual(before, {name: (self.root / name).read_bytes() for name in before})
+        with self.assertRaisesRegex(ValueError, "only valid"):
+            bump_release.prepare("none", baseline, self.root, custom_version="0.6.1")
+        with self.assertRaisesRegex(ValueError, "original workflow"):
+            bump_release.prepare("none", "a" * 40, self.root)
+
+    def test_bump_workflow_can_prepare_without_tagging_or_publishing(self):
+        baseline = self.git("rev-parse", "HEAD")
+        with self.bump_origin() as remote:
+            result = bump_release.prepare("minor", baseline, self.root, publish=False)
+            self.assertEqual(result["version"], "0.6.0")
+            self.assertFalse(result["tag_prepared"])
+            self.assertFalse(result["publish_requested"])
+            self.assertEqual(self.remote_commit(remote), result["sha"])
+            self.assertIsNone(bump_release.tag_commit(self.root, "v0.6.0"))
 
     def test_inconsistent_lockfile_prevents_both_bump_writes(self):
         (self.root / "Cargo.lock").write_text('[[package]]\nname = "ssmcp"\nversion = "0.4.0"\n')
@@ -1406,6 +1526,129 @@ class ReleaseTests(unittest.TestCase):
         (checkout / "unexpected.txt").write_text("not part of the pinned source\n")
         with self.assertRaisesRegex(ValueError, "uncommitted source"):
             release.source_submodules(self.root)
+
+
+class BumpWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="ssmcp-bump-dispatch-")))
+        self.repository = "LIghtJUNction/ssmcp"
+        self.baseline = "a" * 40
+        self.sha = "b" * 40
+        self.details = {
+            "workflow_run_id": 123,
+            "run_url": f"https://api.github.com/repos/{self.repository}/actions/runs/123",
+            "html_url": f"https://github.com/{self.repository}/actions/runs/123",
+        }
+        self.http = (b"HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
+                     + json.dumps(self.details).encode("utf-8") + b"\n")
+
+    def dispatch(self, directory, attempt=1):
+        return bump_release.dispatch(
+            "v0.10.25", self.sha, self.baseline, 456, attempt, self.root / directory,
+            root=self.root, repository=self.repository
+        )
+
+    def test_workflow_uses_original_sha_current_default_and_existing_release_contract(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/bump.yml").read_text()
+        self.assertIn("default: none", workflow)
+        self.assertIn("options: [none, patch, minor, major, custom]", workflow)
+        self.assertEqual(workflow.count("ref: ${{ github.sha }}"), 2)
+        self.assertNotIn("ref: main", workflow)
+        self.assertNotIn("gh workflow run", workflow)
+        self.assertIn("--run-attempt \"$GITHUB_RUN_ATTEMPT\"", workflow)
+        self.assertIn("if: inputs.dry_run != true && inputs.publish == true", workflow)
+
+    def test_dispatch_preserves_raw_http_and_explicit_no_deploy_inputs(self):
+        response = subprocess.CompletedProcess(["gh"], 0, self.http, b"original stderr\n")
+        with mock.patch.object(bump_release, "verify_dispatch_source") as verify, \
+             mock.patch.object(bump_release.subprocess, "run", return_value=response) as post:
+            result = self.dispatch("success")
+        verify.assert_called_once_with(self.root, self.baseline, self.sha, "v0.10.25")
+        post.assert_called_once()
+        argv = post.call_args.args[0]
+        self.assertEqual(argv, [
+            "gh", "api", "--method", "POST", "--hostname", "github.com",
+            "--header", "X-GitHub-Api-Version: 2026-03-10", "--input", "-", "--include",
+            "repos/LIghtJUNction/ssmcp/actions/workflows/release.yml/dispatches",
+        ])
+        stdin = post.call_args.kwargs["input"]
+        self.assertEqual(json.loads(stdin), {
+            "ref": "main", "inputs": {"tag": "v0.10.25", "build_only": False, "deploy_server": False},
+        })
+        self.assertEqual(result["status"], "dispatched")
+        self.assertEqual(result["source"], "github-actions")
+        self.assertEqual(result["workflow_run_id"], 123)
+        self.assertEqual(result["bump_run_id"], 456)
+        capture_path = self.root / "success/dispatch-capture.json"
+        capture = json.loads(capture_path.read_text())
+        self.assertEqual(set(capture), {"schema", "argv", "stdin_base64", "stdout_base64",
+                                       "stderr_base64", "exit_code", "started_utc", "finished_utc"})
+        self.assertEqual(base64.b64decode(capture["stdin_base64"]), stdin)
+        self.assertEqual(base64.b64decode(capture["stdout_base64"]), self.http)
+        self.assertEqual(base64.b64decode(capture["stderr_base64"]), b"original stderr\n")
+        self.assertEqual((self.root / "success/stdout.http").read_bytes(), self.http)
+        self.assertEqual(result["capture_sha256"], release.digest(capture_path))
+        with mock.patch.object(bump_release.subprocess, "run") as repeated:
+            with self.assertRaises(FileExistsError):
+                self.dispatch("success")
+        repeated.assert_not_called()
+
+    def test_rerun_never_posts_even_without_a_previous_receipt(self):
+        with mock.patch.object(bump_release, "verify_dispatch_source") as verify, \
+             mock.patch.object(bump_release.subprocess, "run") as post, \
+             self.assertRaisesRegex(ValueError, "new explicit Release workflow dispatch"):
+            self.dispatch("rerun", attempt=2)
+        verify.assert_not_called()
+        post.assert_not_called()
+        result = json.loads((self.root / "rerun/result.json").read_text())
+        self.assertEqual(result["status"], "rerun_blocked")
+        self.assertFalse((self.root / "rerun/dispatch-capture.json").exists())
+
+    def test_wrong_prepared_source_stops_before_post(self):
+        with mock.patch.object(bump_release, "verify_dispatch_source",
+                               side_effect=ValueError("prepared tag differs")), \
+             mock.patch.object(bump_release.subprocess, "run") as post, \
+             self.assertRaisesRegex(ValueError, "prepared tag differs"):
+            self.dispatch("wrong-source")
+        post.assert_not_called()
+        result = json.loads((self.root / "wrong-source/result.json").read_text())
+        self.assertEqual(result["status"], "not_dispatched")
+
+    def test_ambiguous_http_or_cli_failure_is_preserved_without_retry(self):
+        cases = (
+            ("old-api", 0, b"HTTP/2.0 204 No Content\r\n\r\n"),
+            ("failed-cli", 1, self.http),
+            ("malformed", 0, b"HTTP/2.0 200 OK\n\nnot-json"),
+            ("wrong-run", 0, b"HTTP/2.0 200 OK\n\n" + json.dumps({
+                **self.details, "html_url": "https://github.com/another/repo/actions/runs/123"
+            }).encode("utf-8")),
+        )
+        for directory, code, stdout in cases:
+            with self.subTest(case=directory), \
+                 mock.patch.object(bump_release, "verify_dispatch_source"), \
+                 mock.patch.object(bump_release.subprocess, "run", return_value=
+                                   subprocess.CompletedProcess(["gh"], code, stdout, b"detail\n")) as post, \
+                 self.assertRaises(ValueError):
+                self.dispatch(directory)
+            post.assert_called_once()
+            capture = json.loads((self.root / directory / "dispatch-capture.json").read_text())
+            self.assertEqual(capture["exit_code"], code)
+            self.assertEqual(base64.b64decode(capture["stdout_base64"]), stdout)
+            self.assertEqual(base64.b64decode(capture["stderr_base64"]), b"detail\n")
+            self.assertEqual(json.loads((self.root / directory / "result.json").read_text())["status"],
+                             "dispatch_unconfirmed")
+
+    def test_post_timeout_keeps_partial_bytes_and_never_reposts(self):
+        failure = subprocess.TimeoutExpired(["gh"], 120, output=b"partial HTTP", stderr=b"partial error")
+        with mock.patch.object(bump_release, "verify_dispatch_source"), \
+             mock.patch.object(bump_release.subprocess, "run", side_effect=failure) as post, \
+             self.assertRaisesRegex(ValueError, "delivery is unknown"):
+            self.dispatch("timeout")
+        post.assert_called_once()
+        capture = json.loads((self.root / "timeout/dispatch-capture.json").read_text())
+        self.assertIsNone(capture["exit_code"])
+        self.assertEqual(base64.b64decode(capture["stdout_base64"]), b"partial HTTP")
+        self.assertEqual(base64.b64decode(capture["stderr_base64"]), b"partial error")
 
 
 class GithubReleaseTests(unittest.TestCase):
