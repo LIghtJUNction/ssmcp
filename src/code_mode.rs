@@ -553,6 +553,22 @@ impl AuditRun {
         agent_id: &str,
         token: &str,
     ) -> Result<(), String> {
+        self.bind_identity(client_id, owner, agent_id, token)?;
+        // An explicit binding action retains bound no-op delivery. Actual
+        // time-only execution can still prove it was passive.
+        self.bound_target(client_id);
+        Ok(())
+    }
+
+    /// Freeze request credentials for later dispatch and tool-source reads.
+    /// Identity preparation is not user work and cannot create delivery targets.
+    pub(crate) fn bind_identity(
+        &self,
+        client_id: &str,
+        owner: &str,
+        agent_id: &str,
+        token: &str,
+    ) -> Result<(), String> {
         let mut bindings = self
             .bindings
             .lock()
@@ -576,10 +592,6 @@ impl AuditRun {
                 },
             );
         }
-        drop(bindings);
-        // Preserve bound no-op delivery. An actual time-only run can separately
-        // prove it was passive; rebinding must not erase that execution audit.
-        self.bound_target(client_id);
         Ok(())
     }
 
@@ -1326,6 +1338,41 @@ mod tests {
             run.native_dispatched("writer", Some(tool));
             assert_eq!(run.steering_targets(), ["writer"]);
         }
+    }
+
+    #[test]
+    fn request_identity_does_not_qualify_passive_work_for_user_delivery() {
+        let run = AuditRun::new("return await ui.get('display');", None).unwrap();
+        run.bind_identity("display", "owner", "agent_one", "private-token")
+            .unwrap();
+        let binding = run.binding("display").unwrap();
+        assert_eq!(binding.owner, "owner");
+        assert_eq!(binding.agent_id, "agent_one");
+        assert_eq!(binding.token, "private-token");
+        assert!(run.targets().is_empty());
+        assert!(run.steering_targets().is_empty());
+
+        for tool in ["ssmcp.ui.get", "ssmcp.ui.questions", "ssmcp.ui.tool_summary"] {
+            run.native_dispatched("display", Some(tool));
+            run.bind_identity("display", "owner", "agent_one", "private-token")
+                .unwrap();
+            assert_eq!(run.targets(), ["display"]);
+            assert!(run.steering_targets().is_empty());
+            assert!(!run.question_delivery_eligible("display"));
+        }
+        assert!(
+            run.bind_identity("display", "owner", "agent_two", "other-token")
+                .is_err()
+        );
+        assert_eq!(run.binding("display").unwrap().agent_id, "agent_one");
+        assert!(run.steering_targets().is_empty());
+
+        run.native_dispatched("display", Some("ssmcp.exec.run"));
+        run.bind_identity("display", "owner", "agent_one", "private-token")
+            .unwrap();
+        run.native_dispatched("display", Some("ssmcp.ui.get"));
+        assert_eq!(run.steering_targets(), ["display"]);
+        assert!(run.question_delivery_eligible("display"));
     }
 
     #[test]

@@ -1333,6 +1333,51 @@ async fn selected_tool_source_preload_and_ui_observation_keep_user_work_queued()
             .all(|message| message.state == wire::SteeringState::Queued)
     );
     assert_eq!(fixture.native.lock().unwrap().source_reads, 1);
+
+    // The same identity and source preparation must still deliver both exact-
+    // agent and Next caller work when a real eligible native call follows.
+    let authorization = fixture
+        .broker
+        .authenticate("mcp", &fixture.token)
+        .await
+        .unwrap();
+    let arguments: CodeArguments = serde_json::from_value(json!({
+        "code":format!("return await call({},'ssmcp.fs.stat',{{path:'summary-fixture'}});", serde_json::to_string(fixture.session.client_id()).unwrap()),
+        "timeout_ms":10000,
+        "agent":{"client_id":fixture.session.client_id(),"id":fixture.agent_id,"token":fixture.agent_token}
+    })).unwrap();
+    let response = execute(
+        fixture.broker.clone(),
+        "mcp".into(),
+        authorization,
+        fixture.token.clone(),
+        arguments,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response["isError"], false, "{response:#}");
+    let messages = response["structuredContent"]["user_messages"]
+        .as_array()
+        .unwrap();
+    let mut message_ids = messages
+        .iter()
+        .map(|message| {
+            assert_eq!(message["client_id"], fixture.session.client_id());
+            message["message_id"].as_str().unwrap()
+        })
+        .collect::<Vec<_>>();
+    message_ids.sort_unstable();
+    assert_eq!(message_ids, ["source-metadata-next", "summary-requirement"]);
+    assert_eq!(
+        fixture.summary_requirement_state(),
+        wire::SteeringState::Delivered
+    );
+    assert_eq!(
+        response["structuredContent"]["question_answers"][0]["id"],
+        "retained_question"
+    );
+    fixture.wait_for_ack().await;
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 2);
 }
 
 #[tokio::test]

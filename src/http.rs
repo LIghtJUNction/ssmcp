@@ -1018,7 +1018,9 @@ async fn execute(
             .collaboration
             .bind(&owner, &agent.id, &agent.token)?;
         audit_run.record_connection(&session)?;
-        audit_run.bind(&agent.client_id, &owner, &agent.id, &agent.token)?;
+        // Request identity also authorizes automatic tool-source preparation.
+        // Only an actual eligible call or user wait may receive queued work.
+        audit_run.bind_identity(&agent.client_id, &owner, &agent.id, &agent.token)?;
     }
     let sources = tokio::time::timeout_at(
         deadline,
