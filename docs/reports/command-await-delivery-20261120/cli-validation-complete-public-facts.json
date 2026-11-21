@@ -1,0 +1,564 @@
+{
+  "schema": "ssmcp-final-cli-validation-complete-stage.v1",
+  "snapshot_utc": "2026-11-21 18:13:00 UTC",
+  "source": {
+    "commit": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "tree": "9ab5ef5acaebec078441cfa8862bceffc0dae891",
+    "branch": "work/zuse-cli-ui-fixes-20261121",
+    "frozen": true
+  },
+  "validation": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "tree": "9ab5ef5acaebec078441cfa8862bceffc0dae891",
+    "evidence": "Original source coordinator completed native jobs; Clippy independently read by original acceptance coordinator",
+    "light_checks": {
+      "exit_code": 0,
+      "both_eof": true,
+      "Node_passed": 64,
+      "release_policy_passed": 118,
+      "deployment_policy_passed": 35,
+      "receipt": {
+        "bytes": 24327,
+        "sha256": "c14211479d8925b82bd2d2df590e8beab8ade00edf81ae83034b0e75dfc48e8e",
+        "path_not_provided": true
+      }
+    },
+    "full_library": {
+      "exit_code": 0,
+      "both_eof": true,
+      "private": {
+        "passed": 1971,
+        "failed": 0,
+        "ignored": 12,
+        "filtered": 6
+      },
+      "host": {
+        "passed": 6
+      },
+      "required_code_mode": {
+        "passed": 2
+      },
+      "parallelism_budget_assertions_unchanged": true,
+      "receipt": {
+        "bytes": 217023,
+        "sha256": "98635e062a6d3b6fd61012508c7bb2ccf4dd6da83a835a39832fca0d0ea4c7f2",
+        "path_not_provided": true
+      }
+    },
+    "clippy": {
+      "linux_exit": 0,
+      "windows_gnu_exit": 0,
+      "all_targets": true,
+      "deny_warnings": true,
+      "wrapper_exit": 0,
+      "both_eof": true,
+      "independent_original_read": true,
+      "receipt": {
+        "bytes": 2398,
+        "sha256": "cfcb098bc4adeabb7979aabfca376fe722f7f8ae86385244e682e6620d5c825f",
+        "file": "cli-validation-20261121-v6/clippy/receipt.json"
+      }
+    },
+    "candidate_E2E_lifecycle": "Original six-group run 5 PASS / 1 FAIL; unchanged interaction followup PASS; installer and pinned real Zuse lifecycle PASS",
+    "publication_completed": false
+  },
+  "git_sync": {
+    "evidence": "Original source owner actual fetch/fast-forward and independent acceptance complete job read",
+    "fetch": {
+      "arguments": [
+        "fetch",
+        "--prune",
+        "--no-tags",
+        "origin"
+      ],
+      "previous_local_main": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+      "remote_main": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+      "ahead": 0,
+      "behind": 2,
+      "working_tree_unchanged_by_fetch": true
+    },
+    "main_update": {
+      "mode": "normal fast-forward; no recursive submodule update; no autostash",
+      "resulting_main": "3730c039ec15a33af7bb3b56a9811e5649a99f85",
+      "three_dependency_repo_HEAD_diff_untracked_list_hashes_unchanged": true,
+      "user_artifacts_and_modifications_preserved": true,
+      "removed_zuse_gitlink_directory_preserved_as_untracked": true,
+      "receipt": {
+        "bytes": 12510,
+        "sha256": "91486f0153136734ea7089fbbeb4f796522710bbaae36085b9fed2a51afe7464",
+        "file": "git-sync-main-20261121/receipt.json"
+      }
+    },
+    "owned_validation_worktree": {
+      "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+      "clean": true
+    },
+    "status": "Actual local synchronization completed to the observed remote main at this phase"
+  },
+  "candidate_build": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "evidence": "Original acceptance coordinator independently read the completed existing native candidate build",
+    "exit_code": 0,
+    "running": false,
+    "both_eof": true,
+    "stdout_bytes": 6691,
+    "stderr_bytes": 0,
+    "receipt": {
+      "bytes": 8300,
+      "sha256": "e7ebb9418bfa1225e3ed41f0e331d154aa7886891894f609f4c4715767355baf",
+      "file": "cli-validation-20261121-v6/candidate-build/receipt.json"
+    },
+    "profile": {
+      "release": true,
+      "opt_level": "z",
+      "test": false
+    },
+    "artifacts": {
+      "ssmcp": {
+        "bytes": 14823632,
+        "fresh": false,
+        "sha256": "f87fa3eb4afb6fbe7f9e93773a1c0bbcc775d23f941b8f182a6cc8932bc3b1d9"
+      },
+      "ssmcp-frontend": {
+        "bytes": 1386688,
+        "fresh": false,
+        "sha256": "78aa15bd86465a9cb424656b8756f5f2a992588b13704226b487ba137736ba6a"
+      },
+      "ssmcpd": {
+        "bytes": 7409856,
+        "fresh": false,
+        "sha256": "3bb5cb9d58e8ed00661ea40f3321819834e1f9c94919c8a50eb9ae9944b27c8c"
+      },
+      "vt_snapshot": {
+        "bytes": 440984,
+        "fresh": false,
+        "sha256": "c3d390806fdec01cd9acd0492ee552d788df305665670fa6cb81144c627f7f65"
+      }
+    },
+    "no_product_runtime_pass_inferred": true
+  },
+  "CI_static_review": {
+    "fixed_source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "static_ready": true,
+    "source_changes_only": [
+      ".github/workflows/bump.yml",
+      "scripts/bump_release.py",
+      "scripts/test_release.py"
+    ],
+    "defaults": {
+      "level": "none",
+      "helper_alias": "current",
+      "publish": true,
+      "dry_run": false
+    },
+    "behavior": {
+      "none_can_still_tag_and_publish": true,
+      "frozen_baseline": "github.sha",
+      "deterministic_version_commit": true,
+      "ordinary_fast_forward_only": true,
+      "tag_conflicts_rejected": true,
+      "run_attempt_not_one_rejects_before_POST": true,
+      "helper_single_POST_invocation_not_network_exactly_once": true,
+      "raw_actions_capture_retained": true,
+      "release_request": {
+        "ref": "main",
+        "inputs": [
+          "tag",
+          "build_only=false",
+          "deploy_server=false"
+        ]
+      }
+    },
+    "H2": {
+      "this_v25_native_flow_requires_no_logic_change": true,
+      "Bump_baseline_B_distinct_from_Release_workflow_P": true,
+      "source_S_enters_main_before_Release_dispatch": true,
+      "Bump_two_jobs_are_separate_run_not_Release19": true,
+      "Actions_capture_must_not_be_substituted_for_native_receipt": true,
+      "future_other_release_versions_need_version_binding_update": true
+    },
+    "new_test_definitions": 12,
+    "tests_run_by_review_agent": false,
+    "real_Actions_dispatch_claimed": false
+  },
+  "H2_recipe_identity": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "baseline_recipe_source": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+    "files": [
+      {
+        "path": ".github/workflows/release.yml",
+        "bytes": 22724,
+        "sha256": "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c",
+        "git_blob": "d3e6e93c46f0fc3a37e1785233d9eadb64ca3d82",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "bytes": 14994,
+        "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172",
+        "git_blob": "14629b92b94ed22deba31850185187abd93444ef",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      },
+      {
+        "path": ".github/workflows/deploy-server.yml",
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c",
+        "git_blob": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      },
+      {
+        "path": "scripts/release.py",
+        "bytes": 65003,
+        "sha256": "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e",
+        "git_blob": "a386389f20c380e51d61fc59a270635a42c91fba",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      },
+      {
+        "path": "scripts/install.sh",
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906",
+        "git_blob": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      },
+      {
+        "path": "scripts/install.ps1",
+        "bytes": 12928,
+        "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051",
+        "git_blob": "7c2cc8cd0ad5d16cc34215a2f4a36ffd3005c621",
+        "bytes_and_sha_match_840629_pins": true,
+        "git_blob_matches_github": true
+      }
+    ],
+    "all_six_exact": true,
+    "H2_imported": false,
+    "H2_executed": false,
+    "S": null,
+    "P": null,
+    "run": null
+  },
+  "H2_test_count_compatibility": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "H2_package": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "old_count": 106,
+    "new_count": 118,
+    "hardcoded_test_counts": false,
+    "requires_unchanged_step_name_command_and_success": true,
+    "H2_change_required": false,
+    "static_only": true
+  },
+  "exec_read_latest_request": {
+    "user_requirement": "Expanded exec.read should show the actual read content",
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "static_coverage": "Current native read stdout/stderr body, metadata and bounded display already included",
+    "four_relevant_blobs_unchanged_from_merged_DDE": true,
+    "scope": [
+      "verified native Provider::Exec and exec.read",
+      "successful typed reply",
+      "active connection/request row",
+      "current read page rather than full job log"
+    ],
+    "local_preview_total_bytes": 131072,
+    "original_tool_return_unchanged": true,
+    "history_rows_not_retroactively_filled": true,
+    "screenshot_runtime_binary_and_payload_not_available": true,
+    "no_new_source_gap_identified_by_static_review": true,
+    "current_live_UI_fixed_claimed": false,
+    "evidence": "Authenticated user relay406; original acceptance coordinator viewed screenshot; narrow fixed-source review410"
+  },
+  "historical_goal_failure": {
+    "source": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525",
+    "library_binary_sha256": "89cb27382edc94530b928e3b111fd4445b59aa7797da15402b031ebe5476ce1f",
+    "wrapper_exit": 1,
+    "running": false,
+    "both_eof": true,
+    "stdout_bytes": 27766,
+    "stderr_bytes": 0,
+    "private": {
+      "passed": 1970,
+      "failed": 1,
+      "ignored": 12,
+      "filtered": 6
+    },
+    "host": {
+      "passed": 6
+    },
+    "required_code_mode": {
+      "passed": 2
+    },
+    "receipt": {
+      "file": "cli-validation-20261121-v5/library-tests/receipt.json",
+      "bytes": 243333,
+      "sha256": "66a7fd7b00c138a3ef3eb0f7d71ff3facb1d51b707638b0170d8d61c5f6cadd2"
+    },
+    "failed_case": {
+      "name": "client::terminal::conversation::goals::tests::goal_enter_saves_without_sending_and_projects_current_goal_to_ui",
+      "location": "goals/tests.rs:48",
+      "assertion": "goal worker completes: Elapsed(())",
+      "root_cause_proven": false,
+      "different_from_old_summary_case": true
+    },
+    "suite_elapsed_seconds": 74.09,
+    "exact_diagnostic": {
+      "status": "completed; separate diagnostic record retained",
+      "same_binary": true,
+      "single_thread": true,
+      "original_budget_and_assertions_preserved": true
+    },
+    "evidence": "Original source coordinator actual completed job and original stdout read",
+    "full_v5_status": "FAILED",
+    "publication": "paused at validation"
+  },
+  "goal_exact_diagnostic": {
+    "source": "2c94bacb2013e9a5c4d4dd13bcbeea2366252525",
+    "binary_sha256": "89cb27382edc94530b928e3b111fd4445b59aa7797da15402b031ebe5476ce1f",
+    "exit_code": 0,
+    "both_eof": true,
+    "passed": 1,
+    "filtered": 1988,
+    "elapsed_seconds": 0.13,
+    "original_budget_seconds": 3,
+    "assertions_and_budget_unchanged": true,
+    "receipt": {
+      "bytes": 2230,
+      "sha256": "eb11452972c57a3258d44e583d97c72831f78f9f945ac14de7ce1663efce399f",
+      "path_not_provided": true
+    },
+    "does_not_erase_full_suite_failure": true,
+    "root_cause_proven": false
+  },
+  "historical_failure_root_cause_proven": false,
+  "earlier_E2E_and_TLS_results": {
+    "report": "current-iteration-CLI-e2e-and-CI-bump.md",
+    "facts": "cli-e2e-and-ci-bump-public-facts.json",
+    "commit": "cf62d9485976d815f5a0c46c34ed4504a2edd958"
+  },
+  "terminal_scope": {
+    "verified_by_new_execution": true,
+    "intended_checks": [
+      "independent output/cursor",
+      "selection/restoration",
+      "audit Copy/log navigation",
+      "attribution",
+      "background jobs",
+      "termios"
+    ],
+    "current_per_PTY_VT_screen_verification_claimed": false,
+    "new_VT_gate_added": false,
+    "evidence": "Final fixed-source terminal-control report from original six-group run"
+  },
+  "release": {
+    "planned_tag": "v0.10.25",
+    "server_deployment": false,
+    "registry_crate_publication": false,
+    "new_release_completed_receipt": false,
+    "H2_imported_or_executed": false,
+    "S": null,
+    "P": null,
+    "run": null,
+    "dispatch": null,
+    "status": "Product validation has passing evidence for each required group; source coordinator proceeding to normal merge and existing authorized native publication flow; no completed release receipt yet",
+    "prior_failed_runs_retained": true
+  },
+  "report_group": {
+    "native_product_or_Cargo": 0,
+    "source_writes": 0,
+    "H2_execution": 0,
+    "static_report_wording_review": "Direct review of supplied receipts; no execution or additional gate"
+  },
+  "e2e": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "evidence": "Original acceptance coordinator independently read completed existing native E2E job",
+    "exit_code": 1,
+    "running": false,
+    "both_eof": true,
+    "no_truncation": true,
+    "stdout_bytes": 3964,
+    "stderr_bytes": 0,
+    "groups": {
+      "passed": 5,
+      "failed": 1,
+      "total": 6
+    },
+    "checks": [
+      {
+        "name": "interactions",
+        "exit_code": 1,
+        "report": null
+      },
+      {
+        "name": "message-references",
+        "exit_code": 0,
+        "report": {
+          "bytes": 13811,
+          "sha256": "a3cebb8aba15a2baaf94f53bb1915e71848d059145af0c66802086c1d2ab57b4",
+          "file": "cli-validation-20261121-v6/e2e/message-references/report.json"
+        }
+      },
+      {
+        "name": "questions",
+        "exit_code": 0,
+        "report": {
+          "bytes": 4460,
+          "sha256": "627a4ec2c753a109d3493099c9e711671fdb005d06f8f5ac95858b95ee8b43bc",
+          "file": "cli-validation-20261121-v6/e2e/questions/report.json"
+        }
+      },
+      {
+        "name": "user-wait",
+        "exit_code": 0,
+        "report": {
+          "bytes": 14708,
+          "sha256": "d5441e7e0eee8ab2ef16aa2593b650eec0cf8bec5ba367216ba040546f85266d",
+          "file": "cli-validation-20261121-v6/e2e/user-wait/report.json"
+        }
+      },
+      {
+        "name": "terminal-control",
+        "exit_code": 0,
+        "report": {
+          "bytes": 5243,
+          "sha256": "e47814502cbb6ac6a54cbd944fa59c4598150c9ff7ee17931f8402c20d851bfc",
+          "file": "cli-validation-20261121-v6/e2e/terminal-control/report.json"
+        }
+      },
+      {
+        "name": "send-reference-completion",
+        "exit_code": 0,
+        "report": {
+          "bytes": 17978,
+          "sha256": "541fd1408c99d6f0621b0ebd2ccb67ecf62da351fe3f32acfd6e47f7e61608c6",
+          "file": "cli-validation-20261121-v6/e2e/send-reference-completion/report.json"
+        }
+      }
+    ],
+    "receipt": {
+      "bytes": 75890,
+      "sha256": "b6d193a0c86c3ba18da415477b1ab5627bb25b93a329bbd381f9cd33fbf48c9b",
+      "file": "cli-validation-20261121-v6/e2e/receipt.json"
+    },
+    "remaining_failure": {
+      "name": "interactions",
+      "initial_cause": "Router ready-record assertion after original 12s wait; root cause unproven",
+      "followup": {
+        "exit_code": 0,
+        "both_eof": true,
+        "evidence": "Original source coordinator completion plus original acceptance coordinator independent full read",
+        "source_unchanged": true,
+        "original_parameters_unchanged": true,
+        "report": {
+          "file": "cli-validation-20261121-v6/e2e-interactions-after-lock/interactions/report.json",
+          "bytes": 19010,
+          "sha256": "acff219df11ca758d7c33f6c7899e314d7fa711674462151ee0cd628aeb6a46d"
+        },
+        "receipt": {
+          "file": "cli-validation-20261121-v6/e2e-interactions-after-lock/receipt.json",
+          "bytes": 24444,
+          "sha256": "12b4508fdeb740c23c471697e03397511d252d3a3c686fc001f162e0ef1acbca"
+        },
+        "independent_original_read": true,
+        "no_truncation": true,
+        "stdout_bytes": 1047,
+        "stderr_bytes": 0,
+        "running": false
+      }
+    },
+    "old_user_wait_and_terminal_failures_passed_on_this_candidate": true,
+    "new_release_pass_claimed": false,
+    "all_groups_have_a_passing_run": true,
+    "single_run_all_six_passed": false,
+    "additional_unexecuted_attempt": {
+      "checks": [],
+      "reason": "Lock timeout; product checks did not execute"
+    },
+    "root_cause_proven": false
+  },
+  "installer_and_lifecycle": {
+    "source": "4f73f5684279ecae1a8e8486e4332c20bdbaab95",
+    "evidence": "Original acceptance coordinator independently read original existing jobs in full, both EOF and no truncation",
+    "installer": {
+      "exit_code": 0,
+      "stdout_bytes": 8295,
+      "stderr_bytes": 0,
+      "checks": [
+        {
+          "exit_code": 0,
+          "name": "create-package-checkout",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "package",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "installers",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "remove-owned-package-checkout",
+          "timed_out": false
+        }
+      ],
+      "receipt": {
+        "file": "cli-validation-20261121-v6/installer-check/receipt.json",
+        "bytes": 8786,
+        "sha256": "3c7a95085bd70e1e3bd1f7e35897bb0dd54fe874d9dfef2a740ca7c2a38dcdaa"
+      }
+    },
+    "lifecycle": {
+      "version": "v0.4.2",
+      "exit_code": 0,
+      "stdout_bytes": 6135,
+      "stderr_bytes": 0,
+      "checks": [
+        {
+          "exit_code": 0,
+          "name": "version-before",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "download",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "install",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-installed",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "uninstall",
+          "timed_out": false
+        },
+        {
+          "exit_code": 0,
+          "name": "version-after",
+          "timed_out": false
+        }
+      ],
+      "receipt": {
+        "file": "cli-validation-20261121-v6/zuse-lifecycle-smoke/receipt.json",
+        "bytes": 13081,
+        "sha256": "1c6aca363513d472eaa3c16b08cf4d0e8690b57140a82472d95500d7ed3c046e"
+      }
+    },
+    "desktop_browser_success_claimed": false
+  },
+  "previous_snapshot": {
+    "commit": "cb4716d83cadcafcddce53acf8d5fca90619b623",
+    "report": "current-iteration-CI-bump-validation.md"
+  }
+}
