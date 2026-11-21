@@ -256,12 +256,57 @@ fn zip_rejects_extra_executables_unsafe_paths_and_damaged_payload() {
     assert!(receipt.verify(&bytes, target).is_err());
 }
 
+// Storage fixtures contain synthetic headers and are never executed. Use the
+// platform's archive format without requiring an official host-architecture asset.
+const STORAGE_TARGET: &str = if cfg!(windows) {
+    "x86_64-pc-windows-msvc"
+} else if cfg!(target_os = "macos") {
+    "x86_64-apple-darwin"
+} else {
+    "x86_64-unknown-linux-gnu"
+};
+
+fn fixture_store(root: &Path) -> storage::Store {
+    storage::Store::open(root, true)
+        .unwrap()
+        .unwrap()
+        .with_fixture_target(STORAGE_TARGET)
+}
+
 fn installed(root: &Path) -> (storage::Store, storage::Installation, Vec<u8>) {
-    let store = storage::Store::open(root, true).unwrap().unwrap();
-    let (release, bytes, binary) = package(release::target().unwrap());
+    let store = fixture_store(root);
+    let (release, bytes, binary) = package(STORAGE_TARGET);
     let download = store.save_download(release, &bytes).unwrap();
     let installation = store.install(&download.download_id).unwrap();
     (store, installation, binary)
+}
+
+#[test]
+fn fixture_target_is_instance_local_and_default_store_keeps_host_policy() {
+    let temporary = Temporary::new();
+    let target = if release::target().ok() == Some("x86_64-unknown-linux-gnu") {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    };
+    let fixture = storage::Store::open(&temporary.0.join("fixture"), true)
+        .unwrap()
+        .unwrap()
+        .with_fixture_target(target);
+    let default_root = temporary.0.join("default");
+    let default = storage::Store::open(&default_root, true).unwrap().unwrap();
+    let (release, bytes, binary) = package(target);
+    let error = default.save_download(release.clone(), &bytes).unwrap_err();
+    assert!(error.contains("target"), "{error}");
+    for kind in ["downloads", "installations"] {
+        assert_eq!(fs::read_dir(default_root.join(kind)).unwrap().count(), 0);
+    }
+    let download = fixture.save_download(release, &bytes).unwrap();
+    let installation = fixture.install(&download.download_id).unwrap();
+    let path = fixture.executable(&installation);
+    assert_eq!(fs::read(&path).unwrap(), binary);
+    fixture.uninstall(&installation.installation_id).unwrap();
+    assert!(!path.exists());
 }
 
 #[test]
@@ -367,8 +412,8 @@ fn uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match() {
 fn install_rechecks_cached_download_before_publishing_any_executable() {
     let temporary = Temporary::new();
     let root = temporary.0.join("manager");
-    let store = storage::Store::open(&root, true).unwrap().unwrap();
-    let (release, bytes, _) = package(release::target().unwrap());
+    let store = fixture_store(&root);
+    let (release, bytes, _) = package(STORAGE_TARGET);
     let receipt = store.save_download(release, &bytes).unwrap();
     fs::write(
         root.join("downloads")
