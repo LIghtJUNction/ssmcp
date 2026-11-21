@@ -1661,10 +1661,7 @@ pub async fn run() -> crate::Result<()> {
                 .into(),
         );
     }
-    if connection_context::dispatch(&args)?
-        || config::dispatch(&args)?
-        || trust::dispatch(&args)?
-    {
+    if connection_context::dispatch(&args)? || config::dispatch(&args)? || trust::dispatch(&args)? {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "setup") {

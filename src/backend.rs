@@ -44,7 +44,8 @@ pub(crate) async fn run_helper(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut process = process::Managed::spawn(&mut command).map_err(|e| format!("{program}: {e}"))?;
+    let mut process =
+        process::Managed::spawn(&mut command).map_err(|e| format!("{program}: {e}"))?;
     let mut stdout = process
         .child
         .stdout

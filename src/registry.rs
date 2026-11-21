@@ -112,9 +112,7 @@ impl StoredTool {
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema: descriptor["inputSchema"].clone(),
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if self.provider.is_harness()
-                || self.provider == Provider::Peer
-            {
+            approval: if self.provider.is_harness() || self.provider == Provider::Peer {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection

@@ -3076,7 +3076,9 @@ impl State {
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
                 } else if self.notice.is_none() {
-                    wait_hint.as_ref().map_or(PanelTone::Muted, |(_, tone)| *tone)
+                    wait_hint
+                        .as_ref()
+                        .map_or(PanelTone::Muted, |(_, tone)| *tone)
                 } else {
                     PanelTone::Muted
                 };
@@ -5201,7 +5203,10 @@ mod tests {
     #[test]
     fn manual_computer_commands_only_queue_legacy_actions_and_preserve_the_draft() {
         let mut state = State::new(28, 120, &Ui::default());
-        state.conversation.composer.set_text("keep @missing $skill draft");
+        state
+            .conversation
+            .composer
+            .set_text("keep @missing $skill draft");
         state.conversation.composer.left();
         let draft = state.chat_saved_draft();
         for (command, action) in [
@@ -5226,7 +5231,12 @@ mod tests {
             assert_eq!(state.chat_saved_draft(), draft);
         }
         let mut preview = preview(28, 120);
-        for command in ["/computer", "/computer on", "/computer off", "/computer toggle"] {
+        for command in [
+            "/computer",
+            "/computer on",
+            "/computer off",
+            "/computer toggle",
+        ] {
             assert!(preview.chat_command(command).is_err());
             assert!(preview.actions.is_empty());
         }

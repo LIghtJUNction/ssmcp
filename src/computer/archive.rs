@@ -60,7 +60,9 @@ fn member(name: &str, release: &Release, mode: u32) -> Result<bool, String> {
             .strip_prefix("examples/")
             .is_some_and(|name| !name.contains('/') && name.ends_with(".zuse"));
     if !document || mode & 0o111 != 0 {
-        return Err(format!("Unexpected member in the Zuse release archive: {relative}"));
+        return Err(format!(
+            "Unexpected member in the Zuse release archive: {relative}"
+        ));
     }
     Ok(false)
 }
@@ -76,7 +78,11 @@ fn tar(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
     let mut executable = None;
     // Raw mode exposes PAX/GNU extension entries rather than silently applying
     // a second path or size. The official release uses plain regular entries.
-    for entry in archive.entries().map_err(|error| error.to_string())?.raw(true) {
+    for entry in archive
+        .entries()
+        .map_err(|error| error.to_string())?
+        .raw(true)
+    {
         let mut entry = entry.map_err(|error| error.to_string())?;
         if seen.len() >= MAX_ENTRIES || !entry.header().entry_type().is_file() {
             return Err("Zuse tar archive contains too many entries or a non-regular entry".into());
@@ -119,7 +125,9 @@ fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
         || archive.offset() != 0
         || !archive.comment().is_empty()
         || archive.zip64_comment().is_some()
-        || archive.has_overlapping_files().map_err(|error| error.to_string())?
+        || archive
+            .has_overlapping_files()
+            .map_err(|error| error.to_string())?
     {
         return Err("Zuse ZIP archive has an unsupported or ambiguous layout".into());
     }
@@ -128,7 +136,9 @@ fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
     let mut expanded = 0usize;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let mode = entry.unix_mode().ok_or("Zuse ZIP member has no regular-file mode")?;
+        let mode = entry
+            .unix_mode()
+            .ok_or("Zuse ZIP member has no regular-file mode")?;
         if entry.encrypted() || !entry.is_file() || mode & 0o170000 != 0o100000 {
             return Err("Zuse ZIP contains an encrypted or non-regular entry".into());
         }
@@ -189,7 +199,11 @@ fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
 
 fn executable_target(bytes: &[u8], target: &str) -> bool {
     if target.ends_with("-unknown-linux-gnu") {
-        let machine = if target.starts_with("aarch64-") { 183u16 } else { 62u16 };
+        let machine = if target.starts_with("aarch64-") {
+            183u16
+        } else {
+            62u16
+        };
         return bytes.len() >= 64
             && bytes.starts_with(b"\x7fELF")
             && bytes[4] == 2
@@ -197,14 +211,19 @@ fn executable_target(bytes: &[u8], target: &str) -> bool {
             && u16::from_le_bytes([bytes[18], bytes[19]]) == machine;
     }
     if target.ends_with("-apple-darwin") {
-        let cpu = if target.starts_with("aarch64-") { 0x0100000cu32 } else { 0x01000007u32 };
+        let cpu = if target.starts_with("aarch64-") {
+            0x0100000cu32
+        } else {
+            0x01000007u32
+        };
         return bytes.len() >= 32
             && bytes[..4] == [0xcf, 0xfa, 0xed, 0xfe]
             && u32::from_le_bytes(bytes[4..8].try_into().unwrap()) == cpu;
     }
     if target == "x86_64-pc-windows-msvc" && bytes.len() >= 64 && bytes.starts_with(b"MZ") {
         let offset = u32::from_le_bytes(bytes[60..64].try_into().unwrap()) as usize;
-        return bytes.get(offset..offset.saturating_add(6))
+        return bytes
+            .get(offset..offset.saturating_add(6))
             .is_some_and(|header| header == b"PE\0\0\x64\x86");
     }
     false

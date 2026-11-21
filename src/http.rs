@@ -904,7 +904,14 @@ impl CodeRunReport {
         } else {
             self.run.cancel_unfinished_user_waits()
         };
-        user_wait::cancel_native(&self.broker, &self.user, &self.access_token, &self.run, waits).await;
+        user_wait::cancel_native(
+            &self.broker,
+            &self.user,
+            &self.access_token,
+            &self.run,
+            waits,
+        )
+        .await;
         let completion = self.run.completion(result);
         deliver_code_completion(
             &self.broker,
@@ -1642,10 +1649,16 @@ fn commit_user_response_inner(
             continue;
         };
         let finish_episode = target.session.steering.episode(
-            target.session.client_id(), &target.owner,
-            target.binding.as_ref().map(|binding| binding.agent_id.as_str()),
+            target.session.client_id(),
+            &target.owner,
+            target
+                .binding
+                .as_ref()
+                .map(|binding| binding.agent_id.as_str()),
         );
-        report.run.commit_finish_wait(target.session.client_id(), &finish_episode);
+        report
+            .run
+            .commit_finish_wait(target.session.client_id(), &finish_episode);
         tool_summary_notices.extend(tool_summaries::notices(report, &target));
         let EligibleUserResponse {
             session,

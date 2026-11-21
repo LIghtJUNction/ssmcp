@@ -83,12 +83,17 @@ pub(crate) struct FinishReceipt {
 
 impl FinishReceipt {
     pub(super) fn from_view(view: QuestionView, consumed: bool) -> Result<Self, String> {
-        let finish = view.finish.ok_or("finish_request_required: not a finish decision")?;
+        let finish = view
+            .finish
+            .ok_or("finish_request_required: not a finish decision")?;
         Ok(Self {
             request_id: view.question.id,
             status: finish.status,
             choice: finish.decision.as_ref().map(|decision| decision.choice),
-            actor: finish.decision.as_ref().map(|decision| decision.actor.clone()),
+            actor: finish
+                .decision
+                .as_ref()
+                .map(|decision| decision.actor.clone()),
             revision: finish.decision.as_ref().map(|decision| decision.revision),
             consumed,
             invalidation_reason: finish.invalidation_reason,
@@ -454,14 +459,23 @@ impl super::Queue {
     ) -> Result<QuestionView, String> {
         super::identifier(id)?;
         self.validate_scope(scope)?;
-        let record = self.records.iter().find(|record| record.question.id == id)
+        let record = self
+            .records
+            .iter()
+            .find(|record| record.question.id == id)
             .ok_or("finish_request_missing: this request is no longer retained")?;
-        let routing = record.routing.as_ref().ok_or("finish_request_required: not a scoped request")?;
+        let routing = record
+            .routing
+            .as_ref()
+            .ok_or("finish_request_required: not a scoped request")?;
         if routing.kind != QuestionKind::Finish
             || routing.scope_expired
             || !routing.scope.same_thread(scope)
         {
-            return Err("finish_scope_mismatch: this request belongs to another thread or connection".into());
+            return Err(
+                "finish_scope_mismatch: this request belongs to another thread or connection"
+                    .into(),
+            );
         }
         Ok(record.view())
     }
@@ -473,12 +487,19 @@ impl super::Queue {
         revision: u64,
     ) -> Result<QuestionView, String> {
         self.finish_view_for(scope, id)?;
-        let record = self.records.iter_mut().find(|record| record.question.id == id)
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.question.id == id)
             .expect("validated finish request");
         let routing = record.routing.as_mut().expect("validated finish scope");
-        if revision == 0 || !routing.human_approved()
+        if revision == 0
+            || !routing.human_approved()
             || routing.answer_revision != revision
-            || routing.decision.as_ref().is_none_or(|decision| decision.revision != revision)
+            || routing
+                .decision
+                .as_ref()
+                .is_none_or(|decision| decision.revision != revision)
             || record.question.state != QuestionState::Answered
         {
             return Err("finish_approval_required: an unconsumed Human Yes for this exact request and revision is required".into());
@@ -495,10 +516,16 @@ impl super::Queue {
         reason: &str,
     ) -> Result<QuestionView, String> {
         self.finish_view_for(scope, id)?;
-        let record = self.records.iter_mut().find(|record| record.question.id == id)
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.question.id == id)
             .expect("validated finish request");
         let routing = record.routing.as_mut().expect("validated finish scope");
-        if matches!(routing.finish_status, Some(FinishStatus::Pending | FinishStatus::Approved)) {
+        if matches!(
+            routing.finish_status,
+            Some(FinishStatus::Pending | FinishStatus::Approved)
+        ) {
             routing.finish_status = Some(FinishStatus::Cancelled);
             routing.invalidation_reason = Some(reason.into());
             if record.question.state == QuestionState::Pending {
@@ -514,11 +541,17 @@ impl super::Queue {
     #[cfg(test)]
     pub(super) fn consume_finish(&mut self, scope: &RequestScope) -> Result<String, String> {
         self.validate_scope(scope)?;
-        let candidate = self.records.iter().find_map(|record| {
-            let routing = record.routing.as_ref()?;
-            (routing.scope.same_thread(scope) && routing.human_approved())
-                .then(|| (record.question.id.clone(), routing.answer_revision))
-        }).ok_or("finish_approval_required: the local user must approve this exact finish request")?;
+        let candidate = self
+            .records
+            .iter()
+            .find_map(|record| {
+                let routing = record.routing.as_ref()?;
+                (routing.scope.same_thread(scope) && routing.human_approved())
+                    .then(|| (record.question.id.clone(), routing.answer_revision))
+            })
+            .ok_or(
+                "finish_approval_required: the local user must approve this exact finish request",
+            )?;
         self.consume_finish_revision(scope, &candidate.0, candidate.1)?;
         Ok(candidate.0)
     }

@@ -56,9 +56,7 @@ pub(crate) fn apply(action: Action) -> Result<Value, String> {
         Action::Off => crate::computer_control::set_local(false),
         Action::Toggle => crate::computer_control::toggle_local(),
     };
-    result.map_err(|error| {
-        format!("旧版 SSMCP 兼容开关：操作失败 · 不控制独立 Zuse CLI · {error}")
-    })
+    result.map_err(|error| format!("旧版 SSMCP 兼容开关：操作失败 · 不控制独立 Zuse CLI · {error}"))
 }
 
 pub(crate) fn describe(state: &Value) -> String {
@@ -108,10 +106,22 @@ mod tests {
     fn missing_or_invalid_legacy_state_never_claims_that_zuse_is_off() {
         for (state, label) in [
             (json!({"available":true,"enabled":true,"mode":"on"}), "开启"),
-            (json!({"available":true,"enabled":false,"mode":"off"}), "关闭"),
-            (json!({"available":false,"enabled":false,"mode":"unset"}), "未设置"),
-            (json!({"available":false,"enabled":false,"mode":"unavailable"}), "不可用"),
-            (json!({"available":true,"enabled":false,"mode":"on"}), "不可用"),
+            (
+                json!({"available":true,"enabled":false,"mode":"off"}),
+                "关闭",
+            ),
+            (
+                json!({"available":false,"enabled":false,"mode":"unset"}),
+                "未设置",
+            ),
+            (
+                json!({"available":false,"enabled":false,"mode":"unavailable"}),
+                "不可用",
+            ),
+            (
+                json!({"available":true,"enabled":false,"mode":"on"}),
+                "不可用",
+            ),
         ] {
             let message = describe(&state);
             assert!(message.starts_with("旧版 SSMCP 兼容开关："));

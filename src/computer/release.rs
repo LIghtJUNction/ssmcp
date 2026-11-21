@@ -87,14 +87,19 @@ impl Release {
             || self.target != expected_target
             || self.asset_name != expected_name
             || self.url
-                != format!("{REPOSITORY}/releases/download/{}/{expected_name}", self.tag)
+                != format!(
+                    "{REPOSITORY}/releases/download/{}/{expected_name}",
+                    self.tag
+                )
             || self.release_id == 0
             || self.asset_id == 0
             || self.size == 0
             || self.size > MAX_ARCHIVE as u64
             || !valid_digest(&self.sha256)
         {
-            return Err("The Zuse release asset identity, target, size or SHA256 is invalid".into());
+            return Err(
+                "The Zuse release asset identity, target, size or SHA256 is invalid".into(),
+            );
         }
         Ok(())
     }
@@ -102,7 +107,9 @@ impl Release {
     pub(super) fn verify(&self, bytes: &[u8], expected_target: &str) -> Result<(), String> {
         self.validate(expected_target)?;
         if bytes.len() as u64 != self.size || digest(bytes) != self.sha256 {
-            return Err("Zuse archive size or SHA256 differs from the official release asset".into());
+            return Err(
+                "Zuse archive size or SHA256 differs from the official release asset".into(),
+            );
         }
         Ok(())
     }
@@ -151,7 +158,10 @@ pub(super) fn select(
         ".tar.gz"
     };
     let name = format!("zuse-{}-{target}{suffix}", metadata.tag_name);
-    let mut matches = metadata.assets.into_iter().filter(|asset| asset.name == name);
+    let mut matches = metadata
+        .assets
+        .into_iter()
+        .filter(|asset| asset.name == name);
     let asset = matches
         .next()
         .ok_or_else(|| format!("The official Zuse release has no exact asset {name}"))?;
@@ -195,11 +205,7 @@ fn allowed_url(url: &reqwest::Url) -> bool {
         )
 }
 
-async fn bounded(
-    client: &reqwest::Client,
-    url: &str,
-    limit: usize,
-) -> Result<Vec<u8>, String> {
+async fn bounded(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8>, String> {
     let mut response = client
         .get(url)
         .send()
@@ -208,7 +214,9 @@ async fn bounded(
         .error_for_status()
         .map_err(|error| error.to_string())?;
     if !allowed_url(response.url())
-        || response.content_length().is_some_and(|size| size > limit as u64)
+        || response
+            .content_length()
+            .is_some_and(|size| size > limit as u64)
     {
         return Err("Zuse download URL or response length is outside the release policy".into());
     }
@@ -222,9 +230,7 @@ async fn bounded(
     Ok(bytes)
 }
 
-pub(super) async fn download(
-    requested: Option<&str>,
-) -> Result<(Release, Vec<u8>), String> {
+pub(super) async fn download(requested: Option<&str>) -> Result<(Release, Vec<u8>), String> {
     let requested = requested.map(version).transpose()?;
     let target = target()?;
     let client = reqwest::Client::builder()

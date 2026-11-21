@@ -3071,8 +3071,7 @@ mod tests {
         assert_eq!(output, b"\t");
         assert_eq!(keys.len(), 1);
         assert!(matches!(keys[0], Key::Select));
-        let (output, keys) =
-            keyboard.feed(b"\x1b[99;3u", Instant::now(), false, true, false);
+        let (output, keys) = keyboard.feed(b"\x1b[99;3u", Instant::now(), false, true, false);
         assert!(output.is_empty());
         assert!(matches!(keys.as_slice(), [Key::Select]));
     }
@@ -3169,7 +3168,6 @@ mod tests {
         assert!(!state.conversation.content_focus);
         assert_eq!(state.conversation.composer.text(), "/audit ");
     }
-
 
     #[cfg(unix)]
     #[test]

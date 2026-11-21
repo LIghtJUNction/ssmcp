@@ -38,7 +38,9 @@ pub(crate) fn prepare_finish(
 ) -> Result<FinishReceipt, String> {
     let scope = RequestScope::current()?;
     if scope.requester.thread_id != recipient {
-        return Err("finish_scope_mismatch: recipient must be the authenticated asking thread".into());
+        return Err(
+            "finish_scope_mismatch: recipient must be the authenticated asking thread".into(),
+        );
     }
     if let Some(id) = request_id {
         let queue = state().lock().unwrap_or_else(|error| error.into_inner());
@@ -52,7 +54,12 @@ pub(crate) fn prepare_finish(
     let owner = history::capture();
     let (question, created, view) = {
         let mut queue = state().lock().unwrap_or_else(|error| error.into_inner());
-        let (question, created) = queue.ask_owned(request, Some(scope.clone()), QuestionKind::Finish, Some(owner))?;
+        let (question, created) = queue.ask_owned(
+            request,
+            Some(scope.clone()),
+            QuestionKind::Finish,
+            Some(owner),
+        )?;
         let view = queue.finish_view_for(&scope, &question.id)?;
         (question, created, view)
     };
@@ -84,7 +91,10 @@ pub(crate) fn validate_finish_owner(
     let original = RequestScope::from_call(original)?;
     let current = RequestScope::current()?;
     if !original.same_thread(&current) {
-        return Err("finish_scope_mismatch: this wait belongs to another thread, account or connection".into());
+        return Err(
+            "finish_scope_mismatch: this wait belongs to another thread, account or connection"
+                .into(),
+        );
     }
     let queue = state().lock().unwrap_or_else(|error| error.into_inner());
     queue.validate_scope(&current)?;
@@ -96,7 +106,9 @@ pub(crate) fn validate_finish_owner(
 
 pub(crate) fn cancel_finish(id: &str, reason: &str) -> Result<FinishReceipt, String> {
     let scope = RequestScope::current()?;
-    let view = state().lock().unwrap_or_else(|error| error.into_inner())
+    let view = state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
         .cancel_finish_for(&scope, id, reason)?;
     notify();
     FinishReceipt::from_view(view, false)
@@ -113,7 +125,9 @@ impl FinishWait {
     pub(crate) fn begin(id: &str, recipient: &str) -> Result<Self, String> {
         let scope = RequestScope::current()?;
         if scope.requester.thread_id != recipient {
-            return Err("finish_scope_mismatch: recipient must be the authenticated asking thread".into());
+            return Err(
+                "finish_scope_mismatch: recipient must be the authenticated asking thread".into(),
+            );
         }
         // Subscribe before the first observation; changes cannot be lost between
         // examining a Pending decision and polling changed().
@@ -124,7 +138,12 @@ impl FinishWait {
             return Err("finish_busy: this exact request already has an active waiter".into());
         }
         queue.finish_waiting.insert(id.into(), 1);
-        Ok(Self { request_id: id.into(), scope, changes, keep: false })
+        Ok(Self {
+            request_id: id.into(),
+            scope,
+            changes,
+            keep: false,
+        })
     }
 
     pub(crate) fn receipt(&self) -> Result<FinishReceipt, String> {
@@ -146,8 +165,13 @@ impl FinishWait {
             if std::time::Instant::now() >= deadline {
                 return Ok(None);
             }
-            let revision = finish.decision.as_ref().ok_or("finish_decision_missing")?.revision;
-            let consumed = queue.consume_finish_revision(&self.scope, &self.request_id, revision)?;
+            let revision = finish
+                .decision
+                .as_ref()
+                .ok_or("finish_decision_missing")?
+                .revision;
+            let consumed =
+                queue.consume_finish_revision(&self.scope, &self.request_id, revision)?;
             self.keep = true;
             return FinishReceipt::from_view(consumed, true).map(Some);
         }
@@ -156,7 +180,10 @@ impl FinishWait {
     }
 
     pub(crate) async fn changed(&mut self) -> Result<(), String> {
-        self.changes.changed().await.map_err(|_| "finish decision channel closed".into())
+        self.changes
+            .changed()
+            .await
+            .map_err(|_| "finish decision channel closed".into())
     }
 
     pub(crate) fn end(&mut self, timed_out: bool) -> Result<FinishReceipt, String> {
@@ -164,7 +191,9 @@ impl FinishWait {
         if timed_out {
             return self.receipt();
         }
-        let view = state().lock().unwrap_or_else(|error| error.into_inner())
+        let view = state()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
             .cancel_finish_for(&self.scope, &self.request_id, "wait_cancelled")?;
         notify();
         FinishReceipt::from_view(view, false)

@@ -1,8 +1,8 @@
 //! Per-run waiting receipts. User bodies stay in the authenticated queue until
 //! the final HTTP response can commit and include exactly those revisions.
 use super::{AuditRun, RunBinding};
-use crate::steering::Reservation;
 use crate::client::interface::questions::{FinishReceipt, FinishStatus};
+use crate::steering::Reservation;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -48,10 +48,14 @@ impl Arguments {
             return Err("user wait timeout_ms must be 1000..=25000".into());
         }
         if self.finish_request_id.as_ref().is_some_and(|id| {
-            self.intent != Intent::Finish || id.is_empty() || id.len() > 128
+            self.intent != Intent::Finish
+                || id.is_empty()
+                || id.len() > 128
                 || !id.bytes().all(|byte| byte.is_ascii_graphic())
         }) {
-            return Err("finish_request_id is only a visible exact request ID for intent finish".into());
+            return Err(
+                "finish_request_id is only a visible exact request ID for intent finish".into(),
+            );
         }
         if self.reason.as_ref().is_some_and(|reason| {
             reason.trim().is_empty() || reason.len() > 512 || reason.chars().any(char::is_control)
@@ -215,7 +219,10 @@ impl AuditRun {
             record.outcome = outcome;
             record.reason = Some(reason);
             record.reservation.take();
-            if matches!(outcome, Outcome::AuthorizationRevoked | Outcome::BindingInvalid | Outcome::Disconnected) {
+            if matches!(
+                outcome,
+                Outcome::AuthorizationRevoked | Outcome::BindingInvalid | Outcome::Disconnected
+            ) {
                 record.finish_decision = None;
             }
         }
@@ -229,7 +236,8 @@ impl AuditRun {
     ) {
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(record) = waits.records.get_mut(client_id)
-            && record.intent == Intent::Finish && record.outcome == Outcome::Waiting
+            && record.intent == Intent::Finish
+            && record.outcome == Outcome::Waiting
         {
             record.finish_request_id = request_id;
             record.finish_episode = Some(episode);
@@ -237,22 +245,36 @@ impl AuditRun {
     }
 
     pub(crate) fn capture_finish_wait(&self, client_id: &str, data: &Value) -> bool {
-        let Ok(receipt) = serde_json::from_value::<FinishReceipt>(data["finish_decision"].clone()) else {
+        let Ok(receipt) = serde_json::from_value::<FinishReceipt>(data["finish_decision"].clone())
+        else {
             return false;
         };
         if data["finish_request_id"] != receipt.request_id
-            || receipt.request_id.is_empty() || receipt.request_id.len() > 128
-            || !receipt.request_id.bytes().all(|byte| byte.is_ascii_graphic())
+            || receipt.request_id.is_empty()
+            || receipt.request_id.len() > 128
+            || !receipt
+                .request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic())
             || (receipt.consumed && !receipt.human_permission())
             || serde_json::to_vec(&receipt).map_or(true, |bytes| bytes.len() > 1024)
         {
             return false;
         }
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(record) = waits.records.get_mut(client_id) else { return false };
-        if record.intent != Intent::Finish || record.recipient.agent_id().is_none()
-            || record.finish_request_id.as_ref().is_some_and(|id| id != &receipt.request_id)
-            || matches!(record.outcome, Outcome::AuthorizationRevoked | Outcome::BindingInvalid | Outcome::Disconnected)
+        let Some(record) = waits.records.get_mut(client_id) else {
+            return false;
+        };
+        if record.intent != Intent::Finish
+            || record.recipient.agent_id().is_none()
+            || record
+                .finish_request_id
+                .as_ref()
+                .is_some_and(|id| id != &receipt.request_id)
+            || matches!(
+                record.outcome,
+                Outcome::AuthorizationRevoked | Outcome::BindingInvalid | Outcome::Disconnected
+            )
         {
             return false;
         }
@@ -262,19 +284,28 @@ impl AuditRun {
     }
 
     pub(crate) fn finish_request_id(&self, client_id: &str) -> Option<String> {
-        self.waits.lock().unwrap_or_else(|error| error.into_inner())
-            .records.get(client_id).and_then(|record| record.finish_request_id.clone())
+        self.waits
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .records
+            .get(client_id)
+            .and_then(|record| record.finish_request_id.clone())
     }
 
     pub(crate) fn finish_decision_ready(&self, client_id: &str) -> bool {
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(record) = waits.records.get_mut(client_id)
-            && record.intent == Intent::Finish && record.outcome == Outcome::Waiting
-            && record.finish_decision.as_ref().is_some_and(|receipt| matches!(
-                receipt.status,
-                FinishStatus::Denied | FinishStatus::Cancelled
-                    | FinishStatus::Invalidated | FinishStatus::Completed
-            ))
+            && record.intent == Intent::Finish
+            && record.outcome == Outcome::Waiting
+            && record.finish_decision.as_ref().is_some_and(|receipt| {
+                matches!(
+                    receipt.status,
+                    FinishStatus::Denied
+                        | FinishStatus::Cancelled
+                        | FinishStatus::Invalidated
+                        | FinishStatus::Completed
+                )
+            })
         {
             record.outcome = Outcome::DecisionReady;
             true
@@ -287,7 +318,9 @@ impl AuditRun {
     /// Native completion alone is not the outer response's approval receipt.
     pub(crate) fn commit_finish_wait(&self, client_id: &str, episode: &str) {
         let mut waits = self.waits.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(record) = waits.records.get_mut(client_id) else { return };
+        let Some(record) = waits.records.get_mut(client_id) else {
+            return;
+        };
         if record.outcome != Outcome::DecisionReady {
             return;
         }
@@ -383,7 +416,8 @@ impl AuditRun {
             .values_mut()
             .filter_map(|record| {
                 if record.outcome != Outcome::Waiting
-                    && !(include_ready && matches!(record.outcome, Outcome::Ready | Outcome::DecisionReady))
+                    && !(include_ready
+                        && matches!(record.outcome, Outcome::Ready | Outcome::DecisionReady))
                 {
                     return None;
                 }
@@ -578,8 +612,13 @@ mod tests {
             agent_id: "asking-agent".into(),
             token: "synthetic-token".into(),
         });
-        run.begin_user_wait("room", recipient, Intent::Finish).unwrap();
-        run.begin_finish_wait("room", Some("question_exact".into()), "episode_before".into());
+        run.begin_user_wait("room", recipient, Intent::Finish)
+            .unwrap();
+        run.begin_finish_wait(
+            "room",
+            Some("question_exact".into()),
+            "episode_before".into(),
+        );
         run
     }
 
@@ -623,8 +662,11 @@ mod tests {
     #[test]
     fn revoked_cancelled_or_read_only_finish_receipts_never_allow_ending() {
         for outcome in [
-            Outcome::AuthorizationRevoked, Outcome::BindingInvalid, Outcome::Disconnected,
-            Outcome::Cancelled, Outcome::TimedOut,
+            Outcome::AuthorizationRevoked,
+            Outcome::BindingInvalid,
+            Outcome::Disconnected,
+            Outcome::Cancelled,
+            Outcome::TimedOut,
         ] {
             let run = finish_run();
             assert!(run.capture_finish_wait("room", &consumed_human_decision()));
@@ -641,5 +683,4 @@ mod tests {
         run.commit_finish_wait("room", "episode_before");
         assert_eq!(run.user_wait_receipt("room")["may_finish"], false);
     }
-
 }

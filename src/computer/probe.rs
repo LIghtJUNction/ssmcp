@@ -14,11 +14,25 @@ pub(super) async fn version(path: &Path) -> Result<Value, String> {
     let sha256 = release::digest(&bytes);
     let size = bytes.len();
     let mut command = tokio::process::Command::new(path);
-    command.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut process = crate::backend::process::Managed::spawn(&mut command)
         .map_err(|error| format!("Could not run the standalone Zuse executable: {error}"))?;
-    let mut stdout = process.child.stdout.take().ok_or("Zuse version stdout is unavailable")?.take(OUTPUT_LIMIT + 1);
-    let mut stderr = process.child.stderr.take().ok_or("Zuse version stderr is unavailable")?.take(OUTPUT_LIMIT + 1);
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or("Zuse version stdout is unavailable")?
+        .take(OUTPUT_LIMIT + 1);
+    let mut stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or("Zuse version stderr is unavailable")?
+        .take(OUTPUT_LIMIT + 1);
     let mut out = Vec::new();
     let mut err = Vec::new();
     let outcome = tokio::time::timeout(DEADLINE, async {
@@ -34,12 +48,22 @@ pub(super) async fn version(path: &Path) -> Result<Value, String> {
             return Err("Zuse --version exceeded its output limit".to_string());
         }
         if !status.success() {
-            return Err(format!("Zuse --version failed ({status}): {}", String::from_utf8_lossy(&err)));
+            return Err(format!(
+                "Zuse --version failed ({status}): {}",
+                String::from_utf8_lossy(&err)
+            ));
         }
-        let text = std::str::from_utf8(&out).map_err(|error| error.to_string())?.trim();
-        let value = text.strip_prefix("zuse ").ok_or("Zuse --version returned an unexpected identity")?;
-        if value.is_empty() || value.len() > 128
-            || !value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+        let text = std::str::from_utf8(&out)
+            .map_err(|error| error.to_string())?
+            .trim();
+        let value = text
+            .strip_prefix("zuse ")
+            .ok_or("Zuse --version returned an unexpected identity")?;
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
         {
             return Err("Zuse --version returned an invalid version token".into());
         }
@@ -48,7 +72,10 @@ pub(super) async fn version(path: &Path) -> Result<Value, String> {
             return Err("Zuse --version returned more than one line".into());
         }
         Ok(version)
-    }).await.map_err(|_| "Zuse --version exceeded its three-second deadline".to_string()).and_then(|result| result);
+    })
+    .await
+    .map_err(|_| "Zuse --version exceeded its three-second deadline".to_string())
+    .and_then(|result| result);
     process.shutdown().await;
     let version = outcome?;
     let (after, current) = storage::bytes(path, MAX_EXECUTABLE)?;

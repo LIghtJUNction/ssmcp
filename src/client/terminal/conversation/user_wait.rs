@@ -453,7 +453,13 @@ mod tests {
             // Removing the real wait must also remove its red alert. A live
             // background task still has a clock, but is not waiting for a human.
             state.conversation.content_focus = false;
-            state.conversation.wait_fixture.as_mut().unwrap().active.clear();
+            state
+                .conversation
+                .wait_fixture
+                .as_mut()
+                .unwrap()
+                .active
+                .clear();
             state.panel.tasks = vec![crate::client::panel::TaskView {
                 id: "#background".into(),
                 description: "Ordinary background work".into(),

@@ -117,9 +117,15 @@ pub(super) async fn wait_observed(
     };
     // watch retains a change that happens before changed() is first polled.
     let mut changed = session.steering.subscribe();
-    let episode_id = session.steering.episode(&client_id, &recipient.owner, recipient.agent_id());
+    let episode_id = session
+        .steering
+        .episode(&client_id, &recipient.owner, recipient.agent_id());
     if arguments.intent == Intent::Finish {
-        run.begin_finish_wait(&client_id, arguments.finish_request_id.clone(), episode_id.clone());
+        run.begin_finish_wait(
+            &client_id,
+            arguments.finish_request_id.clone(),
+            episode_id.clone(),
+        );
     }
     match session
         .steering
@@ -282,8 +288,14 @@ pub(super) async fn wait_observed(
             let status = data.as_ref().and_then(|data| data["status"].as_str());
             let negative = match status {
                 Some("ready") => None,
-                Some("decided") if arguments.intent == Intent::Finish
-                    && data.as_ref().is_some_and(|data| run.capture_finish_wait(&client_id, data)) => None,
+                Some("decided")
+                    if arguments.intent == Intent::Finish
+                        && data
+                            .as_ref()
+                            .is_some_and(|data| run.capture_finish_wait(&client_id, data)) =>
+                {
+                    None
+                }
                 Some("cancelled") => Some(Outcome::Cancelled),
                 Some("timed_out") => Some(Outcome::TimedOut),
                 Some("disconnected") => Some(Outcome::Disconnected),
@@ -323,9 +335,16 @@ pub(super) async fn cancel_native(
             let Ok(session) = broker.client(user, &authorization, &client_id).await else {
                 continue;
             };
-            let Some(recipient) = run.wait_recipient(&client_id) else { continue };
-            if recipient.connection.upgrade().is_none_or(|original| !Arc::ptr_eq(&original, &session))
-                || authorized(broker, user, token, &client_id, &session, &recipient).await.is_err()
+            let Some(recipient) = run.wait_recipient(&client_id) else {
+                continue;
+            };
+            if recipient
+                .connection
+                .upgrade()
+                .is_none_or(|original| !Arc::ptr_eq(&original, &session))
+                || authorized(broker, user, token, &client_id, &session, &recipient)
+                    .await
+                    .is_err()
             {
                 continue;
             }
@@ -873,21 +892,30 @@ mod tests {
         run.begin_user_wait(
             session.client_id(),
             recipient.clone(),
-            if finish { Intent::Finish } else { Intent::NeedUser },
+            if finish {
+                Intent::Finish
+            } else {
+                Intent::NeedUser
+            },
         )
         .unwrap();
         if finish {
             let episode = session.steering.episode(
-                session.client_id(), &recipient.owner, recipient.agent_id(),
+                session.client_id(),
+                &recipient.owner,
+                recipient.agent_id(),
             );
             run.begin_finish_wait(session.client_id(), Some("question_exact".into()), episode);
-            assert!(run.capture_finish_wait(session.client_id(), &json!({
-                "finish_request_id":"question_exact","finish_decision":{
-                    "request_id":"question_exact","status":"completed","choice":"yes",
-                    "actor":{"origin":"human"},"revision":1,"consumed":true,
-                    "invalidation_reason":null
-                }
-            })));
+            assert!(run.capture_finish_wait(
+                session.client_id(),
+                &json!({
+                    "finish_request_id":"question_exact","finish_decision":{
+                        "request_id":"question_exact","status":"completed","choice":"yes",
+                        "actor":{"origin":"human"},"revision":1,"consumed":true,
+                        "invalidation_reason":null
+                    }
+                })
+            ));
             assert!(run.finish_decision_ready(session.client_id()));
         } else {
             run.reserve_user_wait(
@@ -985,37 +1013,72 @@ mod tests {
             let (report, session) = identity_report(true, true).await;
             let eligible = eligible_user_response(&report).await.unwrap();
             assert_eq!(eligible.len(), 1);
-            assert_eq!(report.run.user_wait_receipt(session.client_id())["may_finish"], false);
+            assert_eq!(
+                report.run.user_wait_receipt(session.client_id())["may_finish"],
+                false
+            );
             match failure {
                 "oauth" => report.broker.oauth.revoke_subject("42").unwrap(),
-                "ban" => { report.broker.user_policies.set("42", true, None); }
+                "ban" => {
+                    report.broker.user_policies.set("42", true, None);
+                }
                 "agent" => {
-                    let binding = report.run.wait_recipient(session.client_id()).unwrap().binding.unwrap();
-                    session.collaboration.dispatch(&binding.owner, "leave",
-                        json!({"agent_id":binding.agent_id,"token":binding.token})).await.unwrap();
+                    let binding = report
+                        .run
+                        .wait_recipient(session.client_id())
+                        .unwrap()
+                        .binding
+                        .unwrap();
+                    session
+                        .collaboration
+                        .dispatch(
+                            &binding.owner,
+                            "leave",
+                            json!({"agent_id":binding.agent_id,"token":binding.token}),
+                        )
+                        .await
+                        .unwrap();
                 }
                 "input" => {
-                    session.steering.command(session.client_id(), vec![], SteeringCommand::Publish {
-                        command_id:"after-decision".into(), message_id:"new-input".into(),
-                        expected_revision:0, text:"Keep working on this request.".into(),
-                        target:"next".into(),
-                    }).unwrap();
+                    session
+                        .steering
+                        .command(
+                            session.client_id(),
+                            vec![],
+                            SteeringCommand::Publish {
+                                command_id: "after-decision".into(),
+                                message_id: "new-input".into(),
+                                expected_revision: 0,
+                                text: "Keep working on this request.".into(),
+                                target: "next".into(),
+                            },
+                        )
+                        .unwrap();
                 }
                 "none" => {}
                 _ => unreachable!(),
             }
-            let response = append(commit_user_response(&report, original(), eligible), &report.run);
+            let response = append(
+                commit_user_response(&report, original(), eligible),
+                &report.run,
+            );
             let receipt = &response["structuredContent"]["user_wait"][0];
             assert_eq!(receipt["may_finish"], failure == "none");
             assert_eq!(receipt["finish_request_id"], "question_exact");
-            assert_eq!(receipt["status"], match failure {
-                "none" => "decided",
-                "input" => "superseded",
-                "agent" => "binding_invalid",
-                _ => "authorization_revoked",
-            });
+            assert_eq!(
+                receipt["status"],
+                match failure {
+                    "none" => "decided",
+                    "input" => "superseded",
+                    "agent" => "binding_invalid",
+                    _ => "authorization_revoked",
+                }
+            );
             assert!(response["structuredContent"].get("user_messages").is_none());
-            let queued = session.steering.command(session.client_id(), vec![], SteeringCommand::Snapshot {}).unwrap();
+            let queued = session
+                .steering
+                .command(session.client_id(), vec![], SteeringCommand::Snapshot {})
+                .unwrap();
             if failure == "input" {
                 assert_eq!(queued.messages.len(), 1);
                 assert_eq!(queued.messages[0].state, SteeringState::Queued);
@@ -1025,5 +1088,4 @@ mod tests {
             }
         }
     }
-
 }

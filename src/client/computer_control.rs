@@ -187,7 +187,10 @@ mod tests {
         ] {
             assert_eq!(
                 parse(&args(&[command])).unwrap(),
-                Request::Compatibility { action, json: false }
+                Request::Compatibility {
+                    action,
+                    json: false
+                }
             );
             assert_eq!(
                 parse(&args(&["--json", command])).unwrap(),

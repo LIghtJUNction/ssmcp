@@ -25,11 +25,19 @@ fn binary(target: &str) -> Vec<u8> {
         bytes[..4].copy_from_slice(b"\x7fELF");
         bytes[4] = 2;
         bytes[5] = 1;
-        let machine = if target.starts_with("aarch64-") { 183u16 } else { 62u16 };
+        let machine = if target.starts_with("aarch64-") {
+            183u16
+        } else {
+            62u16
+        };
         bytes[18..20].copy_from_slice(&machine.to_le_bytes());
     } else if target.ends_with("-apple-darwin") {
         bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
-        let cpu = if target.starts_with("aarch64-") { 0x0100000cu32 } else { 0x01000007u32 };
+        let cpu = if target.starts_with("aarch64-") {
+            0x0100000cu32
+        } else {
+            0x01000007u32
+        };
         bytes[4..8].copy_from_slice(&cpu.to_le_bytes());
     } else {
         bytes[..2].copy_from_slice(b"MZ");
@@ -40,12 +48,21 @@ fn binary(target: &str) -> Vec<u8> {
 }
 
 fn release(target: &str, bytes: &[u8]) -> release::Release {
-    let suffix = if target.ends_with("-windows-msvc") { ".zip" } else { ".tar.gz" };
+    let suffix = if target.ends_with("-windows-msvc") {
+        ".zip"
+    } else {
+        ".tar.gz"
+    };
     let name = format!("zuse-v0.3.0-{target}{suffix}");
     release::Release {
-        version: "0.3.0".into(), tag: "v0.3.0".into(), target: target.into(),
-        release_id: 1, asset_id: 2, asset_name: name.clone(),
-        size: bytes.len() as u64, sha256: release::digest(bytes),
+        version: "0.3.0".into(),
+        tag: "v0.3.0".into(),
+        target: target.into(),
+        release_id: 1,
+        asset_id: 2,
+        asset_name: name.clone(),
+        size: bytes.len() as u64,
+        sha256: release::digest(bytes),
         url: format!("https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/{name}"),
     }
 }
@@ -73,7 +90,9 @@ fn zip_members(target: &str, entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(*mode);
-        archive.start_file(format!("zuse-v0.3.0-{target}/{name}"), options).unwrap();
+        archive
+            .start_file(format!("zuse-v0.3.0-{target}/{name}"), options)
+            .unwrap();
         archive.write_all(bytes).unwrap();
     }
     archive.finish().unwrap().into_inner()
@@ -82,17 +101,33 @@ fn zip_members(target: &str, entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
 fn package(target: &str) -> (release::Release, Vec<u8>, Vec<u8>) {
     let executable = binary(target);
     let bytes = if target.ends_with("-windows-msvc") {
-        zip_members(target, &[
-            ("zuse.exe", &executable, 0o755),
-            ("README.md", b"release documentation", 0o644),
-            ("examples/observe.zuse", b"schema()", 0o644),
-        ])
+        zip_members(
+            target,
+            &[
+                ("zuse.exe", &executable, 0o755),
+                ("README.md", b"release documentation", 0o644),
+                ("examples/observe.zuse", b"schema()", 0o644),
+            ],
+        )
     } else {
-        tar_members(target, &[
-            ("zuse", &executable, 0o755, tar::EntryType::Regular),
-            ("README.md", b"release documentation", 0o644, tar::EntryType::Regular),
-            ("docs/language.md", b"language", 0o644, tar::EntryType::Regular),
-        ])
+        tar_members(
+            target,
+            &[
+                ("zuse", &executable, 0o755, tar::EntryType::Regular),
+                (
+                    "README.md",
+                    b"release documentation",
+                    0o644,
+                    tar::EntryType::Regular,
+                ),
+                (
+                    "docs/language.md",
+                    b"language",
+                    0o644,
+                    tar::EntryType::Regular,
+                ),
+            ],
+        )
     };
     (release(target, &bytes), bytes, executable)
 }
@@ -109,9 +144,13 @@ fn official_asset_requires_exact_digest_size_tag_target_and_single_match() {
         "id":receipt.release_id, "tag_name":receipt.tag,
         "draft":false, "prerelease":false, "assets":[asset.clone()]
     });
-    let select = |value: &Value| release::select(
-        &serde_json::to_vec(value).unwrap(), Some("0.3.0"), &receipt.target,
-    );
+    let select = |value: &Value| {
+        release::select(
+            &serde_json::to_vec(value).unwrap(),
+            Some("0.3.0"),
+            &receipt.target,
+        )
+    };
     assert_eq!(select(&metadata).unwrap(), receipt);
     let mut missing_digest = metadata.clone();
     missing_digest["assets"][0]["digest"] = Value::Null;
@@ -128,7 +167,11 @@ fn official_asset_requires_exact_digest_size_tag_target_and_single_match() {
     let mut changed = bytes.clone();
     changed[0] ^= 1;
     assert!(receipt.verify(&changed, &receipt.target).is_err());
-    assert!(receipt.verify(&bytes[..bytes.len() - 1], &receipt.target).is_err());
+    assert!(
+        receipt
+            .verify(&bytes[..bytes.len() - 1], &receipt.target)
+            .is_err()
+    );
     assert!(receipt.verify(&bytes, "aarch64-unknown-linux-gnu").is_err());
     assert!(release::version("../latest").is_err());
     assert!(release::version("0.3.0-beta").is_err());
@@ -136,9 +179,16 @@ fn official_asset_requires_exact_digest_size_tag_target_and_single_match() {
 
 #[test]
 fn archives_extract_only_the_expected_regular_platform_executable() {
-    for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"] {
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ] {
         let (receipt, bytes, executable) = package(target);
-        assert_eq!(archive::executable(&bytes, &receipt, target).unwrap(), executable);
+        assert_eq!(
+            archive::executable(&bytes, &receipt, target).unwrap(),
+            executable
+        );
     }
 }
 
@@ -147,7 +197,8 @@ fn windows_zip_accepts_the_official_dos_creator_without_posix_execute_bits() {
     let target = "x86_64-pc-windows-msvc";
     let executable = binary(target);
     let mut bytes = zip_members(target, &[("zuse.exe", &executable, 0o755)]);
-    let directory = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap()
+    let directory = zip::ZipArchive::new(Cursor::new(&bytes))
+        .unwrap()
         .central_directory_start() as usize;
     // The high byte of "version made by" is the creator OS. This reproduces
     // Python ZipInfo on Windows: DOS creator, with Unix bits in external_attr.
@@ -156,7 +207,10 @@ fn windows_zip_accepts_the_official_dos_creator_without_posix_execute_bits() {
     let mut parsed = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
     assert_eq!(parsed.by_index(0).unwrap().unix_mode().unwrap() & 0o111, 0);
     let receipt = release(target, &bytes);
-    assert_eq!(archive::executable(&bytes, &receipt, target).unwrap(), executable);
+    assert_eq!(
+        archive::executable(&bytes, &receipt, target).unwrap(),
+        executable
+    );
 }
 
 #[test]
@@ -187,7 +241,10 @@ fn zip_rejects_extra_executables_unsafe_paths_and_damaged_payload() {
     let target = "x86_64-pc-windows-msvc";
     let exe = binary(target);
     for name in ["../escape", "folder\\escape", "second.exe"] {
-        let bytes = zip_members(target, &[("zuse.exe", &exe, 0o755), (name, b"unwanted", 0o755)]);
+        let bytes = zip_members(
+            target,
+            &[("zuse.exe", &exe, 0o755), (name, b"unwanted", 0o755)],
+        );
         assert!(archive::executable(&bytes, &release(target, &bytes), target).is_err());
     }
     let (receipt, mut bytes, _) = package(target);
@@ -220,13 +277,26 @@ fn install_is_private_atomic_and_never_changes_an_external_entry() {
     assert_eq!(fs::read(&path).unwrap(), binary);
     assert_eq!(fs::read(&external).unwrap(), b"external 0.4.0");
     assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
-    assert!(fs::read_dir(root.join("installations")).unwrap()
-        .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".pending")));
+    assert!(
+        fs::read_dir(root.join("installations"))
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".pending"))
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
     assert!(store.uninstall("../external-zuse").is_err());
     store.uninstall(&receipt.installation_id).unwrap();
@@ -270,7 +340,12 @@ fn canonical_owned_path_keeps_receipt_identity_and_external_paths_stay_unmanaged
     assert_eq!(matched.installation_id, receipt.installation_id);
     let external = temporary.0.join("external-zuse");
     fs::write(&external, b"external").unwrap();
-    assert!(store.matching(&external.canonicalize().unwrap()).unwrap().is_none());
+    assert!(
+        store
+            .matching(&external.canonicalize().unwrap())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -295,7 +370,13 @@ fn install_rechecks_cached_download_before_publishing_any_executable() {
     let store = storage::Store::open(&root, true).unwrap().unwrap();
     let (release, bytes, _) = package(release::target().unwrap());
     let receipt = store.save_download(release, &bytes).unwrap();
-    fs::write(root.join("downloads").join(&receipt.download_id).join("archive"), b"changed").unwrap();
+    fs::write(
+        root.join("downloads")
+            .join(&receipt.download_id)
+            .join("archive"),
+        b"changed",
+    )
+    .unwrap();
     assert!(store.install(&receipt.download_id).is_err());
     assert_eq!(fs::read_dir(root.join("installations")).unwrap().count(), 0);
 }
@@ -303,7 +384,11 @@ fn install_rechecks_cached_download_before_publishing_any_executable() {
 #[cfg(unix)]
 fn fake_cli(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
-    fs::write(path, format!("#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = --version ] || exit 22\n{body}\n")).unwrap();
+    fs::write(
+        path,
+        format!("#!/bin/sh\n[ \"$#\" -eq 1 ] && [ \"$1\" = --version ] || exit 22\n{body}\n"),
+    )
+    .unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
@@ -326,28 +411,55 @@ async fn version_has_a_real_deadline_and_owned_process_cleanup() {
     let temporary = Temporary::new();
     let path = temporary.0.join("zuse");
     fake_cli(&path, "exec sleep 30");
-    assert!(probe::version(&path).await.unwrap_err().contains("deadline"));
+    assert!(
+        probe::version(&path)
+            .await
+            .unwrap_err()
+            .contains("deadline")
+    );
 }
 
 #[tokio::test]
 async fn only_four_lifecycle_tools_exist_and_legacy_actions_are_rejected() {
-    let names = Computer::tools().iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
-    assert_eq!(names, [
-        "ssmcp.computer.version", "ssmcp.computer.download",
-        "ssmcp.computer.install", "ssmcp.computer.uninstall",
-    ]);
+    let names = Computer::tools()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            "ssmcp.computer.version",
+            "ssmcp.computer.download",
+            "ssmcp.computer.install",
+            "ssmcp.computer.uninstall",
+        ]
+    );
     let temporary = Temporary::new();
     let computer = Computer {
         root: temporary.0.join("never-created"),
         operation: Mutex::new(()),
         closed: AtomicBool::new(false),
     };
-    assert!(computer.perform("ssmcp.computer.click", json!({})).await.is_err());
-    assert!(computer.perform("ssmcp.computer.version", json!({"path":"/tmp/arbitrary"})).await.is_err());
+    assert!(
+        computer
+            .perform("ssmcp.computer.click", json!({}))
+            .await
+            .is_err()
+    );
+    assert!(
+        computer
+            .perform("ssmcp.computer.version", json!({"path":"/tmp/arbitrary"}))
+            .await
+            .is_err()
+    );
     assert!(!computer.root.exists());
     computer.shutdown().await.unwrap();
-    assert!(computer.perform("ssmcp.computer.version", json!({})).await.is_err());
+    assert!(
+        computer
+            .perform("ssmcp.computer.version", json!({}))
+            .await
+            .is_err()
+    );
 }
 
 #[cfg(unix)]

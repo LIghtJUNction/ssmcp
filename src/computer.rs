@@ -60,25 +60,34 @@ impl Computer {
             tool(
                 "version",
                 "Query the actual standalone Zuse CLI with a bounded --version. Existing PATH installations are reported without taking ownership or changing them.",
-                json!({}), &[], true, false,
+                json!({}),
+                &[],
+                true,
+                false,
             ),
             tool(
                 "download",
                 "Download an exact official LIghtJUNction/zuse stable release asset for this platform. Requires its published SHA256 and size. Returns a download_id; does not execute or install it.",
                 json!({"version":{"type":"string","maxLength":49,"description":"Optional stable MAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH. Omit for the latest published stable release."}}),
-                &[], false, false,
+                &[],
+                false,
+                false,
             ),
             tool(
                 "install",
                 "Verify a managed download and atomically install only its Zuse executable in private storage. Returns an installation_id and path. Does not replace an external Zuse or add anything to PATH.",
                 json!({"download_id":{"type":"string","pattern":"^[0-9a-f]{32}$"}}),
-                &["download_id"], false, false,
+                &["download_id"],
+                false,
+                false,
             ),
             tool(
                 "uninstall",
                 "Remove only a private Zuse installation whose ownership receipt, file identity and bytes still match this manager. External, Cargo and system installations are never eligible.",
                 json!({"installation_id":{"type":"string","pattern":"^[0-9a-f]{32}$"}}),
-                &["installation_id"], false, true,
+                &["installation_id"],
+                false,
+                true,
             ),
         ]
     }
@@ -134,7 +143,8 @@ impl Computer {
     }
 
     fn store(&self) -> Result<storage::Store, String> {
-        storage::Store::open(&self.root, true)?.ok_or_else(|| "Zuse manager storage is unavailable".into())
+        storage::Store::open(&self.root, true)?
+            .ok_or_else(|| "Zuse manager storage is unavailable".into())
     }
 
     async fn version(&self) -> Result<Value, String> {
@@ -143,7 +153,11 @@ impl Computer {
         if let Ok(selected) = crate::platform::executable("zuse") {
             let path = crate::program::selected_entry(&selected, "zuse")?;
             let store = storage::Store::open(&self.root, false)?;
-            let owned = store.as_ref().map(|store| store.matching(&path)).transpose()?.flatten();
+            let owned = store
+                .as_ref()
+                .map(|store| store.matching(&path))
+                .transpose()?
+                .flatten();
             let mut result = probe::version(&path).await?;
             result["managed"] = json!(owned.is_some());
             result["source"] = json!(if owned.is_some() { "ssmcp" } else { "external" });
@@ -174,7 +188,8 @@ impl Computer {
 }
 
 fn parse<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, String> {
-    serde_json::from_value(args).map_err(|error| format!("Invalid Zuse management arguments: {error}"))
+    serde_json::from_value(args)
+        .map_err(|error| format!("Invalid Zuse management arguments: {error}"))
 }
 
 fn tool(

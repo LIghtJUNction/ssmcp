@@ -21,12 +21,17 @@ fn identity(file: &File) -> Result<Identity, String> {
     {
         use std::os::unix::fs::MetadataExt;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        Ok(Identity { volume: metadata.dev(), file: metadata.ino() })
+        Ok(Identity {
+            volume: metadata.dev(),
+            file: metadata.ino(),
+        })
     }
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
         let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: this live File owns the handle and info is writable.
         if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
@@ -65,25 +70,52 @@ fn owned(metadata: &Metadata) -> bool {
 
 fn open(path: &Path, directory: bool) -> Result<File, String> {
     let before = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-    if !no_links(&before) || (if directory { !before.is_dir() } else { !before.is_file() }) {
-        return Err(format!("Expected a plain {}: {}", if directory { "directory" } else { "file" }, path.display()));
+    if !no_links(&before)
+        || (if directory {
+            !before.is_dir()
+        } else {
+            !before.is_file()
+        })
+    {
+        return Err(format!(
+            "Expected a plain {}: {}",
+            if directory { "directory" } else { "file" },
+            path.display()
+        ));
     }
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 });
+        options.custom_flags(
+            libc::O_NOFOLLOW | libc::O_NONBLOCK | if directory { libc::O_DIRECTORY } else { 0 },
+        );
     }
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | if directory { FILE_FLAG_BACKUP_SEMANTICS } else { 0 });
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        options.custom_flags(
+            FILE_FLAG_OPEN_REPARSE_POINT
+                | if directory {
+                    FILE_FLAG_BACKUP_SEMANTICS
+                } else {
+                    0
+                },
+        );
     }
     let file = options.open(path).map_err(|error| error.to_string())?;
     let after = file.metadata().map_err(|error| error.to_string())?;
-    if !no_links(&after) || (if directory { !after.is_dir() } else { !after.is_file() }) {
+    if !no_links(&after)
+        || (if directory {
+            !after.is_dir()
+        } else {
+            !after.is_file()
+        })
+    {
         return Err("Zuse storage path changed while opening it".into());
     }
     Ok(file)
@@ -93,7 +125,10 @@ fn directory(path: &Path) -> Result<Identity, String> {
     let file = open(path, true)?;
     #[cfg(unix)]
     if !owned(&file.metadata().map_err(|error| error.to_string())?) {
-        return Err(format!("Zuse manager directory is not private and owned: {}", path.display()));
+        return Err(format!(
+            "Zuse manager directory is not private and owned: {}",
+            path.display()
+        ));
     }
     #[cfg(windows)]
     crate::platform::windows::verify_directory(&file).map_err(|error| error.to_string())?;
@@ -104,7 +139,10 @@ fn private_file(path: &Path) -> Result<File, String> {
     let file = open(path, false)?;
     #[cfg(unix)]
     if !owned(&file.metadata().map_err(|error| error.to_string())?) {
-        return Err(format!("Zuse manager file is not private and owned: {}", path.display()));
+        return Err(format!(
+            "Zuse manager file is not private and owned: {}",
+            path.display()
+        ));
     }
     #[cfg(windows)]
     crate::platform::windows::verify_file(&file).map_err(|error| error.to_string())?;
@@ -134,7 +172,8 @@ pub(super) fn bytes(path: &Path, limit: usize) -> Result<(Identity, Vec<u8>), St
 fn read<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
     private_file(path)?;
     let (_, content) = bytes(path, MAX_RECEIPT)?;
-    serde_json::from_slice(&content).map_err(|error| format!("Invalid Zuse ownership receipt: {error}"))
+    serde_json::from_slice(&content)
+        .map_err(|error| format!("Invalid Zuse ownership receipt: {error}"))
 }
 
 fn create(path: &Path, bytes: &[u8], executable: bool) -> Result<Identity, String> {
@@ -161,7 +200,9 @@ fn json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 
 fn sync_directory(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
-    open(path, true)?.sync_all().map_err(|error| error.to_string())?;
+    open(path, true)?
+        .sync_all()
+        .map_err(|error| error.to_string())?;
     #[cfg(windows)]
     let _ = path; // File contents are flushed; Windows rename remains atomic.
     Ok(())
@@ -175,20 +216,25 @@ pub(super) fn id() -> Result<String, String> {
 
 fn valid_id(value: &str) -> bool {
     value.len() == 32
-        && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(super) fn default_root() -> Result<PathBuf, String> {
     #[cfg(windows)]
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     #[cfg(target_os = "macos")]
-    let base = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"));
+    let base = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support"));
     #[cfg(all(unix, not(target_os = "macos")))]
     let base = std::env::var_os("XDG_DATA_HOME")
         .filter(|path| Path::new(path).is_absolute())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-    let base = base.filter(|path| path.is_absolute()).ok_or("An absolute user data directory is required to manage Zuse")?;
+    let base = base
+        .filter(|path| path.is_absolute())
+        .ok_or("An absolute user data directory is required to manage Zuse")?;
     Ok(base.join("ssmcp-zuse-cli"))
 }
 
@@ -280,7 +326,12 @@ impl Drop for Initialization {
                 if directory(path).ok().as_ref() == Some(expected) {
                     let _ = fs::remove_dir(path);
                 }
-            } else if private_file(path).and_then(|file| identity(&file)).ok().as_ref() == Some(expected) {
+            } else if private_file(path)
+                .and_then(|file| identity(&file))
+                .ok()
+                .as_ref()
+                == Some(expected)
+            {
                 let _ = fs::remove_file(path);
             }
         }
@@ -337,13 +388,18 @@ impl Store {
             initialization.file("manager.lock", b"", |file, bytes| file.write_all(bytes))?;
         }
         let lock = private_file(&lock_path)?;
-        crate::platform::lock_file(&lock, true)
-            .map_err(|error| format!("Zuse manager is busy or cannot acquire its ownership lock: {error}"))?;
+        crate::platform::lock_file(&lock, true).map_err(|error| {
+            format!("Zuse manager is busy or cannot acquire its ownership lock: {error}")
+        })?;
         if directory(root)? != root_identity {
             return Err("Zuse manager root changed while acquiring its lock".into());
         }
         if let Some(initialization) = initialization.as_mut() {
-            let owner = Owner { schema: SCHEMA, owner_id: id()?, directory: root_identity.clone() };
+            let owner = Owner {
+                schema: SCHEMA,
+                owner_id: id()?,
+                directory: root_identity.clone(),
+            };
             initialization.directory("downloads")?;
             initialization.directory("installations")?;
             let bytes = serde_json::to_vec_pretty(&owner).map_err(|error| error.to_string())?;
@@ -351,7 +407,8 @@ impl Store {
             sync_directory(root)?;
         }
         let owner: Owner = read(&root.join("owner.json"))?;
-        if owner.schema != SCHEMA || !valid_id(&owner.owner_id) || owner.directory != root_identity {
+        if owner.schema != SCHEMA || !valid_id(&owner.owner_id) || owner.directory != root_identity
+        {
             return Err("Zuse manager ownership receipt does not match this directory".into());
         }
         directory(&root.join("downloads"))?;
@@ -359,7 +416,12 @@ impl Store {
         if let Some(initialization) = initialization.as_mut() {
             initialization.committed = true;
         }
-        Ok(Some(Self { root: root.to_owned(), owner_id: owner.owner_id, root_identity, _lock: lock }))
+        Ok(Some(Self {
+            root: root.to_owned(),
+            owner_id: owner.owner_id,
+            root_identity,
+            _lock: lock,
+        }))
     }
 
     fn check(&self) -> Result<(), String> {
@@ -367,7 +429,10 @@ impl Store {
             return Err("Zuse manager root identity changed".into());
         }
         let owner: Owner = read(&self.root.join("owner.json"))?;
-        if owner.owner_id != self.owner_id || owner.directory != self.root_identity || owner.schema != SCHEMA {
+        if owner.owner_id != self.owner_id
+            || owner.directory != self.root_identity
+            || owner.schema != SCHEMA
+        {
             return Err("Zuse manager ownership changed".into());
         }
         Ok(())
@@ -389,8 +454,12 @@ impl Store {
         let stage = Stage::new(destination)?;
         let archive = create(&stage.path.join("archive"), bytes, false)?;
         let receipt = Download {
-            schema: SCHEMA, owner_id: self.owner_id.clone(), download_id, release,
-            directory: stage.identity.clone(), archive,
+            schema: SCHEMA,
+            owner_id: self.owner_id.clone(),
+            download_id,
+            release,
+            directory: stage.identity.clone(),
+            archive,
         };
         json(&stage.path.join("receipt.json"), &receipt)?;
         stage.publish()?;
@@ -401,8 +470,10 @@ impl Store {
         let path = self.location("downloads", download_id)?;
         exact_files(&path, &["archive", "receipt.json"])?;
         let receipt: Download = read(&path.join("receipt.json"))?;
-        if receipt.schema != SCHEMA || receipt.owner_id != self.owner_id
-            || receipt.download_id != download_id || directory(&path)? != receipt.directory
+        if receipt.schema != SCHEMA
+            || receipt.owner_id != self.owner_id
+            || receipt.download_id != download_id
+            || directory(&path)? != receipt.directory
         {
             return Err("Zuse download ownership does not match this manager".into());
         }
@@ -415,12 +486,23 @@ impl Store {
         let installation_id = id()?;
         let destination = self.location("installations", &installation_id)?;
         let stage = Stage::new(destination)?;
-        let binary_identity = create(&stage.path.join(release::executable_name(&receipt.release.target)), &binary, true)?;
+        let binary_identity = create(
+            &stage
+                .path
+                .join(release::executable_name(&receipt.release.target)),
+            &binary,
+            true,
+        )?;
         let installed = Installation {
-            schema: SCHEMA, owner_id: self.owner_id.clone(), installation_id,
-            download_id: receipt.download_id, release: receipt.release,
-            directory: stage.identity.clone(), binary: binary_identity,
-            binary_size: binary.len() as u64, binary_sha256: release::digest(&binary),
+            schema: SCHEMA,
+            owner_id: self.owner_id.clone(),
+            installation_id,
+            download_id: receipt.download_id,
+            release: receipt.release,
+            directory: stage.identity.clone(),
+            binary: binary_identity,
+            binary_size: binary.len() as u64,
+            binary_sha256: release::digest(&binary),
         };
         json(&stage.path.join("receipt.json"), &installed)?;
         stage.publish()?;
@@ -428,7 +510,9 @@ impl Store {
     }
 
     pub(super) fn executable(&self, installation: &Installation) -> PathBuf {
-        self.root.join("installations").join(&installation.installation_id)
+        self.root
+            .join("installations")
+            .join(&installation.installation_id)
             .join(release::executable_name(&installation.release.target))
     }
 
@@ -436,9 +520,17 @@ impl Store {
         let path = self.location("installations", id)?;
         let receipt: Installation = read(&path.join("receipt.json"))?;
         receipt.release.validate(release::target()?)?;
-        exact_files(&path, &[release::executable_name(&receipt.release.target), "receipt.json"])?;
-        if receipt.schema != SCHEMA || receipt.owner_id != self.owner_id
-            || receipt.installation_id != id || !valid_id(&receipt.download_id)
+        exact_files(
+            &path,
+            &[
+                release::executable_name(&receipt.release.target),
+                "receipt.json",
+            ],
+        )?;
+        if receipt.schema != SCHEMA
+            || receipt.owner_id != self.owner_id
+            || receipt.installation_id != id
+            || !valid_id(&receipt.download_id)
             || directory(&path)? != receipt.directory
         {
             return Err("Zuse installation is not owned by this manager".into());
@@ -446,7 +538,8 @@ impl Store {
         let binary = self.executable(&receipt);
         private_file(&binary)?;
         let (actual_id, content) = bytes(&binary, MAX_EXECUTABLE)?;
-        if actual_id != receipt.binary || content.len() as u64 != receipt.binary_size
+        if actual_id != receipt.binary
+            || content.len() as u64 != receipt.binary_size
             || release::digest(&content) != receipt.binary_sha256
         {
             return Err("Zuse installation identity or bytes changed; refusing ownership".into());
@@ -458,18 +551,28 @@ impl Store {
         self.check()?;
         let mut installed = Vec::new();
         for (index, entry) in fs::read_dir(self.root.join("installations"))
-            .map_err(|error| error.to_string())?.enumerate()
+            .map_err(|error| error.to_string())?
+            .enumerate()
         {
             if index >= 256 {
                 return Err("Too many Zuse installation entries to inspect safely".into());
             }
             let name = entry.map_err(|error| error.to_string())?.file_name();
-            let Some(id) = name.to_str().filter(|name| valid_id(name)) else { continue };
+            let Some(id) = name.to_str().filter(|name| valid_id(name)) else {
+                continue;
+            };
             installed.push(self.verify_installation(id)?);
         }
         installed.sort_by_key(|entry| {
-            (entry.release.version.split('.').map(|part| part.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>(),
-             entry.installation_id.clone())
+            (
+                entry
+                    .release
+                    .version
+                    .split('.')
+                    .map(|part| part.parse::<u32>().unwrap_or(0))
+                    .collect::<Vec<_>>(),
+                entry.installation_id.clone(),
+            )
         });
         Ok(installed.pop())
     }
@@ -478,18 +581,34 @@ impl Store {
         // program::executable returns a canonical path (extended-length on
         // Windows). Compare the same representation on both sides; path
         // equality alone never grants ownership.
-        let executable = executable.canonicalize().map_err(|error| error.to_string())?;
-        let installations = self.root.join("installations").canonicalize()
+        let executable = executable
+            .canonicalize()
             .map_err(|error| error.to_string())?;
-        let Some(parent) = executable.parent() else { return Ok(None) };
+        let installations = self
+            .root
+            .join("installations")
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let Some(parent) = executable.parent() else {
+            return Ok(None);
+        };
         if parent.parent() != Some(installations.as_path()) {
             return Ok(None);
         }
-        let Some(id) = parent.file_name().and_then(|name| name.to_str()).filter(|id| valid_id(id)) else {
+        let Some(id) = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|id| valid_id(id))
+        else {
             return Ok(None);
         };
         let receipt = self.verify_installation(id)?;
-        if self.executable(&receipt).canonicalize().map_err(|error| error.to_string())? != executable {
+        if self
+            .executable(&receipt)
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            != executable
+        {
             return Ok(None);
         }
         Ok(Some(receipt))
@@ -503,7 +622,9 @@ impl Store {
         // published namespace before removing its two known ordinary files.
         fs::rename(&path, &tombstone).map_err(|error| error.to_string())?;
         if directory(&tombstone)? != receipt.directory {
-            return Err("Zuse installation changed before removal; no contents were deleted".into());
+            return Err(
+                "Zuse installation changed before removal; no contents were deleted".into(),
+            );
         }
         let name = release::executable_name(&receipt.release.target);
         exact_files(&tombstone, &[name, "receipt.json"])?;
@@ -521,12 +642,19 @@ impl Store {
 
 fn exact_files(path: &Path, names: &[&str]) -> Result<(), String> {
     directory(path)?;
-    let entries = fs::read_dir(path).map_err(|error| error.to_string())?
+    let entries = fs::read_dir(path)
+        .map_err(|error| error.to_string())?
         .take(names.len() + 1)
-        .map(|entry| entry.map(|entry| entry.file_name()).map_err(|error| error.to_string()))
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(|error| error.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if entries.len() != names.len()
-        || entries.iter().any(|entry| !entry.to_str().is_some_and(|entry| names.contains(&entry)))
+        || entries
+            .iter()
+            .any(|entry| !entry.to_str().is_some_and(|entry| names.contains(&entry)))
     {
         return Err("Zuse owned directory contains unexpected or missing files".into());
     }
@@ -547,16 +675,26 @@ impl Stage {
         let path = destination.with_file_name(format!(".pending-{}", id()?));
         crate::platform::private_directory(&path).map_err(|error| error.to_string())?;
         let identity = directory(&path)?;
-        Ok(Self { path, destination, identity })
+        Ok(Self {
+            path,
+            destination,
+            identity,
+        })
     }
 
     fn publish(self) -> Result<(), String> {
-        if directory(&self.path)? != self.identity || fs::symlink_metadata(&self.destination).is_ok() {
+        if directory(&self.path)? != self.identity
+            || fs::symlink_metadata(&self.destination).is_ok()
+        {
             return Err("Zuse staging or destination identity changed".into());
         }
         sync_directory(&self.path)?;
         fs::rename(&self.path, &self.destination).map_err(|error| error.to_string())?;
-        sync_directory(self.destination.parent().ok_or("Zuse destination has no parent")?)?;
+        sync_directory(
+            self.destination
+                .parent()
+                .ok_or("Zuse destination has no parent")?,
+        )?;
         Ok(())
     }
 }
@@ -600,10 +738,16 @@ mod initialization_tests {
         let root = temporary.0.join("manager");
         let result = Store::open_with(&root, true, |file, _| {
             file.write_all(b"{")?;
-            Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "injected full disk"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "injected full disk",
+            ))
         });
         assert!(result.is_err());
-        assert!(!root.exists(), "an incomplete owned root must not poison retries");
+        assert!(
+            !root.exists(),
+            "an incomplete owned root must not poison retries"
+        );
         let store = Store::open(&root, true).unwrap().unwrap();
         store.check().unwrap();
     }

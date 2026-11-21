@@ -60,7 +60,10 @@ fn missing_status_never_initializes_legacy_state() {
     assert_eq!(status["controls_this_version"], false);
     assert_eq!(status["standalone_zuse_controlled"], false);
     assert!(!fixture.root.exists());
-    assert!(Store::shared().is_err(), "tests cannot select the operator's state");
+    assert!(
+        Store::shared().is_err(),
+        "tests cannot select the operator's state"
+    );
 }
 
 #[test]
@@ -103,7 +106,10 @@ fn explicit_off_repairs_corruption_but_on_and_toggle_refuse() {
     assert_eq!(read_status(&store)["mode"], "unavailable");
     assert!(store.update(Some(true)).is_err());
     assert!(store.update(None).is_err());
-    assert_eq!(fs::read(fixture.root.join("state.json")).unwrap(), broken.to_vec());
+    assert_eq!(
+        fs::read(fixture.root.join("state.json")).unwrap(),
+        broken.to_vec()
+    );
     let repaired = store.update(Some(false)).unwrap();
     assert!(!repaired.enabled);
     assert_eq!(store.read().unwrap(), Some(repaired));
@@ -142,7 +148,11 @@ fn busy_state_status_is_bounded_and_preserves_the_record() {
     fixture.store().update(Some(true)).unwrap();
     let path = fixture.root.join("state.json");
     let original = fs::read(&path).unwrap();
-    let held = OpenOptions::new().read(true).write(true).open(path).unwrap();
+    let held = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
     crate::platform::lock_file(&held, true).unwrap();
     let status = read_status(&fixture.store());
     assert_eq!(status["mode"], "unavailable");
@@ -177,7 +187,10 @@ fn off_preserves_state_and_input_lock_inodes_without_taking_input_lease() {
         (input_before.dev(), input_before.ino()),
         (input_after.dev(), input_after.ino())
     );
-    assert_eq!(fs::read(input_path).unwrap(), b"existing legacy lease".to_vec());
+    assert_eq!(
+        fs::read(input_path).unwrap(),
+        b"existing legacy lease".to_vec()
+    );
     drop(input);
 }
 

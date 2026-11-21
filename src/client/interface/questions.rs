@@ -8,14 +8,12 @@ pub(crate) use history::tests::{enqueue_for_test, with_test_queue};
 mod human_finish_tests;
 mod requests;
 mod workflow;
-pub(super) use workflow::{
-    FinishWait, cancel_finish, prepare_finish, validate_finish, validate_finish_owner,
-};
 pub(crate) use delivery::attach as attach_answers;
 #[cfg(test)]
 pub(crate) use requests::{AgentActor, FinishDecision, FinishView};
 pub(crate) use requests::{
-    AnswerDelivery, DecisionActor, FinishChoice, FinishReceipt, FinishStatus, QuestionKind, QuestionView,
+    AnswerDelivery, DecisionActor, FinishChoice, FinishReceipt, FinishStatus, QuestionKind,
+    QuestionView,
 };
 use requests::{RequestScope, Routing};
 use serde::{Deserialize, Serialize};
@@ -24,6 +22,9 @@ use std::{
     collections::VecDeque,
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
+};
+pub(super) use workflow::{
+    FinishWait, cancel_finish, prepare_finish, validate_finish, validate_finish_owner,
 };
 
 const MAX_PENDING: usize = 32;
