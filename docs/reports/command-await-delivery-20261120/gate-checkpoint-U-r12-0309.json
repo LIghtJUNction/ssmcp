@@ -1,0 +1,794 @@
+{
+  "schema": "ssmcp-U-r12-public-stage-facts-v1",
+  "observation_cutoff_utc": "2026-11-21T03:09:06Z",
+  "status": "gate_completed_ui_p1_publication_pending",
+  "source": {
+    "label": "U",
+    "commit": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "tree": "2c60d011da8c2b31aefd80367bf7f19e28f10b62",
+    "version": "0.10.25",
+    "scope": "Only this immutable U source and its completed r12 receipt; no result transfer to a successor."
+  },
+  "gate": {
+    "status": "passed",
+    "stages": 35,
+    "all_stage_exit_codes_zero": true,
+    "started_utc": "2026-11-21T02:42:31.873Z",
+    "finished_utc": "2026-11-21T02:53:03.910Z",
+    "outer_finished_utc": "2026-11-21T02:53:04.024629+00:00",
+    "launcher_exit_code": 0,
+    "outer_exit_code": 0,
+    "original_receipt": {
+      "bytes": 1282781,
+      "sha256": "cf17822a03c045fff67b2015e196fee0e1edaf45df55b0761331080eac496000"
+    },
+    "checks": [
+      {
+        "name": "release-policy",
+        "exit_code": 0,
+        "seconds": 5.37,
+        "test_results": null
+      },
+      {
+        "name": "deployment-policy",
+        "exit_code": 0,
+        "seconds": 0.61,
+        "test_results": null
+      },
+      {
+        "name": "fmt",
+        "exit_code": 0,
+        "seconds": 2.71,
+        "test_results": null
+      },
+      {
+        "name": "library-compile",
+        "exit_code": 0,
+        "seconds": 79.8,
+        "test_results": null
+      },
+      {
+        "name": "library-private",
+        "exit_code": 0,
+        "seconds": 33.54,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 6,
+            "ignored": 23,
+            "measured": 0,
+            "passed": 2050,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "library-host",
+        "exit_code": 0,
+        "seconds": 0.02,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 2073,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 6,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "clippy",
+        "exit_code": 0,
+        "seconds": 50.78,
+        "test_results": null
+      },
+      {
+        "name": "windows-gnu-clippy",
+        "exit_code": 0,
+        "seconds": 30.49,
+        "test_results": null
+      },
+      {
+        "name": "integration-compile",
+        "exit_code": 0,
+        "seconds": 54.82,
+        "test_results": null
+      },
+      {
+        "name": "integration-allow_account",
+        "exit_code": 0,
+        "seconds": 0.06,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 3,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-cc_backend",
+        "exit_code": 0,
+        "seconds": 1.07,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 6,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-client_resources",
+        "exit_code": 0,
+        "seconds": 0.07,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 1,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-client_server_config",
+        "exit_code": 0,
+        "seconds": 0.07,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 5,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-codex_backend",
+        "exit_code": 0,
+        "seconds": 20.44,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 2,
+            "measured": 0,
+            "passed": 14,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-collaboration",
+        "exit_code": 0,
+        "seconds": 0.13,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 3,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-connection_context",
+        "exit_code": 0,
+        "seconds": 0.15,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 10,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-context",
+        "exit_code": 0,
+        "seconds": 0.09,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 12,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-context_helpers",
+        "exit_code": 0,
+        "seconds": 0.01,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 2,
+            "measured": 0,
+            "passed": 0,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-context_runtime",
+        "exit_code": 0,
+        "seconds": 0.1,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 1,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-oauth_security",
+        "exit_code": 0,
+        "seconds": 1.13,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 11,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-pi_backend",
+        "exit_code": 0,
+        "seconds": 0.15,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 9,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-release_client",
+        "exit_code": 0,
+        "seconds": 0.05,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 4,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-resources",
+        "exit_code": 0,
+        "seconds": 0.14,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 10,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-rsync",
+        "exit_code": 0,
+        "seconds": 0.15,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 3,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-server_runtime",
+        "exit_code": 0,
+        "seconds": 0.03,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 1,
+            "measured": 0,
+            "passed": 3,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-terminals",
+        "exit_code": 0,
+        "seconds": 0.4,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 4,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-two_tools",
+        "exit_code": 0,
+        "seconds": 0.03,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 7,
+            "measured": 0,
+            "passed": 2,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-workspace_bridge",
+        "exit_code": 0,
+        "seconds": 0,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 3,
+            "measured": 0,
+            "passed": 0,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-zuse_worker_entry",
+        "exit_code": 0,
+        "seconds": 0.26,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 1,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "library-code-mode-ignored",
+        "exit_code": 0,
+        "seconds": 0.26,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 2077,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 2,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-two_tools-ignored",
+        "exit_code": 0,
+        "seconds": 1.44,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 2,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 7,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-workspace_bridge-ignored",
+        "exit_code": 0,
+        "seconds": 2.07,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 3,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "integration-context_helpers-ignored",
+        "exit_code": 0,
+        "seconds": 0.19,
+        "test_results": [
+          {
+            "failed": 0,
+            "filtered": 0,
+            "ignored": 0,
+            "measured": 0,
+            "passed": 2,
+            "result": "ok"
+          }
+        ]
+      },
+      {
+        "name": "release",
+        "exit_code": 0,
+        "seconds": 216.41,
+        "test_results": null
+      },
+      {
+        "name": "decoder",
+        "exit_code": 0,
+        "seconds": 97.64,
+        "test_results": null
+      }
+    ],
+    "result_counts": {
+      "library_private": {
+        "passed": 2050,
+        "failed": 0,
+        "ignored": 23,
+        "filtered_out": 6,
+        "rust_seconds": 33.52,
+        "outer_stage_seconds": 33.54,
+        "nested_one_pass_summaries_excluded": 3
+      },
+      "library_host": {
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 2073
+      },
+      "ordinary_integration": {
+        "targets": 19,
+        "passed": 101
+      },
+      "explicit_ignored_worker": {
+        "targets": 1,
+        "passed": 1,
+        "name": "integration-zuse_worker_entry"
+      },
+      "separately_executed_ignored_groups": [
+        {
+          "name": "library-code-mode-ignored",
+          "passed": 2
+        },
+        {
+          "name": "integration-two_tools-ignored",
+          "passed": 7
+        },
+        {
+          "name": "integration-workspace_bridge-ignored",
+          "passed": 3
+        },
+        {
+          "name": "integration-context_helpers-ignored",
+          "passed": 2
+        }
+      ],
+      "separately_executed_ignored_group_total": 14,
+      "library_ignored_tests_not_executed": 21,
+      "no_aggregate_claim_of_all_tests_without_skips": true
+    }
+  },
+  "original_goal_mapping": {
+    "selected_count": 17,
+    "subset_of_library_private_passes": true,
+    "independently_matched_to_original_log": true,
+    "each_result_line_exactly_once": true,
+    "each_line_number_matches": true,
+    "historical_map_observed_utc": "2026-11-21T02:50:35.422835+00:00",
+    "historical_map_gate_status": "running",
+    "historical_map_gate_receipt": {
+      "bytes": 1218298,
+      "sha256": "dc1c9b7ff1f87f93983d8c0fd8422a2dc65207e46ab92fdc5d84ba88a4dbc776"
+    },
+    "completion_uses_final_receipt": true,
+    "log": {
+      "bytes": 557741,
+      "sha256": "97fcea1a8519422763c4e58897f1414395e0485233363863efde00a52db3bf50"
+    },
+    "groups": [
+      {
+        "goal": "native",
+        "count": 5,
+        "scope": "Explicit recipient selection, exact receipt/draft matching, and no fallback to next caller. Native inbox @/$ text remains literal."
+      },
+      {
+        "goal": "ownership",
+        "count": 2,
+        "scope": "Reply ownership and retry receipts remain associated with the original thread."
+      },
+      {
+        "goal": "file",
+        "count": 5,
+        "scope": "Unavailable references preserve text and warnings; budgets, retries and queue acknowledgement are covered by the mapped library tests."
+      },
+      {
+        "goal": "skill",
+        "count": 5,
+        "scope": "Effective skill precedence, bounded completion and delivery only after explicit selection/send."
+      }
+    ],
+    "cases": [
+      {
+        "goal": "native",
+        "test": "client::terminal::conversation::messaging::tests::native_mentions_require_selection_and_file_syntax_remains_literal",
+        "original_log_line": 5637,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "native",
+        "test": "client::terminal::conversation::messaging::tests::missing_native_recipients_never_fall_back_to_next_caller",
+        "original_log_line": 5636,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "native",
+        "test": "client::terminal::conversation::messaging::tests::service_receipt_clears_only_the_exact_submitted_native_draft",
+        "original_log_line": 5640,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "native",
+        "test": "client::terminal::conversation::messaging::tests::a_mismatched_or_failed_native_receipt_never_clears_the_draft",
+        "original_log_line": 5634,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "native",
+        "test": "client::messaging::tests::mismatched_receipt_preserves_draft_and_idempotent_retry_cannot_change_target",
+        "original_log_line": 5323,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "ownership",
+        "test": "client::interface::history::ownership::tests::program_reply_keeps_original_owner_and_one_copy_after_selection_changes",
+        "original_log_line": 5152,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "ownership",
+        "test": "client::interface::messages::tests::final_reply_retry_receipts_cannot_be_borrowed_by_another_thread",
+        "original_log_line": 5205,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "file",
+        "test": "client::references::tests::unavailable_files_keep_source_and_warn_without_read_actions",
+        "original_log_line": 5403,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "file",
+        "test": "client::references::tests::full_budget_unavailable_references_keep_exact_text_and_local_warnings",
+        "original_log_line": 5386,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "file",
+        "test": "client::references::tests::unavailable_metadata_cannot_crowd_out_readable_reference_contents",
+        "original_log_line": 5412,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "file",
+        "test": "client::references::tests::missing_reference_retries_remain_frozen_until_source_is_edited",
+        "original_log_line": 5385,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "file",
+        "test": "client::steering::tests::full_budget_missing_reference_reaches_real_queue_once_with_ack_notice",
+        "original_log_line": 5545,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "skill",
+        "test": "client::references::tests::skill_names_use_effective_precedence_and_explicit_roots",
+        "original_log_line": 5406,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "skill",
+        "test": "client::completion::tests::send_body_completes_references_without_changing_the_command",
+        "original_log_line": 4982,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "skill",
+        "test": "client::completion::tests::send_completion_rejects_commands_shell_currency_and_code",
+        "original_log_line": 4983,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "skill",
+        "test": "client::terminal::conversation::skill_picker_tests::skill_picker_keys_only_deliver_the_explicitly_sent_selection",
+        "original_log_line": 5667,
+        "result": "ok",
+        "matching_result_lines": 1
+      },
+      {
+        "goal": "skill",
+        "test": "client::terminal::conversation::skill_picker_tests::send_reference_picker_preserves_drafts_and_delivers_only_after_explicit_send",
+        "original_log_line": 5666,
+        "result": "ok",
+        "matching_result_lines": 1
+      }
+    ]
+  },
+  "build_receipt_bindings": {
+    "artifacts": [
+      {
+        "name": "library-test-fixture",
+        "bytes": 166657104,
+        "sha256": "da95c523626a6de2fdeeb7372992b8a3678e7348ce84c42f367fe7fc4dec2be0",
+        "cargo_fresh": false,
+        "recorded_link_and_private_copy_equal": true
+      },
+      {
+        "name": "ssmcp",
+        "bytes": 15738696,
+        "sha256": "2dbab2aa293ae411de20f9839d574bf62ef79a644710884a81f6fe6239717e35",
+        "cargo_fresh": false,
+        "recorded_link_and_private_copy_equal": true
+      },
+      {
+        "name": "ssmcp-frontend",
+        "bytes": 1386584,
+        "sha256": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06",
+        "cargo_fresh": false,
+        "recorded_link_and_private_copy_equal": true
+      },
+      {
+        "name": "ssmcpd",
+        "bytes": 8176168,
+        "sha256": "e2e63fcfc63c05ca81907c976f8f3dda2aee65db9efa6d0d242fba69b95271b0",
+        "cargo_fresh": false,
+        "recorded_link_and_private_copy_equal": true
+      },
+      {
+        "name": "vt_snapshot",
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+        "cargo_fresh": false,
+        "recorded_link_and_private_copy_equal": true
+      }
+    ],
+    "recorded_selected_artifact_count": 5,
+    "recorded_actual_compilation_and_copy_verification": true,
+    "binary_bytes_rehashed_by_this_independent_review": false,
+    "source_and_dependency_guards_before_after": true,
+    "nine_recorded_inputs_unchanged": true,
+    "source_manifest": {
+      "entries": 1849,
+      "sha256": "332aa41a2650bffc7c69213dacf381817b8ef0b59b37d62be2e5e038fdcf9b7f"
+    },
+    "dependency_manifest": {
+      "resolved_package_count": 277,
+      "registry_package_count": 264,
+      "git_checkout_count": 11,
+      "sha256": "d15007158f48a979220a461d7c44efaf43c09695da8938a154bccc4be9a741c1"
+    },
+    "local_elf_artifacts_are_not_six_platform_release_packages": true
+  },
+  "evidence": [
+    {
+      "label": "completed_gate_review",
+      "file": "root-completed-gate-review.json",
+      "bytes": 10568,
+      "sha256": "ca21cf00393d2b0d22169ebc3fdebc5e729ff37ac3540261e65ae59538d8675d",
+      "review_scope": "Full text read and full-file hash verified."
+    },
+    {
+      "label": "final_gate",
+      "file": "candidate-gates.json",
+      "bytes": 1282781,
+      "sha256": "cf17822a03c045fff67b2015e196fee0e1edaf45df55b0761331080eac496000",
+      "review_scope": "Full-file hash, immutable identity and all 35 checks selected; not a full textual review of every embedded record."
+    },
+    {
+      "label": "launcher_exit",
+      "file": "launcher-exit.json",
+      "bytes": 4792,
+      "sha256": "af70be48cbc5da4ca364961b1a93017b8b7930584ffe7cfe08f0513621983598",
+      "review_scope": "Original exit.json full text and hash; public label distinguishes the two exit receipts."
+    },
+    {
+      "label": "outer_exit",
+      "file": "outer-exit.json",
+      "bytes": 1168,
+      "sha256": "53aaed2b5fb89c4d159d33c35b426d8c1beae5f2cc7633b713d25c8d88a5e3a8",
+      "review_scope": "Original exit.json full text and hash; public label distinguishes the two exit receipts."
+    },
+    {
+      "label": "original_goal_map",
+      "file": "U-original-goals-library-result-map.json",
+      "bytes": 11392,
+      "sha256": "aebc5950d178b30d662a7007f750c7a574b5f7559cbeaff91558ad53df7a906c",
+      "review_scope": "Full text/hash and all 17 entries independently matched against the original library log."
+    },
+    {
+      "label": "library_private_log",
+      "file": "candidate2-library-private.log",
+      "bytes": 557741,
+      "sha256": "97fcea1a8519422763c4e58897f1414395e0485233363863efde00a52db3bf50",
+      "review_scope": "Full-file hash, the 17 exact result lines and the outer/child summary lines; no claim that every log line was manually reviewed."
+    }
+  ],
+  "pending": {
+    "dedicated_ui_runtime_acceptance": true,
+    "p1_acceptance": true,
+    "formal_publication": true,
+    "final_release_complete": false,
+    "installation_acceptance": true
+  },
+  "boundaries": [
+    "No new test, build, native product, workflow dispatch, publish or installation was executed by this review.",
+    "Windows GNU Clippy is a recorded cross-target check, not a claim of native Windows runtime acceptance.",
+    "Existing historical performance results retain their original source identity; this checkpoint adds no U performance A/B result.",
+    "The 17 mapped goals are library-test evidence and do not replace interactive UI/runtime/P1 acceptance.",
+    "Native inbox literal @/$ text does not automatically attach local files or skills.",
+    "The historical running map is preserved; whole-Gate completion comes from the final completed receipt."
+  ]
+}
