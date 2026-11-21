@@ -119,6 +119,105 @@ async fn full_keyboard_question_editor_edges_do_not_leave_the_question_panel() {
 }
 
 #[tokio::test]
+async fn full_keyboard_empty_questions_list_arrows_move_between_panels() {
+    let fixture = Fixture::new();
+    saved::with_test_history(
+        fixture.0.join("history"),
+        queue::with_test_queue(async {
+            let requests = queue::snapshot();
+            assert!(queue::retained_views().is_empty());
+            for (left, right) in [
+                (b"\x1b[D".as_slice(), b"\x1b[C".as_slice()),
+                (b"\x1bOD".as_slice(), b"\x1bOC".as_slice()),
+            ] {
+                for content_focus in [false, true] {
+                    let mut state = state(120);
+                    assert_eq!(state.conversation.view, View::Questions);
+                    assert!(!state.conversation.detail);
+                    assert!(state.conversation.question_id.is_none());
+                    state.conversation.content_focus = content_focus;
+                    state.conversation.target = Some("example-builder".into());
+                    assert!(state.conversation.composer.left());
+                    let draft = state.conversation.snapshot()["draft"].clone();
+                    let queued_messages = state.chat_data()["queue"].clone();
+
+                    press(&mut state, right);
+                    assert_eq!(state.conversation.view, View::History);
+                    press(&mut state, left);
+                    assert_eq!(state.conversation.view, View::Questions);
+                    assert_eq!(state.conversation.content_focus, content_focus);
+                    assert!(!state.conversation.detail);
+                    press(&mut state, left);
+                    assert_eq!(state.conversation.view, View::Queue);
+
+                    assert_eq!(state.conversation.snapshot()["draft"], draft);
+                    assert_eq!(
+                        state.conversation.target.as_deref(),
+                        Some("example-builder")
+                    );
+                    assert_eq!(state.chat_data()["queue"], queued_messages);
+                    assert_eq!(queue::snapshot(), requests);
+                    assert!(state.conversation.submitting.is_none());
+                    assert!(state.actions.is_empty());
+                }
+            }
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn full_keyboard_questions_list_arrows_preserve_selection_until_enter() {
+    let fixture = Fixture::new();
+    saved::with_test_history(
+        fixture.0.join("history"),
+        queue::with_test_queue(async {
+            let ordinary = queue::enqueue_for_test(false, "Which format?", "nav-question")
+                .question
+                .id;
+            let finish = queue::enqueue_for_test(true, "Ready to finish?", "nav-finish")
+                .question
+                .id;
+            let requests = queue::retained_views();
+            let mut state = state(120);
+            assert_eq!(
+                state.conversation.question_id.as_deref(),
+                Some(ordinary.as_str())
+            );
+            assert!(state.conversation.detail);
+            press(&mut state, b"partial answer");
+            // A second escape prefix resolves the standalone Escape before Down.
+            press(&mut state, b"\x1b\x1b[B");
+            assert!(!state.conversation.detail);
+
+            press(&mut state, b"\x1bOC");
+            assert_eq!(state.conversation.view, View::History);
+            press(&mut state, b"\x1bOD\x1bOD");
+            assert_eq!(state.conversation.view, View::Queue);
+            press(&mut state, b"\x1bOC");
+            assert_eq!(state.conversation.view, View::Questions);
+            assert!(!state.conversation.detail);
+
+            press(&mut state, b"\r");
+            assert!(state.conversation.detail);
+            assert_eq!(
+                state.conversation.question_id.as_deref(),
+                Some(finish.as_str())
+            );
+            assert_eq!(
+                state.conversation.answers[&ordinary].text(),
+                "partial answer"
+            );
+            assert_eq!(queue::retained_views(), requests);
+            assert_eq!(state.conversation.composer.text(), "keep the main draft");
+            assert!(state.conversation.submitting.is_none());
+            assert!(state.actions.is_empty());
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn question_and_finish_replies_stay_in_original_history_after_switch_and_release() {
     for finish in [false, true] {
         let fixture = Fixture::new();
