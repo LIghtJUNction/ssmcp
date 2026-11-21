@@ -6,6 +6,7 @@ pub(super) struct Loaded {
     pub bundle: Bundle,
     client: Option<Arc<Session>>,
     binding: Option<code_mode::RunBinding>,
+    client_version: Option<String>,
     mode: &'static str,
     hint: Option<&'static str>,
 }
@@ -43,6 +44,7 @@ impl Loaded {
         let mut provenance = self.bundle.provenance();
         provenance["mode"] = json!(self.mode);
         provenance["client_id"] = self.client.as_ref().map(|s| json!(s.client_id())).unwrap_or(Value::Null);
+        provenance["client_version"] = json!(self.client_version);
         provenance["hint"] = json!(self.hint);
         if let Some(fields) = response.get_mut("structuredContent").and_then(Value::as_object_mut) {
             fields.insert("tool_sources".into(), provenance.clone());
@@ -73,7 +75,7 @@ pub(super) async fn load(
     let Some(client_id) = selected else {
         return Ok(Loaded {
             bundle:crate::tool_repository::official_seed().await?,
-            client:None, binding:None, mode:"read_only_official_seed",
+            client:None, binding:None, client_version:None, mode:"read_only_official_seed",
             hint:Some("No client tool sources were selected. Pass tool_client_id to load that authorized client's RC and local overrides."),
         });
     };
@@ -86,6 +88,42 @@ pub(super) async fn load(
         }
         session.collaboration.bind(&binding.owner, &binding.agent_id, &binding.token)?;
     }
+    let mut loaded = Loaded {
+        bundle:Bundle { schema:String::new(), rc:None, sources:vec![] },
+        client:Some(session.clone()), binding:binding.clone(), client_version:None,
+        mode:"authorized_client", hint:None,
+    };
+    if arguments.tool_client_id.is_none() {
+        // Compatibility is negotiated from a real, valid capability manifest,
+        // never inferred from a resource error. Explicit selection stays strict.
+        let capabilities = session.call_with_bound_authorization(
+            Operation::CallTool { name:"ssmcp.client.capabilities".into(), arguments:json!({}) },
+            arguments.controller_context.clone(), &authorization, binding.clone(),
+        ).await?;
+        loaded.verify(broker, user, token).await?;
+        if capabilities.get("isError").is_some_and(|value| value != &Value::Bool(false)) {
+            return Err("could not negotiate the selected client's tool-source capability".into());
+        }
+        let capabilities = capabilities.get("structuredContent").unwrap_or(&capabilities);
+        let version = capabilities["client_version"].as_str()
+            .filter(|value| !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+            .ok_or("selected client returned an invalid capability version")?;
+        if capabilities["schema"] != "ssmcp.client.capabilities.v1" {
+            return Err("selected client returned an unknown capability manifest".into());
+        }
+        loaded.client_version = Some(version.to_owned());
+        match capabilities.get("tool_sources") {
+            None => {
+                loaded.bundle = crate::tool_repository::official_seed().await?;
+                loaded.verify(broker, user, token).await?;
+                loaded.mode = "legacy_client_official_seed";
+                loaded.hint = Some("This implicitly selected client predates editable tool sources. This run uses the pinned read-only official Git seed; native calls retain their existing permissions. Upgrade the client to load its RC and local overrides. Explicit tool_client_id never uses this compatibility default.");
+                return Ok(loaded);
+            }
+            Some(capability) if capability["schema"] == 1 && capability["uri"] == URI => {}
+            Some(_) => return Err("selected client advertises an unsupported tool-source capability; upgrade compatible components".into()),
+        }
+    }
     // Do not enter AUDIT_RUN here: preloading this fixed resource is not the
     // user's work and must not qualify a passive run to consume Next caller.
     // Native access and attribution still use the same authenticated account,
@@ -96,10 +134,6 @@ pub(super) async fn load(
             arguments:json!({"uri":URI}),
         }, arguments.controller_context.clone(), &authorization, binding.clone(),
     ).await?;
-    let mut loaded = Loaded {
-        bundle:Bundle { schema:String::new(), rc:None, sources:vec![] },
-        client:Some(session), binding, mode:"authorized_client", hint:None,
-    };
     loaded.verify(broker, user, token).await?;
     if response["isError"] == true {
         let detail = response["content"].as_array().and_then(|items| items.iter()

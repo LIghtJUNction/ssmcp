@@ -35,6 +35,8 @@ struct NativeAnswers {
     display_frames: Vec<wire::wait_display::Snapshot>,
     source_reads: usize,
     source_bundle: Option<Value>,
+    legacy_tool_sources: bool,
+    source_error: Option<String>,
 }
 
 struct Fixture {
@@ -234,6 +236,8 @@ impl Fixture {
             display_frames: vec![],
             source_reads: 0,
             source_bundle: None,
+            legacy_tool_sources: false,
+            source_error: None,
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
@@ -283,11 +287,19 @@ impl Fixture {
                     assert_eq!(arguments, json!({"uri":crate::tool_repository::URI}));
                     assert_eq!(attribution.as_ref().unwrap().account.subject, "42");
                     assert!(code_context.is_none(), "source metadata cannot become eligible user work");
-                    let overridden = {
+                    let (overridden, error) = {
                         let mut state = answers.lock().unwrap();
                         state.source_reads += 1;
-                        state.source_bundle.clone()
+                        (state.source_bundle.clone(), if state.legacy_tool_sources {
+                            Some("unknown client resource".to_owned())
+                        } else { state.source_error.clone() })
                     };
+                    if let Some(error) = error {
+                        send(&mut socket, Frame::Reply {
+                            id, result:Ok(json!({"isError":true,"content":[{"type":"text","text":error}]})),
+                        }).await;
+                        continue;
+                    }
                     let sources = match overridden {
                         Some(value) => value,
                         None => serde_json::to_value(crate::tool_repository::official_seed().await.unwrap()).unwrap(),
@@ -306,7 +318,12 @@ impl Fixture {
                     let mut state = answers.lock().unwrap();
                     state.calls.push(name.clone());
                     if name == "ssmcp.client.capabilities" {
-                        Ok(json!({"thread_scope":1}))
+                        let mut manifest = json!({"schema":"ssmcp.client.capabilities.v1","thread_scope":1,
+                            "client_version":if state.legacy_tool_sources {"0.10.25"} else {"0.10.26"}});
+                        if !state.legacy_tool_sources {
+                            manifest["tool_sources"] = json!({"schema":1,"uri":crate::tool_repository::URI});
+                        }
+                        Ok(manifest)
                     } else {
                         let attribution = attribution.expect("authenticated native attribution");
                         assert_eq!(attribution.account.subject, "42");
@@ -1322,4 +1339,44 @@ async fn edited_tool_helpers_cannot_forge_outer_finish_permission() {
     fixture.assert_summary_observation_did_not_consume_questions();
     assert!(fixture.native.lock().unwrap().calls.iter()
         .all(|name| name == "ssmcp.client.capabilities"));
+}
+
+#[tokio::test]
+async fn implicit_legacy_client_keeps_native_calls_and_explicit_source_selection_stays_strict() {
+    let fixture = Fixture::new().await;
+    fixture.publish_summary_requirement();
+    fixture.native.lock().unwrap().legacy_tool_sources = true;
+    let code = format!("return {{clients:clients.length,view:await call({},'ssmcp.ui.get',{{}})}};",
+        serde_json::to_string(fixture.session.client_id()).unwrap());
+    let request = json!({"code":code,"timeout_ms":10000,
+        "agent":{"client_id":fixture.session.client_id(),"id":fixture.agent_id,"token":fixture.agent_token}});
+    let authorization = fixture.broker.authenticate("mcp", &fixture.token).await.unwrap();
+    let response = execute(fixture.broker.clone(),"mcp".into(),authorization,fixture.token.clone(),
+        serde_json::from_value(request.clone()).unwrap()).await.unwrap();
+    assert_eq!(response["isError"], false, "{response:#}");
+    assert_eq!(response["structuredContent"]["result"]["clients"], 1);
+    assert_eq!(response["structuredContent"]["result"]["view"]["structuredContent"]["display"]["view"], "fixture");
+    let provenance = &response["structuredContent"]["tool_sources"];
+    assert_eq!(provenance["mode"], "legacy_client_official_seed");
+    assert_eq!(provenance["client_id"], fixture.session.client_id());
+    assert_eq!(provenance["client_version"], "0.10.25");
+    assert!(provenance["hint"].as_str().unwrap().contains("Upgrade the client"));
+    assert_eq!(provenance["sources"][0]["name"], "official_seed");
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 0);
+    fixture.assert_summary_observation_did_not_consume_questions();
+    let mut explicit = request.clone();
+    explicit["tool_client_id"] = json!(fixture.session.client_id());
+    let authorization = fixture.broker.authenticate("mcp", &fixture.token).await.unwrap();
+    let error = execute(fixture.broker.clone(),"mcp".into(),authorization,fixture.token.clone(),
+        serde_json::from_value(explicit).unwrap()).await.unwrap_err();
+    assert!(error.contains("unknown client resource"), "{error}");
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 1);
+    fixture.native.lock().unwrap().legacy_tool_sources = false;
+    fixture.native.lock().unwrap().source_error = Some("invalid ssmcprc.toml fixture".into());
+    let authorization = fixture.broker.authenticate("mcp", &fixture.token).await.unwrap();
+    let error = execute(fixture.broker.clone(),"mcp".into(),authorization,fixture.token.clone(),
+        serde_json::from_value(request).unwrap()).await.unwrap_err();
+    assert!(error.contains("invalid ssmcprc.toml fixture"), "{error}");
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 2);
+    fixture.assert_summary_observation_did_not_consume_questions();
 }
