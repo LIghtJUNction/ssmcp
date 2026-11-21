@@ -19,7 +19,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 2. 同步 manifest、相关 Git 锁项和源码 gitlink。同一个仓库的包版本取自实际 manifest。仅执行 `cargo update --workspace` 不会刷新已有的 Git heads。按当前 Cargo 图更新相应 Git 包，再核对完整锁定元数据与 checkout。
 3. 对受影响的消费者执行定向编译、契约或集成检查。记录已核对的版本、提交和结果。最终门禁使用协调者冻结的同一批源码和锁文件。
 
-外部发行还要通过独立的 registry 路径。Cargo 的标准打包过程会规范化 manifest，并使用包内的 registry 锁文件构建。预检检查解包后的 `Cargo.toml`、`Cargo.lock`、源提交和实际元数据，再将结果、Git 图和各项摘要写入发行收据。当前 Git-only 依赖声明缺少现有发布预检要求的 registry 版本选择器。外部打包流程还需要适配，并实际验证 registry 包。[Cargo 打包说明](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
+GitHub 二进制发行记录固定 Git 源码及 Cargo 解析图。开启 crates.io 发布时，脚本在独立目录以实际 Git 包版本导出 registry manifest 和锁文件，再验证 Cargo 规范化后的源码包及其 registry 图。两份图分别记录。同一版本字符串可以对应不同的 Git 源码与 registry 归档。0.10.25 的 registry 发布延期，具体策略见[发布指南](releases.md)。
 
 ### 2026-11-20 迁移前核对记录
 
@@ -64,7 +64,7 @@ GitHub 自动生成的源码压缩包不展开 Git 子模块。源码与契约�
 
 上游库的修改与 registry 发布各自由其仓库维护。应用同步时记录新默认分支提交，更新消费方的锁和源码 gitlink，并检查 `git submodule status --recursive`。四个子库从父 workspace 显式排除，`cargo test --workspace` 不涵盖各自的独立契约测试。发行既有的 ztuio 独立检查继续使用 `cargo test --manifest-path crates/ztuio/Cargo.toml --locked`。
 
-SSMCP 的 crates.io workflow 只发布应用包。独立依赖版本必须在各自的仓库发布，并通过 registry 摘要与应用实际规范化打包的检查。发布任务会比较独立目录中 Cargo dry-run 生成的包与已验证包，发布返回后再核对实际生成包与 registry 摘要。Cargo 上传命令本身会重新打包，因而这些检查提供可重现性和事后核对。[Cargo 发布说明](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
+SSMCP 的 crates.io workflow 只发布应用包。独立依赖版本必须在各自的仓库发布，并通过 registry 摘要与应用实际规范化打包的检查。发布任务会复用已验证的导出锁文件，比较 Cargo dry-run 生成的包与已验证包，发布返回后再核对实际生成包与 registry 摘要。Cargo 上传命令本身会重新打包，因而这些检查提供可重现性和事后核对。[Cargo 发布说明](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
 
 ## zuse 桌面调用
 
