@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Verify multiple real PTYs, background jobs and controller attribution.
 
-Uses e2e_dashboard's disposable physical PTY and isolated SSH/OAuth services.
+Uses e2e_dashboard's disposable physical PTY and isolated account/OAuth relay.
 No existing terminal, account, desktop or model is controlled. Optional PNGs
 render the independently decoded live PTY cells; they are not desktop captures.
 Pillow is needed only when --preview-dir is supplied. Nothing is installed.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -21,14 +22,6 @@ import time
 from e2e_dashboard import Dashboard, Frontend, sha256, text
 
 CONTROLLER = {"name": "acceptance fixture", "model": "fixture-model"}
-
-
-def shell_text(snapshot):
-    rows = snapshot["rows"]
-    divider = next((i for i, row in enumerate(rows) if row.lstrip().startswith("Shell ·")), None)
-    if divider is None:
-        return ""
-    return "\n".join(row.split("│", 1)[0] for row in rows[divider + 1:-1])
 
 
 def render(snapshot, path, label):
@@ -111,6 +104,7 @@ class TerminalControl(Dashboard):
         self.snapshot_dir = snapshots
         self.preview_dir = previews
         self.captures = []
+        self.terminal_outputs = {}
 
     def native(self, name, arguments=None, *, reported=True):
         options = {"code": "return await call(%s,%s,%s);" % (
@@ -121,6 +115,32 @@ class TerminalControl(Dashboard):
         if result.get("isError"):
             raise AssertionError(f"native {name} failed: {result}")
         return result["structuredContent"]
+
+    def read_terminal(self, terminal_id):
+        cursor, previous = self.terminal_outputs.get(terminal_id, (0, ""))
+        result = self.native("terminal.read", {
+            "terminal_id": terminal_id, "cursor": cursor, "max_bytes": 32768, "wait_ms": 0,
+        })
+        if (result.get("terminal_id") != terminal_id or result.get("truncated")
+                or result.get("spilled") or result.get("output_error")):
+            raise AssertionError(f"small PTY fixture lost output for {terminal_id}: {result}")
+        data = base64.b64decode(result["data_base64"], validate=True)
+        if (result["next_cursor"] != cursor + len(data)
+                or result["text"] != data.decode("utf-8", errors="replace")):
+            raise AssertionError(f"PTY byte/cursor receipt disagrees for {terminal_id}: {result}")
+        output = previous + result["text"]
+        self.terminal_outputs[terminal_id] = (result["next_cursor"], output)
+        return output
+
+    def wait_terminal(self, front, terminal_id, marker, description):
+        deadline = time.monotonic() + 8
+        output = ""
+        while time.monotonic() < deadline:
+            output = self.read_terminal(terminal_id)
+            if marker in output:
+                return output
+            front.pump(.05)
+        raise AssertionError(f"timed out waiting for {description} in {terminal_id}: {output[-2000:]!r}")
 
     def capture(self, front, label):
         snapshot = front.snapshot()
@@ -164,19 +184,24 @@ class TerminalControl(Dashboard):
         self.last_frontend = front
         self.client_id = front.client_id
         self.oauth_login(front.credentials)
-        front.until(lambda s: "1/1 · main" in text(s), "main terminal and session indicator")
+        front.until(lambda s: "CODE_MODE" in text(s), "code-mode audit dashboard")
 
         build = self.native("terminal.open", {"name": "build"})["terminal_id"]
         logs = self.native("terminal.open", {"name": "logs"})["terminal_id"]
         inventory = self.native("terminal.list")
         self.check(len(inventory["terminals"]) == 3 and inventory["selected"] == "main",
                    "three independent shells are registered without selecting background terminals")
-        for terminal, heading in (("main", "MAIN_WORKSPACE"), (build, "BUILD_WORKSPACE"), (logs, "LOGS_BACKGROUND")):
+        headings = {"main": "MAIN_WORKSPACE", build: "BUILD_WORKSPACE", logs: "LOGS_BACKGROUND"}
+        for terminal, heading in headings.items():
+            prefix, suffix = heading.rsplit("_", 1)
             self.native("terminal.write", {"terminal_id": terminal,
-                "data": f"printf '\\033[2J\\033[H{heading}\\nIndependent shell, process and output cursor\\n'\n"})
-        front.until(lambda s: "MAIN_WORKSPACE" in shell_text(s), "main screen after background output")
-        self.check("BUILD_WORKSPACE" not in shell_text(front.snapshot()) and "LOGS_BACKGROUND" not in shell_text(front.snapshot()),
-                   "background PTY output does not overwrite the selected screen")
+                "data": f"printf '\\033[2J\\033[H{prefix}_%s\\nIndependent shell, process and output cursor\\n' {suffix}\n"})
+        for terminal, heading in headings.items():
+            output = self.wait_terminal(front, terminal, heading, "independent shell output")
+            self.check(all(other not in output for other in headings.values() if other != heading),
+                       f"{terminal} keeps its own output and cursor without another PTY's bytes")
+        self.check(self.native("terminal.list")["selected"] == "main",
+                   "background PTY output does not steal the selected terminal")
 
         release = self.workspace / "release-jobs"
         background = "import pathlib,time; print('background job running',flush=True)\nwhile not pathlib.Path('release-jobs').exists(): time.sleep(.05)"
@@ -184,22 +209,48 @@ class TerminalControl(Dashboard):
         front.until(lambda s: "Tasks · 2 running" in text(s), "simultaneous background jobs")
         self.check(jobs[0]["job_id"] != jobs[1]["job_id"], "two real background commands remain independently addressable")
 
-        front.send("\x1b[18~printf '__LOCAL_%s__\\n' BUILD\n")
-        front.until(lambda s: "2/3 · build" in text(s) and "__LOCAL_BUILD__" in shell_text(s), "F7 routing input to build")
-        main_output = self.native("terminal.read", {"max_bytes": 32768})["text"]
-        self.check("__LOCAL_BUILD__" not in main_output, "F7 sends following local input only to the newly selected shell")
-        self.check(self.native("terminal.list")["selected"] == build, "local F7 and remote terminal inventory share one selection")
+        selected = self.native("terminal.select", {"terminal_id": build})
+        self.check(selected["terminal_id"] == build and selected["selected"],
+                   "explicit terminal.select acknowledges the build shell")
+        written = self.native("terminal.write", {"terminal_id": build, "data": "printf '__NATIVE_%s__\\n' BUILD\n"})
+        self.check(written["terminal_id"] == build and written["written"] > 0,
+                   "explicit terminal.write acknowledges bytes for the build shell")
+        self.wait_terminal(front, build, "__NATIVE_BUILD__", "explicit input reaching build")
+        self.check("__NATIVE_BUILD__" not in self.read_terminal("main"),
+                   "explicit build input never reaches the main shell")
+        self.check(self.native("terminal.list")["selected"] == build,
+                   "terminal.select and terminal.list agree on the selected shell")
 
         fixture = self.workspace / "paste-reader.py"
         fixture.write_text(INPUT_FIXTURE)
         captured = self.workspace / "paste.json"
-        front.send(shlex.join([sys.executable, str(fixture), str(captured), str(len(PASTE))]) + "\n")
-        front.until(lambda s: "PASTE_READY" in shell_text(s), "raw paste reader")
-        front.send(PASTE)
-        front.until(lambda s: "PASTE_DONE" in shell_text(s), "literal paste completion")
+        self.native("terminal.write", {"terminal_id": build,
+            "data": shlex.join([sys.executable, str(fixture), str(captured), str(len(PASTE))]) + "\n"})
+        self.wait_terminal(front, build, "PASTE_READY", "raw paste reader")
+        # The visible filter is an input-order barrier. Its preceding physical
+        # paste differs from the native payload, so accidental forwarding fails
+        # the child's exact-byte assertion even if only the paste is forwarded.
+        front.send(PASTE.replace(b"literal", b"ui-only") + b"/LOCAL_UI_ONLY")
+        front.until(lambda s: "/ LOCAL_UI_ONLY_" in s["rows"][-1], "physical input stays in audit navigation")
+        written = self.native("terminal.write", {"terminal_id": build, "data": PASTE.decode("ascii")})
+        self.check(written["terminal_id"] == build and written["written"] == len(PASTE),
+                   "native terminal.write reports the exact literal payload length")
+        self.wait_file(front, captured, "raw reader records the native literal payload")
         self.check(json.loads(captured.read_text())["hex"] == PASTE.hex(),
-                   "F7 and F6 inside bracketed paste reach the real child byte for byte")
-        self.check(self.native("terminal.list")["selected"] == build, "pasted F7 does not switch terminals")
+                   "native paste reaches the real child byte for byte; physical UI input never reaches the hidden PTY")
+        self.check(self.native("terminal.list")["selected"] == build, "physical pasted F7 does not switch terminals")
+        front.send("\x1b")
+        front.until(lambda s: "/ LOCAL_UI_ONLY_" not in s["rows"][-1] and "CODE_MODE" in text(s),
+                    "Escape closes the audit filter")
+        self.wait_terminal(front, build, "PASTE_DONE", "literal paste completion")
+
+        front.send("\x1b[18~")
+        front.until(lambda s: "Copy mode" in s["rows"][-1], "F7 enters Copy mode")
+        self.check(self.native("terminal.list")["selected"] == build,
+                   "F7 freezes the audit display without switching the selected PTY")
+        front.send("\x1b[18~")
+        front.until(lambda s: "Copy mode" not in s["rows"][-1] and "CODE_MODE" in text(s),
+                    "F7 returns from Copy mode to the audit dashboard")
 
         fixture = self.workspace / "background-query.py"
         fixture.write_text(QUERY_FIXTURE)
@@ -221,21 +272,29 @@ class TerminalControl(Dashboard):
         self.capture(front, "build")
 
         front.send("\x1b[17~")
-        front.until(lambda s: s["rows"][-1].lstrip().startswith("Logs ·"), "F6 audit focus")
+        front.until(lambda _s: self.ui("/display/focus") == "logs", "F6 focuses logs")
         front.send("\x1b[17~")
-        front.until(lambda s: s["rows"][-1].lstrip().startswith("Shell ·"), "F6 returning to shell")
-        self.check(True, "F6 audit browsing remains usable beside F7 session switching")
+        front.until(lambda _s: self.ui("/display/focus") == "audit", "F6 returns to code-mode audit")
+        self.check(self.native("terminal.list")["selected"] == build,
+                   "F6 switches log/audit focus without moving the selected PTY")
 
         self.native("terminal.write", {"data": "printf '__LEGACY_%s__\\n' MAIN\n"})
         self.check(self.native("terminal.list")["selected"] == build,
                    "legacy calls without terminal_id target main without moving local focus")
-        front.send("\x1b[18~")
-        front.until(lambda s: "3/3 · logs" in text(s) and "BACKGROUND_QUERY_DONE" in shell_text(s), "F7 showing retained background terminal")
+        selected = self.native("terminal.select", {"terminal_id": logs})
+        self.check(selected["terminal_id"] == logs and selected["selected"],
+                   "explicit selection reaches the retained background terminal")
+        self.wait_terminal(front, logs, "BACKGROUND_QUERY_DONE", "retained background output")
         self.native("terminal.status", {"terminal_id": logs})
         self.capture(front, "logs")
-        self.native("terminal.close", {"terminal_id": logs})
-        front.until(lambda s: "1/2 · main" in text(s) and "__LEGACY_MAIN__" in shell_text(s), "closing selected terminal restores main")
-        self.check(True, "closing selected terminal restores main with its existing output intact")
+        closed = self.native("terminal.close", {"terminal_id": logs})
+        inventory = self.native("terminal.list")
+        self.check(closed["closed"] and closed["selected"] == "main"
+                   and inventory["selected"] == "main" and len(inventory["terminals"]) == 2,
+                   "closing the selected terminal restores main and removes only that PTY")
+        main_output = self.wait_terminal(front, "main", "__LEGACY_MAIN__", "default writes retained in main")
+        self.check("MAIN_WORKSPACE" in main_output and "__LEGACY_MAIN__" not in self.read_terminal(build),
+                   "closing selected terminal preserves main output; calls without terminal_id target only main")
         self.capture(front, "main")
 
         exited = self.native("terminal.open", {"name": "exited", "select": True})["terminal_id"]
@@ -245,11 +304,26 @@ class TerminalControl(Dashboard):
             if time.monotonic() >= deadline:
                 raise AssertionError("selected fixture shell did not exit")
             front.pump(.05)
-        front.send("printf '__DROPPED_%s__\\n' INPUT\n\x1b[18~printf '__R%s__\\n' ECOVERED\n")
-        front.until(lambda s: "1/3 · main" in text(s) and "__RECOVERED__" in shell_text(s),
-                    "F7 recovers local input after the selected shell exits")
-        self.check("__DROPPED_INPUT__" not in self.native("terminal.read", {"max_bytes": 32768})["text"],
-                   "exited PTY input failure keeps F7 working and never replays failed text to main")
+        dropped = "printf '__DROPPED_%s__\\n' INPUT\n"
+        try:
+            self.native("terminal.write", {"terminal_id": exited, "data": dropped})
+        except AssertionError as error:
+            self.check("terminal has exited" in str(error), "writes to an exited PTY fail explicitly")
+        else:
+            raise AssertionError("exited PTY unexpectedly accepted input")
+        front.send(dropped + "\x1b[18~")
+        front.until(lambda s: "Copy mode" in s["rows"][-1], "F7 remains usable after the selected shell exits")
+        self.check(self.native("terminal.list")["selected"] == exited,
+                   "Copy mode does not redirect failed input from an exited PTY")
+        front.send("\x1b[18~")
+        front.until(lambda s: "Copy mode" not in s["rows"][-1], "leaving Copy mode after shell exit")
+        selected = self.native("terminal.select", {"terminal_id": "main"})
+        self.check(selected["terminal_id"] == "main" and selected["selected"],
+                   "main remains explicitly selectable after another shell exits")
+        self.native("terminal.write", {"terminal_id": "main", "data": "printf '__R%s__\\n' ECOVERED\n"})
+        main_output = self.wait_terminal(front, "main", "__RECOVERED__", "main shell remains writable")
+        self.check("__DROPPED_INPUT__" not in main_output,
+                   "exited PTY writes and local audit input are never replayed to main")
         self.native("terminal.close", {"terminal_id": exited})
 
         release.write_text("finish")
@@ -277,7 +351,7 @@ def main():
     decoder = args.decoder or binary_dir / "examples/vt_snapshot"
     started = time.monotonic()
     report = {"status": "failed", "controller_fixture": CONTROLLER,
-              "transport": "isolated OpenSSH + OAuth + owned physical PTY + independent vt100 decoder",
+              "transport": "isolated account relay + OAuth + owned physical PTY + independent vt100 decoder",
               "preview_kind": "rendered live PTY cells, not a system desktop screenshot",
               "model_invoked": False,
               "binaries": {name: sha256(path) for name, path in (("ssmcp", binary_dir / "ssmcp"), ("ssmcpd", binary_dir / "ssmcpd"), ("vt_snapshot", decoder))}}
