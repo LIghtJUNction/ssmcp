@@ -1466,8 +1466,153 @@ mod tests {
             }
             socket.close(None).await.unwrap();
         }
+        let mut socket = open_socket_with_capabilities(&base, &login, vec![], offers[4]).await;
+        let Some(wire::Frame::Ready {
+            client_id,
+            capabilities,
+            ..
+        }) = receive(&mut socket).await
+        else {
+            panic!("missing Ready for the HTTP metadata fixture");
+        };
+        assert_eq!(capabilities, offers[4]);
+        let session = broker
+            .client(IDENTITY_RESOURCE, &authorization, &client_id)
+            .await
+            .unwrap();
+        let owner = crate::bridge::owner(IDENTITY_RESOURCE, &authorization).unwrap();
+        openai_metadata_from_http_stays_with_each_original_history(
+            &base,
+            &access,
+            &mut socket,
+            &session,
+            &owner,
+            directory.0.join("histories"),
+        )
+        .await;
+        socket.close(None).await.unwrap();
         server.abort();
         let _ = server.await;
+    }
+
+    async fn openai_metadata_from_http_stays_with_each_original_history(
+        base: &str,
+        access: &str,
+        socket: &mut Socket,
+        session: &crate::broker::Session,
+        owner: &str,
+        directory: PathBuf,
+    ) {
+        use crate::{client::interface::history, runtime::call_scope::CallScope};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let b_history = history::with_test_history(directory.clone(), async {
+            history::record("user", "Conversation B").unwrap();
+            history::current().unwrap().unwrap().metadata.id
+        })
+        .await;
+        history::with_test_history(directory, async {
+            history::record("user", "Conversation A").unwrap();
+            let a_owner = history::current_owner().unwrap();
+            let client = crate::http_client::builder().no_proxy().build().unwrap();
+            let frame_reply = |id, value| Message::Binary(
+                serde_json::to_vec(&wire::Frame::Reply { id, result: Ok(value) }).unwrap().into(),
+            );
+            let mut calls = Vec::new();
+            let mut threads = Vec::new();
+            let mut runs = Vec::new();
+            for (rpc_id, label) in [(1, "A"), (2, "B")] {
+                if label == "B" {
+                    history::resume_test_history(&b_history).unwrap();
+                }
+                let name = format!("fixture-{label}");
+                let agent = session.collaboration.dispatch(owner, "join", json!({"name":name})).await.unwrap();
+                let thread = agent["agent_id"].as_str().unwrap();
+                let job = format!("job-{label}");
+                let expected_session = format!("anonymous-session-{label}");
+                let expected_subject = format!("anonymous-subject-{label}");
+                let request = client.post(format!("{base}/{IDENTITY_RESOURCE}"))
+                    .bearer_auth(access)
+                    .timeout(Duration::from_secs(12))
+                    .json(&json!({"jsonrpc":"2.0","id":rpc_id,"method":"tools/call","params":{
+                        "name":"await",
+                        "arguments":{"client_id":session.client_id(),"timeout_ms":10000,
+                            "targets":[{"type":"exec","job_id":job}],
+                            "agent":{"id":thread,"token":agent["token"]}},
+                        "_meta":{"openai/session":expected_session,"openai/subject":expected_subject,
+                            "account":{"subject":"not-authenticated"}}
+                    }}));
+                let response = tokio::spawn(request.send());
+                if label == "A" {
+                    let Some(wire::Frame::Call {
+                        id, operation: Operation::CallTool {name, arguments},
+                        attribution: None, controller: None, code_context: None, openai_context: None,
+                    }) = receive(socket).await else {
+                        panic!("missing unbound thread-scope probe");
+                    };
+                    assert_eq!(name, "ssmcp.client.capabilities");
+                    assert_eq!(arguments, json!({}));
+                    socket.send(frame_reply(id, json!({"thread_scope":1}))).await.unwrap();
+                }
+
+                let Some(wire::Frame::Call { id, operation: Operation::CallTool {name, arguments},
+                    attribution: Some(attribution), controller: None, code_context: Some(context),
+                    openai_context: Some(metadata),
+                }) = receive(socket).await else {
+                    panic!("missing authenticated business call with OpenAI metadata");
+                };
+                assert_eq!(name, "ssmcp.exec.wait");
+                assert_eq!(arguments["job_id"], job);
+                assert_eq!(attribution.account.subject, "123");
+                assert_eq!(attribution.account.login, "alice");
+                assert_eq!(attribution.owner.as_ref().unwrap().subject, "123");
+                assert_eq!(attribution.agent.as_ref().unwrap().id, thread);
+                assert_eq!(context.session_id.as_deref(), Some(session.client_id()));
+                assert_eq!(context.thread_id.as_deref(), Some(thread));
+                assert_eq!(metadata.session.as_deref(), Some(expected_session.as_str()));
+                assert_eq!(metadata.subject.as_deref(), Some(expected_subject.as_str()));
+                let scope = CallScope::from_relay_for_client(
+                    1, Some(session.client_id()), id, Some(&attribution), Some(&context),
+                ).unwrap();
+                let observation = scope.openai_observation(metadata, context.timestamp_ms).unwrap();
+                threads.push(thread.to_owned());
+                runs.push(context.run_id);
+                calls.push((rpc_id, id, job, observation, response));
+            }
+            assert_ne!(threads[0], threads[1]);
+            assert_ne!(runs[0], runs[1]);
+            assert_ne!(calls[0].1, calls[1].1);
+            let b_owner = history::current_owner().unwrap();
+            assert_eq!(b_owner.id(), b_history);
+            assert_ne!(a_owner.id(), b_owner.id());
+
+            // Both native calls are now in flight. Complete B first, then A
+            // while B is still selected, using only the already-captured owners.
+            for (rpc_id, id, job, observation, response) in calls.into_iter().rev() {
+                assert!(observation.record().unwrap());
+                socket.send(frame_reply(id, json!({
+                    "structuredContent":{"job_id":job,"running":false,"exit_code":0}
+                }))).await.unwrap();
+                let response = response.await.unwrap().unwrap().error_for_status().unwrap();
+                let body: Value = response.json().await.unwrap();
+                assert_eq!(body["id"], rpc_id);
+                assert_eq!(body["result"]["structuredContent"]["status"], "ready");
+                assert_eq!(body["result"]["structuredContent"]["results"][0]["data"]["job_id"], job);
+            }
+
+            assert_eq!(history::current_owner().unwrap().id(), b_history);
+            assert!(history::openai::read_selected(&a_owner).is_err());
+            let b = history::openai::read_selected(&b_owner).unwrap().unwrap();
+            assert_eq!(b.session.unwrap().value, "anonymous-session-B");
+            assert_eq!(b.subject.unwrap().value, "anonymous-subject-B");
+            history::resume_test_history(a_owner.id()).unwrap();
+            let a = history::openai::read_selected(&a_owner).unwrap().unwrap();
+            assert_eq!(a.session.unwrap().value, "anonymous-session-A");
+            assert_eq!(a.subject.unwrap().value, "anonymous-subject-A");
+            assert!(history::openai::read_selected(&b_owner).is_err());
+            history::resume_test_history(&b_history).unwrap();
+            assert_eq!(history::current_owner().unwrap().id(), b_history);
+        }).await;
     }
 
     #[test]

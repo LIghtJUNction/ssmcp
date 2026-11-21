@@ -1073,6 +1073,15 @@ pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
 pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
+#[cfg(test)]
+pub(crate) fn resume_test_history(id: &str) -> Result<Conversation, String> {
+    // Test selections must not reset the process-wide last-reply copy cache.
+    ownership::TEST_HISTORY
+        .try_with(|_| ())
+        .map_err(|_| "no isolated history fixture for this selection")?;
+    with(|history| history.resume(id))
+}
+
 pub(crate) fn resume(id: &str) -> Result<Conversation, String> {
     with(|history| {
         let conversation = history.resume(id)?;
