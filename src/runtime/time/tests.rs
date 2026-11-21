@@ -144,7 +144,7 @@ fn timer_capacity_retention_and_elapsed_lifetime_are_bounded() {
 #[tokio::test]
 async fn timer_and_late_observation_stay_with_the_original_history_lease() {
     let clock = Clock::new().unwrap();
-    let path = std::env::temp_dir().join(format!(
+    let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
         "ssmcp-time-history-{}-{}",
         std::process::id(),
         clock.id

@@ -396,7 +396,7 @@ mod tests {
     async fn final_messages_and_presentations_need_owner_but_no_finish_approval() {
         use crate::client::interface::history;
         use crate::runtime::call_scope::Source;
-        let path = std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "ssmcp-retired-hooks-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()

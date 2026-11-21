@@ -103,6 +103,36 @@ fn allocation_lock_rejects_links_permissions_and_replaced_inodes() {
 }
 
 #[test]
+fn allocation_lock_drop_releases_while_an_inherited_descriptor_stays_open() {
+    let directory = private_directory();
+    let first = AllocationLock::open(&directory.0).unwrap();
+    first.file.try_lock().unwrap();
+    // dup and fork retain the same open file description. Keeping this clone
+    // alive makes the fork-before-exec window deterministic without a child.
+    let inherited = first.file.try_clone().unwrap();
+    let second = AllocationLock::open(&directory.0).unwrap();
+    assert!(matches!(
+        second.file.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    drop(first);
+    second.file.try_lock().unwrap();
+    assert!(inherited.metadata().unwrap().is_file());
+
+    // Neither an unacquired guard nor the old owner's descriptor may release
+    // the new owner's independent lock.
+    drop(AllocationLock::open(&directory.0).unwrap());
+    drop(inherited);
+    let third = AllocationLock::open(&directory.0).unwrap();
+    assert!(matches!(
+        third.file.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    drop(second);
+    third.file.try_lock().unwrap();
+}
+
+#[test]
 fn allocation_lock_excludes_another_process() {
     let directory = private_directory();
     let lock = AllocationLock::open(&directory.0).unwrap();
