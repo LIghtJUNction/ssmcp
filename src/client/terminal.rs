@@ -3077,9 +3077,13 @@ mod tests {
         let now = Instant::now();
         let mut state = State::new(28, 48, &Ui::default());
         state.preview = true;
-        state.conversation.composer.set_text("keep @missing $skill draft");
+        state
+            .conversation
+            .composer
+            .set_text("keep @missing $skill draft");
         state.conversation.content_focus = true;
-        let before = state.conversation.snapshot();
+        let draft = state.conversation.composer.text().to_owned();
+        let cursor = state.conversation.composer.cursor();
         for sequence in [
             b"\x1b[99;11u".as_slice(),
             b"\x1b[99;11:1u",
@@ -3095,18 +3099,27 @@ mod tests {
                 };
                 for part in [&sequence[..split], &sequence[split..]] {
                     let (text, keys) = keyboard.feed(part, now, false, true, false);
-                    assert!(text.is_empty() && keys.is_empty(), "{sequence:?} at {split}");
+                    assert!(
+                        text.is_empty() && keys.is_empty(),
+                        "{sequence:?} at {split}"
+                    );
                 }
                 let (text, keys) =
                     keyboard.feed(&[], now + Duration::from_millis(80), true, true, false);
                 assert!(text.is_empty() && keys.is_empty());
                 assert!(keyboard.pending.is_empty());
-                assert!(keyboard.logs, "ignoring a retired key must not change focus");
+                assert!(
+                    keyboard.logs,
+                    "ignoring a retired key must not change focus"
+                );
             }
             for byte in sequence {
                 assert!(state.keyboard(&[*byte], now, false).is_empty());
             }
-            assert_eq!(state.conversation.snapshot(), before);
+            assert_eq!(state.conversation.composer.text(), draft);
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            assert!(state.conversation.content_focus);
+            assert!(!state.selection);
             assert!(state.actions.is_empty());
         }
         for sequence in [
@@ -3116,8 +3129,7 @@ mod tests {
             b"\x1b[99;11:0u",
             b"\x1b[99;11;1;2u",
         ] {
-            let (text, keys) =
-                Keyboard::default().feed(sequence, now, false, true, false);
+            let (text, keys) = Keyboard::default().feed(sequence, now, false, true, false);
             assert_eq!(text, sequence);
             assert!(keys.is_empty());
         }

@@ -133,20 +133,24 @@ fn hint(snapshot: &Snapshot) -> Option<String> {
         .map(|entry| entry.remaining_ms)
         .min()?
         .div_ceil(1000);
-    if episodes.len() > 1 {
-        Some(format!(
-            "{} 项等待你的回应 · {remaining}s · /wait",
-            episodes.len()
-        ))
+    let label = if episodes.len() > 1 {
+        format!("{} 项等待你的输入", episodes.len())
     } else {
-        snapshot
-            .active
-            .first()
-            .map(|entry| format!("{} · {remaining}s · /wait", intent_text(entry.intent)))
-    }
+        "等待你的输入".into()
+    };
+    // This is the current request's remaining budget, not elapsed user time.
+    Some(format!(
+        "! {label} · 剩余 {:02}:{:02} · /wait",
+        remaining / 60,
+        remaining % 60
+    ))
 }
 
 impl State {
+    pub(in crate::client::terminal) fn user_wait_alert(snapshot: &Snapshot) -> Option<String> {
+        hint(snapshot)
+    }
+
     pub(super) fn chat_user_wait(&mut self, arguments: &str) -> Result<(), String> {
         if self.preview {
             return Err("预览不连接真实的用户等待".into());
@@ -194,7 +198,7 @@ impl State {
         self.dirty = true;
     }
 
-    pub(super) fn chat_user_wait_hint(&self) -> Option<String> {
+    pub(super) fn chat_user_wait_hint(&self) -> Option<(String, PanelTone)> {
         if self.help
             || self.selection
             || self.conversation.logs_open
@@ -206,7 +210,9 @@ impl State {
         {
             return None;
         }
-        hint(&self.chat_user_wait_snapshot()).or_else(|| self.chat_timing_hint())
+        hint(&self.chat_user_wait_snapshot())
+            .map(|text| (text, PanelTone::Error))
+            .or_else(|| self.chat_timing_hint().map(|text| (text, PanelTone::Muted)))
     }
 
     pub(super) fn chat_user_wait_snapshot(&self) -> Snapshot {
@@ -229,13 +235,17 @@ mod tests {
     use crate::client::interface::user_wait::Completion;
     use crate::client::notification::{Reason, Report};
 
-    fn screen(state: &mut State) -> String {
+    fn parse(state: &mut State) -> vt100::Parser {
         let frame = state.chat_frame(Instant::now());
         let rows = std::num::NonZeroU16::new(frame.geometry.rows).expect("nonzero frame rows");
         let cols = std::num::NonZeroU16::new(frame.geometry.cols).expect("nonzero frame cols");
         let mut parser = vt100::Parser::new(rows, cols, 0);
         parser.process(&frame.diff(None));
-        parser.screen().contents()
+        parser
+    }
+
+    fn screen(state: &mut State) -> String {
+        parse(state).screen().contents()
     }
 
     fn entry(id: &str, episode: &str, intent: Intent) -> Entry {
@@ -294,7 +304,7 @@ mod tests {
         };
         assert_eq!(
             hint(&snapshot).as_deref(),
-            Some("2 项等待你的回应 · 13s · /wait")
+            Some("! 2 项等待你的输入 · 剩余 00:13 · /wait")
         );
         let text = detail(&snapshot);
         assert_eq!(text.matches("Synthetic wait reason").count(), 2);
@@ -310,7 +320,10 @@ mod tests {
             ],
             ..Snapshot::default()
         };
-        assert_eq!(hint(&mixed).as_deref(), Some("等待你的输入 · 13s · /wait"));
+        assert_eq!(
+            hint(&mixed).as_deref(),
+            Some("! 等待你的输入 · 剩余 00:13 · /wait")
+        );
         let text = detail(&mixed);
         assert!(text.contains("#first-input · 等待你的输入"));
         assert!(text.contains("#second-finish · 等待你的输入"));
@@ -360,13 +373,26 @@ mod tests {
                 ..Snapshot::default()
             });
             let original = state.conversation.composer.text().to_owned();
-            let rendered = screen(&mut state);
+            let parsed = parse(&mut state);
+            let rendered = parsed.screen().contents();
             let footer = rendered.lines().last().unwrap();
             assert!(
-                footer.contains("等待你的输入") && footer.contains("/wait"),
+                footer.contains("! 等待你的输入 · 剩余 00:13 · /wait"),
                 "{rendered}"
             );
+            let cell = parsed.screen().cell(27, 1).unwrap();
+            assert_eq!(cell.contents(), "!");
+            assert_eq!(cell.fgcolor(), vt100::Color::Rgb(242, 139, 130));
+            assert!(!cell.dim());
             assert_eq!(state.conversation.composer.text(), original);
+
+            state.conversation.wait_fixture.as_mut().unwrap().active[0].remaining_ms = 10_999;
+            let parsed = parse(&mut state);
+            assert!(parsed.screen().contents().contains("剩余 00:11"));
+            assert_eq!(
+                parsed.screen().cell(27, 1).unwrap().fgcolor(),
+                vt100::Color::Rgb(242, 139, 130)
+            );
 
             state.notice = Some("Synthetic action failed".into());
             let rendered = screen(&mut state);
@@ -419,6 +445,26 @@ mod tests {
             }
             assert!(!rendered.contains("等待你的输入"));
             assert_eq!(state.conversation.composer.text(), original);
+
+            // Removing the real wait must also remove its red alert. A live
+            // background task still has a clock, but is not waiting for a human.
+            state.conversation.content_focus = false;
+            state.conversation.wait_fixture.as_mut().unwrap().active.clear();
+            state.panel.tasks = vec![crate::client::panel::TaskView {
+                id: "#background".into(),
+                description: "Ordinary background work".into(),
+                cwd: None,
+                started: Instant::now(),
+                deadline: None,
+            }];
+            let parsed = parse(&mut state);
+            assert!(!parsed.screen().contents().contains("等待你的输入"));
+            assert_ne!(
+                parsed.screen().cell(27, 1).unwrap().fgcolor(),
+                vt100::Color::Rgb(242, 139, 130)
+            );
+            assert_eq!(state.conversation.composer.text(), original);
+            assert!(state.actions.is_empty());
         }
     }
 

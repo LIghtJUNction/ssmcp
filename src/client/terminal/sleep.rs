@@ -139,6 +139,18 @@ impl State {
         }
     }
 
+    fn sleep_user_wait_alert(&self) -> Option<String> {
+        #[cfg(test)]
+        if let Some(snapshot) = &self.sleep_fixture {
+            return Self::user_wait_alert(snapshot);
+        }
+        if self.preview {
+            None
+        } else {
+            Self::user_wait_alert(&user_wait::snapshot())
+        }
+    }
+
     pub(super) fn sleep_wants_overlay(&self) -> bool {
         self.sleep.wants(&self.sleep_snapshot())
     }
@@ -173,6 +185,27 @@ impl State {
             // reuploads them on wake; opaque native pixels cannot cover the dim.
             self.media.clear();
             dim(frame, self.ui.color);
+            if let Some(alert) = self.sleep_user_wait_alert()
+                && let Some(row) = frame.rows.last_mut()
+            {
+                // Repaint only the real user-wait alert after the gray pass.
+                // Embedded output colors must remain dim, and finish-only or
+                // ordinary task snapshots cannot invent a countdown here.
+                let margin = if frame.geometry.cols > 2 { " " } else { "" };
+                let text = super::fit(&format!("{margin}{alert}"), frame.geometry.cols);
+                let padding = " ".repeat(
+                    usize::from(frame.geometry.cols)
+                        .saturating_sub(unicode_width::UnicodeWidthStr::width(text.as_str())),
+                );
+                *row = if self.ui.color {
+                    format!(
+                        "\x1b[0;1;{};48;2;10;13;18m{text}{padding}\x1b[0m",
+                        self.ui.color("error")
+                    )
+                } else {
+                    format!("\x1b[0;1m{text}{padding}\x1b[0m")
+                };
+            }
         }
         // Copy mode must keep reporting the mouse release after a click wakes
         // the overlay. Restore its original capture mode only after release.
@@ -452,6 +485,8 @@ mod tests {
         let now = Instant::now();
         for (rows, cols) in [(28, 120), (24, 48), (5, 16), (1, 1)] {
             let mut state = state(rows, cols);
+            state.notice = None;
+            state.conversation.wait_fixture = state.sleep_fixture.clone();
             state.conversation.composer.set_text("Draft: 界");
             let before = state.conversation.snapshot();
             let frame = state.frame(now);
@@ -471,27 +506,50 @@ mod tests {
                 for col in 0..cols {
                     let cell = parsed.screen().cell(row, col).unwrap();
                     if !cell.is_wide_continuation() {
-                        assert!(cell.dim());
-                        assert!(!cell.bold() && !cell.inverse());
+                        if row == rows - 1 {
+                            assert!(!cell.dim() && cell.bold() && !cell.inverse());
+                            assert_eq!(cell.fgcolor(), vt100::Color::Rgb(242, 139, 130));
+                        } else {
+                            assert!(cell.dim());
+                            assert!(!cell.bold() && !cell.inverse());
+                        }
                         assert_eq!(cell.bgcolor(), vt100::Color::Rgb(10, 13, 18));
                     }
                 }
             }
-            assert!(parsed.screen().contents().contains(if cols >= 24 {
+            assert!(parsed.screen().contents().contains(if rows == 1 {
+                "!"
+            } else if cols >= 24 {
                 "Click or type to wake"
             } else {
                 "z"
             }));
+            if cols >= 48 {
+                assert!(
+                    parsed
+                        .screen()
+                        .contents()
+                        .contains("! 等待你的输入 · 剩余 00:20 · /wait")
+                );
+            }
             assert_eq!(state.conversation.snapshot(), before);
             save(&frame, "sleep");
             state.sleep.dismiss();
             let awake = state.frame(now);
-            assert!(
-                !parse(&awake)
-                    .screen()
-                    .contents()
-                    .contains("Click or type to wake")
-            );
+            let parsed = parse(&awake);
+            assert!(!parsed.screen().contents().contains("Click or type to wake"));
+            if cols >= 48 {
+                assert!(
+                    parsed
+                        .screen()
+                        .contents()
+                        .contains("! 等待你的输入 · 剩余 00:20 · /wait")
+                );
+                let cell = parsed.screen().cell(rows - 1, 1).unwrap();
+                assert_eq!(cell.contents(), "!");
+                assert_eq!(cell.fgcolor(), vt100::Color::Rgb(242, 139, 130));
+                assert!(!cell.dim());
+            }
             assert_eq!(state.conversation.snapshot(), before);
             save(&awake, "awake");
         }

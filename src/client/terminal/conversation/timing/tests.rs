@@ -16,7 +16,7 @@ fn entry(remaining_ms: Option<u64>, elapsed_ms: u64) -> Entry {
     }
 }
 
-fn screen(state: &mut State) -> String {
+fn parse(state: &mut State) -> vt100::Parser {
     let frame = state.chat_frame(Instant::now());
     let mut parser = vt100::Parser::new(
         std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
@@ -24,7 +24,11 @@ fn screen(state: &mut State) -> String {
         0,
     );
     parser.process(&frame.diff(None));
-    parser.screen().contents()
+    parser
+}
+
+fn screen(state: &mut State) -> String {
+    parse(state).screen().contents()
 }
 
 #[test]
@@ -62,6 +66,14 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
         let first = screen(&mut state);
         assert!(first.contains("剩余 00:13"), "{cols}: {first}");
         assert!(first.contains("Specific local notice"), "{cols}: {first}");
+        state.notice = None;
+        let parsed = parse(&mut state);
+        assert!(parsed.screen().contents().contains("计时 · 剩余 00:13"));
+        assert!(!parsed.screen().contents().contains("等待你的输入"));
+        assert_ne!(
+            parsed.screen().cell(29, 1).unwrap().fgcolor(),
+            vt100::Color::Rgb(242, 139, 130)
+        );
         state.conversation.timing_fixture.as_mut().unwrap().active[0].remaining_ms = Some(10_999);
         let later = screen(&mut state);
         assert!(later.contains("剩余 00:11"), "{cols}: {later}");

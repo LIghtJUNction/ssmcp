@@ -3074,11 +3074,13 @@ impl State {
                     || update_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
+                } else if self.notice.is_none() {
+                    wait_hint.as_ref().map_or(PanelTone::Muted, |(_, tone)| *tone)
                 } else {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if let Some(hint) = wait_hint { return hint; }
+                    if let Some((hint, _)) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }
                     if let Some(hint) = update_hint {
