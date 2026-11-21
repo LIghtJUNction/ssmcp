@@ -155,7 +155,6 @@ include = [
     "/scripts/test_setup_server.py",
     "/scripts/render_log_preview.py",
     "/packaging/ssmcp-portal.service",
-    "/packaging/ssmcp-computer.lua",
     "/scripts/e2e_computer_controls.py",
     "/docs/backends.md",
     "/docs/optional-harnesses.md",
@@ -198,11 +197,10 @@ include = [
 
 [workspace]
 members = []
-exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
+exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio"]
 resolver = "3"
 
 [dependencies]
-zuse = { package = "zuse-computer", git = "https://github.com/LIghtJUNction/zuse.git", default-features = false, features = ["std"] }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
 zharness = { git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
 zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }
