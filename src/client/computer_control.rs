@@ -1,4 +1,5 @@
-//! Local Zuse CLI lifecycle commands, using the same manager as the native tools.
+//! Local Zuse lifecycle commands and an explicit manual legacy compatibility switch.
+use super::interface::computer::{self as compatibility, Action as CompatibilityAction};
 use std::ffi::OsString;
 
 use serde_json::{Value, json};
@@ -6,6 +7,7 @@ use serde_json::{Value, json};
 const HELP: &str = "\
 Usage: ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
                      [--json]
+       ssmcp computer <on|off|toggle|status> [--json]
 
 Manage the standalone Zuse CLI. Desktop and browser operations run directly in Zuse;
 SSMCP does not embed those controls or provide an action proxy.
@@ -18,12 +20,22 @@ SSMCP does not embed those controls or provide an action proxy.
 An omitted VERSION selects the latest stable release. Downloading does not install
 or execute it. Installation does not overwrite an external Zuse executable or change PATH.
 Use the returned installation path directly, or configure your own PATH explicitly.
---json returns the complete native MCP result.
+--json returns the complete native MCP result for lifecycle commands.
+
+旧版 SSMCP 兼容开关：on / off / toggle / status · 不控制独立 Zuse CLI
+These explicit manual commands share only the old SSMCP provider state. They do
+not control this version's tools or ordinary exec, and install no keyboard binding.
+status only observes existing state; an absent record is unset, not an Off claim.
+--json returns the compatibility state for these four manual commands.
 ";
 
 #[derive(Debug, PartialEq)]
 enum Request {
     Help,
+    Compatibility {
+        action: CompatibilityAction,
+        json: bool,
+    },
     Action {
         name: &'static str,
         arguments: Value,
@@ -47,6 +59,16 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
             operands.push(value);
         }
     }
+    let compatibility = match operands.as_slice() {
+        ["on"] => Some(CompatibilityAction::On),
+        ["off"] => Some(CompatibilityAction::Off),
+        ["toggle"] => Some(CompatibilityAction::Toggle),
+        ["status"] => Some(CompatibilityAction::Status),
+        _ => None,
+    };
+    if let Some(action) = compatibility {
+        return Ok(Request::Compatibility { action, json });
+    }
     let (name, arguments) = match operands.as_slice() {
         [] | ["version"] => ("ssmcp.computer.version", json!({})),
         ["download"] => ("ssmcp.computer.download", json!({})),
@@ -56,7 +78,11 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
             "ssmcp.computer.uninstall",
             json!({"installation_id":installation_id}),
         ),
-        _ => return Err("use ssmcp computer --help for Zuse CLI lifecycle commands".into()),
+        _ => {
+            return Err(
+                "use ssmcp computer --help for lifecycle and manual compatibility commands".into(),
+            );
+        }
     };
     Ok(Request::Action {
         name,
@@ -71,6 +97,14 @@ pub(crate) async fn dispatch(args: &[OsString]) -> crate::Result<bool> {
     }
     match parse(&args[1..])? {
         Request::Help => print!("{HELP}"),
+        Request::Compatibility { action, json } => {
+            let state = compatibility::apply(action)?;
+            if json {
+                println!("{}", serde_json::to_string(&state)?);
+            } else {
+                println!("{}", compatibility::describe(&state));
+            }
+        }
         Request::Action {
             name,
             arguments,
@@ -98,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn computer_cli_defaults_to_version_and_maps_only_lifecycle_arguments() {
+    fn computer_cli_defaults_to_version_and_preserves_lifecycle_arguments() {
         assert_eq!(
             parse(&[]).unwrap(),
             Request::Action {
@@ -144,12 +178,39 @@ mod tests {
     }
 
     #[test]
-    fn computer_cli_rejects_retired_controls_and_ambiguous_commands() {
+    fn computer_cli_requires_explicit_manual_compatibility_actions() {
+        for (command, action) in [
+            ("status", CompatibilityAction::Status),
+            ("on", CompatibilityAction::On),
+            ("off", CompatibilityAction::Off),
+            ("toggle", CompatibilityAction::Toggle),
+        ] {
+            assert_eq!(
+                parse(&args(&[command])).unwrap(),
+                Request::Compatibility { action, json: false }
+            );
+            assert_eq!(
+                parse(&args(&["--json", command])).unwrap(),
+                Request::Compatibility { action, json: true }
+            );
+        }
+        assert!(matches!(
+            parse(&args(&["--json"])).unwrap(),
+            Request::Action {
+                name: "ssmcp.computer.version",
+                ..
+            }
+        ));
+        assert!(HELP.contains("旧版 SSMCP 兼容开关"));
+        assert!(HELP.contains("不控制独立 Zuse CLI"));
+    }
+
+    #[test]
+    fn computer_cli_rejects_native_actions_and_ambiguous_commands() {
         for values in [
-            vec!["on"],
-            vec!["off"],
-            vec!["toggle"],
-            vec!["status"],
+            vec!["on", "extra"],
+            vec!["toggle", "off"],
+            vec!["status", "version"],
             vec!["click", "1", "2"],
             vec!["install"],
             vec!["uninstall"],

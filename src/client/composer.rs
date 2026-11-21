@@ -112,6 +112,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "发送给当前选定的监听程序、原生收件人或群组：/send <正文>",
     },
     SlashCommand {
+        name: "/computer",
+        description: "旧版 SSMCP 兼容开关：status/on/off/toggle · 不控制独立 Zuse CLI",
+    },
+    SlashCommand {
         name: "/wait",
         description: "查看计时和用户等待；/wait cancel <编号> 只取消对应等待，会话继续",
     },
@@ -1282,7 +1286,18 @@ mod tests {
         assert_eq!(rendered.lines.len(), 4);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
-        for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {
+        draft.set_text("/computer");
+        let command = draft.selected_suggestion().unwrap();
+        assert_eq!(command.name, "/computer");
+        assert!(command.description.contains("旧版 SSMCP 兼容开关"));
+        assert!(command.description.contains("不控制独立 Zuse CLI"));
+        for value in [
+            "/filter cargo",
+            "/computer off",
+            "/unknown",
+            "message /reload",
+            "/\n",
+        ] {
             draft.set_text(value);
             assert!(draft.suggestions().is_empty());
         }

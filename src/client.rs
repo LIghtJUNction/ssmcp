@@ -83,7 +83,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
-  computer                     Zuse CLI version and installation
+  computer                     Zuse CLI lifecycle and manual legacy compatibility
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -126,6 +126,7 @@ Usage: ssmcp username@server [options]
                   [--timeout SECONDS] [--json] [--server URL]
        ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
                       [--json]
+       ssmcp computer <on|off|toggle|status> [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
        ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
@@ -265,8 +266,11 @@ workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
 Use the standalone Zuse CLI directly for desktop and browser operations.
 SSMCP does not embed computer or browser control. The local `ssmcp computer`
-command only queries, downloads, installs or uninstalls the Zuse CLI.
+command queries, downloads, installs or uninstalls the Zuse CLI (default: version).
 Managed installs do not replace an external executable or change PATH.
+Explicit on/off/toggle/status, or /computer in chat, operate only the legacy
+SSMCP compatibility switch. They do not control standalone Zuse or ordinary exec.
+No default or global shortcut is installed for this compatibility switch.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.

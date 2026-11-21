@@ -708,6 +708,7 @@ impl State {
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
             "/goal" => self.chat_goal(rest)?,
+            "/computer" => self.computer_command(rest)?,
             "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs" => {
                 self.chat_openai_command(command, rest)?;
             }
@@ -5195,6 +5196,40 @@ mod tests {
         assert!(!state.chat_menu_visible());
         input(&mut state, b"\t");
         assert_eq!(state.conversation.composer.text(), "/re");
+    }
+
+    #[test]
+    fn manual_computer_commands_only_queue_legacy_actions_and_preserve_the_draft() {
+        let mut state = State::new(28, 120, &Ui::default());
+        state.conversation.composer.set_text("keep @missing $skill draft");
+        state.conversation.composer.left();
+        let draft = state.chat_saved_draft();
+        for (command, action) in [
+            ("/computer", "computer.status"),
+            ("/computer status", "computer.status"),
+            ("/computer on", "computer.on"),
+            ("/computer off", "computer.off"),
+            ("/computer toggle", "computer.toggle"),
+        ] {
+            assert!(state.chat_command(command).unwrap());
+            assert_eq!(std::mem::take(&mut state.actions), vec![action]);
+            assert_eq!(state.chat_saved_draft(), draft);
+            assert!(state.conversation.submitting.is_none());
+            let notice = state.notice.as_deref().unwrap();
+            assert!(notice.contains("请求已排队"));
+            assert!(notice.contains("旧版 SSMCP 兼容开关"));
+            assert!(notice.contains("不控制独立 Zuse CLI"));
+        }
+        for command in ["/computer on extra", "/computer click", "/computer version"] {
+            assert!(state.chat_command(command).is_err());
+            assert!(state.actions.is_empty());
+            assert_eq!(state.chat_saved_draft(), draft);
+        }
+        let mut preview = preview(28, 120);
+        for command in ["/computer", "/computer on", "/computer off", "/computer toggle"] {
+            assert!(preview.chat_command(command).is_err());
+            assert!(preview.actions.is_empty());
+        }
     }
 
     #[test]

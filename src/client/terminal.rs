@@ -21,6 +21,7 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod computer;
 mod conversation;
 pub(super) use conversation::reload_state::{
     Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
