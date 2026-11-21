@@ -592,7 +592,10 @@ async fn existing_official(official: &Path) -> Result<Option<PathBuf>, String> {
     for path in [official, &official.join(".git")] {
         let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err("official tools require a real working directory and an independent .git directory".into());
+            return Err(
+                "official tools require a real working directory and an independent .git directory"
+                    .into(),
+            );
         }
         #[cfg(windows)]
         {

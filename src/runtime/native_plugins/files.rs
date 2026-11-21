@@ -289,7 +289,9 @@ mod tests {
         let private_inputs = fixture.scratch.0.join("workspace/.ssmcp/inputs");
         #[cfg(not(unix))]
         assert_eq!(
-            std::fs::symlink_metadata(&private_inputs).unwrap_err().kind(),
+            std::fs::symlink_metadata(&private_inputs)
+                .unwrap_err()
+                .kind(),
             std::io::ErrorKind::NotFound
         );
         let imported = fixture
@@ -330,7 +332,9 @@ mod tests {
             // The preceding native write can create .ssmcp/managed-files.
             // Unsupported private paste must not create its own input storage.
             assert_eq!(
-                std::fs::symlink_metadata(private_inputs).unwrap_err().kind(),
+                std::fs::symlink_metadata(private_inputs)
+                    .unwrap_err()
+                    .kind(),
                 std::io::ErrorKind::NotFound
             );
         }
