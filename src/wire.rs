@@ -6,6 +6,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 mod attribution;
 pub mod messages;
+pub mod openai;
 pub mod versions;
 pub mod wait_display;
 pub use attribution::{ControlAccount, ControlAgent, ControlAttribution};
@@ -623,6 +624,9 @@ pub enum Frame {
         /// Present only when this call belongs to an audited code-mode run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code_context: Option<CodeContext>,
+        /// Caller-supplied display metadata, only after openai_context_v1 negotiation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        openai_context: Option<openai::OpenAiContext>,
     },
     CodeModeFinished {
         completion: CodeCompletion,
@@ -731,6 +735,7 @@ mod tests {
             controller: None,
             attribution: None,
             code_context: None,
+            openai_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(
@@ -751,6 +756,7 @@ mod tests {
             }),
             attribution: None,
             code_context: None,
+            openai_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(value["controller"]["source"], "caller-reported");
@@ -839,6 +845,7 @@ mod tests {
             controller: None,
             attribution: None,
             code_context: Some(context.clone()),
+            openai_context: None,
         };
         let value = serde_json::to_value(frame).unwrap();
         assert_eq!(value["code_context"]["code"], code);

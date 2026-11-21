@@ -3,6 +3,7 @@ pub(crate) mod archive;
 pub(crate) mod descriptions;
 pub(crate) mod goals;
 mod listener;
+pub(crate) mod openai;
 mod ownership;
 pub(crate) use listener::{
     ensure_current_id, record_listener_result, record_request_in, with_listener_conversation,
@@ -578,6 +579,7 @@ impl History {
         for (id, _lease) in reclaim {
             self.remove_description(&id, &names)?;
             self.remove_goal(&id, &names)?;
+            self.remove_openai(&id, &names)?;
             self.directory.remove(&session_name(&id)?)?;
             self.directory.remove(&format!("{id}.lease"))?;
         }

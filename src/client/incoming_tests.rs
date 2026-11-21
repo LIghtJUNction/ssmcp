@@ -15,6 +15,7 @@ fn queued_call(id: u64) -> Frame {
         controller: None,
         attribution: None,
         code_context: None,
+        openai_context: None,
     }
 }
 

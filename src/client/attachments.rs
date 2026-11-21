@@ -23,6 +23,7 @@ pub(crate) enum Source {
     Text(String),
     Image(Vec<u8>),
     Copy(String),
+    Web(WebAction),
     Handoff(String),
     Context { command: String, arguments: String },
 }
@@ -44,6 +45,33 @@ pub(crate) enum Loaded {
     },
     Context(String),
     Copied,
+    WebNotice(&'static str),
+}
+
+/// A local web effect produced by an explicit terminal command.
+pub(crate) enum WebAction {
+    Open(reqwest::Url),
+    Copy(String),
+}
+
+impl WebAction {
+    async fn run(
+        self,
+        open: impl AsyncFnOnce(&reqwest::Url) -> Result<(), String>,
+        copy: impl AsyncFnOnce(&str) -> Result<(), String>,
+    ) -> Result<Loaded, String> {
+        let notice = match self {
+            Self::Open(url) => {
+                open(&url).await?;
+                "Browser launch requested"
+            }
+            Self::Copy(url) => {
+                copy(&url).await?;
+                "ChatGPT URL copied to the system clipboard"
+            }
+        };
+        Ok(Loaded::WebNotice(notice))
+    }
 }
 // An attach frontend owns local input files without owning the service's
 // Runtime, tools or model connection. Only an explicit, scoped binding enables
@@ -106,6 +134,7 @@ impl Task {
                         | Source::Text(_)
                         | Source::Image(_)
                         | Source::Copy(_)
+                        | Source::Web(_)
                 ) {
                     return Err(error);
                 }
@@ -267,6 +296,18 @@ pub(crate) async fn load(source: Source, workspace: &Workspace) -> Result<Loaded
         Source::Copy(text) => super::clipboard::write_text(&text)
             .await
             .map(|()| Loaded::Copied),
+        Source::Web(action) => {
+            action
+                .run(
+                    async |url| {
+                        super::account::open_browser(url)
+                            .await
+                            .map_err(|_| "Could not start the desktop browser launcher".into())
+                    },
+                    super::clipboard::write_text,
+                )
+                .await
+        }
         Source::Clipboard => match super::clipboard::read().await? {
             super::clipboard::Content::Text(text)
                 if super::references::paste::should_store(&text) =>
@@ -1100,5 +1141,65 @@ mod tests {
         assert!(load_path(&workspace, "../outside.png").await.is_err());
         std::os::unix::fs::symlink(root.0.join("图.png"), root.0.join("link.png")).unwrap();
         assert!(load_path(&workspace, "link.png").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn explicit_web_effects_report_real_launcher_and_clipboard_outcomes() {
+        let url = reqwest::Url::parse("https://chatgpt.com/c/synthetic-fixture").unwrap();
+        let opened = WebAction::Open(url.clone())
+            .run(
+                async |target| {
+                    assert_eq!(target, &url);
+                    Ok(())
+                },
+                async |_| panic!("opening used the clipboard"),
+            )
+            .await;
+        assert!(matches!(
+            opened,
+            Ok(Loaded::WebNotice("Browser launch requested"))
+        ));
+        let error = WebAction::Open(url.clone())
+            .run(
+                async |target| {
+                    assert_eq!(target, &url);
+                    Err("fixture failed to spawn".into())
+                },
+                async |_| panic!("opening used the clipboard"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, "fixture failed to spawn");
+        let error = WebAction::Copy(url.to_string())
+            .run(
+                async |_| panic!("copying launched a browser"),
+                async |text| {
+                    assert_eq!(text, url.as_str());
+                    Err("fixture clipboard unavailable".into())
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, "fixture clipboard unavailable");
+        let copied = WebAction::Copy(url.to_string())
+            .run(
+                async |_| panic!("copying launched a browser"),
+                async |text| {
+                    assert_eq!(text, url.as_str());
+                    Ok(())
+                },
+            )
+            .await;
+        assert!(matches!(
+            copied,
+            Ok(Loaded::WebNotice(
+                "ChatGPT URL copied to the system clipboard"
+            ))
+        ));
     }
 }

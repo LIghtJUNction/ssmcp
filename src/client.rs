@@ -2043,6 +2043,7 @@ struct RegisteredSsh {
     chat_disabled_acknowledged: bool,
     time_observation_supported: bool,
     wait_display_supported: bool,
+    openai_context_supported: bool,
     version_notice: Option<crate::wire::versions::Notice>,
 }
 
@@ -2090,6 +2091,7 @@ async fn register_ssh(
     }
     let mut transport_command = command();
     let timing_offer = relay::timing_offer(&transport_command);
+    let openai_context_offer = relay::openai_context_offer(&transport_command);
     let mut ssh = transport_command
         .spawn()
         .map_err(|error| format!("could not start OpenSSH ssh: {error}"))?;
@@ -2170,6 +2172,10 @@ async fn register_ssh(
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_timing(timing_offer, &capabilities).1,
+            openai_context_offer
+                && capabilities
+                    .iter()
+                    .any(|capability| capability == crate::wire::openai::CAPABILITY),
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
@@ -2205,6 +2211,7 @@ async fn register_ssh(
         version_notice,
         time_observation_supported,
         wait_display_supported,
+        openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
     if account_compat
@@ -2238,6 +2245,7 @@ async fn register_ssh(
         chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_supported,
+        openai_context_supported,
         version_notice,
     }))
 }
@@ -2542,6 +2550,7 @@ async fn connect_inner(
         chat_disabled_acknowledged: _,
         time_observation_supported,
         wait_display_supported,
+        openai_context_supported,
         version_notice,
     } = registration;
     let (time_observation_supported, wait_display_supported) =
@@ -2886,7 +2895,7 @@ async fn connect_inner(
                 render::set_git_status(git_status.snapshot());
             },
             frame = incoming.frames.recv() => match frame {
-                Some(Ok(Some(Frame::Call {id,operation,controller,attribution,code_context}))) => {
+                Some(Ok(Some(Frame::Call {id,operation,controller,attribution,code_context,openai_context}))) => {
                     if let Some(attribution) = &attribution
                         && let Err(error) = attribution.validate() {
                         break Err(error.into());
@@ -2900,8 +2909,11 @@ async fn connect_inner(
                             Err(error) => break 'connected Err(error.into()),
                         }
                     }
-                    let call_scope = match backend.call_scope(id, attribution.as_deref(), code_context.as_ref()) {
-                        Ok(scope) => scope,
+                    let (call_scope, openai_observation) = match backend.relay_call_scope(
+                        id, attribution.as_deref(), code_context.as_ref(),
+                        openai_context.filter(|_| openai_context_supported),
+                    ) {
+                        Ok(scoped) => scoped,
                         Err(error) => break Err(error.into()),
                     };
                     let mut code_call = match backend.begin_code_call(&operation, id, controller.as_ref(), attribution.as_deref(), code_context) {
@@ -2976,7 +2988,13 @@ async fn connect_inner(
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
                             .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
                         let was_tool = matches!(&operation, crate::wire::Operation::CallTool { .. });
+                        let pending_observation = openai_observation.filter(|observation| {
+                            matches!(observation.record(), Ok(false))
+                        });
                         let mut result = call_scope.scope(backend.perform(operation)).await;
+                        if let Some(observation) = pending_observation {
+                            let _ = observation.record();
+                        }
                         if let Some(call) = &mut code_call { call.finish(&result); }
                         // A large native response must not corrupt/disconnect the SSH stream.
                         result = call_scope.scope(async {

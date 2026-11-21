@@ -53,6 +53,7 @@ struct Call {
     controller: Option<Controller>,
     attribution: Option<wire::ControlAttribution>,
     code_context: Option<wire::CodeContext>,
+    openai_context: Option<wire::openai::OpenAiContext>,
     authorization: Option<Authorization>,
     binding: Option<crate::code_mode::RunBinding>,
     traffic_failure: TrafficFailureState,
@@ -315,6 +316,7 @@ impl Session {
                         controller: None,
                         attribution: None,
                         code_context: None,
+                        openai_context: None,
                         authorization: None,
                         binding: None,
                         traffic_failure: TrafficFailureState::default(),
@@ -458,6 +460,10 @@ impl Session {
                 return Err("session access was revoked; tool was not dispatched".into());
             }
         }
+        let openai_context = code_context
+            .as_ref()
+            .filter(|context| context.thread_id.is_some())
+            .and_then(|_| audit_run.as_ref()?.openai_context.clone());
         let carries_source = code_context.is_some();
         if !self.alive.load(Ordering::Acquire) {
             return Err(self.connection_error(false, "client disconnected"));
@@ -496,6 +502,7 @@ impl Session {
                 controller,
                 attribution: attribution.clone(),
                 code_context,
+                openai_context,
                 authorization: authorization.cloned(),
                 binding: binding.clone(),
                 traffic_failure: call_traffic.clone(),
@@ -1236,6 +1243,9 @@ impl Broker {
         let time_observation_supported = access_supported
             && control_attribution
             && peer.as_ref().is_some_and(|peer| peer.time_observation);
+        let openai_context_supported = access_supported
+            && control_attribution
+            && peer.as_ref().is_some_and(|peer| peer.openai_context);
         let chat_disabled = peer
             .as_ref()
             .map_or(self.local_chat_disabled, |peer| peer.chat_disabled);
@@ -1260,6 +1270,9 @@ impl Broker {
         }
         if time_observation_supported {
             capabilities.push(wire::wait_display::TIME_CAPABILITY.into());
+        }
+        if openai_context_supported {
+            capabilities.push(wire::openai::CAPABILITY.into());
         }
         let login_code = if restricted {
             String::new()
@@ -1438,7 +1451,7 @@ impl Broker {
                                 _ => None,
                             };
                             let run_id = call.code_context.as_ref().map(|context| context.run_id.clone());
-                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context };
+                            let frame = Frame::Call { id:next_id, operation:call.operation, controller:call.controller, attribution:if control_attribution {call.attribution.map(Box::new)} else {None}, code_context:call.code_context, openai_context:if openai_context_supported {call.openai_context} else {None} };
                             let bytes = serde_json::to_vec(&frame)?.len() + 1;
                             let mut queued = PendingCall { reply:call.reply, deadline, reload, authorization:call.authorization, subject, binding:call.binding, traffic_failure:call.traffic_failure };
                             let broker = self.clone();
