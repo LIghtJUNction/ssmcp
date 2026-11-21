@@ -1,0 +1,81 @@
+{
+  "schema": "ssmcp.ui-message-reference.public-detail.v1",
+  "status": "reported_passed",
+  "source_label": "V",
+  "source_revision": "f42baae1d5227bd6db8315aef778160b80b57274",
+  "source_report": {
+    "logical_name": "message_references/report.json",
+    "bytes": 13898,
+    "sha256": "fcfe078744ef943d57dfb9cd98598da0c32262749910cbe793a54d1311fcf072",
+    "read_complete": true,
+    "sha256_verified": true
+  },
+  "reported_counts": {
+    "check_records": 53,
+    "vt_frame_references": 8,
+    "delivery_receipts": 4,
+    "frame_receipts": 4,
+    "queue_artifact_receipts": 2
+  },
+  "aggregate_membership": {
+    "context": "These 53 check records are already included in the coordinator's V UI total of 996.",
+    "additional_check_count": 0,
+    "not_evidence_for": "W/r14"
+  },
+  "features": [
+    {
+      "id": "missing_file_reference",
+      "result": "The literal draft is delivered with one warning; the missing file is neither created nor assigned fabricated contents.",
+      "checks": [
+        "Enter after a no-match file search delivers the exact source with one warning",
+        "referencing a missing file neither creates it nor fabricates its contents"
+      ]
+    },
+    {
+      "id": "mixed_file_and_skill_references",
+      "result": "Chinese punctuation separates available and unavailable references; unavailable items expose no contents or read actions, while the real file/skill fixture contents are retrieved completely.",
+      "reported_skill_fixture_bytes": 147,
+      "checks": [
+        "Chinese punctuation separates valid and unavailable files and skills",
+        "unavailable references expose no attachment contents or read actions",
+        "the delivered valid file and skill actions retrieve complete real fixture contents"
+      ]
+    },
+    {
+      "id": "skill_picker_enter_sequence",
+      "result": "The first Enter accepts the selected skill without sending; the second Enter delivers that selection exactly once.",
+      "checks": [
+        "the first Enter only accepts the selected skill",
+        "the second Enter delivers the selected skill exactly once"
+      ]
+    },
+    {
+      "id": "full_budget_body",
+      "result": "All 16384 original bytes are delivered and the queued identity is marked delivered; the local missing-reference warning remains, while wire reference metadata is omitted when it cannot fit.",
+      "reported_body_bytes": 16384,
+      "wire_metadata_omitted": true,
+      "checks": [
+        "the complete maximum-size draft matches every original byte",
+        "maximum-size missing-reference requests retain their local warning",
+        "all 16384 original bytes are delivered when warning metadata will not fit",
+        "the exact full-budget queue ID is marked delivered",
+        "the complete native queue artifact confirms the delivered identity and body"
+      ]
+    }
+  ],
+  "execution_context_as_reported": {
+    "transport": "real account router, authenticated WebSocket, native queue and owned PTY",
+    "upstream_provider": "synthetic GitHub fixture",
+    "models_started": false,
+    "existing_services_touched": false,
+    "real_user_credentials_used": false,
+    "inputs_unchanged": true,
+    "frame_origin": "actual owned PTY decoded by the independent VT fixture"
+  },
+  "limits": [
+    "This supplement reread only the complete existing report JSON; source, harnesses, frame files, queue artifacts and executable files were not reopened.",
+    "The 147-byte value is the exercised skill fixture length, not a general size limit.",
+    "The 16384-byte result covers the recorded fixture and explicitly permits omission of wire reference metadata; it does not prove larger bodies or preservation of all metadata.",
+    "No test or product execution was performed for this supplement, and no acceptance totals were increased."
+  ]
+}

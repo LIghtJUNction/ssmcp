@@ -1,0 +1,57 @@
+{
+  "schema": "ssmcp.runtime-W-r14.public-status.v1",
+  "status": "reported_passed",
+  "source": {
+    "label": "W",
+    "commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898"
+  },
+  "execution": {
+    "started_utc": "2026-11-21T06:03:19Z",
+    "finished_utc": "2026-11-21T06:03:27Z",
+    "native_exit_code": 0,
+    "native_running": false,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "timed_out": false
+  },
+  "checks": {
+    "private_clients_passed": 12,
+    "transport_passed": 6,
+    "total_passed": 18,
+    "modules_passed": 2,
+    "module_errors": []
+  },
+  "input_and_cleanup": {
+    "inputs_before_equal_after": true,
+    "source_and_tree_match_W": true,
+    "module_cleanup_passed": true,
+    "short_temp_root_removed": true,
+    "outer_exit_code": 0,
+    "outer_reaped": true
+  },
+  "originals": [
+    {
+      "file": "launch-result.json",
+      "bytes": 12612,
+      "sha256": "6fe2ce3b4e5fcfc54224988149214fa793ad9fde7c47b0d74b95b305a1474fdc"
+    },
+    {
+      "file": "run/report.json",
+      "bytes": 62203,
+      "sha256": "68566e2b33c55c0a85f7c1179bcc365c749e2788f8666a1178a8d7899006fe45"
+    }
+  ],
+  "evidence_basis": {
+    "runner": "The existing sole execution owner reported actual process completion and reading both original files.",
+    "independent_source_owner": "The source owner independently reported fully reading those same two originals, matching their byte counts and hashes, and confirming all 12+6 results and cleanup.",
+    "report_side_root_reopened_runtime_originals": false,
+    "scope": "This public status faithfully projects two existing completion notices. It does not claim a new independent report-side file read or product execution."
+  },
+  "boundaries": [
+    "Counts apply only to the specified W runtime execution; they are separate from Rust library/integration counts.",
+    "No real model or public provider was started.",
+    "UI24, P1, branch integration and publication are not proved by this runtime result.",
+    "No native job, process, agent or client identity, private absolute path, credential or raw test-chat content is published."
+  ]
+}

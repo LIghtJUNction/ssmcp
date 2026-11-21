@@ -1,0 +1,440 @@
+{
+  "schema": "ssmcp.completed-gate-public-facts.v1",
+  "status": "completed_passed",
+  "source": {
+    "label": "W",
+    "commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898"
+  },
+  "execution": {
+    "source": "Existing r14 execution only; this extraction started no build, test, product, helper or Gate.",
+    "started_utc": "2026-11-21T05:42:50.565070+00:00",
+    "finished_utc": "2026-11-21T05:56:01.331566+00:00",
+    "gate_finished_utc": "2026-11-21T05:56:01.212Z",
+    "gate_elapsed_seconds": 790.1,
+    "gate_status": "passed",
+    "launcher_status": "passed",
+    "launcher_exit_code": 0,
+    "owned_exit_code": 0,
+    "owned_error": null,
+    "same_source_run_and_invocation_identity_checked": true,
+    "receipt_hash_references_match_the_four_originals": true
+  },
+  "gate": {
+    "stage_count": 35,
+    "all_stage_exit_codes_zero": true,
+    "stage_exit_codes": {
+      "release-policy": 0,
+      "deployment-policy": 0,
+      "fmt": 0,
+      "library-compile": 0,
+      "library-private": 0,
+      "library-host": 0,
+      "clippy": 0,
+      "windows-gnu-clippy": 0,
+      "integration-compile": 0,
+      "integration-allow_account": 0,
+      "integration-cc_backend": 0,
+      "integration-client_resources": 0,
+      "integration-client_server_config": 0,
+      "integration-codex_backend": 0,
+      "integration-collaboration": 0,
+      "integration-connection_context": 0,
+      "integration-context": 0,
+      "integration-context_helpers": 0,
+      "integration-context_runtime": 0,
+      "integration-oauth_security": 0,
+      "integration-pi_backend": 0,
+      "integration-release_client": 0,
+      "integration-resources": 0,
+      "integration-rsync": 0,
+      "integration-server_runtime": 0,
+      "integration-terminals": 0,
+      "integration-two_tools": 0,
+      "integration-workspace_bridge": 0,
+      "integration-zuse_worker_entry": 0,
+      "library-code-mode-ignored": 0,
+      "integration-two_tools-ignored": 0,
+      "integration-workspace_bridge-ignored": 0,
+      "integration-context_helpers-ignored": 0,
+      "release": 0,
+      "decoder": 0
+    },
+    "rust_result_partition_count": 26,
+    "rust_result_columns": [
+      "stage",
+      "passed",
+      "failed",
+      "ignored",
+      "filtered_out"
+    ],
+    "rust_result_rows": [
+      [
+        "library-private",
+        2057,
+        0,
+        23,
+        6
+      ],
+      [
+        "library-host",
+        6,
+        0,
+        0,
+        2080
+      ],
+      [
+        "integration-allow_account",
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-cc_backend",
+        6,
+        0,
+        1,
+        0
+      ],
+      [
+        "integration-client_resources",
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-client_server_config",
+        5,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-codex_backend",
+        14,
+        0,
+        2,
+        0
+      ],
+      [
+        "integration-collaboration",
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-connection_context",
+        10,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-context",
+        12,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-context_helpers",
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        "integration-context_runtime",
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-oauth_security",
+        11,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-pi_backend",
+        9,
+        0,
+        1,
+        0
+      ],
+      [
+        "integration-release_client",
+        4,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-resources",
+        10,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-rsync",
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-server_runtime",
+        3,
+        0,
+        1,
+        0
+      ],
+      [
+        "integration-terminals",
+        4,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-two_tools",
+        2,
+        0,
+        7,
+        0
+      ],
+      [
+        "integration-workspace_bridge",
+        0,
+        0,
+        3,
+        0
+      ],
+      [
+        "integration-zuse_worker_entry",
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        "library-code-mode-ignored",
+        2,
+        0,
+        0,
+        2084
+      ],
+      [
+        "integration-two_tools-ignored",
+        7,
+        0,
+        0,
+        2
+      ],
+      [
+        "integration-workspace_bridge-ignored",
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        "integration-context_helpers-ignored",
+        2,
+        0,
+        0,
+        0
+      ]
+    ],
+    "private_library": {
+      "passed": 2057,
+      "failed": 0,
+      "ignored": 23,
+      "filtered_out": 6,
+      "parent_result_seconds": 36.63
+    },
+    "host_library": {
+      "passed": 6,
+      "failed": 0
+    },
+    "ordinary_integration": {
+      "partitions": 19,
+      "passed": 101,
+      "failed": 0
+    },
+    "explicit_worker_integration": {
+      "partitions": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    "mandatory_ignored_selection": {
+      "partitions": 4,
+      "passed": 14,
+      "failed": 0,
+      "library_passed": 2,
+      "integration_passed": 12
+    },
+    "library_partition_recorded": {
+      "complete": true,
+      "disjoint": true,
+      "host": 6,
+      "private": 2080,
+      "total": 2086
+    },
+    "ignored_boundary": {
+      "initial_private_library_ignored": 23,
+      "explicitly_executed_library_ignored": 2,
+      "other_library_ignored_not_executed": 21,
+      "initial_ordinary_integration_ignored": 17,
+      "explicitly_executed_integration_ignored": 12,
+      "other_integration_ignored_not_covered_by_those_selections": 5
+    },
+    "counting_rule": "Stages and test cases are different units. Explicit ignored-test selections are separate actual partitions. The 17+7 selected name results are subsets of the 2057 private-library passes and are not added."
+  },
+  "completed_source_binding_for_existing_map": {
+    "partial_map_file": "public-W-r14-running-20261121/W-r14-library-partial-name-map.json",
+    "bytes": 8240,
+    "sha256": "fbaf586f2e514d861497c3312904d48ffd9053c9806b9e2842c5b616f78a1e23",
+    "partial_file_preserved_with_original_null_source_and_false_completion": true,
+    "final_source_commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "final_source_tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "selected_names": 24,
+    "prior_target_names": 17,
+    "new_regression_names": 7,
+    "each_exact_ok_line_once": true,
+    "log": {
+      "file": "release25-final14/logs/candidate2-library-private.log",
+      "bytes": 558263,
+      "sha256": "fe9de2041cbfbce0c7610e854d8a25955d86cd41303827dfdb3eac30de404cfe"
+    },
+    "same_log_path_as_final_library_stage": true,
+    "same_parent_result_as_final_library_stage": true,
+    "raw_log_bytes_rehashed_after_completion": false,
+    "scope": "The existing map contains the earlier full-log byte hash, exact name matches and line numbers. This final file binds that same named log and parent result to the source and completed execution in the final receipts. No new log read or ELF read occurred here; V supplied names only."
+  },
+  "input_and_shutdown": {
+    "source_heads_before_export_after_export_and_final": {
+      "after_export": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+      "before_export": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+      "final": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8"
+    },
+    "worktree_clean_after": true,
+    "launcher_input_count": 9,
+    "before_equals_after": true,
+    "recorded_input_sha256": {
+      "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+      "cargo_lock": "0b6f1d93e319b27163106ce79475b37f3e737ff89f7a9ca8d35c09e8ad649608",
+      "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+      "driver": "91f716677999ce6692e8a82f02a010eceae195156781288ec47ae8c30a691185",
+      "git_heads": "03e3e5f194320ce325fc8be8f079ee0705df9abaffab5ee9cc683cfc8c71e67c",
+      "owner_agreement": "03b14a6be75847c902575aa034d59420f14403d96ca7e907a1e8b713df0a8cf6",
+      "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+      "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+      "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+    },
+    "completed_owner_review_input_hashes_unchanged": true,
+    "expected_manifest_comparison": {
+      "owner_reports_before_equals_after_equals_manifest": true,
+      "independent_review_of_before_and_after": true,
+      "separate_expected_manifest_file_read_in_this_extraction": false,
+      "scope": "The expected-manifest agreement is attributed to the execution owner's completion review/notice; this extraction directly compares the two nine-entry hashes maps in the supplied launcher receipt."
+    },
+    "cargo_configuration_verified_before_after": true,
+    "dependency_sources_verified_before_after": true,
+    "runtime_tools_records_before_equal_after": true,
+    "compile_provenance_verified_before_after": true,
+    "source_lock_acquired": true,
+    "source_lock_held_until_launcher_return": true,
+    "outer_controller_acquired_target_lock": false,
+    "launcher_exclusive_target_lock": true,
+    "launcher_shared_target_owner_lock_held_entire_batch": true,
+    "service_state_recorded": {
+      "active_state": "inactive",
+      "sub_state": "dead",
+      "no_main_process": true,
+      "main_exit_status": 0
+    },
+    "boundary": "Lock and shutdown state comes from the existing completion receipts; this review did not acquire any lock or inspect/stop processes."
+  },
+  "build_binding": {
+    "source_manifest_recorded": {
+      "entries": 1849,
+      "sha256": "6ebe935d8f04d92450159bb2251297f12e0bf894a97cf7b440211159e99a69e8"
+    },
+    "artifacts_recorded_in_owner_completed_review": {
+      "library-compile/library-test-fixture": {
+        "bytes": 166677776,
+        "sha256": "57fb20efb29b2eefabf9dfe0f3b88b0fb58db6e35efce2fb6feec4b3d625fab3"
+      },
+      "release/ssmcp": {
+        "bytes": 15750352,
+        "sha256": "d654703a12f9479e97b9807ac8d61f370bd5c413963bf6e5b6e45dfbd8434f41"
+      },
+      "release/ssmcp-frontend": {
+        "bytes": 1386584,
+        "sha256": "2e19f8ad2fea673f899bbfc44449161e072381571946b85e3c6a5dc7e8325a06"
+      },
+      "release/ssmcpd": {
+        "bytes": 8176168,
+        "sha256": "c1991fac3c0c6aa0a229781c87fe67ef24c028fd5ffc88b0c50dc413baaa5527"
+      },
+      "decoder/vt_snapshot": {
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f"
+      }
+    },
+    "full_byte_elf_hash_verification_actor": "The original execution owner, as recorded in the supplied completed review and completion notice.",
+    "elf_files_read_or_rehashed_by_this_extraction": false,
+    "artifact_descriptor_source": "root-completed-gate-review.json; descriptors are not an independently repeated ELF measurement by this extractor."
+  },
+  "originals_read": [
+    {
+      "role": "gate",
+      "file": "release25-final14/candidate-gates.json",
+      "bytes": 1286360,
+      "sha256": "423e7072304bcc191da324b0233a00f704c31710f7120522ef16c6e58026ff3c",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "role": "launcher",
+      "file": "release25-final14-launch/exit.json",
+      "bytes": 4793,
+      "sha256": "6468c5b03875fa10170dbfbcfb95da7414d1a1e15b0e84ee2383f397746cb80e",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "role": "owned",
+      "file": "gate-tools/final-v25-r14-binding/owned/exit.json",
+      "bytes": 1168,
+      "sha256": "6c5c5d17c5dca26345694dedf5b932572ff8099ae8dec1d8da1ffb1ed1553b6c",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "role": "review",
+      "file": "gate-tools/final-v25-r14-binding/root-completed-gate-review.json",
+      "bytes": 11877,
+      "sha256": "1ec7f6463faf6917ba15aa643dcbf55f8353418cc848d0c99c00e0cc2b09912d",
+      "full_bytes_read_and_sha256_verified": true
+    },
+    {
+      "role": "partial_map",
+      "file": "public-W-r14-running-20261121/W-r14-library-partial-name-map.json",
+      "bytes": 8240,
+      "sha256": "fbaf586f2e514d861497c3312904d48ffd9053c9806b9e2842c5b616f78a1e23",
+      "full_bytes_read_and_sha256_verified": true
+    }
+  ],
+  "boundaries": [
+    "Only the four fixed final JSON receipts and the preserved partial mapping were read in this final extraction.",
+    "The 26 Rust counts are extracted from the final Gate receipt; individual integration logs were not reopened.",
+    "No older V test result is transferred to W.",
+    "Runtime18, UI24, P1, formal publication and installation require their own evidence and are not proved by this Gate completion.",
+    "Native run, invocation, job, agent, session and process identities and private absolute paths are omitted."
+  ]
+}
