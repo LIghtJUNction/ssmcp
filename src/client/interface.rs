@@ -12,7 +12,6 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-pub(crate) mod computer;
 pub(crate) mod harness;
 pub(crate) mod history;
 pub(crate) mod listener;
@@ -67,7 +66,6 @@ pub(crate) fn get() -> Value {
         "steering": steering,
         "listener": listener::snapshot(),
         "user_wait": user_wait::snapshot(),
-        "computer": computer::snapshot(),
         "time": crate::runtime::time::snapshot(),
         "questions": questions::snapshot(),
     })
@@ -199,17 +197,7 @@ pub(crate) fn apply_pending() -> Result<Option<(u16, u16)>, String> {
     let _updates = UPDATES.lock().unwrap_or_else(|e| e.into_inner());
     let mut geometry = None;
     for action in actions {
-        // Compatibility commands can enter only through the local terminal
-        // queue. They are deliberately absent from the remote ACTIONS catalog.
-        let result = if let Some(action) = computer::Action::from_queued(action) {
-            computer::apply(action).map(|state| {
-                terminal::notice(&computer::describe(&state));
-                None
-            })
-        } else {
-            action_inner(action)
-        };
-        match result {
+        match action_inner(action) {
             Ok(size) => {
                 if size.is_some() {
                     geometry = size;
@@ -1200,10 +1188,6 @@ mod tests {
             json!({}),
             json!({"action":null}),
             json!({"action":"private-fixture"}),
-            json!({"action":"computer.status"}),
-            json!({"action":"computer.on"}),
-            json!({"action":"computer.off"}),
-            json!({"action":"computer.toggle"}),
             json!({"action":"save","extra":true}),
         ] {
             let error = parse_action(value).unwrap_err();
