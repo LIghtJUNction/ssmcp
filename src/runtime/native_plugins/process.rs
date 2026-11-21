@@ -762,7 +762,7 @@ for line in sys.stdin:
             backend.revoke_playwright(&old).await;
             assert!(matches!(backend.drivers.lock().unwrap().get(&Provider::Playwright),
                 Some(Driver::Playwright(current, _)) if Arc::ptr_eq(current, &successor)));
-            backend.shutdown().await;
+            Process::shutdown(&backend).await;
         }).await.expect("bounded fake Playwright cancellation");
     }
 }
