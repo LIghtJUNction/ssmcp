@@ -256,9 +256,44 @@ fn zip_rejects_extra_executables_unsafe_paths_and_damaged_payload() {
     assert!(receipt.verify(&bytes, target).is_err());
 }
 
+fn store_for_package_fixture(root: &Path) -> (storage::Store, &'static str) {
+    let mut store = storage::Store::open(root, true).unwrap().unwrap();
+    let target = if cfg!(all(windows, target_arch = "aarch64")) {
+        // Exercise the native Windows filesystem with inert PE fixture bytes.
+        // Only this test store models an x64 asset. Nothing executes the file.
+        let target = "x86_64-pc-windows-msvc";
+        store.fixture_target = Some(target);
+        target
+    } else {
+        release::target().unwrap()
+    };
+    (store, target)
+}
+
+#[cfg(all(windows, target_arch = "aarch64"))]
+#[tokio::test]
+async fn windows_arm64_refuses_an_official_download_and_foreign_cached_asset() {
+    let unsupported = release::target().unwrap_err();
+    assert!(unsupported.contains("No official Zuse release target"));
+    assert_eq!(
+        release::download(Some("0.3.0")).await.unwrap_err(),
+        unsupported
+    );
+    let temporary = Temporary::new();
+    let root = temporary.0.join("manager");
+    let store = storage::Store::open(&root, true).unwrap().unwrap();
+    let (release, bytes, _) = package("x86_64-pc-windows-msvc");
+    assert_eq!(
+        store.save_download(release, &bytes).unwrap_err(),
+        unsupported
+    );
+    assert_eq!(fs::read_dir(root.join("downloads")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(root.join("installations")).unwrap().count(), 0);
+}
+
 fn installed(root: &Path) -> (storage::Store, storage::Installation, Vec<u8>) {
-    let store = storage::Store::open(root, true).unwrap().unwrap();
-    let (release, bytes, binary) = package(release::target().unwrap());
+    let (store, target) = store_for_package_fixture(root);
+    let (release, bytes, binary) = package(target);
     let download = store.save_download(release, &bytes).unwrap();
     let installation = store.install(&download.download_id).unwrap();
     (store, installation, binary)
@@ -367,8 +402,8 @@ fn uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match() {
 fn install_rechecks_cached_download_before_publishing_any_executable() {
     let temporary = Temporary::new();
     let root = temporary.0.join("manager");
-    let store = storage::Store::open(&root, true).unwrap().unwrap();
-    let (release, bytes, _) = package(release::target().unwrap());
+    let (store, target) = store_for_package_fixture(&root);
+    let (release, bytes, _) = package(target);
     let receipt = store.save_download(release, &bytes).unwrap();
     fs::write(
         root.join("downloads")

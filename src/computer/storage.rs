@@ -342,6 +342,8 @@ pub(super) struct Store {
     owner_id: String,
     root_identity: Identity,
     _lock: File,
+    #[cfg(test)]
+    pub(super) fixture_target: Option<&'static str>,
 }
 
 impl Store {
@@ -418,7 +420,17 @@ impl Store {
             owner_id: owner.owner_id,
             root_identity,
             _lock: lock,
+            #[cfg(test)]
+            fixture_target: None,
         }))
+    }
+
+    fn release_target(&self) -> Result<&'static str, String> {
+        #[cfg(test)]
+        if let Some(target) = self.fixture_target {
+            return Ok(target);
+        }
+        release::target()
     }
 
     fn check(&self) -> Result<(), String> {
@@ -445,7 +457,7 @@ impl Store {
     }
 
     pub(super) fn save_download(&self, release: Release, bytes: &[u8]) -> Result<Download, String> {
-        release.verify(bytes, release::target()?)?;
+        release.verify(bytes, self.release_target()?)?;
         let download_id = id()?;
         let destination = self.location("downloads", &download_id)?;
         let stage = Stage::new(destination)?;
@@ -479,7 +491,7 @@ impl Store {
         if archive_id != receipt.archive {
             return Err("The recorded Zuse download was replaced".into());
         }
-        let binary = archive::executable(&content, &receipt.release, release::target()?)?;
+        let binary = archive::executable(&content, &receipt.release, self.release_target()?)?;
         let installation_id = id()?;
         let destination = self.location("installations", &installation_id)?;
         let stage = Stage::new(destination)?;
@@ -516,7 +528,7 @@ impl Store {
     fn verify_installation(&self, id: &str) -> Result<Installation, String> {
         let path = self.location("installations", id)?;
         let receipt: Installation = read(&path.join("receipt.json"))?;
-        receipt.release.validate(release::target()?)?;
+        receipt.release.validate(self.release_target()?)?;
         exact_files(
             &path,
             &[
