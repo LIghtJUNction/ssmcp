@@ -4,7 +4,7 @@ pub(crate) mod account;
 pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
-mod chat_io;
+pub(crate) mod chat_io;
 mod clipboard;
 pub(crate) mod completion;
 mod composer;
