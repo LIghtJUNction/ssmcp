@@ -1032,8 +1032,8 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
                 ));
     }
     if backend == "wayland" {
-        // In zuse 0.2.0 (557ea46), these exact state checks precede shortcut
-        // dispatch and virtual-keyboard creation. A generic prefix could also
+        // These exact state checks precede shortcut dispatch and virtual-keyboard
+        // creation in the pinned zuse 0.3.0. A generic prefix could also
         // accept a new error or appended restoration failure, so keep it exact.
         return matches!(
             error,
@@ -1048,6 +1048,8 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
                 | "unsupported_state: Num Lock is enabled; disable it before input"
                 | "unsupported_state: Caps Lock state is unavailable"
                 | "unsupported_state: Num Lock state is unavailable"
+                | "unsupported_state: Num Lock differs between the active and other keyboards"
+                | "unsupported_state: cannot restore the same active keyboard after a Num Lock chord"
                 | "unsupported_state: keyboard layout group must be 0 before input"
                 | "unsupported_state: keyboard layout group is unavailable"
                 | "unsupported_state: a unique main keyboard is required"

@@ -1,9 +1,12 @@
 //! Optional display metadata from the current MCP request.
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "linux", test))]
 use serde_json::Value;
 
 pub const CAPABILITY: &str = "openai_context_v1";
+#[cfg(any(target_os = "linux", test))]
 pub(crate) const SESSION: &str = "openai/session";
+#[cfg(any(target_os = "linux", test))]
 pub(crate) const SUBJECT: &str = "openai/subject";
 const MAX_VALUE_BYTES: usize = 512;
 
@@ -24,6 +27,7 @@ pub(crate) fn valid(value: &str) -> bool {
         })
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl OpenAiContext {
     pub(crate) fn from_meta(meta: Option<&Value>) -> Option<Self> {
         let meta = meta?.as_object()?;

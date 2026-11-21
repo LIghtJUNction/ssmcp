@@ -124,7 +124,7 @@ async fn wayland_preflight_recovery_fixture() {
             true,
             0,
             false,
-            "unsupported_state: Num Lock is enabled; disable it before input",
+            "unsupported_state: cannot restore the same active keyboard after a Num Lock chord",
         ),
         (
             false,
@@ -157,6 +157,18 @@ async fn wayland_preflight_recovery_fixture() {
         assert_eq!(error, expected);
         assert_eq!(state.lock().unwrap().dispatched, before);
         assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
+        if num {
+            let text_error = computer
+                .perform_host("ssmcp.computer.type", json!({"text":"a"}))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                text_error,
+                "unsupported_state: Num Lock is enabled; disable it before input"
+            );
+            assert_eq!(state.lock().unwrap().dispatched, before);
+            assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
+        }
 
         {
             let mut state = state.lock().unwrap();
