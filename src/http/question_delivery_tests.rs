@@ -774,6 +774,12 @@ async fn finalizer_validates_the_envelope_and_budget_before_claiming_exact_typed
     );
 }
 
+// Give the success and revocation fixtures time to reach their delivery checks.
+const SUMMARY_TARGET_TIMEOUT_MS: u64 = 5_000;
+// Allow one second for the existing collector probe and three seconds of slack.
+const SUMMARY_OBSERVATION_GUARD: Duration =
+    Duration::from_millis(SUMMARY_TARGET_TIMEOUT_MS + 1_000 + 3_000);
+
 // Passive await shares the authenticated native wire, but must not opt into
 // the other delivery channels merely because its eleventh call earns a summary.
 impl Fixture {
@@ -799,8 +805,13 @@ impl Fixture {
     }
 
     async fn public_await(&self, arguments: Value) -> Value {
-        timeout(
-            Duration::from_secs(5),
+        self.public_await_with_guard(arguments, Duration::from_secs(5))
+            .await
+    }
+
+    async fn public_await_with_guard(&self, arguments: Value, guard: Duration) -> Value {
+        match timeout(
+            guard,
             await_tool::execute(
                 self.broker.clone(),
                 "mcp".into(),
@@ -809,8 +820,24 @@ impl Fixture {
             ),
         )
         .await
-        .expect("bounded passive observation must finish")
-        .unwrap()
+        {
+            Ok(Ok(response)) => response,
+            outcome => panic!(
+                "bounded passive observation did not finish successfully: {outcome:#?}; {}",
+                self.summary_peer_trace()
+            ),
+        }
+    }
+
+    fn summary_peer_trace(&self) -> String {
+        let state = self
+            .native
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        format!(
+            "calls={:?}, summary_calls={}",
+            state.calls, state.summary_calls
+        )
     }
 
     fn publish_summary_requirement(&self) {
@@ -888,11 +915,20 @@ async fn tool_summary_public_await_delivers_the_eleventh_call_without_consuming_
     let inbox_id = fixture.send_message(0).await;
 
     let response = fixture
-        .public_await(json!({
-            "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
-        }))
+        .public_await_with_guard(
+            json!({
+                "targets":[{"type":"exec","job_id":"summary-job"}],
+                "timeout_ms":SUMMARY_TARGET_TIMEOUT_MS
+            }),
+            SUMMARY_OBSERVATION_GUARD,
+        )
         .await;
-    assert_eq!(response["structuredContent"]["status"], "ready");
+    assert_eq!(
+        response["structuredContent"]["status"],
+        "ready",
+        "{response:#}; {}",
+        fixture.summary_peer_trace()
+    );
     assert_eq!(
         response["structuredContent"]["results"][0]["data"]["job_id"],
         "summary-job"
@@ -942,7 +978,7 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
         .await
         .unwrap();
     let arguments: CodeArguments = serde_json::from_value(json!({
-        "code":format!("return await waitFor({},{{targets:[{{type:'exec',job_id:'summary-job'}}],timeout_ms:1000}});",
+        "code":format!("return await waitFor({},{{targets:[{{type:'exec',job_id:'summary-job'}}],timeout_ms:{SUMMARY_TARGET_TIMEOUT_MS}}});",
             serde_json::to_string(fixture.session.client_id()).unwrap()),
         "timeout_ms":10000,
         "agent":{"client_id":fixture.session.client_id(),"id":fixture.agent_id,"token":fixture.agent_token}
@@ -957,8 +993,10 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
     .await
     .unwrap();
     assert_eq!(
-        response["structuredContent"]["result"]["status"], "ready",
-        "{response:#}"
+        response["structuredContent"]["result"]["status"],
+        "ready",
+        "{response:#}; {}",
+        fixture.summary_peer_trace()
     );
     assert_await_summary(&response, fixture.session.client_id());
     fixture.wait_for_ack().await;
@@ -982,32 +1020,52 @@ async fn tool_summary_code_mode_wait_for_keeps_the_native_delivery_boundary() {
     );
 }
 
+async fn abort_summary_observer(
+    observing: JoinHandle<Result<Value, String>>,
+    reason: String,
+) -> String {
+    observing.abort();
+    format!("{reason}; observer at cleanup: {:#?}", observing.await)
+}
+
 #[tokio::test]
 async fn tool_summary_passive_await_rechecks_oauth_and_binding_after_probe() {
     for revoked in ["oauth", "agent"] {
         let fixture = Fixture::new().await;
         fixture.ten_summary_calls().await;
         fixture.publish_summary_requirement();
+        let arguments = fixture.await_arguments(json!({
+            "targets":[{"type":"exec","job_id":"summary-job"}],
+            "timeout_ms":SUMMARY_TARGET_TIMEOUT_MS
+        }));
         let arrived = Arc::new(Notify::new());
         let resume = Arc::new(Notify::new());
         fixture.native.lock().unwrap().summary_probe_pause =
             Some((arrived.clone(), resume.clone()));
-        let broker = fixture.broker.clone();
-        let token = fixture.token.clone();
-        let arguments = fixture.await_arguments(json!({
-            "targets":[{"type":"exec","job_id":"summary-job"}],"timeout_ms":1000
-        }));
-        let observing = tokio::spawn(async move {
-            await_tool::execute(broker, "mcp".into(), token, arguments)
-                .await
-                .unwrap()
-        });
-        timeout(Duration::from_secs(3), arrived.notified())
-            .await
-            .expect("the final native summary probe must reach the authenticated peer");
-        match revoked {
-            "oauth" => fixture.broker.oauth.revoke_subject("42").unwrap(),
-            "agent" => {
+        let deadline = tokio::time::Instant::now() + SUMMARY_OBSERVATION_GUARD;
+        let mut observing = tokio::spawn(await_tool::execute(
+            fixture.broker.clone(),
+            "mcp".into(),
+            fixture.token.clone(),
+            arguments,
+        ));
+        let probe = tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                // A completed observation cannot exercise in-flight revocation.
+                biased;
+                result = &mut observing => Some(result),
+                _ = arrived.notified() => None,
+            }
+        })
+        .await;
+        let revocation = if matches!(&probe, Ok(None)) {
+            if revoked == "oauth" {
+                fixture
+                    .broker
+                    .oauth
+                    .revoke_subject("42")
+                    .map_err(|error| error.to_string())
+            } else {
                 fixture
                     .session
                     .collaboration
@@ -1017,18 +1075,41 @@ async fn tool_summary_passive_await_rechecks_oauth_and_binding_after_probe() {
                         json!({"agent_id":fixture.agent_id,"token":fixture.agent_token}),
                     )
                     .await
-                    .unwrap();
+                    .map(|_| ())
             }
-            _ => unreachable!(),
-        }
+        } else {
+            Ok(())
+        };
+
+        // Release the authenticated peer even on failure. Only unconsumed
+        // handles can be joined or aborted below.
         resume.notify_one();
-        let response = timeout(Duration::from_secs(3), observing)
-            .await
-            .unwrap()
-            .unwrap();
+        let response = match (probe, revocation) {
+            (Ok(Some(result)), _) => {
+                Err(format!("observer completed before revocation could run: {result:#?}"))
+            }
+            (Err(_), _) => Err(abort_summary_observer(
+                observing,
+                "the final native summary probe did not reach the authenticated peer before the guard".into(),
+            ).await),
+            (Ok(None), Err(error)) => Err(abort_summary_observer(
+                observing, format!("revocation failed while the native probe was paused: {error}"),
+            ).await),
+            (Ok(None), Ok(())) => match tokio::time::timeout_at(deadline, &mut observing).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => Err(format!("observer join failed after revocation: {error:?}")),
+                Err(_) => Err(abort_summary_observer(
+                    observing,
+                    "observer did not finish after releasing the native probe".into(),
+                ).await),
+            },
+        }
+        .unwrap_or_else(|error| panic!("{revoked}: {error}; {}", fixture.summary_peer_trace()));
         assert_eq!(
-            response["structuredContent"]["status"], "unauthorized",
-            "{revoked}"
+            response["structuredContent"]["status"],
+            "unauthorized",
+            "{revoked}: {response:#}; {}",
+            fixture.summary_peer_trace()
         );
         assert!(
             response["structuredContent"]["results"][0]
