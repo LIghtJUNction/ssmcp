@@ -1,19 +1,19 @@
 {
   "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
-  "snapshot_utc": "2026-11-21 20:19:27 UTC",
+  "snapshot_utc": "2026-11-21 20:59:47 UTC",
   "source": {
-    "commit": "58bf72e381bb07f28f399fd76adb96f105f72dac",
-    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+    "commit": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+    "tree": "03933bbd0e0e910f1c48333c386075ff21f231d6",
     "parents": [
-      "db6f14b5faea8d434f4107877005b7669c1c940e",
-      "add39e18ff92680ff3ac0c3e911407956e20b228"
+      "43b757aed1d95b3e5c69bbd93978c70a3588d58b"
     ],
     "branch": "fix/release-0.10.26-20261121",
     "version": "0.10.26",
-    "frozen": true,
+    "frozen": false,
     "main_at_last_actual_read": "add39e18ff92680ff3ac0c3e911407956e20b228",
-    "previous_candidate": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "changed_paths_since_previous_candidate": 2
+    "previous_candidate": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "changed_paths_since_previous_candidate": null,
+    "phase": "extended feature implementation"
   },
   "release_notes": {
     "branch": "fix/release-0.10.26-20261121",
@@ -629,8 +629,8 @@
   },
   "current_release": {
     "planned_tag": "v0.10.26",
-    "candidate_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
-    "S": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "candidate_source": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+    "S": null,
     "P": null,
     "run": null,
     "dispatch": null,
@@ -638,8 +638,9 @@
     "merge_tag_dispatch_started": false,
     "server_deployment": false,
     "registry_publication": false,
-    "actual_GitHub_release_404_at_utc": "2026-11-21 20:13:05 UTC",
-    "actual_GitHub_tag_404_at_utc": "2026-11-21 20:13:05 UTC"
+    "actual_GitHub_release_404_at_utc": "2026-11-21 20:59:47 UTC",
+    "actual_GitHub_tag_404_at_utc": "2026-11-21 20:59:47 UTC",
+    "final_source_frozen": false
   },
   "exec_read_live_scope": {
     "implementation_in_source": true,
@@ -652,159 +653,31 @@
     "source_branch_release_note_files_added": 1,
     "H2_execution": 0,
     "POST": 0,
-    "source_branch_release_note_followup_commits": 1
+    "source_branch_release_note_followup_commits": 1,
+    "previous_snapshot_commit": "46a67fd304d2a20ebc408fd0fffb025b97079738"
   },
   "successor_validation": {
-    "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
-    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
-    "stage": "v15",
-    "native_job_suffix": "-2c7",
-    "status": "shared Cargo resource wait timeout",
-    "exit_code": 1,
-    "running": false,
-    "stdout_bytes": 2927,
+    "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+    "tree": "eeb2c9c0f54605b4fa0650119f64b3d0f8413926",
+    "stage": "v17",
+    "status": "library build passed; targeted UI tests separate",
+    "exit_code": 0,
+    "stdout_bytes": 4528,
     "stderr_bytes": 0,
     "both_eof": true,
     "no_truncation": true,
-    "error": "TimeoutError('shared Cargo owner lock busy')",
-    "stages": [
-      {
-        "stage": "clean-before",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:22.835106+00:00"
-      },
-      {
-        "stage": "fetch-source",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.051656+00:00"
-      },
-      {
-        "stage": "select-owned-repair-source",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.083714+00:00"
-      },
-      {
-        "stage": "gitlink-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.087524+00:00"
-      },
-      {
-        "stage": "dependency-root-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.091424+00:00"
-      },
-      {
-        "stage": "dependency-origin-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.093129+00:00"
-      },
-      {
-        "stage": "dependency-clean-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.096876+00:00"
-      },
-      {
-        "stage": "dependency-old-head-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.098478+00:00"
-      },
-      {
-        "stage": "dependency-head-zharness",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.100173+00:00"
-      },
-      {
-        "stage": "gitlink-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.103877+00:00"
-      },
-      {
-        "stage": "dependency-root-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.105570+00:00"
-      },
-      {
-        "stage": "dependency-origin-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.107173+00:00"
-      },
-      {
-        "stage": "dependency-clean-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.110871+00:00"
-      },
-      {
-        "stage": "dependency-old-head-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.114608+00:00"
-      },
-      {
-        "stage": "dependency-head-zplugin",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.119469+00:00"
-      },
-      {
-        "stage": "gitlink-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.123295+00:00"
-      },
-      {
-        "stage": "dependency-root-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.125194+00:00"
-      },
-      {
-        "stage": "dependency-origin-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.127010+00:00"
-      },
-      {
-        "stage": "dependency-clean-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.130785+00:00"
-      },
-      {
-        "stage": "dependency-old-head-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.134517+00:00"
-      },
-      {
-        "stage": "dependency-head-ztuio",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.138168+00:00"
-      },
-      {
-        "stage": "clean-after-dependency-sync",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.154064+00:00"
-      },
-      {
-        "stage": "source-head",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.157960+00:00"
-      },
-      {
-        "stage": "source-tree",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.161746+00:00"
-      },
-      {
-        "stage": "source-gitlinks",
-        "exit_code": 0,
-        "ended_utc": "2026-11-21T20:09:24.165584+00:00"
-      }
-    ],
-    "receipt": {
-      "bytes": 25686,
-      "sha256": "1edc3813bdd768735dc4e891fbc047d2af4134f9c51b3082fa7fa4d723c3bf13",
-      "relative_path": "cli-validation-20261121-v15/library-build.json"
-    },
-    "library_artifact_present": false,
     "worktree_clean": true,
-    "wait_budget_seconds": 180,
-    "toolchain_executed": false,
-    "compile_executed": false,
-    "product_tests_executed": false
+    "receipt": {
+      "bytes": 31309,
+      "sha256": "530bf42d76ab57455671ee900dc4d3dcd0c3f7d9854410a7f51b0366010be3e6"
+    },
+    "library_artifact": {
+      "bytes": 160069808,
+      "sha256": "78b6d102e77b788e9a70319d7f5bd5e1fab65c7858ea4528b10b7fc40beacebe",
+      "fresh": false,
+      "test": true
+    },
+    "evidence": "source completion plus independent acceptance read"
   },
   "resume_fix": {
     "user_requested": true,
@@ -1092,28 +965,37 @@
     "H2_code_change_required": false,
     "H2_imported": false,
     "H2_executed": false,
-    "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
-    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+    "source": "64b07e7c51491336071142bbfe613567841a4d4a",
+    "tree": "71fa5de6d98c325a234791e801de7ae368733085",
     "complete_byte_read_base_source": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
     "current_source_nine_file_git_blob_and_size_identity_equal": true,
     "current_source_gitlinks_equal_to_byte_read_base": true,
     "compare_to_previous_candidate": {
-      "normal_merge": true,
-      "parents": [
-        "db6f14b5faea8d434f4107877005b7669c1c940e",
-        "add39e18ff92680ff3ac0c3e911407956e20b228"
-      ],
-      "files": 2,
-      "additions": 200,
-      "deletions": 9,
+      "files": 5,
+      "additions": 532,
+      "deletions": 45,
       "files_changed": [
-        "src/computer/archive.rs",
-        "src/computer/tests.rs"
+        "scripts/e2e_agent_panel.py",
+        "src/client/terminal/conversation.rs",
+        "src/client/terminal/conversation/history.rs",
+        "src/client/terminal/conversation/sessions.rs",
+        "src/client/terminal/conversation/sessions/tests.rs"
       ]
     },
-    "static_review_sha256": "e1e9da0aea9cf22718e404df9700c171e213610ff0914630d96903492be9d9c9",
-    "previous_source": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "original_cross_platform_fixtures_preserved": true
+    "static_review_sha256": "69cce7be5fa10e29bdd8d84caa51a5d56e809575f1075b6bd6a1b8a473c0bc79",
+    "previous_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "original_cross_platform_fixtures_preserved": true,
+    "reviewed_source": "64b07e7c51491336071142bbfe613567841a4d4a",
+    "reviewed_tree": "71fa5de6d98c325a234791e801de7ae368733085",
+    "final_source_frozen": false,
+    "current_head_covered_by_this_proof": false,
+    "all_nine_frozen_files_and_three_gitlinks_unchanged": true,
+    "H2_execution": false,
+    "previous_static_proof": {
+      "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+      "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+      "sha256": "e1e9da0aea9cf22718e404df9700c171e213610ff0914630d96903492be9d9c9"
+    }
   },
   "intermediate_builds": [
     {
@@ -1493,6 +1375,175 @@
       },
       "stage": "v14",
       "superseded_by": "58bf72e381bb07f28f399fd76adb96f105f72dac"
+    },
+    {
+      "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+      "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+      "stage": "v15",
+      "native_job_suffix": "-2c7",
+      "status": "shared Cargo resource wait timeout",
+      "exit_code": 1,
+      "running": false,
+      "stdout_bytes": 2927,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "error": "TimeoutError('shared Cargo owner lock busy')",
+      "stages": [
+        {
+          "stage": "clean-before",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:22.835106+00:00"
+        },
+        {
+          "stage": "fetch-source",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.051656+00:00"
+        },
+        {
+          "stage": "select-owned-repair-source",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.083714+00:00"
+        },
+        {
+          "stage": "gitlink-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.087524+00:00"
+        },
+        {
+          "stage": "dependency-root-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.091424+00:00"
+        },
+        {
+          "stage": "dependency-origin-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.093129+00:00"
+        },
+        {
+          "stage": "dependency-clean-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.096876+00:00"
+        },
+        {
+          "stage": "dependency-old-head-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.098478+00:00"
+        },
+        {
+          "stage": "dependency-head-zharness",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.100173+00:00"
+        },
+        {
+          "stage": "gitlink-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.103877+00:00"
+        },
+        {
+          "stage": "dependency-root-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.105570+00:00"
+        },
+        {
+          "stage": "dependency-origin-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.107173+00:00"
+        },
+        {
+          "stage": "dependency-clean-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.110871+00:00"
+        },
+        {
+          "stage": "dependency-old-head-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.114608+00:00"
+        },
+        {
+          "stage": "dependency-head-zplugin",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.119469+00:00"
+        },
+        {
+          "stage": "gitlink-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.123295+00:00"
+        },
+        {
+          "stage": "dependency-root-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.125194+00:00"
+        },
+        {
+          "stage": "dependency-origin-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.127010+00:00"
+        },
+        {
+          "stage": "dependency-clean-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.130785+00:00"
+        },
+        {
+          "stage": "dependency-old-head-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.134517+00:00"
+        },
+        {
+          "stage": "dependency-head-ztuio",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.138168+00:00"
+        },
+        {
+          "stage": "clean-after-dependency-sync",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.154064+00:00"
+        },
+        {
+          "stage": "source-head",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.157960+00:00"
+        },
+        {
+          "stage": "source-tree",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.161746+00:00"
+        },
+        {
+          "stage": "source-gitlinks",
+          "exit_code": 0,
+          "ended_utc": "2026-11-21T20:09:24.165584+00:00"
+        }
+      ],
+      "receipt": {
+        "bytes": 25686,
+        "sha256": "1edc3813bdd768735dc4e891fbc047d2af4134f9c51b3082fa7fa4d723c3bf13",
+        "relative_path": "cli-validation-20261121-v15/library-build.json"
+      },
+      "library_artifact_present": false,
+      "worktree_clean": true,
+      "wait_budget_seconds": 180,
+      "toolchain_executed": false,
+      "compile_executed": false,
+      "product_tests_executed": false,
+      "superseded_by": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa"
+    },
+    {
+      "source": "64b07e7c51491336071142bbfe613567841a4d4a",
+      "stage": "v16_format_check",
+      "status": "failed",
+      "format_check_exit": 1,
+      "compile_started": false,
+      "stdout_bytes": 3190,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "receipt": {
+        "bytes": 28805,
+        "sha256": "2db9af485bd62db15a301609dab01dd4145d280120ac0aa1c83e6af74d6c509f"
+      },
+      "superseded_by": "b6524adaab83f593738433d1d401cd866802a6c9"
     }
   ],
   "all_CLI_subcommands": {
@@ -1582,7 +1633,12 @@
         "007-upgrade"
       ]
     },
-    "current_source": "58bf72e381bb07f28f399fd76adb96f105f72dac"
+    "current_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "extended_scope": [
+      "worker actual lifecycle and limits",
+      "send finish approval",
+      "file tracking and cleanup/reload"
+    ]
   },
   "docs_residue": {
     "status": "post-release patch prepared and independently reviewed; not applied",
@@ -1635,10 +1691,10 @@
     "run_id": 44944812920,
     "head_sha": "58bf72e381bb07f28f399fd76adb96f105f72dac",
     "attempt": 1,
-    "status": "in_progress",
-    "conclusion": null,
+    "status": "completed",
+    "conclusion": "success",
     "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44944812920",
-    "status_snapshot_utc": "2026-11-21 20:16:58 UTC",
+    "status_snapshot_utc": "2026-11-21 20:59:47 UTC",
     "dispatch": {
       "native_job_suffix": "-2c8",
       "http_status": 200,
@@ -1657,56 +1713,97 @@
       {
         "id": 136969687196,
         "name": "linux (ubuntu-24.04)",
-        "status": "in_progress",
-        "conclusion": null,
-        "active_steps": [
-          "Exercise terminal dashboard and Git observer through a real PTY"
-        ]
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-21T20:24:06Z"
       },
       {
         "id": 136969687373,
         "name": "linux (ubuntu-24.04-arm)",
-        "status": "in_progress",
-        "conclusion": null,
-        "active_steps": [
-          "Exercise conversation UI and account relay request queues"
-        ]
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-21T20:25:05Z"
       },
       {
         "id": 136969687417,
         "name": "Client (windows-2025)",
         "status": "completed",
         "conclusion": "success",
-        "active_steps": []
+        "completed_at": "2026-11-21T20:14:55Z"
       },
       {
         "id": 136969687436,
         "name": "Client (macos-15)",
         "status": "completed",
         "conclusion": "success",
-        "active_steps": []
+        "completed_at": "2026-11-21T20:16:03Z"
       },
       {
         "id": 136969687453,
         "name": "Client (windows-11-arm)",
-        "status": "in_progress",
-        "conclusion": null,
-        "active_steps": [
-          "Parse PowerShell installer"
-        ]
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-21T20:17:30Z"
       },
       {
         "id": 136969687461,
         "name": "Client (macos-15-intel)",
-        "status": "in_progress",
-        "conclusion": null,
-        "active_steps": [
-          "Run cargo test --locked --lib --bin ssmcp --test release_client"
-        ]
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-21T20:20:03Z"
       }
     ],
     "not_a_Release_run": true,
-    "old_source_success_relabelled": false
+    "old_source_success_relabelled": false,
+    "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+    "workflow_id": 419318514,
+    "updated_at": "2026-11-21T20:25:06Z",
+    "agent_ui_fix_not_in_this_source": true,
+    "applies_to_current_development_head": false,
+    "library_counts": {
+      "linux_x64": [
+        1990,
+        0,
+        13
+      ],
+      "linux_arm": [
+        1990,
+        0,
+        13
+      ],
+      "windows_x64": [
+        1306,
+        0,
+        4
+      ],
+      "windows_arm": [
+        1307,
+        0,
+        4
+      ],
+      "macos_arm": [
+        1428,
+        0,
+        5
+      ],
+      "macos_intel": [
+        1428,
+        0,
+        5
+      ]
+    },
+    "five_new_archive_tests_all_six_pass": true,
+    "five_existing_install_safety_tests_all_six_pass": true,
+    "linux_ssmcpd_passed": 13,
+    "linux_integration_targets": 19,
+    "linux_integration_counts": [
+      102,
+      0,
+      17
+    ],
+    "release_client_each": 5,
+    "release_client_already_in_linux_integration_total": true
   },
   "zuse_current_release_observation": {
     "release_id": 453909150,
@@ -1785,7 +1882,7 @@
       "所有agent的工具调用历史都一摸一样",
       "目前agents面板感觉是摆设"
     ],
-    "status": "read-only investigation; no confirmed root cause or fix yet",
+    "status": "core and PTY committed; static ready; b652 targeted tests 4 passed 1 failed; f17 hint assertion corrected, rerun pending",
     "investigation_scope": [
       "actual selected UI surface",
       "verified member identity through event storage",
@@ -1799,6 +1896,143 @@
       "audit_run_list_and_global_logs_have_distinct_scope": true
     },
     "single_source_writer_coordinated": true,
-    "release_waits_for_scope_resolution": true
+    "release_waits_for_scope_resolution": true,
+    "scope_resolution": "exact member history navigation and stable painted identity; global overview remains global",
+    "authenticated_samples": {
+      "members": 3,
+      "distinct_events": true,
+      "full_history_audit": false,
+      "backend_corruption_proven": false
+    },
+    "source_core": "66ece5ebd6e3b11e7c46aa7b855831d33f2b5df1",
+    "source_pty": "64b07e7c51491336071142bbfe613567841a4d4a",
+    "source_format": "b6524adaab83f593738433d1d401cd866802a6c9",
+    "source_hint_fix": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+    "static_review": {
+      "files": 5,
+      "additions": 532,
+      "deletions": 45,
+      "executed": false,
+      "concrete_blockers": [],
+      "proof_bytes": 16575,
+      "proof_sha256": "69cce7be5fa10e29bdd8d84caa51a5d56e809575f1075b6bd6a1b8a473c0bc79"
+    },
+    "format_hint_delta_review": {
+      "proof_bytes": 5411,
+      "proof_sha256": "5592c8c44a3ff565df9dd217ea3d6f341596a9acd5dc7afcdab938713d322794",
+      "format_only": true,
+      "hint_only_one_assertion": true,
+      "whole_worker_tree_reviewed": false
+    },
+    "actual_tests": {
+      "source": "b6524adaab83f593738433d1d401cd866802a6c9",
+      "passed": 4,
+      "failed": 1,
+      "failure": "generic footer assertion while group composer displays detailed history hint",
+      "receipt_bytes": 11614,
+      "receipt_sha256": "6fa8753f69c41521a443ad05bbaa238d0e8816de0d4b056a8bf3f7b54bf66bc2",
+      "corrected_source": "f17e8fe1e1ac7db3f1c9874d293d479aa013ccaa",
+      "corrected_rerun_observed": false
+    }
+  },
+  "consistent_private_cache": {
+    "status": "completed",
+    "guarded_by_shared_owner_lock": true,
+    "exit_code": 0,
+    "stdout_bytes": 324,
+    "stderr_bytes": 0,
+    "both_eof": true,
+    "no_truncation": true,
+    "inconsistent_earlier_seed_used": false,
+    "receipt": {
+      "bytes": 1014,
+      "sha256": "92166997ec74fa35dfd553f199eba554d8cef591026a5a49684bc5364cbe09da"
+    },
+    "evidence": "source and independent acceptance read existing terminal job"
+  },
+  "extended_user_scope": {
+    "worker": {
+      "required": true,
+      "status": "first config and queue committed; not wired or tested",
+      "source_first": "43b757aed1d95b3e5c69bbd93978c70a3588d58b",
+      "cli": "--worker N",
+      "idle_wait": true,
+      "wake_on_task": true,
+      "one_worker_per_task": true,
+      "busy_policy_default": "FIFO",
+      "interrupted_wait_hook": true,
+      "complete_cycle_required": [
+        "claim",
+        "execute",
+        "finish",
+        "re-wait",
+        "next task"
+      ],
+      "ui": {
+        "dedicated": true,
+        "states": [
+          "idle",
+          "working",
+          "offline",
+          "total"
+        ],
+        "colors": true,
+        "composer": false,
+        "tool_control": true
+      },
+      "real_external_models_started": 0
+    },
+    "resources": {
+      "required": true,
+      "formula": "system_resource / total_system_workers * k",
+      "default_k": 1,
+      "resources": [
+        "CPU",
+        "memory"
+      ],
+      "denominator": "configured live worker slots across sessions on same host, including idle",
+      "hard_ram_isolation": "owned process trees; ordinary threads share address space",
+      "status": "mechanism probe passed; product integration pending",
+      "linux_probe": {
+        "cpu_max": "25000 100000",
+        "memory_max_bytes": 33554432,
+        "memory_swap_max": 0,
+        "pids_max": 16,
+        "cleanup_confirmed": true,
+        "receipt_bytes": 2027,
+        "receipt_sha256": "71fe16835579767a0a34000ada0d101246c014eca9d3ddee2b25edf313aee7fc"
+      },
+      "platform_support_not_yet_claimed": true
+    },
+    "finish": {
+      "required": true,
+      "status": "implementation in progress",
+      "exact_original_text_received": false,
+      "summary": "send end-task option true awaits explicit real user approval; timeout or missing approval prompts continued blocking wait and does not permit finish"
+    },
+    "cleanup": {
+      "required": true,
+      "status": "inventory and implementation pending",
+      "requirements": [
+        "record created files",
+        "custom automatic cleanup rules",
+        "default cleanup of disposable .ssmcp temporary files",
+        "cleanup triggered by reload",
+        "clean existing .ssmcp directory"
+      ],
+      "user_authorized_existing_cleanup": true,
+      "preserve": [
+        "live handles",
+        "configuration",
+        "authentication",
+        "history",
+        "acceptance evidence"
+      ],
+      "destructive_cleanup_observed": false
+    },
+    "compact_reads": {
+      "required": true,
+      "summary": "read needed fields and errors; avoid repeated full exec.list, checkpoints, and duplicate logs"
+    }
   }
 }
