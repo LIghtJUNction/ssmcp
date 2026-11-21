@@ -1,35 +1,40 @@
-# SSMCP 当前迭代：Zuse CLI 迁移已进入源码
+# SSMCP 当前迭代：首批轻量检查通过，清理完成，迁移继续集成
 
-**更新于 2026-11-21 15:19:08 UTC。** 当前已核对开发分支 `work/zuse-cli-only-20261121` 的固定提交 [`659354f`](https://github.com/LIghtJUNction/ssmcp/commit/659354f9b6361b862bd3069c1df47fdf7d65b2bd)。相对旧候选 `02aa4dc`，该快照包含 **7 个提交、43 个文件变化**；它仍处于开发和集成阶段，报告组尚未取得新架构的编译、产品运行或发布通过回执。[源码快照与审查事实](migration-zuse-cli-659354-development-public-facts.json)
+**更新于 2026-11-21 16:06:25 UTC。** 本记录依据固定 `031fc6e` 的首批检查、原执行方的清理回执，以及报告组独立读取的 GitHub 状态。**新候选尚未冻结，也尚无本轮迁移的完整 Rust、产品验收或发布通过回执。** [阶段事实与回执文件身份](cli-first-checks-cleanup-progress-public-facts.json)
 
-## 已进入代码的变化
+## 最新范围
 
-迁移方向保持不变：实际桌面及浏览器操作直接使用 **Zuse CLI**；SSMCP 的 computer 工具仅负责**版本查询、下载、安装、卸载**。已读取的注册规则和 JavaScript 入口对应 `computer.version`、`computer.download`、`computer.install`、`computer.uninstall`，不在此提前承诺最终参数或运行结果。
+桌面与浏览器主操作继续直接使用 **Zuse CLI**；SSMCP 的 computer 工具仅保留版本查询、下载、安装、卸载。红色等待提示、符号与剩余时间显示，以及结束前绑定具体请求的 Human 决策流程继续集成。
 
-该固定 diff 已移除旧 CDP、Playwright、Omarchy 实现及隐藏 worker 入口，并移除直接的 `zuse-computer` Rust 依赖。新归档与发行包处理模块已经提交；其余生命周期集成、锁文件和子模块状态仍以原负责人的最终源码为准。[固定源码差异](https://github.com/LIghtJUNction/ssmcp/compare/02aa4dcd18786062ef44be6c76422dff054fbfed...659354f9b6361b862bd3069c1df47fdf7d65b2bd)
+最新用户反馈要求：**仅移除默认 `Super + Alt + C` 快捷键，保留现有显式控制开关，不动正在直播的机器。** 最终源码需按这一范围对齐；先前分支中撤掉显式开关的做法不作为最终已确认范围。
 
-源码负责人已回报，由现有 ChatGPT 协作者在独立分支逐步提交，未启动新 native 模型，也未恢复旧 native 作者会话。仓库清理仍由原负责人执行；报告组目前未取得清理完成回执，不记录已释放空间。
+## 首批真实检查及当前编译状态
 
-## 本快照的两项静态发现
+原执行方回报，以下五个现有 Node 脚本在固定 [`031fc6e`](https://github.com/LIghtJUNction/ssmcp/commit/031fc6ed108d0642793b60f099992574b62a5de4) 上均以 **0 退出**：
 
-| 问题 | 已核对依据与影响 | 当前状态 |
-|---|---|---|
-| Windows ZIP 被误要求 Unix 执行权限 | [新 archive.rs](https://github.com/LIghtJUNction/ssmcp/blob/659354f9b6361b862bd3069c1df47fdf7d65b2bd/src/computer/archive.rs) 对 `zuse.exe` 也要求 Unix 执行位；[官方 Windows 配方](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/scripts/release.py) 未改变 [CPython 的 DOS-origin 默认值](https://github.com/python/cpython/blob/ebf955df7a89ed0c7968f79faec1de49f61ed7cb/Lib/zipfile/__init__.py)，[zip 6.0.0](https://github.com/zip-rs/zip2/blob/abfc23d19e5c6038cba27eb3a897bc34c6d5bf86/src/types.rs) 据此给出无执行位的普通文件 mode。 | 已交原作者。未下载实际 ZIP、未运行安装，不称为实机复现。 |
-| 退役快捷键编码可能进入草稿 | paste 外收到旧 Kitty Super+Alt+C 序列时，[键盘解码](https://github.com/LIghtJUNction/ssmcp/blob/659354f9b6361b862bd3069c1df47fdf7d65b2bd/src/client/terminal.rs)会把它送入普通字符路径；ESC 可触发返回／恢复逻辑，其余编码可被[插入草稿](https://github.com/LIghtJUNction/ssmcp/blob/659354f9b6361b862bd3069c1df47fdf7d65b2bd/src/client/terminal/conversation.rs)。 | 已交原作者。条件是该序列确实到达应用；paste 内字面内容应继续保留。 |
+- `test_cua_facade.mjs`
+- `test_client_capabilities.mjs`
+- `test_execution_helpers.mjs`
+- `test_rtk_helpers.mjs`
+- `test_tools_search.mjs`
 
-报告组已补读上述关键代码路径与 Windows ZIP 配方／库规则。对 `/send`、引用准备、补全和回执主路径的限定静态审查未见直接改写；这不构成整套迁移的兼容性或运行通过结论。
+原验收协调方随后只读复核了回执的哈希、源码／树身份和这五个退出码。报告组没有重新运行检查，也没有把五个脚本等同于五个测试用例或完整验收。
 
-## 版本来源与后续验证范围
+最后收到的 Cargo 准入回执是 **共享编译所有权锁等待后阻塞，Cargo 尚未执行**。原负责人正在与占用方协调交接。这是启动条件受阻，不能记为 Rust 测试失败，也不能记为编译通过。
 
-预编译下载模块针对 GitHub Release。2026-11-21 15:09:24 UTC 的独立读取确认 [GitHub 正式发行包为 v0.3.0](https://github.com/LIghtJUNction/zuse/releases/tag/v0.3.0)，[官方 crate 索引](https://github.com/rust-lang/crates.io-index/blob/master/zu/se/zuse-computer)当时另有未撤回的 `zuse-computer 0.4.0`；二者属于不同渠道。这里没有执行下载、安装、卸载或真实桌面／浏览器操作。
+## 清理结果
 
-旧 `tests/zuse_worker_entry.rs` 已删除，原对应 worker 验证目标及旧阶段总数不能继续照搬。原 H2 准备物仍是静态、未执行材料；其中四个 gitlink／子模块的假设需按最终源码处理。六个发布 recipe 在本快照未变，这本身不支持放宽原 workflow、源码、锁图和资产字节绑定要求。新验证范围由实际集成后的代码确定。
+原执行方的两批回执记录删除 **65＋7＝72 个已确认闲置的标准构建缓存子目录**。路径 `du` 累计为 **127,444,672,512 字节，约 118.7 GiB**；最后一份回执于 **15:49:28 UTC** 记录磁盘可用空间 **461,121,187,840 字节，约 429.5 GiB**。路径累计占用不等于净释放量；并发文件变化及统计口径应分开看待。原负责人报告共享 target 与源码 worktree 均保留。
 
-## 保留的旧候选里程碑
+另有 **12 个远端已合并分支、2 个本地分支**的删除回执。报告组于 **15:57:36 UTC** 独立读取完整 GitHub 分支列表，确认所报的 12 个远端名称均已不在列表中，当前为 **50 个分支**；`main`、源码迁移工作分支和当前报告分支仍存在。本地分支与缓存清理结果保留执行方回执归属。
 
-**Gate20 的 35 个阶段通过**仍只属于旧 `02aa4dc`，原件已由报告组独立读取；[完整报告](current-iteration-Gate20-passed.md)及[最终事实](gate-S02aa-r20-final-public-facts.json)保持原样。**N20 一次来源校验通过**目前为原验收方报告，报告组未独立读取 proof／receipt；后续旧候选产品运行及发布已因架构变更暂停。
+## 接下来完成什么
 
-上述旧结果不会转移给新源码。旧内置输入开关、generation gate、控制边界与 EOF 分析均保留历史归属，不据此声称它们约束独立 Zuse CLI。下一步跟进两项修正、最终集成提交及必要验证，继续推进发布。
+源码静态审查已核对 Windows ZIP、PATH 入口及退役快捷键的对应修正；截至固定 [`c7eebfd`](https://github.com/LIghtJUNction/ssmcp/commit/c7eebfd25fa4b1a3e83ebc5a7cd07eab1bd0cc39)，已读取 finish 取消前的调用方检查、完成回执及代次绑定修正，先前遗漏的 Rust 结构字段也已补齐；这些是源码层面的核对。仍需收口最新显式开关范围、剩余集成问题、最终锁文件与源码身份，再据实际实现开展必要验证。
+
+报告组 **15:59:39 UTC** 读取 GitHub `releases/latest`，SSMCP 返回的是 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)；本轮迁移尚未取得新版本发布回执。另已独立确认 Zuse 的 GitHub 正式发行包更新到 [v0.4.2](https://github.com/LIghtJUNction/zuse/releases/tag/v0.4.2)，但本报告没有先前 SIGABRT／EPERM 反馈已解决的实机证据。
+
+旧 `02aa4dc` 的 [Gate20 通过记录](current-iteration-Gate20-passed.md)及 N20 里程碑保持原来源，不转移给新源码。旧 H2、内置控制权限和 EOF 附录保留历史归属；最终发布验证需按实际新配方与三个已观察到的库 gitlink 重新对齐。
 
 ---
 
