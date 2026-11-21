@@ -1,0 +1,410 @@
+{
+  "schema": "ssmcp.candidate-ab-submetrics.v1",
+  "document_status": "draft_for_review",
+  "cutoff_utc": "2026-11-21T00:24:26Z",
+  "previous_checkpoint": {
+    "commit": "91f98f84e9320042e382b93e22f7e256df3282b9",
+    "tree": "662acd0e4ce330a8f053caf55bcd02521be8f256",
+    "facts_url": "https://github.com/LIghtJUNction/ssmcp/blob/91f98f84e9320042e382b93e22f7e256df3282b9/docs/reports/command-await-delivery-20261120/candidate-ab-0010.json",
+    "report_url": "https://github.com/LIghtJUNction/ssmcp/blob/91f98f84e9320042e382b93e22f7e256df3282b9/docs/reports/command-await-delivery-20261120/README.md"
+  },
+  "source": {
+    "baseline_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "candidate_commit": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "candidate_tree": "088fe1cde36fe63a33df1f9b7cfb619ae5f8ee35",
+    "candidate_parent": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "candidate_url": "https://github.com/LIghtJUNction/ssmcp/commit/fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "scope": "fixed candidate only; no inference to the later integrated source"
+  },
+  "original_report_sha256": {
+    "baseline_report_sha256": "7b7c9081616aca563d74efe883cd716e6be8da594e2671e283c904a7b096c64c",
+    "candidate_report_sha256": "4ef95978b201f9a3a8d3c42cd4ded2282ff4e7c802a269242027a32691cc6b49",
+    "baseline_ctrlv_sha256": "df1d570ed1bbcf8e47d6a4e99c94d06357319ebc0ca22a9c5e9d3d82b05498d4",
+    "candidate_ctrlv_sha256": "af2b6f5a996ae60fe2a0bb4bf632e5c1bb39e015111a205deb3b8bf68d88be7f"
+  },
+  "original_execution_sha256": {
+    "baseline_execution_sha256": "aefc6b8a20c8bec808057acae758c60fb44630c5912cb1851cced2a7dc2eef63",
+    "candidate_execution_sha256": "13a685aa21e523c1d42e4c62b4bd61b6fb065fb0d8a5500a819e34218cb1e1bb"
+  },
+  "observations_per_side": 1,
+  "rows": [
+    {
+      "name": "multiline-2738",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 0.007923,
+          "candidate": 0.009907
+        },
+        "visible_ms": {
+          "baseline": 33.536642,
+          "candidate": 14.919875
+        },
+        "ready_ms": {
+          "baseline": 67.904495,
+          "candidate": 14.919875
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 67.896572,
+          "candidate": 14.909968
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": 33.528719,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": 34.367853,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 331.01153226267667,
+          "candidate": 264.72235491240417
+        },
+        "vt_snapshots": {
+          "baseline": 2,
+          "candidate": 1
+        },
+        "write_calls": {
+          "baseline": 1,
+          "candidate": 1
+        },
+        "backpressure_waits": {
+          "baseline": 0,
+          "candidate": 0
+        }
+      }
+    },
+    {
+      "name": "multiline-64k",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 3.789682,
+          "candidate": 0.291445
+        },
+        "visible_ms": {
+          "baseline": 34.839222,
+          "candidate": 28.644784
+        },
+        "ready_ms": {
+          "baseline": 34.839222,
+          "candidate": 28.644784
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 31.04954,
+          "candidate": 28.353339
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 16.49516874814216,
+          "candidate": 214.4879620230125
+        },
+        "vt_snapshots": {
+          "baseline": 1,
+          "candidate": 1
+        },
+        "write_calls": {
+          "baseline": 13,
+          "candidate": 12
+        },
+        "backpressure_waits": {
+          "baseline": 11,
+          "candidate": 11
+        }
+      }
+    },
+    {
+      "name": "multiline-4m-exact",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 330.458831,
+          "candidate": 25.966284
+        },
+        "visible_ms": {
+          "baseline": 335.33393,
+          "candidate": 55.933765
+        },
+        "ready_ms": {
+          "baseline": 370.222459,
+          "candidate": 55.933765
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 39.763628,
+          "candidate": 29.967481
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": 4.875099,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": 34.888529,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 12.104416855761974,
+          "candidate": 154.0463565788542
+        },
+        "vt_snapshots": {
+          "baseline": 2,
+          "candidate": 1
+        },
+        "write_calls": {
+          "baseline": 867,
+          "candidate": 966
+        },
+        "backpressure_waits": {
+          "baseline": 862,
+          "candidate": 943
+        }
+      }
+    },
+    {
+      "name": "multiline-4m-plus-one",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 328.006441,
+          "candidate": 22.376305
+        },
+        "visible_ms": {
+          "baseline": 337.795869,
+          "candidate": 44.152384
+        },
+        "ready_ms": {
+          "baseline": 337.795869,
+          "candidate": 44.152384
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 9.789428,
+          "candidate": 21.776079
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 12.19492027525799,
+          "candidate": 178.7610777456829
+        },
+        "vt_snapshots": {
+          "baseline": 1,
+          "candidate": 1
+        },
+        "write_calls": {
+          "baseline": 889,
+          "candidate": 984
+        },
+        "backpressure_waits": {
+          "baseline": 886,
+          "candidate": 976
+        }
+      }
+    },
+    {
+      "name": "ordinary-16k",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 0.023443,
+          "candidate": 0.019377
+        },
+        "visible_ms": {
+          "baseline": 2439.160607,
+          "candidate": 27.853111
+        },
+        "ready_ms": {
+          "baseline": 2439.160607,
+          "candidate": 27.853111
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 2439.137164,
+          "candidate": 27.833734
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": null,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 666.5102589259054,
+          "candidate": 806.3683748774321
+        },
+        "vt_snapshots": {
+          "baseline": 1,
+          "candidate": 1
+        },
+        "write_calls": {
+          "baseline": 3,
+          "candidate": 2
+        },
+        "backpressure_waits": {
+          "baseline": 0,
+          "candidate": 0
+        }
+      }
+    },
+    {
+      "name": "busy-multiline-2738",
+      "identities_match": true,
+      "metrics": {
+        "pty_write_ms": {
+          "baseline": 0.007733,
+          "candidate": 0.008528
+        },
+        "visible_ms": {
+          "baseline": 5.377071,
+          "candidate": 29.151625
+        },
+        "ready_ms": {
+          "baseline": 43.186361,
+          "candidate": 29.151625
+        },
+        "after_pty_last_write_ready_ms": {
+          "baseline": 43.178628,
+          "candidate": 29.143097
+        },
+        "after_pty_last_write_preparing_ms": {
+          "baseline": 5.369338,
+          "candidate": null
+        },
+        "preparing_to_reference_ready_ms": {
+          "baseline": 37.80929,
+          "candidate": null
+        },
+        "pty_mib_per_second": {
+          "baseline": 339.14449374333213,
+          "candidate": 307.5286550325032
+        },
+        "vt_snapshots": {
+          "baseline": 3,
+          "candidate": 2
+        },
+        "write_calls": {
+          "baseline": 1,
+          "candidate": 1
+        },
+        "backpressure_waits": {
+          "baseline": 0,
+          "candidate": 0
+        }
+      }
+    }
+  ],
+  "ctrlv": {
+    "baseline": {
+      "name": "ctrl-v-multiline-2738",
+      "status": "passed",
+      "expected": "reference",
+      "trigger": "PTY Ctrl+V",
+      "trigger_hex": "16",
+      "bracketed": false,
+      "clipboard_payload_bytes": 2738,
+      "clipboard_payload_sha256": "20bcff3825dcba6114a09a7f0c38f6e8b6a3dd85a02e10be940e2b8418251f73",
+      "wire_bytes": 1,
+      "accepted_bytes": 1,
+      "write_calls": 1,
+      "short_writes": 0,
+      "write_attempts": 1,
+      "backpressure_waits": 0,
+      "vt_snapshots": 2,
+      "ready_frame_grid_confirmed": true,
+      "ready_ms": 50.066292,
+      "after_trigger_write_ready_ms": 50.059631
+    },
+    "candidate": {
+      "name": "ctrl-v-multiline-2738",
+      "status": "passed",
+      "expected": "reference",
+      "trigger": "PTY Ctrl+V",
+      "trigger_hex": "16",
+      "bracketed": false,
+      "clipboard_payload_bytes": 2738,
+      "clipboard_payload_sha256": "20bcff3825dcba6114a09a7f0c38f6e8b6a3dd85a02e10be940e2b8418251f73",
+      "wire_bytes": 1,
+      "accepted_bytes": 1,
+      "write_calls": 1,
+      "short_writes": 0,
+      "write_attempts": 1,
+      "backpressure_waits": 0,
+      "vt_snapshots": 2,
+      "ready_frame_grid_confirmed": true,
+      "ready_ms": 46.399351,
+      "after_trigger_write_ready_ms": 46.392517
+    },
+    "trigger_write_ms": {
+      "baseline": 0.006661,
+      "candidate": 0.006834
+    }
+  },
+  "step_wall_seconds": {
+    "baseline": {
+      "six-cases": 21.94306516647339,
+      "ctrlv": 3.9751644134521484
+    },
+    "candidate": {
+      "six-cases": 16.999460697174072,
+      "ctrlv": 5.381131410598755
+    }
+  },
+  "timing_contract": {
+    "baseline": {
+      "pty_last_write": "last byte accepted by PTY; not client read completion or disk fsync",
+      "first_visible": "first decoded paste-specific input/notice frame",
+      "preparing_visible": "first observed Preparing local input frame, or null if superseded",
+      "ready": "physical complete reference/inline/rejection frame before correctness RPCs",
+      "observation": "VT decode cost included; no extra key, resize or UI RPC during timing",
+      "performance_gate": "descriptive comparison only; bounded liveness and correctness asserted"
+    },
+    "candidate": {
+      "pty_last_write": "last byte accepted by PTY; not client read completion or disk fsync",
+      "first_visible": "first decoded paste-specific input/notice frame",
+      "preparing_visible": "first observed Preparing local input frame, or null if superseded",
+      "ready": "physical complete reference/inline/rejection frame before correctness RPCs",
+      "observation": "VT decode cost included; no extra key, resize or UI RPC during timing",
+      "performance_gate": "descriptive comparison only; bounded liveness and correctness asserted"
+    },
+    "ctrlv": "one PTY Ctrl+V byte to physical complete reference; includes adapter and storage; no timed RPC/key; not OS clipboard performance"
+  },
+  "new_rust_tests": {
+    "compiled_as_part_of_successful_library_test_fixture": true,
+    "executed": false,
+    "build_receipt_sha256": "8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7",
+    "artifact_sha256": "6ab9368340abb1ec715b3841ddf814aa2fd2bd9e0f371d622fc841e23806b7f3",
+    "count": 7,
+    "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/fc06728a36d0b4d2920e1e2bc29885721ced5780/src/client/terminal/conversation/tests/paste_batch.rs",
+    "compile_mode": "cargo test --lib --no-run",
+    "artifact_bytes": 165564392,
+    "new_execution_performed": false
+  },
+  "interpretation": {
+    "same_original_measurements": true,
+    "new_runs_or_gates": false,
+    "primary_ready_table_unchanged": true,
+    "all_submetrics_improved_claimed": false,
+    "preparing_null_means": "not observed, possibly superseded before a sampled frame; not zero milliseconds",
+    "first_visible_is": "first decoded paste-specific input or notice frame observed by the fixture",
+    "pty_write_is": "time until all bytes are accepted by the PTY, not completed client processing or disk fsync",
+    "after_last_write_ready_is": "observed ready time minus the last PTY write timestamp",
+    "ctrlv_step_wall_is_pure_paste_latency": false,
+    "vt_observation_and_decode_cost_included": true,
+    "causal_or_statistical_generalization": false,
+    "final_integrated_source_result_claimed": false,
+    "comparison_scope": "each scene n=1 per side; fixed 781 baseline versus fixed fc candidate"
+  },
+  "evidence_origin": "Primary reviewer recomputed the submetrics from the previously read original reports; this draft checked the supplied exact-hash review file and kept only public normalized fields."
+}

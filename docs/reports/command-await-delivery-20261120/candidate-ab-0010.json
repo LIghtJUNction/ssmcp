@@ -372,8 +372,17 @@
   "new_rust_tests": {
     "count": 7,
     "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/fc06728a36d0b4d2920e1e2bc29885721ced5780/src/client/terminal/conversation/tests/paste_batch.rs",
-    "review_scope": "static source review only",
-    "execution_pass_claimed": false
+    "review_scope": "static source review and successful compilation into the library test fixture; tests not executed",
+    "execution_pass_claimed": false,
+    "compiled_as_part_of_successful_library_test_fixture": true,
+    "compile_mode": "cargo test --lib --no-run",
+    "executed": false,
+    "build_receipt_sha256": "8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7",
+    "library_test_fixture": {
+      "bytes": 165564392,
+      "sha256": "6ab9368340abb1ec715b3841ddf814aa2fd2bd9e0f371d622fc841e23806b7f3"
+    },
+    "correction": "The original 91f report said static review only and omitted the already successful compilation. This correction records no new test execution."
   },
   "remaining_status": {
     "fixed_candidate_paste_ab_passed": true,
@@ -389,7 +398,9 @@
     "stage": "source-only integration in progress",
     "public_main_commit": "f208a03b5403332214f3acf6ee0b176752b5d2c9",
     "public_main_url": "https://github.com/LIghtJUNction/ssmcp/commit/f208a03b5403332214f3acf6ee0b176752b5d2c9",
-    "results_from_fc_not_relabelled_as_integrated_source": true
+    "results_from_fc_not_relabelled_as_integrated_source": true,
+    "observation_scope": "Historical integration observation at the original A/B checkpoint; not a claim that f208 remains the latest main.",
+    "current_summary": "Final source integration is still in progress; no current main HEAD asserted in this correction."
   },
   "evidence_observed_through_utc": "2026-11-21T00:13:14Z",
   "publication_observation": {
@@ -399,5 +410,17 @@
     "other_v22_run_conclusion": "failure",
     "other_v22_run_updated_utc": "2026-11-20T23:50:46Z",
     "does_not_establish_candidate_release": true
+  },
+  "documentation_correction": {
+    "applied_at_utc": "2026-11-21T00:24:26Z",
+    "original_published_commit": "91f98f84e9320042e382b93e22f7e256df3282b9",
+    "original_facts_url": "https://github.com/LIghtJUNction/ssmcp/blob/91f98f84e9320042e382b93e22f7e256df3282b9/docs/reports/command-await-delivery-20261120/candidate-ab-0010.json",
+    "original_facts_bytes": 15306,
+    "original_facts_sha256": "f44f2f36b4c62b0421fdd17d89fc6fe9ce3d35b298bdb2df4957ab0a6ec43f02",
+    "primary_ready_values_and_n_unchanged": true,
+    "new_test_execution_performed": false,
+    "submetrics_file": "candidate-ab-submetrics-0021.json",
+    "submetrics_scope": "recomputed from the same existing reports; no rerun or new measurement",
+    "historical_cutoff_retained": "2026-11-21T00:13:14Z"
   }
 }
