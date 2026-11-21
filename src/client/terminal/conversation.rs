@@ -144,7 +144,7 @@ pub(super) struct Conversation {
     force_task: Option<listener::Task>,
     force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
-    wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
+    pub(super) wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     #[cfg(test)]
     timing_fixture: Option<crate::runtime::time::Snapshot>,
     parked: Option<steering::SavedDraft>,
