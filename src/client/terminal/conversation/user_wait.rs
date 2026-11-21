@@ -33,6 +33,7 @@ fn intent_text(intent: Intent) -> &'static str {
 fn outcome_text(outcome: Outcome) -> &'static str {
     match outcome {
         Outcome::Ready => "消息已就绪，等待提交",
+        Outcome::Decided => "本轮结束决策已返回",
         Outcome::TimedOut => "本轮等待超时",
         Outcome::Cancelled => "等待已取消，会话继续",
         Outcome::Disconnected => "连接已断开",
@@ -256,6 +257,7 @@ mod tests {
             recipient: "next".into(),
             reason: Some("Synthetic wait reason".into()),
             remaining_ms: 12_500,
+            finish_request_id: None,
             notification_requested: false,
             notification: None,
         }
@@ -347,6 +349,8 @@ mod tests {
                 wait_id: "previous-wait".into(),
                 status: Outcome::Ready,
                 notification: None,
+                finish_request_id: None,
+                finish_decision: None,
             }],
             ..Snapshot::default()
         };

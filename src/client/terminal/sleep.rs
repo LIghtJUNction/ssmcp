@@ -319,6 +319,7 @@ mod tests {
                 recipient: "next".into(),
                 reason: Some("Synthetic visual wait".into()),
                 remaining_ms: 20_000,
+                finish_request_id: None,
                 notification_requested: false,
                 notification: None,
             }],
