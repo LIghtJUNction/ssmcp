@@ -11,10 +11,13 @@ render_ui_snapshot.py renderer (Pillow and a monospace font are required).
 """
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -49,6 +52,7 @@ class AgentPanel(Composer):
         self.output = output
         self.font = font
         self.snapshots = []
+        self.history_artifacts = []
 
     def config(self, name, **_options):
         path = self.directory / f"{name}.toml"
@@ -155,13 +159,117 @@ class AgentPanel(Composer):
                    "owned thread marker is saved to the current conversation")
         return receipt["message_id"]
 
-    def thread_page(self, member=None, *, main=False):
-        arguments = {"action": "thread", "client_id": self.client_id, "limit": 64}
+    def history_result(self, name, arguments):
+        if name not in ("ssmcp.ui.history", "ssmcp.output.read"):
+            raise AssertionError("unexpected history observation tool")
+        result = self.response("return await call(%s, %s, %s);" % (
+            json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)))
+        if self.messages(result):
+            raise AssertionError("history observation consumed a user requirement")
+        native = result["structuredContent"]["result"]
+        if native.get("isError"):
+            raise AssertionError(f"native history observation failed: {native}")
+        return native
+
+    def read_history_artifact(self, summary):
+        # The production transport may spill a valid large process page.
+        # Use the same authenticated output reader as the references fixture.
+        meta = summary.get("artifact", {})
+        size = meta.get("bytes")
+        if (summary.get("format") != "mcp_tool_result_json" or summary.get("output_error")
+                or meta.get("schema") != "ssmcp.output.v1"
+                or meta.get("scope") != "native_tool_result_json"
+                or meta.get("complete") is not True
+                or not isinstance(size, int) or not 0 < size <= 1024 * 1024
+                or meta.get("observed_bytes") != size
+                or meta.get("sha256_scope") != "first_bytes_snapshot"
+                or not re.fullmatch(r"[0-9a-f]{32}", str(meta.get("id", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(meta.get("sha256", "")))):
+            raise AssertionError("history spill is not a complete bounded native JSON artifact")
+        # output.read is eligible work; never let observation take a real request.
+        if any(item["status"] != "delivered" for item in self.queue()["queue"]):
+            raise AssertionError("history artifact reads require an entirely delivered queue")
+        payload = bytearray()
+        chunks = 0
+        while len(payload) < size:
+            offset = len(payload)
+            part = self.history_result("ssmcp.output.read", {
+                "id": meta["id"], "offset": offset,
+                "max_bytes": min(8192, size - offset)})["structuredContent"]
+            chunk = base64.b64decode(part["data_base64"], validate=True)
+            end = offset + len(chunk)
+            if (not chunk or len(chunk) > 8192 or end > size
+                    or part.get("id") != meta["id"] or part.get("offset") != offset
+                    or part.get("next_offset") != end or part.get("bytes") != len(chunk)
+                    or part.get("size") != size or part.get("complete") is not True
+                    or part.get("eof") is not (end == size)
+                    or part.get("sha256_scope") != "returned_chunk"
+                    or part.get("sha256") != hashlib.sha256(chunk).hexdigest()):
+                raise AssertionError("output.read returned an invalid history chunk")
+            payload.extend(chunk)
+            chunks += 1
+        if hashlib.sha256(payload).hexdigest() != meta["sha256"]:
+            raise AssertionError("complete history artifact digest differs from its manifest")
+        native = json.loads(payload)
+        if (not isinstance(native, dict) or native.get("isError")
+                or not isinstance(native.get("structuredContent"), dict)):
+            raise AssertionError("history artifact is not a successful native MCP result")
+        self.history_artifacts.append({
+            "id": meta["id"], "bytes": size, "sha256": meta["sha256"],
+            "complete": True, "chunks": chunks})
+        return native
+
+    def thread_page(self, member=None, *, main=False, cursor=None, generation=None, limit=64):
+        arguments = {"action": "thread", "client_id": self.client_id, "limit": limit}
+        if cursor is not None:
+            arguments.update(cursor=cursor, generation=generation)
         if member is not None:
             arguments["agent_id"] = member["agent_id"]
         elif main:
             arguments["main"] = True
-        return self.observe("ssmcp.ui.history", arguments)
+        native = self.history_result("ssmcp.ui.history", arguments)
+        data = native.get("structuredContent", {})
+        if data.get("spilled"):
+            data = self.read_history_artifact(data)["structuredContent"]
+        if (data.get("schema_version") != 1 or not isinstance(data.get("events"), list)
+                or data.get("scope", {}).get("client_id") != self.client_id):
+            raise AssertionError("complete native result did not contain the thread history schema")
+        return data
+
+    @staticmethod
+    def saved_message_texts(page):
+        return {event["value"]["text"] for event in page["events"]
+                if event.get("value", {}).get("type") == "ssmcp.message"}
+
+    def history_containing_messages(self, wanted, *, main=False):
+        # A page is not the whole journal. Follow the real cursor/generation,
+        # stopping at the known saved markers instead of chasing new observer calls.
+        wanted = set(wanted)
+        events = []
+        seen = set()
+        cursor = generation = scope = None
+        for _ in range(32):
+            page = self.thread_page(main=main, cursor=cursor,
+                                    generation=generation, limit=16)
+            if generation is not None and (page["generation"] != generation
+                                           or page["scope"] != scope):
+                raise AssertionError("history paging changed the owner or process generation")
+            if page.get("retention_gap_possible"):
+                raise AssertionError("owned fixture lost history before its marker assertions")
+            generation, scope = page["generation"], page["scope"]
+            for event in page["events"]:
+                if event["sequence"] in seen:
+                    raise AssertionError("history cursor repeated an event")
+                seen.add(event["sequence"])
+                events.append(event)
+            combined = {**page, "events": events}
+            if wanted <= self.saved_message_texts(combined):
+                return combined
+            next_cursor = page["next_cursor"]
+            if not page["has_more"] or (cursor is not None and next_cursor <= cursor):
+                raise AssertionError("saved history markers were not found before the journal ended")
+            cursor = next_cursor
+        raise AssertionError("owned history marker search exceeded its bounded page count")
 
     def leave_thread_history(self, front):
         front.send(ESC)
@@ -233,13 +341,12 @@ class AgentPanel(Composer):
         front.until(lambda shot: "AGENT_PANEL_A_LATE" in text(shot),
                     "returning to A reveals its late reply")
         self.leave_thread_history(front)
-        aggregate = self.thread_page()
-        main = self.thread_page(main=True)
-        self.check(all(marker in json.dumps(aggregate["events"]) for marker in
-                       (*markers, "AGENT_PANEL_A_LATE"))
-                   and markers[2] in json.dumps(main["events"])
-                   and markers[0] not in json.dumps(main["events"])
-                   and markers[1] not in json.dumps(main["events"]),
+        aggregate = self.history_containing_messages((*markers, "AGENT_PANEL_A_LATE"))
+        main = self.history_containing_messages((markers[2],), main=True)
+        self.check(set((*markers, "AGENT_PANEL_A_LATE")) <= self.saved_message_texts(aggregate)
+                   and markers[2] in self.saved_message_texts(main)
+                   and markers[0] not in self.saved_message_texts(main)
+                   and markers[1] not in self.saved_message_texts(main),
                    "the process overview retains both members and main remains a separate scope")
         returned = self.ui("/display/conversation")
         owner_after = [item["id"] for item in self.observe(
@@ -459,6 +566,7 @@ def main():
             harness.cleanup()
             report.update(checks=harness.checks, metrics=harness.metrics,
                           snapshots=harness.snapshots,
+                          history_artifacts=harness.history_artifacts,
                           duration_seconds=round(time.monotonic() - started, 3))
             destination = args.report or args.out / "agent-panel-result.json"
             destination.parent.mkdir(parents=True, exist_ok=True)
