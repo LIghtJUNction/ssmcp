@@ -216,13 +216,36 @@ return await ui.wait(clientId, {
 });
 ```
 
-`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client. After `timed_out`, another `code_mode` call can wait again if the task needs it.
+`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. `finish_request_id` is optional or null and is accepted only for `finish`; use the exact returned visible ASCII ID, at most 128 bytes. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client; resume in a new outer call.
 
-The server binds the wait to the authenticated owner and live client connection. An existing valid `collab.bind` or `agent` binding also permits messages addressed to that exact agent; an unbound caller can receive only next-caller messages. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notification delivery is best effort and deduplicated for the same waiting episode; `sent` means the system accepted a notification request, not that the user saw it.
+The server binds the wait to the authenticated owner and live client connection. A valid `collab.bind` or `agent` binding permits ordinary messages addressed to that exact agent; an unbound caller can receive only next-caller messages. A finish wait requires the verified asking thread. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notifications are best effort and deduplicated for the same episode; `sent` means the system accepted a notification request, not that the user saw it.
 
-The helper's `ready` status reserves input but does not deliver its body. Inspect the outer response: only a `structuredContent.user_wait` array entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. The final response rechecks authorization and the reserved revisions before attaching those messages. Cancellation, timeout, disconnection, revoked access, invalid binding, and superseded input have distinct receipts and do not confirm delivery. Read the actual user messages before continuing; receipt metadata cannot substitute for their contents.
+For ordinary messages, the helper's `ready` status reserves input but does not deliver its body. Only an outer `structuredContent.user_wait` entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. Final response assembly rechecks authorization, recipient binding and reserved revisions. Read those actual messages; receipt metadata is not their content.
 
-The legacy `intent: "finish"` value remains accepted as an ordinary bounded user wait. It creates no completion request, continuation prompt or consent field. Only outer `user_wait.status: "received"` with matching `user_messages` confirms delivery. [Wait receipts](../src/code_mode/user_wait.rs) · [User waiting](user-wait.md)
+### Before ending the conversation
+
+Bind an existing participant with its real ID and private token, then request the local user's decision:
+
+```js
+await collab.bind(clientId, {
+  agent_id: participant.id,
+  token: participant.token,
+});
+return await ui.wait(clientId, {
+  intent: "finish",
+  reason: "The work is ready. Should this conversation end now?",
+  timeout_ms: 20000,
+  notify: false,
+});
+```
+
+If ordinary input is already queued for this recipient, the server delivers it through the normal reservation and final `received` path. It does not create a new finish request or interpret the message as approval. Otherwise, the same native wait creates or resumes a real Human No/Yes question and owns its cancellation cleanup. Preserve the returned `finish_request_id`; after a timeout, pass it in a new `ui.wait` call with the same verified thread. Timeout, ordinary text, cancellation, new relevant input, disconnection, reconnection and revoked authority never approve ending. [Server routing](../src/http/user_wait.rs) · [Native lifecycle](../src/client/interface/user_wait.rs)
+
+Read the **final outer** `structuredContent.user_wait` entry for this client and wait. End only when it has `intent: "finish"`, `status: "decided"` and `may_finish: true`, with the same exact `finish_request_id` and `finish_decision.request_id`. The decision must have `status: "completed"`, `choice: "yes"`, `actor: {origin: "human"}`, a positive `revision`, `consumed: true`, and `invalidation_reason: null`. An inner JavaScript result may still say `decision_ready` with `may_finish: false`; it is not the final permission receipt. [Receipt commit](../src/code_mode/user_wait.rs)
+
+Human No returns a denied decision and `may_finish: false`. Only the original asking thread can consume the exact Human Yes once; reading or resuming an already completed request returns `consumed: false` and grants no new permission. Other agents cannot approve Yes for the user. Local question state such as `approved` is insufficient until the final outer response rechecks authority, connection, thread and input episode. [Decision rules](../src/client/interface/questions/requests.rs)
+
+Progress, ordinary `answer` messages, `ui.reply` and code-run completion remain available. They do not themselves grant permission to end, and MCP cannot force an arbitrary external model to keep running or intercept every external final reply. Follow the decision protocol before ending; do not claim a global enforcement boundary. The retired `request_finish`, `ssmcp.ui.finish`, `ssmcp.ui.answer` and public `await` finish target stay retired. See [user waiting](user-wait.md) for the live red countdown, local cancellation and complete receipt fields.
 
 ### Requirements and context
 

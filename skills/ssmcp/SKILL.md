@@ -185,6 +185,28 @@ return await ports.open({
 
 Confirm the returned state is `running` before reading the listener address on the listening client. The open call waits at most eight seconds; if it returns `starting`, use `ports.list()` to observe the same ID until its listener is ready. A `cleanup_failed` state retains pending handles; retry close or cancel and inspect the result. Swap endpoint IDs for the reverse direction. List mappings with `ports.list()` and close one with `ports.close(id)` when done. Listeners and targets are limited to loopback; the mapping remains managed after the JavaScript invocation finishes and ends on closure, expiry, authorization loss, or disconnection.
 
+## Wait for the real user before ending
+
+Use `return await ui.wait(clientId,{intent:"need_user",timeout_ms:20000})` when user input is needed. Only the final outer `structuredContent.user_wait` entry with `status:"received"` and matching `user_messages` confirms message delivery. Read those messages before continuing.
+
+Before ending, bind the existing asking participant and request a real local Human No/Yes decision:
+
+```js
+await collab.bind(clientId, {agent_id: participant.id, token: participant.token});
+return await ui.wait(clientId, {
+  intent: "finish",
+  reason: "The work is ready. May this conversation end now?",
+  timeout_ms: 20000,
+  notify: false,
+});
+```
+
+Use the actual participant ID and private token; display labels grant no authority. A finish wait requires a verified thread. Already queued user input is delivered normally and never counts as approval. Each run allows one wait per client. After timeout, bind the same thread in a new call and pass the actual returned `finish_request_id` to resume; do not invent IDs.
+
+Inspect the final outer receipt for the exact client and wait. End only with `status:"decided"`, `may_finish:true`, matching request IDs, and `finish_decision` containing `status:"completed"`, `choice:"yes"`, `actor:{origin:"human"}`, a positive revision, `consumed:true`, and `invalidation_reason:null`. An inner `decision_ready`, a question-list read, Human No, text saying yes, timeout, cancel, new input, lost connection or revoked authority is not approval. A consumed decision cannot be replayed; another agent cannot approve for the user.
+
+Progress and ordinary answer/reply messages remain available. This protocol does not intercept arbitrary external model final replies or force a model to stay running. Do not revive the retired `request_finish`, `ui.finish` or `ui.answer` tools. The live red countdown is the current wait's remaining budget; waking the screen does not answer or cancel it. See [user waiting](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/user-wait.md) for the full contract.
+
 ## Observe activity and respect lifecycle
 
 Background command stdout/stderr is displayed while it runs. Keep job IDs, stream sources and cursors separate; a historical read or wait result must not be reported as new live output. Pretty, verbose and JSONL audit logs use a redacted copy of events. Do not print environment mappings, credentials or sensitive file bodies. Native return values preserve their types and permission states; sanitizing the audit copy does not change a provider's approval decision.
