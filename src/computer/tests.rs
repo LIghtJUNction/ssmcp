@@ -193,6 +193,36 @@ fn archives_extract_only_the_expected_regular_platform_executable() {
 }
 
 #[test]
+fn windows_zip_preserves_archive_comment_and_zip64_end_rejections() {
+    let target = "x86_64-pc-windows-msvc";
+    let (_, plain, expected) = package(target);
+    assert_eq!(
+        archive::executable(&plain, &release(target, &plain), target).unwrap(),
+        expected
+    );
+
+    let mut commented = zip::ZipWriter::new_append(Cursor::new(plain.clone())).unwrap();
+    commented.set_comment("release notes").unwrap();
+    let bytes = commented.finish().unwrap().into_inner();
+    let parsed = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    assert_eq!(parsed.comment(), b"release notes");
+    assert!(archive::executable(&bytes, &release(target, &bytes), target).is_err());
+
+    // The second sector contains one opaque test field with a zero-length body.
+    for sector in [&[][..], &[0xc5, 0xa1, 0, 0, 0, 0]] {
+        let mut writer = zip::ZipWriter::new_append(Cursor::new(plain.clone())).unwrap();
+        writer.set_raw_zip64_extensible_data_sector(sector.into());
+        let bytes = writer.finish().unwrap().into_inner();
+        let parsed = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        assert_eq!(
+            parsed.raw_zip64_extensible_data_sector(),
+            (!sector.is_empty()).then_some(sector)
+        );
+        assert!(archive::executable(&bytes, &release(target, &bytes), target).is_err());
+    }
+}
+
+#[test]
 fn windows_zip_accepts_the_official_dos_creator_without_posix_execute_bits() {
     let target = "x86_64-pc-windows-msvc";
     let executable = binary(target);

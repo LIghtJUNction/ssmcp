@@ -117,6 +117,27 @@ fn tar(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
     executable.ok_or_else(|| "Zuse archive has no expected executable".into())
 }
 
+// The old guard rejected any ZIP64 end record reported by the reader. ZIP 9's
+// accessor only reports nonempty sectors. For the plain release layout, the
+// commentless classic end record directly follows the last central entry.
+fn has_classic_zip_end(bytes: &[u8], last_header: u64) -> bool {
+    let Some((header, fields)) = usize::try_from(last_header)
+        .ok()
+        .and_then(|offset| bytes.get(offset..))
+        .and_then(|entry| entry.split_first_chunk::<46>())
+    else {
+        return false;
+    };
+    // APPNOTE 4.3.12: lengths of the file name, extra field and file comment.
+    let name = u16::from_le_bytes([header[28], header[29]]);
+    let extra = u16::from_le_bytes([header[30], header[31]]);
+    let comment = u16::from_le_bytes([header[32], header[33]]);
+    let length = usize::from(name) + usize::from(extra) + usize::from(comment);
+    fields
+        .get(length..)
+        .is_some_and(|end| end.len() == 22 && end.starts_with(b"PK\x05\x06"))
+}
+
 fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format!("Invalid Zuse ZIP archive: {error}"))?;
@@ -124,12 +145,18 @@ fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
         || archive.len() > MAX_ENTRIES
         || archive.offset() != 0
         || !archive.comment().is_empty()
-        || archive.zip64_comment().is_some()
+        || archive.raw_zip64_extensible_data_sector().is_some()
         || archive
             .has_overlapping_files()
             .map_err(|error| error.to_string())?
     {
         return Err("Zuse ZIP archive has an unsupported or ambiguous layout".into());
+    }
+    let last = archive
+        .by_index_data(archive.len() - 1)
+        .map_err(|error| error.to_string())?;
+    if !has_classic_zip_end(bytes, last.central_header_start()) {
+        return Err("Zuse ZIP archive requires a classic central directory end record".into());
     }
     let mut expected = BTreeMap::new();
     let mut executable = None;
