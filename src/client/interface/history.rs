@@ -328,9 +328,19 @@ pub(crate) fn default_directory() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn workspace() -> Result<String, String> {
-    let path = std::env::current_dir()
-        .and_then(fs::canonicalize)
-        .map_err(|_| "cannot determine conversation workspace")?;
+    let cwd = std::env::current_dir().map_err(|error| {
+        format!("cannot read current directory for conversation workspace: {error}")
+    })?;
+    canonical_workspace(&cwd)
+}
+
+fn canonical_workspace(cwd: &Path) -> Result<String, String> {
+    let path = fs::canonicalize(cwd).map_err(|error| {
+        format!(
+            "cannot resolve conversation workspace {}: {error}",
+            cwd.display()
+        )
+    })?;
     let value = path
         .to_str()
         .ok_or("conversation workspace must be UTF-8")?;
@@ -1619,6 +1629,20 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn conversation_workspace_reports_the_failing_path_and_os_error() {
+        let temporary = Temporary::new();
+        assert_eq!(
+            canonical_workspace(&temporary.0).unwrap(),
+            fs::canonicalize(&temporary.0).unwrap().to_str().unwrap()
+        );
+        let missing = temporary.0.join("not-created");
+        let os_error = fs::canonicalize(&missing).unwrap_err();
+        let error = canonical_workspace(&missing).unwrap_err();
+        assert!(error.contains(&missing.display().to_string()), "{error}");
+        assert!(error.ends_with(&os_error.to_string()), "{error}");
     }
 
     fn query(text: &str) -> SearchFilter {

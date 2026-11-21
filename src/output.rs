@@ -134,6 +134,42 @@ impl Drop for ReloadTicket {
     }
 }
 
+/// Failure while establishing the private directory needed by a local connection.
+#[derive(Debug)]
+pub(crate) struct StartupDirectoryError {
+    directory: PathBuf,
+    operation: &'static str,
+    cause: io::Error,
+}
+
+impl StartupDirectoryError {
+    fn new(directory: &std::path::Path, operation: &'static str, cause: io::Error) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            operation,
+            cause,
+        }
+    }
+}
+
+impl std::fmt::Display for StartupDirectoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} ssmcp output directory {}: {}",
+            self.operation,
+            self.directory.display(),
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for StartupDirectoryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
 pub struct OutputStore {
     owner: String,
     directory: PathBuf,
@@ -163,6 +199,10 @@ impl OutputStore {
     /// Every connection gets a distinct owner. Acknowledged reload is the only
     /// path that restores ownership, using a private, expiring, one-use grant.
     pub fn new_connection() -> Result<Arc<Self>, String> {
+        Self::start_connection().map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn start_connection() -> crate::Result<Arc<Self>> {
         let reload = if !RELOAD_CHECKED.swap(true, Ordering::AcqRel) {
             std::env::var(RELOAD_ENV).ok()
         } else {
@@ -179,7 +219,7 @@ impl OutputStore {
     }
 
     #[cfg(unix)]
-    fn connection_in(temporary: &Path, reload: Option<&str>) -> Result<Arc<Self>, String> {
+    fn connection_in(temporary: &Path, reload: Option<&str>) -> crate::Result<Arc<Self>> {
         // A shared parent created by one ordinary user cannot be trusted by a
         // second user. Each UID instead creates its own private top-level root.
         let uid = unsafe { libc::geteuid() };
@@ -218,18 +258,19 @@ impl OutputStore {
     }
 
     #[cfg(windows)]
-    fn directory() -> Result<PathBuf, String> {
+    fn directory() -> Result<PathBuf, StartupDirectoryError> {
         let base = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
             .join("ssmcp");
-        std::fs::create_dir_all(&base).map_err(|e| format!("create output base directory: {e}"))?;
+        std::fs::create_dir_all(&base)
+            .map_err(|error| StartupDirectoryError::new(&base, "create base for", error))?;
         Ok(base.join("output"))
     }
 
     #[cfg(test)]
     fn at(directory: PathBuf, policy: Policy) -> Result<Arc<Self>, String> {
-        Self::at_restoring(directory, policy, None)
+        Self::at_restoring(directory, policy, None).map_err(|error| error.to_string())
     }
 
     #[cfg(test)]
@@ -241,25 +282,33 @@ impl OutputStore {
         directory: PathBuf,
         policy: Policy,
         reload: Option<&str>,
-    ) -> Result<Arc<Self>, String> {
+    ) -> crate::Result<Arc<Self>> {
         #[cfg(windows)]
         let directory_fd = windows::private_directory(&directory)
-            .map_err(|e| format!("open private output directory: {e}"))?;
+            .map_err(|error| StartupDirectoryError::new(&directory, "open private", error))?;
         #[cfg(unix)]
         let directory_fd = {
             match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(format!("create private output directory: {e}")),
+                Err(error) => {
+                    return Err(
+                        StartupDirectoryError::new(&directory, "create private", error).into(),
+                    );
+                }
             }
             let directory_fd = open_directory(&directory)
-                .map_err(|e| format!("open private output directory: {e}"))?;
-            let metadata = directory_fd
-                .metadata()
-                .map_err(|e| format!("inspect private output directory: {e}"))?;
+                .map_err(|error| StartupDirectoryError::new(&directory, "open private", error))?;
+            let metadata = directory_fd.metadata().map_err(|error| {
+                StartupDirectoryError::new(&directory, "inspect private", error)
+            })?;
             if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+                let cause = io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "must be owned by this user with private permissions",
+                );
                 return Err(
-                    "output directory must be owned by this user with private permissions".into(),
+                    StartupDirectoryError::new(&directory, "validate private", cause).into(),
                 );
             }
             directory_fd
@@ -1473,7 +1522,21 @@ mod tests {
         crate::platform::private_directory(&target).unwrap();
         std::fs::write(target.join("keep"), b"untouched").unwrap();
         std::os::unix::fs::symlink(&target, &directory).unwrap();
-        assert!(OutputStore::connection_in(&fixture.path, None).is_err());
+        let error = OutputStore::connection_in(&fixture.path, None)
+            .err()
+            .unwrap();
+        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
+        assert_eq!(refused.directory, directory);
+        assert_eq!(refused.operation, "open private");
+        let cause = std::error::Error::source(refused)
+            .unwrap()
+            .downcast_ref::<io::Error>()
+            .unwrap();
+        assert_eq!(
+            cause.raw_os_error(),
+            open_directory(&directory).unwrap_err().raw_os_error()
+        );
+        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
         assert_eq!(std::fs::read_link(&directory).unwrap(), target);
         assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"untouched");
         std::fs::remove_file(&directory).unwrap();
@@ -1482,7 +1545,12 @@ mod tests {
         let error = OutputStore::connection_in(&fixture.path, None)
             .err()
             .unwrap();
-        assert!(error.contains("private permissions"), "{error}");
+        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
+        assert_eq!(refused.operation, "validate private");
+        assert_eq!(refused.directory, directory);
+        assert_eq!(refused.cause.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("private permissions"), "{error}");
+        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
         assert_eq!(std::fs::metadata(&directory).unwrap().mode() & 0o777, 0o755);
     }
 

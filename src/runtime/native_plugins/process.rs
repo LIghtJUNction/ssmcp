@@ -121,7 +121,7 @@ impl Process {
         Self::with_output(
             shell_path,
             std::env::current_dir()?,
-            OutputStore::new_connection()?,
+            OutputStore::start_connection()?,
         )
         .await
     }
@@ -141,7 +141,7 @@ impl Process {
         Self::with_observer(
             shell_path,
             std::env::current_dir()?,
-            OutputStore::new_connection()?,
+            OutputStore::start_connection()?,
             observer,
             harness.cloned(),
         )

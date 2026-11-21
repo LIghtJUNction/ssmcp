@@ -1773,7 +1773,7 @@ pub async fn run() -> crate::Result<()> {
             "context",
             "Warning",
             &format!(
-                "Local memory unavailable; conversation history and drafts remain usable: {error}"
+                "Local memory unavailable: {error}. Saved conversation history also requires an accessible workspace."
             ),
         );
     }
@@ -1940,10 +1940,6 @@ pub async fn run() -> crate::Result<()> {
         {
             continue;
         }
-        let unsupported_protocol = result
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.downcast_ref::<UnsupportedWireProtocol>().is_some());
         let permanent = result
             .as_ref()
             .err()
@@ -1962,7 +1958,7 @@ pub async fn run() -> crate::Result<()> {
             apply_account(&mut options, true).await?;
             continue;
         }
-        if !options.watchdog || unsupported_protocol || permanent {
+        if !watchdog_retries(options.watchdog, result.as_ref().err().map(Box::as_ref)) {
             if let Some(runner) = &service {
                 runner.record("disconnected", attempt, None, None, error.as_deref())?;
             }
@@ -2005,6 +2001,18 @@ pub async fn run() -> crate::Result<()> {
             },
         }
     }
+}
+
+pub(crate) fn watchdog_retries(
+    enabled: bool,
+    error: Option<&(dyn std::error::Error + Send + Sync)>,
+) -> bool {
+    enabled
+        && error.is_none_or(|error| {
+            !error.is::<UnsupportedWireProtocol>()
+                && !error.is::<relay::PermanentFailure>()
+                && !error.is::<crate::output::StartupDirectoryError>()
+        })
 }
 
 enum ConnectionExit {
@@ -3116,6 +3124,19 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watchdog_keeps_retrying_transient_transport_errors() {
+        let disconnected = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert!(watchdog_retries(true, Some(&disconnected)));
+        assert!(!watchdog_retries(false, Some(&disconnected)));
+        assert!(watchdog_retries(true, None));
+        assert!(!watchdog_retries(true, Some(&UnsupportedWireProtocol)));
+        assert!(!watchdog_retries(
+            true,
+            Some(&relay::PermanentFailure("rejected".into()))
+        ));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn local_socket_option_accepts_default_and_custom_paths_without_eating_flags() {
