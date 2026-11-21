@@ -35,6 +35,29 @@ fn relative<'a>(name: &'a str, prefix: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "Zuse archive member is outside the exact release directory".into())
 }
 
+fn skill_source(name: &str) -> bool {
+    // Text sources shipped by the Zuse 0.6 producer. These members are checked
+    // as non-executable metadata and never extracted into the installation.
+    matches!(
+        name,
+        "skills/zuse/SKILL.md"
+            | "skills/zuse/agents/openai.yaml"
+            | "skills/zuse/assets/appearance-click.zuse"
+            | "skills/zuse/assets/chatgpt-desktop.zuse"
+            | "skills/zuse/assets/functions.zuse"
+            | "skills/zuse/assets/import-and-eval.zuse"
+            | "skills/zuse/assets/observe-and-time.zuse"
+            | "skills/zuse/assets/wechat.zuse"
+            | "skills/zuse/references/runtime.md"
+            | "skills/zuse/references/scripts.md"
+            | "skills/zuse/scripts/check_examples.py"
+            | "skills/zuse-find-package/SKILL.md"
+            | "skills/zuse-find-package/agents/openai.yaml"
+            | "skills/zuse-publish-package/SKILL.md"
+            | "skills/zuse-publish-package/agents/openai.yaml"
+    )
+}
+
 fn member(name: &str, release: &Release, mode: u32) -> Result<bool, String> {
     let relative = relative(name, &release.prefix())?;
     if mode & 0o7000 != 0 {
@@ -56,9 +79,10 @@ fn member(name: &str, release: &Release, mode: u32) -> Result<bool, String> {
         || relative
             .strip_prefix("docs/")
             .is_some_and(|name| !name.contains('/') && name.ends_with(".md"))
-        || relative
-            .strip_prefix("examples/")
-            .is_some_and(|name| !name.contains('/') && name.ends_with(".zuse"));
+        || relative.strip_prefix("examples/").is_some_and(|name| {
+            !name.contains('/') && (name.ends_with(".zuse") || name.ends_with(".py"))
+        })
+        || skill_source(relative);
     if !document || mode & 0o111 != 0 {
         return Err(format!(
             "Unexpected member in the Zuse release archive: {relative}"
