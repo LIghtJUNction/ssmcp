@@ -45,9 +45,6 @@ fn identity(file: &File) -> Result<Identity, String> {
 }
 
 fn no_links(metadata: &Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return false;
-    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -56,7 +53,7 @@ fn no_links(metadata: &Metadata) -> bool {
             return false;
         }
     }
-    true
+    !metadata.file_type().is_symlink()
 }
 
 #[cfg(unix)]
