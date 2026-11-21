@@ -1,0 +1,57 @@
+{
+  "schema": "ssmcp.publication-plan-git-source-deferred-crate.v1",
+  "recorded_utc": "2026-11-21 07:20:47 UTC",
+  "status": "implementation_contract_confirmed_source_pending",
+  "source": "Source integration owner confirmed the next increment's contract; this is not an execution or publication receipt.",
+  "product_version": "0.10.25",
+  "github_distribution": {
+    "platform_count": 6,
+    "public_asset_count": 16,
+    "versioned_binaries": true,
+    "installers": true
+  },
+  "crate_publication": {
+    "mode": "explicitly_deferred",
+    "independent_from_server_deployment_deferral": true,
+    "registry_installability_claimed": false
+  },
+  "planned_ci_source_evidence": {
+    "artifact_name": "verified-source",
+    "producer": "finalize",
+    "consumer": "publish_release",
+    "must_not_claim_to_be_verified_crate": true,
+    "schema_and_exact_members": "Await immutable source implementation; not inferred from a run."
+  },
+  "registry_path_to_retain": {
+    "release_only_version_mapping": true,
+    "registry_graph": true,
+    "checksums": true,
+    "package_bytes": true,
+    "dry_run": true
+  },
+  "integrity_to_preserve": [
+    "Six platform build artifacts and 16 public release assets",
+    "Exact final source S and workflow P, real ancestry and initial checkout",
+    "Original dispatch capture, real run/attempt identity and execution receipts",
+    "Complete resolved Git source/lock graph and gitlink identities",
+    "Artifact IDs, outer ZIP and inner package byte binding, public assets and checksums",
+    "Explicit actual crate deferral and separate server deployment outcome"
+  ],
+  "not_yet_established": {
+    "implemented_source_commit": null,
+    "exact_new_job_matrix": null,
+    "exact_source_receipt_schema": null,
+    "executed_validation": null,
+    "published_release": null
+  },
+  "scope": "A confirmed implementation plan for the same original source author. No source edit, helper execution, product test, dispatch, release or installation performed by this record.",
+  "additional_accepted_work": {
+    "dependency_version_tree": {
+      "command": "ssmcp --version --all",
+      "status": "Accepted for a following increment; no implementation or test result yet."
+    },
+    "desktop_control_boundary": {
+      "status": "Read-only source-path investigation requested; no host desktop operation, permission change or global enforcement claim."
+    }
+  }
+}
