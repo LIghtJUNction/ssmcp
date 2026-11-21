@@ -597,7 +597,9 @@ class Dashboard(Harness):
         front.send(b"\x1b")
         # Both session and display decoders delay an ambiguous Escape prefix.
         # Observe its completed state change before sending the next sequence.
-        front.until(lambda s: "Wheel" in s["rows"][-1] and s["hide_cursor"], "Escape retaining audit navigation")
+        front.until(lambda s: "Enter Apply" not in s["rows"][-1]
+                    and s["hide_cursor"] and self.ui("/display/focus") == "audit",
+                    "Escape closing filter editing while retaining audit navigation")
         self.check(self.ui("/display/log_scrollback") == 0,
                    "End restores live logs and Escape never focuses a hidden shell")
         front.send(b"\x1b[5~x")
