@@ -1,12 +1,14 @@
 //! One native worker pool owns a bounded FIFO. A lease is internal authority;
 //! display labels and request JSON never select or complete an execution slot.
 use serde::Serialize;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 use tokio::sync::watch;
+use super::{SlotView, Snapshot};
 
 const MAX_QUEUED: usize = 128;
 const MAX_FINISHED: usize = 128;
+const MAX_UNKNOWN_KEYS: usize = 128;
 const MAX_TASK_BYTES: usize = 16 * 1024;
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 
@@ -49,27 +51,6 @@ pub(crate) struct TaskView {
     pub(crate) replay_safe: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct SlotView {
-    pub(crate) slot: usize,
-    pub(crate) epoch: u64,
-    pub(crate) state: &'static str,
-    pub(crate) task_id: Option<String>,
-    pub(crate) reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct Snapshot {
-    pub(crate) generation: String,
-    pub(crate) total: usize,
-    pub(crate) idle: usize,
-    pub(crate) working: usize,
-    pub(crate) offline: usize,
-    pub(crate) queued: usize,
-    pub(crate) closed: bool,
-    pub(crate) slots: Vec<SlotView>,
-}
-
 pub(crate) struct Lease<T> {
     pub(crate) generation: String,
     pub(crate) slot: usize,
@@ -82,6 +63,7 @@ pub(crate) struct Lease<T> {
 
 pub(crate) enum Outcome {
     Completed(String),
+    CompletedWithWarning(String, String),
     Failed(String),
     Cancelled,
     Unknown(String),
@@ -114,6 +96,8 @@ struct State<T> {
     sequence: u64,
     revision: u64,
     closed: bool,
+    unknown_keys: BTreeSet<(Actor, String)>,
+    unknown_guard_full: bool,
 }
 
 pub(crate) struct Queue<T> {
@@ -134,6 +118,7 @@ impl<T: Clone> Queue<T> {
                 tasks: BTreeMap::new(), fifo: VecDeque::new(), finished: VecDeque::new(),
                 slots: (0..count).map(|_| Slot { epoch: 0, state: SlotState::Offline("executor not connected".into()) }).collect(),
                 sequence: 0, revision: 0, closed: false,
+                unknown_keys: BTreeSet::new(), unknown_guard_full: false,
             }),
             changed,
         })
@@ -186,6 +171,12 @@ impl<T: Clone> Queue<T> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(task) = state.tasks.values().find(|task| task.actor == actor && task.key == key) {
             return if task.text == text { Ok(task.view.clone()) } else { Err("worker request_id was already used with different text".into()) };
+        }
+        if state.unknown_keys.contains(&(actor.clone(), key.to_owned())) {
+            return Err("this worker request_id has an expired unknown result; effects must be reconciled before submitting a new request_id".into());
+        }
+        if state.unknown_guard_full {
+            return Err("worker unknown-result retry guard is full; no new task was admitted; reconcile unknown effects before starting another connection".into());
         }
         if state.closed { return Err("worker pool is closed; no task was admitted".into()); }
         if state.slots.iter().all(|slot| matches!(slot.state, SlotState::Offline(_))) {
@@ -264,9 +255,9 @@ impl<T: Clone> Queue<T> {
         if !cleanup_complete { return Err("owned worker cleanup is incomplete; the slot remains busy".into()); }
         let closed = state.closed;
         let task = state.tasks.get_mut(&lease.task_id).expect("validated lease task");
-        let cancelled = task.view.status == TaskStatus::Cancelling || closed;
         let (status, output, error) = match outcome {
             Outcome::Completed(output) => (TaskStatus::Completed, Some(bounded(&output, MAX_RESULT_BYTES)), None),
+            Outcome::CompletedWithWarning(output, warning) => (TaskStatus::Completed, Some(bounded(&output, MAX_RESULT_BYTES)), Some(bounded(&warning, 4096))),
             Outcome::Failed(error) => (TaskStatus::Failed, None, Some(bounded(&error, 4096))),
             Outcome::Cancelled => (TaskStatus::Cancelled, None, None),
             Outcome::Unknown(error) => (TaskStatus::Unknown, None, Some(bounded(&error, 4096))),
@@ -279,7 +270,7 @@ impl<T: Clone> Queue<T> {
         task.view.updated_ms = now_ms;
         task.view.replay_safe = false;
         let view = task.view.clone();
-        state.slots[lease.slot].state = if reusable && !cancelled && !state.closed {
+        state.slots[lease.slot].state = if reusable && !closed {
             SlotState::Idle
         } else { SlotState::Offline("owned executor stopped; reconnect required".into()) };
         state.finished.push_back(lease.task_id.clone());
@@ -325,6 +316,29 @@ impl<T: Clone> Queue<T> {
             offline: slots.iter().filter(|slot| slot.state == "offline").count(),
             queued: state.fifo.len(), closed: state.closed, slots }
     }
+
+    /// Called only after the entire closed pool's owned scopes have actually
+    /// been observed empty. It resolves cleanup-unknown slots after a failed
+    /// individual shutdown without inventing a successful task result.
+    pub(crate) fn cleaned_closed_pool(&self, now_ms: u64) -> Result<(), String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.closed { return Err("worker pool must be closed before final cleanup".into()); }
+        let mut finished = Vec::new();
+        for task in state.tasks.values_mut() {
+            if matches!(task.view.status, TaskStatus::Working | TaskStatus::Cancelling) {
+                task.view.status = TaskStatus::Unknown;
+                task.view.error = Some("owned execution was stopped without a confirmed result; inspect effects before retrying".into());
+                task.view.replay_safe = false;
+                task.view.updated_ms = now_ms;
+                finished.push(task.view.task_id.clone());
+            }
+        }
+        state.finished.extend(finished);
+        for slot in &mut state.slots { slot.state = SlotState::Offline("connection closed; owned cleanup complete".into()); }
+        trim(&mut state);
+        self.changed(&mut state);
+        Ok(())
+    }
 }
 
 fn valid<T>(state: &State<T>, generation: &str, lease: &Lease<T>) -> bool {
@@ -340,7 +354,15 @@ fn trim<T>(state: &mut State<T>) {
     while state.finished.len() > MAX_FINISHED {
         if let Some(id) = state.finished.pop_front()
             && state.tasks.get(&id).is_some_and(|task| task.view.status.terminal()) {
-            state.tasks.remove(&id);
+            if let Some(task) = state.tasks.remove(&id) && task.view.status == TaskStatus::Unknown {
+                if state.unknown_keys.len() < MAX_UNKNOWN_KEYS {
+                    state.unknown_keys.insert((task.actor, task.key));
+                } else {
+                    // A bounded guard may refuse new work, but must never
+                    // forget uncertain execution and silently replay its key.
+                    state.unknown_guard_full = true;
+                }
+            }
         }
     }
 }

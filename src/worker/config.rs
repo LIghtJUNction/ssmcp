@@ -31,6 +31,7 @@ impl Config {
 /// memory outside the pool is unused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(target_os = "linux", test))]
 pub(crate) struct Capacity {
     pub(crate) cpu_micros_per_second: u64,
     pub(crate) memory_bytes: u64,
@@ -38,12 +39,14 @@ pub(crate) struct Capacity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(target_os = "linux", test))]
 pub(crate) struct Allocation {
     pub(crate) cpu_micros_per_second: u64,
     pub(crate) memory_bytes: u64,
     pub(crate) registered_workers: usize,
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl Capacity {
     pub(crate) fn allocate(self, total: usize, factor: f64) -> Result<Allocation, String> {
         if total == 0 || !factor.is_finite() || factor <= 0.0 {

@@ -15,6 +15,7 @@ pub(crate) struct Unit {
     pub(crate) group: Option<PathBuf>,
     pub(crate) invocation: Option<String>,
     busy: bool,
+    retired: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,6 +36,10 @@ struct Pool {
 struct State { schema: u32, pools: BTreeMap<String, Pool> }
 
 pub(crate) struct Registry { root: PathBuf, boot: String }
+
+pub(crate) enum AdmissionError { Deferred(String), Failed(String) }
+impl From<String> for AdmissionError { fn from(value: String) -> Self { Self::Failed(value) } }
+impl From<&str> for AdmissionError { fn from(value: &str) -> Self { Self::Failed(value.into()) } }
 
 struct Locked { file: File, state: State }
 
@@ -127,15 +132,15 @@ impl Registry {
     /// All existing slots must be at their owned idle checkpoint before their
     /// memory ceilings can decrease. No active model is OOM-killed to admit a
     /// new pool. The new pool remains offline while this returns a busy error.
-    pub(crate) async fn admit(&self, generation: &str, config: Config, capacity: Capacity) -> Result<Vec<Unit>, String> {
+    pub(crate) async fn admit(&self, generation: &str, config: Config, capacity: Capacity) -> Result<Vec<Unit>, AdmissionError> {
         valid_nonce(generation)?;
         let mut locked = self.lock().await?;
         self.prune(&mut locked).await?;
         if locked.state.pools.contains_key(generation) { return Err("worker generation was already admitted".into()); }
-        if locked.state.pools.values().any(|pool| !pool.ready || pool.units.iter().any(|unit| unit.busy)) {
-            return Err("waiting for existing workers to reach their idle resource checkpoint".into());
+        if locked.state.pools.values().any(|pool| !pool.ready || pool.units.iter().any(|unit| !unit.retired && unit.busy)) {
+            return Err(AdmissionError::Deferred("waiting for existing workers to reach their idle resource checkpoint".into()));
         }
-        let total = locked.state.pools.values().map(|pool| pool.units.len()).sum::<usize>()
+        let total = locked.state.pools.values().map(|pool| pool.units.iter().filter(|unit| !unit.retired).count()).sum::<usize>()
             .checked_add(config.count).ok_or("registered worker count overflow")?;
         let budget = locked.state.pools.values().fold(capacity, |budget, pool| Capacity {
             cpu_micros_per_second: budget.cpu_micros_per_second.min(pool.capacity.cpu_micros_per_second),
@@ -146,13 +151,14 @@ impl Registry {
         for (key, pool) in &locked.state.pools {
             let share = budget.allocate(total, pool.config.factor)?;
             for (index, unit) in pool.units.iter().enumerate() {
+                if unit.retired { continue; }
                 let group = owned_group(&pool.generation, unit).await?.ok_or("an admitted worker is no longer connected")?;
                 let current = std::fs::read_to_string(group.join("memory.current")).map_err(|e| e.to_string())?
                     .trim().parse::<u64>().map_err(|_| "invalid worker memory.current")?;
                 // Admission is deferred rather than shrinking underneath the
                 // idle process's current resident/cache charge.
                 if current.saturating_add(1024 * 1024) >= share.memory_bytes {
-                    return Err("waiting for idle worker memory to fit the smaller resource share".into());
+                    return Err(AdmissionError::Deferred("waiting for idle worker memory to fit the smaller resource share".into()));
                 }
                 updates.push((key.clone(), index, share, group));
             }
@@ -164,13 +170,13 @@ impl Registry {
                 // Any already-confirmed reductions stay recorded as stricter
                 // ceilings. Never admit the new slots after a partial update.
                 self.save(&locked)?;
-                return Err(error);
+                return Err(error.into());
             }
             locked.state.pools.get_mut(&key).expect("retained pool").units[index].allocation = share;
         }
         let units: Vec<_> = (0..config.count).map(|slot| Unit {
             name: format!("ssmcp-worker-{generation}-{slot}.scope"), allocation,
-            group: None, invocation: None, busy: false,
+            group: None, invocation: None, busy: false, retired: false,
         }).collect();
         locked.state.pools.insert(generation.into(), Pool {
             generation: generation.into(), pid: std::process::id(), start: limits::identity(std::process::id())?,
@@ -202,6 +208,7 @@ impl Registry {
         let pool = own_pool(&mut locked.state, generation, &self.boot)?;
         if !pool.ready { return Err("worker resource admission is incomplete".into()); }
         let unit = pool.units.get_mut(index).ok_or("worker slot is missing")?;
+        if unit.retired { return Err("worker slot was retired after owned cleanup".into()); }
         if unit.busy { return Err("worker slot is already busy".into()); }
         let group = owned_group(generation, unit).await?.ok_or("worker scope disconnected")?;
         limits::verify(&group, unit.allocation)?;
@@ -218,6 +225,26 @@ impl Registry {
         let group = owned_group(generation, unit).await?.ok_or("worker scope disconnected before idle acknowledgement")?;
         limits::verify(&group, unit.allocation)?;
         unit.busy = false;
+        self.save(&locked)
+    }
+
+    pub(crate) async fn snapshot(&self, generation: &str) -> Result<serde_json::Value, String> {
+        let locked = self.lock().await?;
+        let pool = locked.state.pools.get(generation).ok_or("worker resource admission is incomplete")?;
+        Ok(serde_json::json!({"scope":"current_os_user", "uid":unsafe { libc::geteuid() },
+            "registered_workers":locked.state.pools.values().map(|pool| pool.units.iter().filter(|unit| !unit.retired).count()).sum::<usize>(),
+            "effective_capacity":pool.capacity,"factor":pool.config.factor,"units":pool.units,
+            "note":"Ceilings are the last verified owned-scope limits; dispatch rechecks kernel values. Stricter ceilings may remain after another pool leaves or a partial admission fails."}))
+    }
+
+    pub(crate) async fn retire(&self, generation: &str, index: usize) -> Result<(), String> {
+        let mut locked = self.lock().await?;
+        let Some(pool) = locked.state.pools.get_mut(generation) else { return Ok(()); };
+        let unit = pool.units.get_mut(index).ok_or("worker slot is missing")?;
+        stop_owned(generation, unit).await?;
+        unit.busy = false;
+        unit.retired = true;
+        if pool.units.iter().all(|unit| unit.retired) { locked.state.pools.remove(generation); }
         self.save(&locked)
     }
 
@@ -357,7 +384,11 @@ fn check_show(generation: &str, unit: &Unit, shown: &BTreeMap<String, String>) -
     if unit.invocation.as_ref().is_some_and(|id| shown.get("InvocationID") != Some(id)) {
         return Err("worker unit invocation changed; refusing to touch a replacement".into());
     }
-    let path = shown.get("ControlGroup").filter(|value| !value.is_empty()).ok_or("worker unit has no cgroup")?;
+    let path = match shown.get("ControlGroup").filter(|value| !value.is_empty()) {
+        Some(path) => path,
+        None if shown.get("ActiveState").is_some_and(|state| matches!(state.as_str(), "inactive" | "failed")) => return Ok(None),
+        None => return Err("worker unit has no cgroup".into()),
+    };
     let group = limits::group_path(&format!("0::{path}"))?;
     if group.file_name().and_then(|name| name.to_str()) != Some(&unit.name) {
         return Err("worker unit cgroup does not match its unique name".into());

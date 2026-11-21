@@ -124,3 +124,57 @@ fn failed_execution_is_not_silently_replayed() {
     assert_eq!(pool.snapshot().idle, 1);
     assert!(pool.claim(0, epoch, 4).unwrap().is_none());
 }
+
+#[test]
+fn confirmed_cancel_cleanup_can_reuse_a_live_slot_and_confirmed_results_survive_history_failure() {
+    let pool = queue(1); let epoch = pool.online(0).unwrap(); let who = actor("a");
+    let task = pool.submit(who.clone(), "one", "task", "owner", 1).unwrap();
+    let lease = pool.claim(0, epoch, 2).unwrap().unwrap();
+    pool.cancel(&who, &task.task_id, 3).unwrap();
+    pool.finish(&lease, Outcome::Cancelled, true, true, 4).unwrap();
+    assert_eq!(pool.snapshot().idle, 1);
+    pool.submit(who.clone(), "two", "next", "owner", 5).unwrap();
+    let lease = pool.claim(0, epoch, 6).unwrap().unwrap();
+    let result = pool.finish(&lease, Outcome::CompletedWithWarning("actual reply".into(), "original history unavailable".into()), true, true, 7).unwrap();
+    assert_eq!(result.status, TaskStatus::Completed);
+    assert_eq!(result.output.as_deref(), Some("actual reply"));
+    assert!(result.error.is_some());
+    assert!(pool.cleaned_closed_pool(8).is_err());
+    pool.close(9);
+    pool.cleaned_closed_pool(10).unwrap();
+    assert_eq!(pool.snapshot().working, 0);
+    assert_eq!(pool.snapshot().offline, 1);
+}
+
+#[test]
+fn unknown_result_eviction_keeps_an_actor_bound_retry_tombstone() {
+    let pool = queue(1); let mut epoch = pool.online(0).unwrap(); let who = actor("a");
+    let original = pool.submit(who.clone(), "uncertain", "task", "owner A", 1).unwrap();
+    let lease = pool.claim(0, epoch, 2).unwrap().unwrap();
+    pool.finish(&lease, Outcome::Unknown("reply lost".into()), true, false, 3).unwrap();
+    epoch = pool.online(0).unwrap();
+    for index in 0..MAX_FINISHED {
+        pool.submit(who.clone(), &format!("later-{index}"), "later", "owner A", 4).unwrap();
+        let lease = pool.claim(0, epoch, 5).unwrap().unwrap();
+        pool.finish(&lease, Outcome::Completed("done".into()), true, true, 6).unwrap();
+    }
+    assert!(pool.result(&who, &original.task_id).is_err());
+    assert!(pool.submit(who, "uncertain", "task", "new owner", 7).unwrap_err().contains("expired unknown"));
+    assert_eq!(pool.snapshot().queued, 0);
+    assert!(pool.submit(actor("b"), "uncertain", "unrelated", "owner B", 8).is_ok());
+}
+
+#[test]
+fn full_unknown_retry_guard_refuses_new_admission_instead_of_forgetting_effects() {
+    let pool = queue(1); let mut epoch = pool.online(0).unwrap(); let who = actor("a");
+    let mut last = None;
+    for index in 0..MAX_FINISHED + MAX_UNKNOWN_KEYS + 1 {
+        last = Some(pool.submit(who.clone(), &format!("unknown-{index}"), "task", "owner", 1).unwrap());
+        let lease = pool.claim(0, epoch, 2).unwrap().unwrap();
+        pool.finish(&lease, Outcome::Unknown("no confirmed reply".into()), true, false, 3).unwrap();
+        epoch = pool.online(0).unwrap();
+    }
+    assert!(pool.submit(who.clone(), "new", "task", "owner", 4).unwrap_err().contains("guard is full"));
+    assert_eq!(pool.result(&who, &last.unwrap().task_id).unwrap().status, TaskStatus::Unknown);
+    assert_eq!(pool.snapshot().queued, 0);
+}

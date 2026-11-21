@@ -280,6 +280,9 @@ pub struct Runtime {
     tool_call_hook: Mutex<Option<Arc<dyn hooks::ToolCallHook>>>,
     catalog: Catalog,
     sessions: Option<crate::session::control::Control>,
+    tool_root: PathBuf,
+    #[cfg(target_os = "linux")]
+    workers: Mutex<Option<Arc<crate::worker::Pool>>>,
 }
 impl Runtime {
     pub fn new(backend: Arc<Backend>, root: PathBuf) -> Result<Arc<Self>, String> {
@@ -317,7 +320,7 @@ impl Runtime {
                 Definition::new(time.clone()),
             ],
         )?;
-        let plugins = plugins::Plugins::new(root, registry.clone());
+        let plugins = plugins::Plugins::new(root.clone(), registry.clone());
         registry.replace(Provider::Client, capabilities::tools())?;
         for (provider, tools) in native.catalogs()? {
             // Time passivity is a server delivery guarantee. A new client must
@@ -358,6 +361,9 @@ impl Runtime {
             tool_call_hook: Mutex::new(None),
             catalog: Catalog::default(),
             sessions,
+            tool_root: root,
+            #[cfg(target_os = "linux")]
+            workers: Mutex::new(None),
         });
         crate::client::interface::harness::bind(&runtime);
         crate::client::completion::bind(&runtime);
@@ -431,6 +437,13 @@ impl Runtime {
         self.backend.wait_discovery().await
     }
     pub fn validate_reload(&self) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+            let state = pool.queue.snapshot();
+            if state.working != 0 || state.queued != 0 {
+                return Err("finish or cancel worker tasks and wait for owned cleanup before reloading this connection".into());
+            }
+        }
         let tool = self.registry.lookup(crate::client::reload::TOOL)?;
         if tool.provider != Provider::Reload {
             return Err("reload provider mismatch".into());
@@ -443,6 +456,30 @@ impl Runtime {
     /// Opaque runtime generation used to reject work retained across reconnects.
     pub(crate) fn connection_generation(&self) -> u64 {
         self.call_connection
+    }
+
+    pub(crate) fn configure_workers(&self, config: crate::worker::Config, agent: &crate::client::chat_io::Agent) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        {
+            let pool = crate::worker::Pool::new(config, agent, self.tool_root.clone())?;
+            self.registry.replace(Provider::Worker, crate::worker::Pool::tools())?;
+            *self.workers.lock().unwrap_or_else(|error| error.into_inner()) = Some(pool);
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        { let _ = (config, agent); Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into()) }
+    }
+
+    pub(crate) fn start_workers(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone() { pool.start(); }
+    }
+
+    pub(crate) fn stop_workers(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+            pool.queue.close(crate::worker::now_ms());
+        }
     }
 
     pub(crate) fn bind_client_id(&self, client_id: &str) -> Result<(), String> {
@@ -714,6 +751,11 @@ impl Runtime {
                     None => Err("session management was not granted with --session-control".into()),
                 },
                 Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+                #[cfg(target_os = "linux")]
+                Provider::Worker => {
+                    let pool = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone().ok_or("worker mode was not configured")?;
+                    pool.perform(&tool.native_name, arguments, self).await.map(backend::result)
+                }
                 Provider::Plugins => self.plugins.perform(&tool, arguments).await,
                 provider if self.native.contains(provider) => {
                     let dispatch = source.clone().scope(self.native.call(&tool, arguments));
@@ -851,6 +893,13 @@ impl Runtime {
     }
     pub async fn shutdown(&self) {
         self.registry.close();
+        #[cfg(target_os = "linux")]
+        {
+            let pool = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone();
+            if let Some(pool) = pool && let Err(error) = pool.shutdown().await {
+                self.audit.push(json!({"type":"ssmcp.worker.cleanup_failed","cleanup_complete":false,"error":error}));
+            }
+        }
         self.catalog
             .snapshots
             .lock()
@@ -1262,3 +1311,4 @@ mod tests {
         );
     }
 }
+

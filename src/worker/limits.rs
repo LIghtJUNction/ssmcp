@@ -1,5 +1,6 @@
 //! Effective Linux capacity and exact cgroup readback. No limit is inferred from
 //! a successful `systemd-run` exit alone, and MemAvailable is not the budget.
+#[cfg(target_os = "linux")]
 use super::config::{Allocation, Capacity};
 use std::path::{Component, Path, PathBuf};
 
@@ -43,6 +44,7 @@ pub(crate) fn identity(pid: u32) -> Result<u64, String> {
     process_start(&std::fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|e| e.to_string())?)
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn verify(group: &Path, allocation: Allocation) -> Result<(), String> {
     let read = |name: &str| std::fs::read_to_string(group.join(name)).map_err(|e| format!("worker {name} readback: {e}"));
     let cpu = cpu_limit(&read("cpu.max")?)?.ok_or("worker CPU quota was not installed")?;

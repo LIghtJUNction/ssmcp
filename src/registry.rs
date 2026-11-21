@@ -24,6 +24,8 @@ pub enum Provider {
     Output,
     Reload,
     Sessions,
+    #[cfg(target_os = "linux")]
+    Worker,
     Audit,
     Codex,
     Claude,
@@ -57,6 +59,8 @@ impl Provider {
             Self::Output => "output",
             Self::Reload => "reload",
             Self::Sessions => "sessions",
+            #[cfg(target_os = "linux")]
+            Self::Worker => "worker",
             Self::Audit => "audit",
             Self::Codex => "codex",
             Self::Claude => "claude",
@@ -396,6 +400,8 @@ fn prepare(
             Provider::Output => id.starts_with("ssmcp.output."),
             Provider::Reload => id == "ssmcp.client.reload",
             Provider::Sessions => id.starts_with("ssmcp.session."),
+            #[cfg(target_os = "linux")]
+            Provider::Worker => matches!(id.as_str(), "ssmcp.worker.status" | "ssmcp.worker.submit" | "ssmcp.worker.result" | "ssmcp.worker.cancel"),
             Provider::Audit => id == "ssmcp.audit.events",
             Provider::Codex => id.starts_with("codex.") || id.starts_with("ssmcp.codex."),
             Provider::Claude => true,
@@ -581,3 +587,4 @@ mod tests {
         assert!(registry.catalog().unwrap().is_empty());
     }
 }
+
