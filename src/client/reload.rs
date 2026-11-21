@@ -170,12 +170,49 @@ impl Restart {
         // Old requests, commands and backends have already stopped. Clean only
         // registered temporary files before creating the new reload handoff.
         // A cleanup error must not discard the draft or replace a reload error.
-        if let Err(error) = crate::managed_files::cleanup(&self.cwd, false, "reload") {
-            super::render::status(
+        match crate::managed_files::cleanup(&self.cwd, false, "reload") {
+            Ok(summary)
+                if !summary.errors.is_empty()
+                    || !summary.recoveries.is_empty()
+                    || !summary.retention.recoveries.is_empty()
+                    || summary.scan_truncated =>
+            {
+                let errors = summary.errors.len();
+                let recoveries = summary.recoveries.len() + summary.retention.recoveries.len();
+                let truncated = summary.scan_truncated;
+                // Preserve only redacted metadata, never file contents. Spill
+                // even a short diagnostic so it survives the following exec
+                // under the existing output owner, quota and retention policy.
+                let diagnostic = crate::audit::event(json!({
+                    "type": "ssmcp.files.cleanup",
+                    "trigger": "reload",
+                    "summary": summary,
+                }));
+                let mut capture = output.capture("managed-files:reload:json");
+                let saved = capture.spill()
+                    .and_then(|()| capture.push(diagnostic.to_string().as_bytes()));
+                let saved = saved.and(capture.finish());
+                let mut details = capture.metadata().map_or_else(
+                    || "diagnostic archive unavailable".to_owned(),
+                    |metadata| format!("diagnostic {} ({})", metadata.id, metadata.path),
+                );
+                if let Err(error) = saved {
+                    details.push_str(&format!("; diagnostic is incomplete: {error}"));
+                }
+                super::render::status(
+                    "cleanup",
+                    "Warning",
+                    &format!(
+                        "Reload cleanup: {errors} errors, {recoveries} recoveries, scan_truncated={truncated}; {details}"
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => super::render::status(
                 "files",
                 "Warning",
                 &format!("Temporary-file cleanup was skipped: {error}"),
-            );
+            ),
         }
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.arguments).current_dir(&self.cwd);
