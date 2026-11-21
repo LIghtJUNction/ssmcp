@@ -3,10 +3,10 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
-struct Temporary(PathBuf);
+pub(super) struct Temporary(pub(super) PathBuf);
 
 impl Temporary {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let path = std::env::temp_dir().join(format!("ssmcp-zuse-cli-{}", storage::id().unwrap()));
         crate::platform::private_directory(&path).unwrap();
         Self(path)
@@ -398,11 +398,11 @@ async fn version_queries_the_actual_fake_cli_and_rejects_wrong_identity() {
     let temporary = Temporary::new();
     let path = temporary.0.join("zuse");
     fake_cli(&path, "printf 'zuse 0.4.0\\n'");
-    let actual = probe::version(&path).await.unwrap();
+    let actual = probe::version(&path, std::future::pending()).await.unwrap();
     assert_eq!(actual["version"], "0.4.0");
     assert_eq!(actual["sha256"], release::digest(&fs::read(&path).unwrap()));
     fake_cli(&path, "printf 'different-program 0.4.0\\n'");
-    assert!(probe::version(&path).await.is_err());
+    assert!(probe::version(&path, std::future::pending()).await.is_err());
 }
 
 #[cfg(unix)]
@@ -412,7 +412,7 @@ async fn version_has_a_real_deadline_and_owned_process_cleanup() {
     let path = temporary.0.join("zuse");
     fake_cli(&path, "exec sleep 30");
     assert!(
-        probe::version(&path)
+        probe::version(&path, std::future::pending())
             .await
             .unwrap_err()
             .contains("deadline")

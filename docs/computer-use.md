@@ -1,6 +1,6 @@
 # Zuse CLI 管理与桌面、浏览器任务
 
-SSMCP 的 `computer` 工具只管理独立的 Zuse CLI：查询版本、下载、安装和卸载。桌面与浏览器程序直接交给 Zuse CLI，通过通用 `exec` 运行。SSMCP 不内置桌面适配器、CDP 浏览器、Omarchy 动作、Playwright 专用桥或内部 Zuse worker，也不在调用失败时切换到这些实现。
+SSMCP 的四个远程 `computer` 工具管理独立 Zuse CLI。本机命令可调用该 CLI 观察明确指定的窗口或页面容器。SSMCP 不内置桌面适配器、CDP 浏览器、Omarchy 动作、Playwright 专用桥或内部 Zuse worker，也不在调用失败时切换到这些实现。
 
 本页说明当前源码的接口。已发布的旧客户端可能提供不同目录；先从 `list` 选定客户端，再读取它实际注册的工具和 schema。[管理器](../src/computer.rs) · [CLI 参数](../src/client/computer_control.rs) · [通用命令](code-mode.md#exec)
 
@@ -30,6 +30,27 @@ ssmcp computer uninstall INSTALLATION_ID_FROM_REPLY --json
 
 `--json` 输出完整 MCP 结果；默认输出结果正文。下载结果正文中读取 `download_id`，安装结果正文中读取 `installation_id` 与可执行文件 `path`。这些命令不会自动把后续步骤串起来。SSMCP 自身的版本仍由 `ssmcp --version` 查询。
 
+## 本机限定目标观察
+
+`ssmcp computer check` 使用实际选中的 CLI 读取 `--version` 和 `schema`，然后用无桌面 I/O 的计时器测试 `eval`、从标准输入读取的 `run -` 和保留状态的 `shell`。观察适配器支持从 0.4.2 起的 0.4.x 合同。每次观察会核对该操作的参数类型、必填项与只读标记；CLI 缺失、版本不匹配、进程退出失败或回执不完整都会给出错误。
+
+在本机显式授权后，每次调用指定一个目标。下面的大写参数须替换为已确认的实际值：
+
+```sh
+ssmcp computer observation status
+ssmcp computer observation on
+ssmcp computer locate-window WINDOW_ID "EXACT_LABEL"
+ssmcp computer observe-tab LOOPBACK_PORT PAGE_TARGET_ID "CSS_CONTAINER"
+ssmcp computer observation off
+```
+
+- `locate-window` 通过 `eval --read-only` 调用 `target.locate`。窗口必须有明确的原生 ID，并能由 Zuse 验证映射状态、进程身份和唯一节点。回执还须与请求的窗口 ID 和标签一致。
+- `observe-tab` 使用 `run -` 将固定程序送给 CLI。它只连接 `127.0.0.1` 上指定页面的 DevTools WebSocket，读取一个唯一匹配的 DOM 容器并断开连接。Zuse 的连接回执可能含有标签页列表，SSMCP 只输出所选容器。端口必须属于已确认的本机浏览器。
+- 观察授权有独立的默认关闭记录。它与旧版键鼠许可分别存储。每个请求绑定授权时的代次，关闭后再开启也不能恢复旧请求。用 Ctrl+C 取消单次调用，用 `observation off` 撤销本机观察；显式 `ssmcp computer off` 或 `/computer off` 同时关闭两套许可。四个远程管理工具的目录保持原样。
+- 当前 CLI 没有旧内置库的逐次输入派发许可回调。需要该保证的键鼠输入、后台点击和等待后自动输入仍待接入。普通 exec 作业具有独立的 OS 权限，不能用来绕过此许可。
+
+[本机调用与回执校验](../src/computer/inspect.rs) · [观察许可与撤销](../src/computer_control.rs)
+
 ## 兼容旧版 SSMCP 的手动开关
 
 默认 `Super + Alt + C` 快捷键已移除。以下入口保留为显式、手动的旧版兼容命令：
@@ -47,7 +68,7 @@ ssmcp computer toggle
 
 `status` 不创建目录、不初始化默认 On，也不改变已有状态。无有效旧记录时返回 `available:false, mode:"unset"`；读取或安全检查失败时返回 `mode:"unavailable"` 和实际错误。只有显式 on/off/toggle 才写状态；记录缺失时，toggle 按旧缺失记录的 Off 值切换为 On，不冒充此前已有有效状态。损坏记录不能被 On 或 toggle 静默接受，显式 Off 可以按原协议修复损坏内容，仍须通过所有权、权限和文件身份检查。
 
-所有兼容输出都标明 `compatibility_only:true`、`controls_this_version:false`、`standalone_zuse_controlled:false`。当前版本没有这些旧动作消费者；普通 exec 和独立 Zuse CLI 不读这个开关，常规使用无需先运行 On 或取得 takeover。显式 Off 成功只证明旧状态已发布，不证明正在执行的旧操作已经全部退出、已送达的动作被撤销，或独立 CLI 已停止。
+所有兼容输出都标明 `compatibility_only:true`、`controls_this_version:false`、`standalone_zuse_controlled:false`。当前版本没有这些旧动作消费者；普通 exec 和独立 Zuse CLI 不读这个开关，常规使用无需先运行 On 或取得 takeover。显式 Off 也会撤销本机限定目标观察，结果包含 `scoped_observations_disabled:true`。旧状态成功发布不证明正在执行的旧操作已经全部退出、已送达的动作被撤销，或独立 CLI 已停止。
 
 ## 版本、来源与平台
 
@@ -91,8 +112,8 @@ return job;
 
 ## 从旧接口迁移
 
-旧的 `ssmcp.browser.*`、`ssmcp.omarchy.*`、`cua` / `browser` / `omarchy` 便捷命名空间，以及 `computer` 中的截图、键鼠、窗口和私有桌面动作已撤去。`ssmcp setup browser`、Playwright 专用加载与内部 worker 入口也不再提供。发现这些旧调用时，改写为独立 Zuse 程序和通用命令调用。
+旧的 `ssmcp.browser.*`、`ssmcp.omarchy.*`、`cua` / `browser` / `omarchy` 便捷命名空间，以及 `computer` 中的截图、键鼠、窗口和私有桌面动作已撤去。`ssmcp setup browser`、Playwright 专用加载与内部 worker 入口也不再提供。迁移旧调用时，先核对目标与授权。需要原有逐次输入许可的动作仍待 CLI 支持。
 
-显式手动开关只保留上文说明的旧版兼容范围，默认快捷键已移除。普通 exec 仍使用启动客户端的操作系统权限；SSMCP 不宣称能够撤销同一系统用户通过其他 Shell 或程序获得的桌面权限。需要操作系统隔离时，应配置明确的账户、会话或沙箱边界。
+显式手动 Off 同时关闭上文两套许可，默认快捷键已移除。普通 exec 仍使用启动客户端的操作系统权限；SSMCP 不宣称能够撤销同一系统用户通过其他 Shell 或程序获得的桌面权限。需要操作系统隔离时，应配置明确的账户、会话或沙箱边界。
 
 OAuth 登录在浏览器中打开授权页、用户显式打开链接，以及已授权外部 MCP 的通用转发仍保留；这些能力不恢复旧内置动作工具。历史实机报告只记录当时实现，不作为这次迁移的验证成绩。

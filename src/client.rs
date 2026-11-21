@@ -268,8 +268,8 @@ Use the standalone Zuse CLI directly for desktop and browser operations.
 SSMCP does not embed computer or browser control. The local `ssmcp computer`
 command queries, downloads, installs or uninstalls the Zuse CLI (default: version).
 Managed installs do not replace an external executable or change PATH.
-Explicit on/off/toggle/status, or /computer in chat, operate only the legacy
-SSMCP compatibility switch. They do not control standalone Zuse or ordinary exec.
+Use computer check for CLI compatibility and computer --help for target-bound local observations.
+Explicit computer off or /computer off revokes legacy input and these observations. Standalone Zuse and ordinary exec use OS permissions.
 No default or global shortcut is installed for this compatibility switch.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.

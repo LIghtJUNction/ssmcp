@@ -67,6 +67,15 @@ impl Store {
         Ok(Self { root })
     }
 
+    /// A separate private sibling prevents a legacy input grant from authorizing observations.
+    pub(super) fn observations(&self) -> Self {
+        let mut directory = self.root.as_os_str().to_owned();
+        directory.push("-zuse-observation");
+        Self {
+            root: directory.into(),
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn at(root: PathBuf) -> Self {
         Self { root }

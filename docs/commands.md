@@ -63,9 +63,11 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 
 ### 兼容旧版 SSMCP 的显式开关
 
-`ssmcp computer on|off|toggle|status [--json]` 和聊天中的 `/computer [status|on|off|toggle]` 保留为手动兼容入口。它们只读写同一系统用户的旧 SSMCP 状态，供仍遵守旧门禁的版本使用；不控制本版工具、普通 exec 或独立 Zuse CLI，也不恢复默认 `Super + Alt + C` 绑定。省略 CLI 子命令仍查询 Zuse `version`；仅聊天中的 `/computer` 默认查看兼容 `status`。
+`ssmcp computer on|off|toggle|status [--json]` 和聊天中的 `/computer [status|on|off|toggle]` 保留为手动兼容入口。开关状态供遵守旧门禁的版本使用，显式 Off 同时撤销本机限定目标观察。独立 Zuse 和普通 exec 使用 OS 权限。客户端已移除默认 `Super + Alt + C` 绑定。省略 CLI 子命令仍查询 Zuse `version`；仅聊天中的 `/computer` 默认查看兼容 `status`。
 
-兼容命令的 `--json` 返回兼容状态本身，不是生命周期工具的 MCP 包。`status` 不创建或初始化状态：无有效旧记录为 `unset`，读取失败为 `unavailable`，都不能解释成 CLI 已被关闭。显式 Off 成功只说明旧状态已发布，不能据此宣称所有旧动作已清理或独立程序已停止。[状态与锁协议](../src/computer_control/storage.rs)
+本机使用 `ssmcp computer check` 核对独立 CLI 合同。使用 `observation on|off|status` 管理单独的观察许可，使用 `locate-window WINDOW_ID EXACT_LABEL` 或 `observe-tab PORT TARGET_ID CSS_CONTAINER` 读取明确目标。[限定目标观察](computer-use.md#本机限定目标观察)
+
+兼容命令的 `--json` 返回兼容状态本身，不是生命周期工具的 MCP 包。`status` 不创建或初始化状态：无有效旧记录为 `unset`，读取失败为 `unavailable`，都不能解释成 CLI 已被关闭。显式 Off 成功表示兼容状态已发布并已撤销本机限定目标观察，不能据此宣称所有旧动作已清理或独立程序已停止。[状态与锁协议](../src/computer_control/storage.rs)
 
 ## 前台观察与终端输入
 

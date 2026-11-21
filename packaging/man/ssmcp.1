@@ -527,6 +527,16 @@ internal worker or hidden fallback. The default Super+Alt+C binding remains remo
 Generic exec uses the client's operating-system permissions; it does not revoke
 other programs' desktop access. OAuth browser login, explicit local navigation
 and authorized generic external MCP forwarding remain supported.
+.SH LOCAL TARGET OBSERVATIONS
+.B ssmcp computer check
+verifies the standalone CLI version, schema and eval/run/shell timer receipts.
+.B ssmcp computer observation on|off|status
+manages a separate observation grant for this OS user.
+.B ssmcp computer locate-window WINDOW_ID EXACT_LABEL
+locates a unique accessible node in the named native window.
+.B ssmcp computer observe-tab PORT PAGE_TARGET_ID CSS_CONTAINER
+reads a unique container through the specified loopback page WebSocket.
+Use Ctrl+C for one invocation or observation off to revoke the grant.
 .SH LEGACY SSMCP COMPATIBILITY SWITCH
 .B ssmcp computer
 .IR "on | off | toggle | status"
@@ -538,7 +548,8 @@ with status, on, off or toggle; no argument reads status.
 The CLI with no subcommand still queries the standalone Zuse version.
 .PP
 These commands share the old same-OS-user state.json and generation protocol.
-They do not control this version's tools, ordinary exec or standalone Zuse.
+Explicit computer off also disables local target observations.
+Ordinary exec and standalone Zuse use OS permissions.
 The four native computer tools remain lifecycle operations only; no remote
 computer.on/off/toggle/status or ui.action switch is registered.
 Standalone Zuse use requires no switch or takeover step.

@@ -253,3 +253,34 @@ fn oversized_unknown_schema_and_zero_on_generation_fail_closed() {
         assert_eq!(fs::read(fixture.root.join("state.json")).unwrap(), bytes);
     }
 }
+
+#[tokio::test]
+async fn observation_grant_is_separate_from_legacy_input_and_old_tickets_stay_revoked() {
+    let fixture = Fixture::new();
+    let legacy = Store::at(fixture.root.join("legacy"));
+    crate::platform::private_directory(&fixture.root).unwrap();
+    let scope = legacy.observations();
+    assert!(ObservationPermit::acquire(legacy.observations()).is_err());
+    legacy.update(Some(true)).unwrap();
+    assert!(ObservationPermit::acquire(legacy.observations()).is_err());
+    legacy.update(Some(false)).unwrap();
+    scope.update(Some(true)).unwrap();
+    assert!(!legacy.read().unwrap().unwrap().enabled);
+    let permit = ObservationPermit::acquire(legacy.observations()).unwrap();
+    permit.check().unwrap();
+    let (_, reason) = tokio::join!(
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            let off = disable(&legacy).unwrap();
+            assert_eq!(off["scoped_observations_disabled"], true);
+            scope.update(Some(true)).unwrap();
+        },
+        tokio::time::timeout(std::time::Duration::from_secs(1), permit.revoked())
+    );
+    assert!(reason.unwrap().contains("revoked"));
+    assert!(permit.check().is_err());
+    ObservationPermit::acquire(legacy.observations())
+        .unwrap()
+        .check()
+        .unwrap();
+}

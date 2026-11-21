@@ -1,9 +1,10 @@
-//! Lifecycle management for the independent Zuse CLI.
+//! Lifecycle management and local, target-bound observation through standalone Zuse.
 //!
-//! SSMCP does not execute Zuse programs or provide desktop/browser actions.
+//! Only lifecycle operations are registered as remote tools.
 //! Installations are private and receipt-bound; external PATH entries are never
 //! replaced, downgraded, or removed.
 mod archive;
+pub(crate) mod inspect;
 mod probe;
 mod release;
 mod storage;
@@ -103,7 +104,7 @@ impl Computer {
         let body = match name {
             "ssmcp.computer.version" => {
                 parse::<Empty>(args)?;
-                self.version().await?
+                self.version(std::future::pending()).await?
             }
             "ssmcp.computer.download" => {
                 let args: DownloadArgs = parse(args)?;
@@ -147,18 +148,17 @@ impl Computer {
             .ok_or_else(|| "Zuse manager storage is unavailable".into())
     }
 
-    async fn version(&self) -> Result<Value, String> {
+    async fn version(&self, stopped: impl Future<Output = String>) -> Result<Value, String> {
         // An existing external entry always wins. A broken/unsupported entry is
         // reported as an error instead of silently falling back to another CLI.
-        if let Ok(selected) = crate::platform::executable("zuse") {
-            let path = crate::program::selected_entry(&selected, "zuse")?;
+        if let Some(path) = probe::path_entry(std::env::var_os("PATH").as_deref())? {
             let store = storage::Store::open(&self.root, false)?;
             let owned = store
                 .as_ref()
                 .map(|store| store.matching(&path))
                 .transpose()?
                 .flatten();
-            let mut result = probe::version(&path).await?;
+            let mut result = probe::version(&path, stopped).await?;
             result["managed"] = json!(owned.is_some());
             result["source"] = json!(if owned.is_some() { "ssmcp" } else { "external" });
             result["installation_id"] = json!(owned.map(|receipt| receipt.installation_id));
@@ -170,7 +170,7 @@ impl Computer {
         let Some(receipt) = store.latest()? else {
             return Ok(json!({"available": false, "managed": false, "reason": "not_installed"}));
         };
-        let mut result = probe::version(&store.executable(&receipt)).await?;
+        let mut result = probe::version(&store.executable(&receipt), stopped).await?;
         if result["version"] != receipt.release.version {
             return Err("Managed Zuse --version differs from its official release receipt".into());
         }

@@ -194,7 +194,7 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 `/computer` 或 `/computer status` 只观察旧版共享状态；`/computer on`、`/computer off`、`/computer toggle` 是显式手动操作。命令经本地队列在终端绘制锁之外执行，保留当前草稿。界面始终标明“旧版 SSMCP 兼容开关 · 不控制独立 Zuse CLI”；没有有效旧记录时显示“未设置”，读取失败显示“不可用”。状态查询不创建目录或初始化默认 On。
 
-这些命令只供仍读取旧协议的 SSMCP 会话使用，不控制当前四个 Zuse 管理工具、普通 exec 或独立 Zuse CLI。独立 CLI 常规操作无需先切换开关或进入 takeover。默认 `Super + Alt + C` 保持移除，普通 Alt+C 复制模式不变；不会安装全局快捷键。`ssmcp.ui.get` 的 `computer` 字段是只读快照，远程 `ui.action` 不提供开关操作。Off 成功只说明旧状态已发布，不证明旧动作已全部清理。[完整兼容范围](computer-use.md#兼容旧版-ssmcp-的手动开关)
+旧状态供读取旧协议的 SSMCP 会话使用。显式 Off 同时撤销本机限定目标观察。开关不控制当前四个 Zuse 管理工具、普通 exec 或独立 Zuse CLI。独立 CLI 常规操作无需先切换开关或进入 takeover。默认 `Super + Alt + C` 保持移除，普通 Alt+C 复制模式不变；不会安装全局快捷键。`ssmcp.ui.get` 的 `computer` 字段是只读快照，远程 `ui.action` 不提供开关操作。旧动作的清理结果须由原会话确认。[完整兼容范围](computer-use.md#兼容旧版-ssmcp-的手动开关)
 
 ## 本地历史标题与摘要
 

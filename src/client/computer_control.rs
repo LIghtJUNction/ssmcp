@@ -1,5 +1,6 @@
 //! Local Zuse lifecycle commands and an explicit manual legacy compatibility switch.
 use super::interface::computer::{self as compatibility, Action as CompatibilityAction};
+use crate::computer::inspect::Request as Observation;
 use std::ffi::OsString;
 
 use serde_json::{Value, json};
@@ -8,6 +9,10 @@ const HELP: &str = "\
 Usage: ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
                      [--json]
        ssmcp computer <on|off|toggle|status> [--json]
+       ssmcp computer observation <on|off|status>
+       ssmcp computer check
+       ssmcp computer locate-window WINDOW_ID EXACT_LABEL
+       ssmcp computer observe-tab LOOPBACK_PORT PAGE_TARGET_ID CSS_CONTAINER
 
 Manage the standalone Zuse CLI. Desktop and browser operations run directly in Zuse;
 SSMCP does not embed those controls or provide an action proxy.
@@ -23,8 +28,11 @@ Use the returned installation path directly, or configure your own PATH explicit
 --json returns the complete native MCP result for lifecycle commands.
 
 旧版 SSMCP 兼容开关：on / off / toggle / status · 不控制独立 Zuse CLI
-These explicit manual commands share only the old SSMCP provider state. They do
-not control this version's tools or ordinary exec, and install no keyboard binding.
+Use observation on to authorize scoped observations separately from legacy input.
+observation off, computer off and Ctrl+C revoke in-flight observations.
+check verifies the CLI contract using
+a timer without opening a window or connecting to a page. Results are JSON.
+Ordinary exec and standalone Zuse outside these commands use OS permissions.
 status only observes existing state; an absent record is unset, not an Off claim.
 --json returns the compatibility state for these four manual commands.
 ";
@@ -32,6 +40,8 @@ status only observes existing state; an absent record is unset, not an Off claim
 #[derive(Debug, PartialEq)]
 enum Request {
     Help,
+    Inspect(Observation),
+    ObservationState(Option<bool>),
     Compatibility {
         action: CompatibilityAction,
         json: bool,
@@ -47,6 +57,24 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
     if args.len() == 1 && matches!(args[0].to_str(), Some("-h" | "--help")) {
         return Ok(Request::Help);
     }
+    // A target's accessible label or selector is literal data, including "--json".
+    if let [op, window, label] = args
+        && op == "locate-window"
+    {
+        return Ok(Request::Inspect(Observation::locate(
+            window.to_str().ok_or("window ID must be UTF-8")?,
+            label.to_str().ok_or("accessible label must be UTF-8")?,
+        )?));
+    }
+    if let [op, port, page, selector] = args
+        && op == "observe-tab"
+    {
+        return Ok(Request::Inspect(Observation::observe(
+            port.to_str().ok_or("port must be UTF-8")?,
+            page.to_str().ok_or("page ID must be UTF-8")?,
+            selector.to_str().ok_or("selector must be UTF-8")?,
+        )?));
+    }
     let mut operands = Vec::new();
     let mut json = false;
     for arg in args {
@@ -58,6 +86,13 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
         } else {
             operands.push(value);
         }
+    }
+    match operands.as_slice() {
+        ["observation", "on"] => return Ok(Request::ObservationState(Some(true))),
+        ["observation", "off"] => return Ok(Request::ObservationState(Some(false))),
+        ["observation", "status"] => return Ok(Request::ObservationState(None)),
+        ["check"] => return Ok(Request::Inspect(Observation::Check)),
+        _ => {}
     }
     let compatibility = match operands.as_slice() {
         ["on"] => Some(CompatibilityAction::On),
@@ -97,6 +132,13 @@ pub(crate) async fn dispatch(args: &[OsString]) -> crate::Result<bool> {
     }
     match parse(&args[1..])? {
         Request::Help => print!("{HELP}"),
+        Request::ObservationState(enabled) => {
+            println!("{}", crate::computer_control::observation_state(enabled)?)
+        }
+        Request::Inspect(request) => {
+            let computer = crate::computer::Computer::new(std::env::current_dir()?)?;
+            println!("{}", computer.inspect_local(request).await?);
+        }
         Request::Compatibility { action, json } => {
             let state = compatibility::apply(action)?;
             if json {
@@ -206,6 +248,25 @@ mod tests {
         ));
         assert!(HELP.contains("旧版 SSMCP 兼容开关"));
         assert!(HELP.contains("不控制独立 Zuse CLI"));
+    }
+
+    #[test]
+    fn local_observations_keep_literal_targets_and_reject_open_programs() {
+        assert_eq!(
+            parse(&args(&["locate-window", "0x24", "--json"])).unwrap(),
+            Request::Inspect(Observation::locate("0x24", "--json").unwrap())
+        );
+        assert_eq!(
+            parse(&args(&["observe-tab", "9", "FIXTURE", "#scope"])).unwrap(),
+            Request::Inspect(Observation::observe("9", "FIXTURE", "#scope").unwrap())
+        );
+        assert_eq!(
+            parse(&args(&["observation", "on"])).unwrap(),
+            Request::ObservationState(Some(true))
+        );
+        for cmd in ["eval", "run", "shell", "click", "launch"] {
+            assert!(parse(&args(&[cmd, "arbitrary"])).is_err());
+        }
     }
 
     #[test]

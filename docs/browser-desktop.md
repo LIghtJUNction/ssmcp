@@ -1,8 +1,12 @@
 # Standalone Zuse for desktop and browser tasks
 
-Desktop and browser operations run directly in the standalone Zuse CLI through SSMCP's generic exec tools. SSMCP supplies connection authorization, literal argv, process ownership and output collection. Its computer tools manage the CLI installation; they do not implement a browser or desktop action protocol.
+SSMCP uses standalone Zuse for local window and browser observations. The four remote computer tools manage the CLI installation. Separately authorized programs can run as owned exec jobs with literal argv and captured output.
 
 Start with the [four lifecycle tools](computer-use.md). Query the actual executable, read that version's `--help` and `schema`, then prepare a Zuse program for the authorized target. Do not infer supported operations from an old SSMCP tool catalog.
+
+## Inspect a single target locally
+
+Use `ssmcp computer check` to verify the installed CLI with a timer. For window and DOM observations, the local operator grants `ssmcp computer observation on` and supplies the exact window or page target to `locate-window` or `observe-tab`. Use `observation off` to revoke these calls. An ordinary exec job does not enforce the local observation grant. Input workflows requiring a per-dispatch SSMCP permit remain unavailable through the CLI adapter. [Local observations](computer-use.md#本机限定目标观察)
 
 ## Run an explicit program
 

@@ -71,6 +71,9 @@ pub(crate) fn describe(state: &Value) -> String {
         _ => "不可用",
     };
     let mut message = format!("旧版 SSMCP 兼容开关：{mode} · 不控制独立 Zuse CLI");
+    if state["scoped_observations_disabled"] == true {
+        message.push_str(" · 已关闭本机限定目标观察");
+    }
     if let Some(error) = state["error"].as_str() {
         message.push_str(" · ");
         message.push_str(&crate::client::panel::safe_text(error));

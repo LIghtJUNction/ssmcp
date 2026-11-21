@@ -231,7 +231,7 @@ ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
 
 版本来自实际 CLI 的 `--version`。下载选择官方稳定版并核验资产身份、大小与 SHA-256；安装仅写入当前管理器的私有目录，不覆盖外部 Zuse、不修改 PATH。使用返回的可执行路径运行任务；卸载必须提供真实 `installation_id`，且所有权和字节仍匹配。[四个管理工具与示例](docs/computer-use.md)
 
-默认 `Super + Alt + C` 快捷键已移除。显式 `ssmcp computer on|off|toggle|status` 与聊天中的 `/computer` 保留为**旧版 SSMCP 兼容开关**，只供仍读取旧协议的 SSMCP 会话使用；它不控制本版工具、通用 exec 或独立 Zuse CLI。独立 CLI 常规使用无需先切换或取得 takeover。`status` 只观察已有记录，缺失显示“未设置”。[兼容开关的范围](docs/computer-use.md#兼容旧版-ssmcp-的手动开关)
+默认 `Super + Alt + C` 快捷键已移除。显式 `ssmcp computer on|off|toggle|status` 与聊天中的 `/computer` 保留为**旧版 SSMCP 兼容开关**，原有状态供读取旧协议的 SSMCP 会话使用。显式 Off 同时撤销本版的本机限定目标观察。观察授权由 `ssmcp computer observation on` 单独开启。独立 CLI 常规使用无需先切换或取得 takeover。`status` 只观察已有记录，缺失显示“未设置”。[兼容开关的范围](docs/computer-use.md#兼容旧版-ssmcp-的手动开关)
 
 通用 Shell 与独立 Zuse 仍遵循操作系统权限；需要隔离时配置实际的账户、会话或沙箱边界。
 
