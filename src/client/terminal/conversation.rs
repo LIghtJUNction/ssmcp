@@ -3083,6 +3083,7 @@ impl State {
         }
         let mut rows = Vec::new();
         let clock_label = self.chat_clock_label_at(now);
+        let question_attention = self.chat_question_attention(g.left.saturating_sub(1));
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
@@ -3165,6 +3166,11 @@ impl State {
                 );
                 rows.push(self.tone(hint_tone, &text));
                 continue;
+            } else if top > 0
+                && index == 0
+                && let Some(alert) = question_attention.as_deref()
+            {
+                self.chat_line(&format!(" {alert}"), PanelTone::Error, g.left)
             } else if top > 0 && index == 0 {
                 let suffix = if self.conversation.view == View::Logs
                     && (!self.log_query.is_empty() || self.log_level != 0)

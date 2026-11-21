@@ -62,6 +62,24 @@ impl State {
         ordered(queue::retained_views())
     }
 
+    pub(super) fn chat_question_attention(&self, width: u16) -> Option<String> {
+        if self.conversation.view != View::Activity || self.help || self.selection {
+            return None;
+        }
+        let count = self.question_views().iter().filter(|view| editable(view)).count();
+        if count == 0 {
+            return None;
+        }
+        // Pending questions need a visible entry even without an active Hub
+        // wait. This is an answer badge, not a blocking-wait or timer claim.
+        let full = format!("! {count} 个问题待答 · Shift+↑");
+        Some(if full.width() <= usize::from(width) {
+            full
+        } else {
+            format!("! 问题待答 {count} Shift+↑")
+        })
+    }
+
     fn question_view(&self, id: &str) -> Option<QuestionView> {
         #[cfg(test)]
         if let Some(views) = &self.conversation.question_fixture {
@@ -868,6 +886,95 @@ mod tests {
             })).unwrap()).unwrap();
         }
         parser.screen().contents()
+    }
+
+    #[test]
+    fn pending_question_badge_is_visible_on_activity_without_a_wait_or_lost_draft() {
+        for columns in [120, 48, 24] {
+            for color in [true, false] {
+                let mut answered = fixture("answered", false);
+                answered.question.state = QuestionState::Answered;
+                let mut invalidated = fixture("invalidated", true);
+                invalidated.finish.as_mut().unwrap().status = FinishStatus::Invalidated;
+                let mut state = state(columns, vec![
+                    fixture("question", false), fixture("finish", true), answered, invalidated,
+                ]);
+                state.chat_change_view(View::Activity);
+                state.ui.color = color;
+                state.notice = Some("Keep the existing action notice".into());
+                state.conversation.wait_fixture =
+                    Some(crate::client::interface::user_wait::Snapshot::default());
+                let before = (
+                    state.conversation.composer.text().to_owned(),
+                    state.conversation.composer.cursor(),
+                    state.conversation.target.clone(),
+                    state.conversation.native_recipient.clone(),
+                    state.conversation.send_to_group,
+                );
+                for content_focus in [false, true] {
+                    state.conversation.content_focus = content_focus;
+                    let frame = state.chat_frame(Instant::now());
+                    let mut parser = vt100::Parser::new(
+                        std::num::NonZeroU16::new(frame.geometry.rows).unwrap(),
+                        std::num::NonZeroU16::new(frame.geometry.cols).unwrap(),
+                        0,
+                    );
+                    parser.process(&frame.diff(None));
+                    let visible = parser.screen().contents();
+                    let header = visible.lines().next().unwrap_or_default();
+                    assert!(header.contains("问题待答") && header.contains('2')
+                        && header.contains("Shift+↑"), "{columns}: {visible}");
+                    assert!(!visible.contains("剩余") && !visible.contains("等待你的输入"));
+                    let cell = parser.screen().cell(0, 1).unwrap();
+                    assert_eq!(cell.contents(), "!");
+                    assert_eq!(cell.fgcolor(), if color {
+                        vt100::Color::Rgb(242, 139, 130)
+                    } else {
+                        vt100::Color::Default
+                    });
+                    assert_eq!((
+                        state.conversation.composer.text().to_owned(),
+                        state.conversation.composer.cursor(),
+                        state.conversation.target.clone(),
+                        state.conversation.native_recipient.clone(),
+                        state.conversation.send_to_group,
+                    ), before);
+                    assert!(state.actions.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn question_badge_navigation_uses_existing_shift_up_and_clears_after_answers() {
+        for columns in [120, 48, 24] {
+            let mut state = state(columns, vec![fixture("pending", false)]);
+            state.chat_change_view(View::Activity);
+            let draft = state.conversation.composer.text().to_owned();
+            let cursor = state.conversation.composer.cursor();
+            let target = state.conversation.target.clone();
+            assert!(state.chat_question_attention(columns).unwrap().contains("问题待答"));
+            assert!(state.chat_keyboard(b"\x1b[1;2A", Instant::now(), false).is_empty());
+            assert_eq!(state.conversation.view, View::Questions);
+            assert_eq!(state.conversation.question_id.as_deref(), Some("pending"));
+            assert!(state.conversation.detail);
+            state.chat_key(Key::Escape);
+            state.chat_key(Key::Escape);
+            assert_eq!(state.conversation.view, View::Activity);
+            assert_eq!(state.conversation.composer.text(), draft);
+            assert_eq!(state.conversation.composer.cursor(), cursor);
+            assert_eq!(state.conversation.target, target);
+            assert_eq!(state.conversation.question_fixture.as_ref().unwrap()[0].question.state,
+                QuestionState::Pending);
+            state.conversation.question_fixture.as_mut().unwrap()[0].question.state =
+                QuestionState::Answered;
+            assert!(state.chat_question_attention(columns).is_none());
+            assert!(!screen(&mut state, "answered-no-badge").contains("问题待答"));
+            state.conversation.question_fixture.as_mut().unwrap().clear();
+            assert!(state.chat_question_attention(columns).is_none());
+            assert!(!screen(&mut state, "empty-no-badge").contains("问题待答"));
+            assert!(state.actions.is_empty());
+        }
     }
 
     #[test]
