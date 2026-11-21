@@ -71,6 +71,8 @@ pub(crate) struct Completion {
 
 #[derive(Debug, Serialize)]
 struct Finish {
+    #[serde(skip)]
+    generation: Option<u64>,
     wait_id: String,
     finished: bool,
     status: Option<Outcome>,
@@ -154,6 +156,7 @@ struct Active {
 }
 
 struct Completed {
+    generation: u64,
     result: Completion,
     intent: Intent,
     finish_scope: Option<Arc<CallScope>>,
@@ -186,6 +189,7 @@ impl State {
         };
         let _ = pending.reply.send_replace(Some(result.clone()));
         self.completed.push_back(Completed {
+            generation: pending.key.generation,
             result,
             intent: pending.entry.intent,
             finish_scope: pending.finish_scope,
@@ -336,12 +340,12 @@ impl Hub {
         let target = {
             let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             state.active.get(id).map(|active| (
-                Some(active.key.clone()), active.entry.intent,
+                active.key.generation, active.entry.intent,
                 active.entry.finish_request_id.clone(), active.finish_scope.clone(),
             )).or_else(|| state.completed.iter().rev()
                 .find(|entry| entry.result.wait_id == id)
                 .map(|entry| (
-                    None, entry.intent, entry.result.finish_request_id.clone(),
+                    entry.generation, entry.intent, entry.result.finish_request_id.clone(),
                     entry.finish_scope.clone(),
                 )))
         };
@@ -357,10 +361,10 @@ impl Hub {
             questions::validate_finish(Some(request_id), None)?;
         }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.active.get(id).is_some_and(|active| {
-            target.as_ref().and_then(|(key, _, _, _)| key.as_ref())
-                .is_none_or(|key| active.key.generation != key.generation)
-        }) {
+        let generation = state.active.get(id).map(|active| active.key.generation)
+            .or_else(|| state.completed.iter().rev()
+                .find(|entry| entry.result.wait_id == id).map(|entry| entry.generation));
+        if generation != target.as_ref().map(|(generation, _, _, _)| *generation) {
             return Err("user wait changed during finish authorization".into());
         }
         let expired = state.expire(Instant::now());
@@ -384,6 +388,7 @@ impl Hub {
             changed();
         }
         Ok(Finish {
+            generation,
             wait_id: id.into(),
             finished,
             status,
@@ -403,10 +408,10 @@ impl Hub {
         }
     }
 
-    fn completion_decision(&self, id: &str, receipt: &FinishReceipt) {
+    fn completion_decision(&self, id: &str, generation: u64, receipt: &FinishReceipt) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(entry) = state.completed.iter_mut().rev()
-            .find(|entry| entry.result.wait_id == id
+            .find(|entry| entry.result.wait_id == id && entry.generation == generation
                 && entry.result.finish_request_id.as_deref() == Some(receipt.request_id.as_str()))
             && entry.result.status != Outcome::Decided
         {
@@ -561,7 +566,7 @@ impl Hub {
                 {
                     result.finish_decision = finish.end(result.status == Outcome::TimedOut).ok();
                     if let Some(receipt) = &result.finish_decision {
-                        self.completion_decision(&result.wait_id, receipt);
+                        self.completion_decision(&result.wait_id, registration.key.generation, receipt);
                     }
                 }
                 return serde_json::to_value(result)
@@ -701,7 +706,9 @@ async fn call_on(hub: &Arc<Hub>, arguments: Value) -> Result<Value, String> {
                 result.finish_request_id = Some(id.clone());
                 if outcome != Outcome::TimedOut {
                     let receipt = questions::cancel_finish(&id, "wait_cancelled")?;
-                    hub.completion_decision(&wait_id, &receipt);
+                    if let Some(generation) = result.generation {
+                        hub.completion_decision(&wait_id, generation, &receipt);
+                    }
                     result.finish_decision = Some(receipt);
                 }
             }
@@ -1072,6 +1079,38 @@ mod tests {
                 let hidden = other_thread.scope(call_on(&hub, json!({"op":"status"}))).await.unwrap();
                 assert!(hidden["state"]["recent"].as_array().unwrap().is_empty());
                 assert_eq!(hub.snapshot().recent.len(), 1, "local completed records remain visible");
+
+                // Drive the production native wait future, then use the local
+                // Human cancel path. The returned and cached decision must be
+                // the same generation's Cancelled receipt, never stale Pending.
+                let mut waiting = Box::pin(asking.scope(hub.wait(Spec {
+                    intent: Intent::Finish, recipient: recipient.clone(),
+                    reason: Some("Local cancellation fixture".into()),
+                    ..spec("wait_local_cancel")
+                })));
+                std::future::poll_fn(|context| {
+                    match std::future::Future::poll(waiting.as_mut(), context) {
+                        std::task::Poll::Pending => std::task::Poll::Ready(()),
+                        std::task::Poll::Ready(result) => panic!("finish unexpectedly completed before Human cancel: {result:?}"),
+                    }
+                }).await;
+                assert_eq!(hub.cancel("wait_local_cancel").unwrap(), "wait_local_cancel");
+                let returned = waiting.await.unwrap();
+                assert_eq!(returned["status"], "cancelled");
+                assert_eq!(returned["finish_decision"]["status"], "cancelled");
+                assert_eq!(returned["finish_decision"]["consumed"], false);
+                let (generation, cached) = {
+                    let state = hub.state.lock().unwrap();
+                    let entry = state.completed.iter().find(|entry| entry.result.wait_id == "wait_local_cancel").unwrap();
+                    (entry.generation, entry.result.finish_decision.clone().unwrap())
+                };
+                assert_eq!(serde_json::to_value(&cached).unwrap(), returned["finish_decision"]);
+                let mut stale = cached.clone();
+                stale.status = questions::FinishStatus::Pending;
+                hub.completion_decision("wait_local_cancel", generation.wrapping_add(1), &stale);
+                let actual = hub.snapshot().recent.into_iter()
+                    .find(|entry| entry.wait_id == "wait_local_cancel").unwrap().finish_decision.unwrap();
+                assert_eq!(actual, cached, "a different generation cannot rewrite a completed decision");
             }),
         ).await;
         std::fs::remove_dir_all(directory).unwrap();

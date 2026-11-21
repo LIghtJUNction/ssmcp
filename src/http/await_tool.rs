@@ -671,6 +671,7 @@ async fn observe(
                     intent: code_mode::user_wait::Intent::NeedUser,
                     reason: reason.clone(),
                     notify: *notify,
+                    finish_request_id: None,
                 },
                 controller,
                 Some(&scope.user_wait_admitted),

@@ -252,8 +252,8 @@ class UserWait(InputHistory):
                     "the authenticated user wait dims the production terminal")
         self.check(self.ui("/display/sleeping"),
                    "the real terminal exposes its active visual sleep state")
-        self.check(re.search(r"! 3 项等待你的输入 · 剩余 \d{2}:\d{2} · /wait", text(front.snapshot())) is not None,
-                   "the sleeping terminal shows the real aggregate warning and bounded countdown")
+        self.check(re.search(r"! 等待你的输入 · 剩余 \d{2}:\d{2} · /wait", text(front.snapshot())) is not None,
+                   "three waits in one episode show the single-episode warning and bounded countdown")
         sleep_shot = self.save_shot("user-wait-active-120", front, cells=True)
         alert = sleep_shot["cells"][-1][1]
         self.check(alert["text"] == "!" and alert["foreground"] == [242, 139, 130]
