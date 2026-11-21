@@ -48,7 +48,9 @@ pub(crate) fn group_path(text: &str) -> Result<PathBuf, String> {
         .find_map(|line| line.strip_prefix("0::"))
         .ok_or("worker hard limits require a unified cgroup v2 hierarchy")?;
     let path = Path::new(relative);
-    if !path.is_absolute()
+    // This field uses Linux absolute-path syntax even in parser tests on
+    // Windows, where native absolute paths also require a drive or UNC prefix.
+    if !relative.starts_with('/')
         || path
             .components()
             .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))

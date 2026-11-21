@@ -285,6 +285,13 @@ mod tests {
                 .unwrap()
                 .contains("shared workspace contents")
         );
+        #[cfg(not(unix))]
+        let private_inputs = fixture.scratch.0.join("workspace/.ssmcp/inputs");
+        #[cfg(not(unix))]
+        assert_eq!(
+            std::fs::symlink_metadata(&private_inputs).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
         let imported = fixture
             .files
             .import_input(attachments::Source::Text(
@@ -320,9 +327,10 @@ mod tests {
                     "save the text inside the workspace and reference it with @path"
                 )
             );
-            let storage = fixture.scratch.0.join("workspace/.ssmcp");
+            // The preceding native write can create .ssmcp/managed-files.
+            // Unsupported private paste must not create its own input storage.
             assert_eq!(
-                std::fs::symlink_metadata(storage).unwrap_err().kind(),
+                std::fs::symlink_metadata(private_inputs).unwrap_err().kind(),
                 std::io::ErrorKind::NotFound
             );
         }
