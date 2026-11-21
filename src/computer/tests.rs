@@ -262,6 +262,33 @@ fn uninstall_refuses_changed_bytes_replaced_identity_or_unrecorded_files() {
 }
 
 #[test]
+fn canonical_owned_path_keeps_receipt_identity_and_external_paths_stay_unmanaged() {
+    let temporary = Temporary::new();
+    let (store, receipt, _) = installed(&temporary.0.join("manager"));
+    let canonical = store.executable(&receipt).canonicalize().unwrap();
+    let matched = store.matching(&canonical).unwrap().unwrap();
+    assert_eq!(matched.installation_id, receipt.installation_id);
+    let external = temporary.0.join("external-zuse");
+    fs::write(&external, b"external").unwrap();
+    assert!(store.matching(&external.canonicalize().unwrap()).unwrap().is_none());
+}
+
+#[test]
+fn uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match() {
+    let temporary = Temporary::new();
+    let (store, receipt, binary) = installed(&temporary.0.join("manager"));
+    let path = store.executable(&receipt);
+    let external_link = temporary.0.join("linked-zuse");
+    fs::hard_link(&path, &external_link).unwrap();
+    assert!(store.uninstall(&receipt.installation_id).is_err());
+    assert_eq!(fs::read(&path).unwrap(), binary);
+    assert_eq!(fs::read(&external_link).unwrap(), binary);
+    fs::remove_file(&external_link).unwrap();
+    store.uninstall(&receipt.installation_id).unwrap();
+    assert!(!path.exists());
+}
+
+#[test]
 fn install_rechecks_cached_download_before_publishing_any_executable() {
     let temporary = Temporary::new();
     let root = temporary.0.join("manager");

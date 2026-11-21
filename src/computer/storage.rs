@@ -54,21 +54,13 @@ fn no_links(metadata: &Metadata) -> bool {
     true
 }
 
+#[cfg(unix)]
 fn owned(metadata: &Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        // SAFETY: geteuid has no preconditions.
-        metadata.uid() == unsafe { libc::geteuid() }
-            && metadata.mode() & 0o077 == 0
-            && (metadata.is_dir() || metadata.nlink() == 1)
-    }
-    #[cfg(windows)]
-    {
-        // New roots and all their descendants inherit the protected user-only
-        // DACL installed by platform::private_directory.
-        no_links(metadata)
-    }
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: geteuid has no preconditions.
+    metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.mode() & 0o077 == 0
+        && (metadata.is_dir() || metadata.nlink() == 1)
 }
 
 fn open(path: &Path, directory: bool) -> Result<File, String> {
@@ -99,17 +91,23 @@ fn open(path: &Path, directory: bool) -> Result<File, String> {
 
 fn directory(path: &Path) -> Result<Identity, String> {
     let file = open(path, true)?;
+    #[cfg(unix)]
     if !owned(&file.metadata().map_err(|error| error.to_string())?) {
         return Err(format!("Zuse manager directory is not private and owned: {}", path.display()));
     }
+    #[cfg(windows)]
+    crate::platform::windows::verify_directory(&file).map_err(|error| error.to_string())?;
     identity(&file)
 }
 
 fn private_file(path: &Path) -> Result<File, String> {
     let file = open(path, false)?;
+    #[cfg(unix)]
     if !owned(&file.metadata().map_err(|error| error.to_string())?) {
         return Err(format!("Zuse manager file is not private and owned: {}", path.display()));
     }
+    #[cfg(windows)]
+    crate::platform::windows::verify_file(&file).map_err(|error| error.to_string())?;
     Ok(file)
 }
 
@@ -395,15 +393,21 @@ impl Store {
     }
 
     pub(super) fn matching(&self, executable: &Path) -> Result<Option<Installation>, String> {
+        // program::executable returns a canonical path (extended-length on
+        // Windows). Compare the same representation on both sides; path
+        // equality alone never grants ownership.
+        let executable = executable.canonicalize().map_err(|error| error.to_string())?;
+        let installations = self.root.join("installations").canonicalize()
+            .map_err(|error| error.to_string())?;
         let Some(parent) = executable.parent() else { return Ok(None) };
-        if parent.parent() != Some(self.root.join("installations").as_path()) {
+        if parent.parent() != Some(installations.as_path()) {
             return Ok(None);
         }
         let Some(id) = parent.file_name().and_then(|name| name.to_str()).filter(|id| valid_id(id)) else {
             return Ok(None);
         };
         let receipt = self.verify_installation(id)?;
-        if self.executable(&receipt) != executable {
+        if self.executable(&receipt).canonicalize().map_err(|error| error.to_string())? != executable {
             return Ok(None);
         }
         Ok(Some(receipt))
