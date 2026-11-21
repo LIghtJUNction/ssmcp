@@ -1,0 +1,1356 @@
+--- baseline-v25/verify_published_candidate.py
++++ verify_published_manual_main.py
+@@ -1,4 +1,9 @@
+-"""Verify the actual published package and assets without installing or deploying."""
++"""Verify a manual-main publication with separate workflow and product identities.
++
++UNBOUND preparation: final S, workflow P, run and original dispatch evidence have
++not been selected. Missing or unsupported evidence fails closed. This program
++never dispatches a workflow, creates a tag, publishes, or deploys.
++"""
+ 
+ import argparse
+ import concurrent.futures
+@@ -13,9 +18,13 @@
+ import tomllib
+ import urllib.request
+ 
++from dispatch_receipt_adapter import parse_dispatch_capture
++from manual_main_provenance import verify_execution
++
+ 
+ def api(endpoint):
+-    result = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True, timeout=60, check=True)
++    result = subprocess.run(["gh", "api", "--hostname", "github.com", endpoint],
++                            capture_output=True, text=True, timeout=60, check=True)
+     return json.loads(result.stdout)
+ 
+ 
+@@ -42,6 +51,140 @@
+ def require(condition, message):
+     if not condition:
+         raise ValueError(message)
++
++
++# Q is the reviewed recipe source, not a selected release candidate or main SHA.
++# Updating any pin requires a new source review; never learn pins from the run.
++RECIPE_SOURCE_COMMIT = "647bce2ec9cf74beab43adea831c2e0712d28ea8"
++REVIEWED_RECIPE = {
++    ".github/workflows/release.yml": (18881, "6dd28b97b77386edb6fa8d6538ed9954f0ed00b1b97e1baa2651f339415c2295"),
++    ".github/workflows/ci.yml": (14941, "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"),
++    ".github/workflows/deploy-server.yml": (4499, "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"),
++    "scripts/release.py": (54070, "43e995d675689f3c881f4452172796f4e2f7b195dbceef3dbb9b1ed1d9f95be4"),
++    "scripts/install.sh": (6783, "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"),
++    "scripts/install.ps1": (29653, "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"),
++}
++DISPATCH_API_VERSION = "2026-03-10"
++
++
++def api_bytes(endpoint):
++    """Return the authenticated GitHub response body without text re-encoding."""
++    result = subprocess.run(["gh", "api", "--hostname", "github.com", endpoint],
++                            capture_output=True, timeout=180, check=True)
++    return result.stdout
++
++
++def git_read(checkout, *arguments):
++    return subprocess.check_output(
++        ["git", "--no-replace-objects", *arguments], cwd=checkout,
++        stderr=subprocess.PIPE, timeout=60)
++
++
++def verify_reviewed_recipe(checkout, candidate, workflow_sha):
++    """Require S <= P and the same reviewed publication recipe at both commits."""
++    for label, commit in (("candidate", candidate), ("workflow", workflow_sha)):
++        require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None,
++                label + " must be an exact commit SHA")
++        require(git_read(checkout, "cat-file", "-t", commit).strip() == b"commit",
++                label + " must be a commit object")
++    # Replacement objects must not manufacture either ancestry or recipe bytes.
++    ancestry = subprocess.run(
++        ["git", "--no-replace-objects", "merge-base", "--is-ancestor", candidate, workflow_sha],
++        cwd=checkout, capture_output=True, timeout=60)
++    require(ancestry.returncode == 0,
++            "candidate is not a verified ancestor of the exact workflow commit")
++    verified = {}
++    for path, (expected_bytes, expected_sha256) in REVIEWED_RECIPE.items():
++        source = git_read(checkout, "show", candidate + ":" + path)
++        workflow = git_read(checkout, "show", workflow_sha + ":" + path)
++        require(source == workflow and len(source) == expected_bytes
++                and digest(source) == expected_sha256,
++                "P/S publication recipe differs from the reviewed bytes: " + path)
++        verified[path] = {"bytes": len(source), "sha256": digest(source)}
++    return {"recipe_source_commit": RECIPE_SOURCE_COMMIT,
++            "candidate_sha": candidate, "workflow_sha": workflow_sha,
++            "candidate_is_ancestor_of_workflow": True,
++            "deferred_version": "0.10.25", "files": verified}
++
++
++def read_original_evidence(path, expected_sha256, label):
++    """Bind original bytes; a hash by itself does not establish their origin."""
++    require(re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None,
++            label + " requires an exact lowercase SHA-256")
++    try:
++        data = path.read_bytes()
++    except OSError:
++        raise ValueError(label + " original bytes are unavailable") from None
++    require(data and digest(data) == expected_sha256,
++            label + " bytes differ from the supplied original receipt hash")
++    # The original private receipt path and its full content are not public report fields.
++    return data, {"bytes": len(data), "sha256": digest(data)}
++
++
++def explicit_false(value, label):
++    require(value is False or type(value) is str and value == "false",
++            label + " must be explicitly false; missing or other falsey values are invalid")
++    return False
++
++
++def verify_dispatch_contract(receipt, run, repository, run_id, tag, workflow_sha):
++    """Check facts from the bound original capture adapter, never direct CLI JSON."""
++    request, response = receipt["request"], receipt["response"]
++    workflow_id = run["workflow_id"]
++    require(type(workflow_id) is int and workflow_id > 0, "invalid workflow identity")
++    base = f"https://api.github.com/repos/{repository}"
++    endpoints = {base + "/actions/workflows/release.yml/dispatches",
++                 base + f"/actions/workflows/{workflow_id}/dispatches"}
++    require(request["method"] == "POST" and request["url"] in endpoints
++            and request["api_version"] == DISPATCH_API_VERSION,
++            "dispatch request endpoint, method or API version differs")
++    body = request["body"]
++    require(isinstance(body, dict) and set(body) == {"ref", "inputs"}
++            and body.get("ref") == "main",
++            "original dispatch must explicitly select main")
++    inputs = body.get("inputs")
++    require(isinstance(inputs, dict) and set(inputs) == {"tag", "deploy_server", "build_only"}
++            and inputs.get("tag") == tag,
++            "original dispatch tag differs")
++    require("deploy_server" in inputs and "build_only" in inputs,
++            "original dispatch must contain both explicit false inputs")
++    explicit_false(inputs["deploy_server"], "deploy_server")
++    explicit_false(inputs["build_only"], "build_only")
++    result = response["body"]
++    require(type(response["status"]) is int and response["status"] == 200
++            and isinstance(result, dict), "dispatch did not return the required HTTP 200 receipt")
++    require(type(result.get("workflow_run_id")) is int
++            and result["workflow_run_id"] == run_id
++            and result.get("run_url") == base + f"/actions/runs/{run_id}"
++            and result.get("html_url") == f"https://github.com/{repository}/actions/runs/{run_id}",
++            "dispatch response does not identify this exact workflow run")
++    require(run["id"] == run_id and run["event"] == "workflow_dispatch"
++            and run["head_branch"] == "main" and run["head_sha"] == workflow_sha
++            and type(run.get("run_attempt")) is int and run["run_attempt"] == 1,
++            "dispatch response is not bound to the original manual-main run")
++    return {"api_version": DISPATCH_API_VERSION, "run_id": run_id, "run_attempt": 1,
++            "workflow_sha": workflow_sha, "requested_ref": "main", "tag": tag,
++            "raw_deploy_server": inputs["deploy_server"],
++            "raw_build_only": inputs["build_only"],
++            "deploy_server": False, "build_only": False}
++
++
++def verify_referenced_workflows(run, repository, workflow_sha):
++    """Check actual resolved references; a referenced deployment did not execute."""
++    references = run.get("referenced_workflows")
++    require(isinstance(references, list), "run is missing referenced_workflows evidence")
++    expected = {f"{repository}/.github/workflows/{name}@{workflow_sha}"
++                for name in ("ci.yml", "deploy-server.yml")}
++    seen = set()
++    for reference in references:
++        require(isinstance(reference, dict) and reference.get("path") in expected
++                and reference["path"] not in seen and reference.get("sha") == workflow_sha
++                and reference.get("ref") == "refs/heads/main",
++                "resolved reusable workflow does not match the reviewed main recipe")
++        seen.add(reference["path"])
++    require(seen == expected, "resolved reusable workflow set differs from the reviewed recipe")
++    return [{"path": row["path"], "sha": row["sha"], "ref": row["ref"]}
++            for row in references]
+ 
+ 
+ def package_identity(row):
+@@ -336,30 +479,59 @@
+ def parse_arguments(argv=None):
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("candidate", help="Exact 40-character lowercase candidate commit SHA")
+-    parser.add_argument("run_id", type=int, help="Successful tag-push release workflow run ID")
++    parser.add_argument("run_id", type=int, help="Exact original manual-main release workflow run ID")
++    parser.add_argument("--workflow-sha", required=True,
++                        help="Exact main commit P that supplied this run's workflow definitions")
+     parser.add_argument("--checkout", type=Path, required=True,
+                         help="Existing Git working-tree root containing the candidate and submodule objects")
+     parser.add_argument("--report-dir", type=Path, required=True,
+                         help="Report directory; only its final component may be created")
++    parser.add_argument("--dispatch-receipt", type=Path, required=True,
++                        help="Original gh api --include dispatch capture bytes")
++    parser.add_argument("--dispatch-receipt-sha256", required=True,
++                        help="Independently recorded SHA-256 of the original dispatch capture")
++    parser.add_argument("--native-execution-receipt", type=Path, required=True,
++                        help="Original native execution receipt independently read by the reviewer")
++    parser.add_argument("--native-execution-receipt-sha256", required=True,
++                        help="Independently recorded SHA-256 of that original native receipt")
++    parser.add_argument("--native-execution-job-id", required=True,
++                        help="Expected native job ID from independent execution readback")
++    parser.add_argument("--native-capture-path", required=True,
++                        help="Exact remote capture path from independent execution readback, not the capture")
+     args = parser.parse_args(argv)
+     if re.fullmatch(r"[0-9a-f]{40}", args.candidate) is None:
+         parser.error("candidate must be an exact 40-character lowercase commit SHA")
++    if re.fullmatch(r"[0-9a-f]{40}", args.workflow_sha) is None:
++        parser.error("--workflow-sha must be an exact 40-character lowercase commit SHA")
+     if args.run_id <= 0:
+         parser.error("run_id must be a positive integer")
++    for name in ("dispatch_receipt_sha256", "native_execution_receipt_sha256"):
++        if re.fullmatch(r"[0-9a-f]{64}", getattr(args, name)) is None:
++            parser.error("--" + name.replace("_", "-") + " must be an exact lowercase SHA-256")
++    if (not args.native_execution_job_id or len(args.native_execution_job_id) > 256
++            or re.search(r"[\s\x00-\x1f\x7f]", args.native_execution_job_id)):
++        parser.error("--native-execution-job-id must be an explicit single identifier")
++    if (not PurePosixPath(args.native_capture_path).is_absolute()
++            or ".." in PurePosixPath(args.native_capture_path).parts
++            or re.search(r"[\x00-\x1f\x7f]", args.native_capture_path)):
++        parser.error("--native-capture-path must be an explicit absolute remote path")
+     try:
+         checkout = args.checkout.expanduser().resolve(strict=True)
+         if not checkout.is_dir():
+             parser.error("--checkout must be an existing Git working-tree root")
+         top = subprocess.check_output(
+-            ["git", "rev-parse", "--show-toplevel"], cwd=checkout, text=True,
++            ["git", "--no-replace-objects", "rev-parse", "--show-toplevel"], cwd=checkout, text=True,
+             stderr=subprocess.PIPE, timeout=15).strip()
+         if Path(top).resolve(strict=True) != checkout:
+             parser.error("--checkout must name the Git working-tree root, not a subdirectory")
+-        kind = subprocess.check_output(
+-            ["git", "cat-file", "-t", args.candidate], cwd=checkout, text=True,
+-            stderr=subprocess.PIPE, timeout=15).strip()
+-        if kind != "commit":
+-            parser.error("candidate must identify a commit object in --checkout")
++        for name, commit in (("candidate", args.candidate), ("workflow", args.workflow_sha)):
++            if git_read(checkout, "cat-file", "-t", commit).strip() != b"commit":
++                parser.error(name + " must identify a commit object in --checkout")
++        for name in ("dispatch_receipt", "native_execution_receipt"):
++            path = getattr(args, name).expanduser().resolve(strict=True)
++            if not path.is_file():
++                parser.error("--" + name.replace("_", "-") + " must be an existing file")
++            setattr(args, name, path)
+         report_dir = args.report_dir.expanduser().resolve()
+         report_dir.mkdir(exist_ok=True)
+         if not report_dir.is_dir():
+@@ -372,28 +544,78 @@
+ 
+ 
+ def main(argv=None):
++    require(__debug__, "Python assertions must remain enabled; do not use -O or PYTHONOPTIMIZE")
+     args = parse_arguments(argv)
+     candidate, run_id = args.candidate, args.run_id
++    workflow_sha = args.workflow_sha
+     repository = "LIghtJUNction/ssmcp"
+     version = "0.10.25"
+     tag = "v" + version
+     checkout = args.checkout
+     report_path = args.report_dir / ("verification-" + candidate[:12] + ".json")
+-    report = {"schema_version": 1, "status": "checking", "tag": tag, "candidate_sha": candidate,
+-              "release_run_id": run_id, "started_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
++    report = {"schema_version": 2, "status": "checking", "tag": tag, "candidate_sha": candidate,
++              "workflow_sha": workflow_sha, "release_run_id": run_id, "run_attempt": 1,
++              "route": "manual-main", "provenance_verified": False,
++              "started_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+ 
+ 
+     def source(path):
+-        return subprocess.check_output(["git", "show", candidate + ":" + path], cwd=checkout)
++        return git_read(checkout, "show", candidate + ":" + path)
+ 
+     try:
++        report["reviewed_recipe"] = verify_reviewed_recipe(checkout, candidate, workflow_sha)
++        dispatch_bytes, report["dispatch_receipt"] = read_original_evidence(
++            args.dispatch_receipt, args.dispatch_receipt_sha256, "dispatch receipt")
++        native_bytes, report["native_execution_receipt"] = read_original_evidence(
++            args.native_execution_receipt, args.native_execution_receipt_sha256,
++            "native execution receipt")
++        # Both hashes and the expected job/path come from independent original
++        # execution readback. Self-authored JSON does not establish authenticity.
++        dispatch = parse_dispatch_capture(
++            dispatch_bytes, expected_capture_sha256=args.dispatch_receipt_sha256,
++            native_execution_receipt_bytes=native_bytes,
++            expected_native_execution_receipt_sha256=args.native_execution_receipt_sha256,
++            expected_native_execution_binding={"native_job_id": args.native_execution_job_id,
++                                               "capture_path": args.native_capture_path})
++        report["native_execution_binding"] = {"native_job_id": args.native_execution_job_id,
++                                               "capture_path_verified_but_redacted": True}
+         run = api(f"repos/{repository}/actions/runs/{run_id}")
+-        assert run["head_sha"] == candidate and run["path"] == ".github/workflows/release.yml"
+-        assert run["event"] == "push" and run["head_branch"] == tag
++        assert run["head_sha"] == workflow_sha and run["path"] == ".github/workflows/release.yml"
++        assert run["event"] == "workflow_dispatch" and run["head_branch"] == "main"
++        assert run["id"] == run_id and type(run["run_attempt"]) is int and run["run_attempt"] == 1
+         assert run["status"] == "completed" and run["conclusion"] == "success"
+-        page = api(f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100")
++        assert run["repository"]["full_name"] == repository
++        assert run["url"] == f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
++        assert run["html_url"] == f"https://github.com/{repository}/actions/runs/{run_id}"
++        attempt = api(f"repos/{repository}/actions/runs/{run_id}/attempts/1")
++        for key in ("id", "event", "head_branch", "head_sha", "path", "workflow_id",
++                    "run_attempt", "status", "conclusion"):
++            require(attempt.get(key) == run.get(key), "run/attempt identity differs: " + key)
++        require(attempt.get("repository", {}).get("full_name") == repository,
++                "attempt repository identity differs")
++        references = verify_referenced_workflows(run, repository, workflow_sha)
++        attempt_references = verify_referenced_workflows(attempt, repository, workflow_sha)
++        require(sorted(references, key=lambda r: r["path"])
++                == sorted(attempt_references, key=lambda r: r["path"]),
++                "run/attempt reusable workflow references differ")
++        workflow = api(f"repos/{repository}/actions/workflows/{run['workflow_id']}")
++        require(workflow.get("id") == run["workflow_id"]
++                and workflow.get("path") == ".github/workflows/release.yml",
++                "release workflow ID/path readback differs")
++        report["workflow_origin"] = {
++            "basis": "independent run/attempt API head_sha and reviewed expected P",
++            "workflow_sha": workflow_sha, "workflow_id": run["workflow_id"],
++            "direct_github_workflow_sha_context_observed": False,
++            "referenced_workflows": references,
++            "references_are_not_execution_evidence": True}
++        report["dispatch_binding"] = verify_dispatch_contract(
++            dispatch, run, repository, run_id, tag, workflow_sha)
++        page = api(f"repos/{repository}/actions/runs/{run_id}/attempts/1/jobs?per_page=100")
+         jobs = page["jobs"]
+         assert page["total_count"] == len(jobs) == 19
++        assert all(job["run_id"] == run_id and type(job["run_attempt"]) is int
++                   and job["run_attempt"] == 1 and job["head_sha"] == workflow_sha
++                   and job["status"] == "completed" for job in jobs)
+         targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin",
+                    "aarch64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+         required = {"validate", "finalize", "publish_release", "publish_crates"}
+@@ -439,13 +661,15 @@
+             assert asset["size"] == record["bytes"]
+             assert asset.get("digest") == "sha256:" + record["sha256"]
+             if record["name"] in archives:
+-                expected_sidecar = f"{record['sha256']}  {record['name']}\n".encode()
++                # package() uses native Path.write_text; Windows emits CRLF.
++                newline = "\r\n" if record["name"].endswith("-pc-windows-msvc.zip") else "\n"
++                expected_sidecar = f"{record['sha256']}  {record['name']}{newline}".encode()
+                 assert small[record["name"] + ".sha256"] == expected_sidecar
+             else:
+                 assert digest(source("scripts/" + record["name"])) == record["sha256"]
+         assert small["SHA256SUMS"].decode() == "".join(f"{r['sha256']}  {r['name']}\n" for r in records)
+         pins = {}
+-        tree = subprocess.check_output(["git", "ls-tree", "-r", candidate], cwd=checkout, text=True)
++        tree = git_read(checkout, "ls-tree", "-r", candidate).decode()
+         for line in tree.splitlines():
+             mode, kind, commit_and_path = line.split(" ", 2)
+             if mode == "160000":
+@@ -456,7 +680,7 @@
+         assert {item["path"]: item["commit"] for item in manifest["submodules"]} == pins
+         for item in manifest["submodules"]:
+             path = checkout / item["path"]
+-            actual_tree = subprocess.check_output(["git", "rev-parse", item["commit"] + "^{tree}"], cwd=path, text=True).strip()
++            actual_tree = git_read(path, "rev-parse", item["commit"] + "^{tree}").decode().strip()
+             assert item["tree"] == actual_tree
+         report["github_release"] = {"id": release["id"], "url": release["html_url"], "published_at": release["published_at"],
+             "asset_count": len(assets), "manifest_sha256": digest(small["release-manifest.json"]),
+@@ -469,8 +693,7 @@
+         crate_url = f"https://static.crates.io/crates/ssmcp/ssmcp-{version}.crate"
+         crate = download(crate_url)
+         assert digest(crate) == registry["checksum"]
+-        candidate_tree = subprocess.check_output(
+-            ["git", "rev-parse", candidate + "^{tree}"], cwd=checkout, text=True).strip()
++        candidate_tree = git_read(checkout, "rev-parse", candidate + "^{tree}").decode().strip()
+         _, crate_binding = verify_crate_contract(
+             manifest, crate, candidate, version, candidate_tree, source("Cargo.toml"), source("Cargo.lock"))
+         report["verified_crate_contract"] = crate_binding
+@@ -484,7 +707,7 @@
+             assert vcs["git"]["sha1"] == candidate and not vcs["git"].get("dirty", False)
+             package = tomllib.loads(member("Cargo.toml").decode())["package"]
+             assert package["name"] == "ssmcp" and package["version"] == version
+-            source_archive = subprocess.check_output(["git", "archive", "--format=tar", candidate, "src"], cwd=checkout)
++            source_archive = git_read(checkout, "archive", "--format=tar", candidate, "src")
+             expected_sources = {}
+             with tarfile.open(fileobj=io.BytesIO(source_archive), mode="r:") as source_tar:
+                 for entry in source_tar.getmembers():
+@@ -502,7 +725,20 @@
+         report["crate"] = {"registry_url": registry_url, "archive_url": crate_url, "version": version,
+             "bytes": len(crate), "sha256": digest(crate), "yanked": registry["yanked"], "vcs": vcs,
+             "matched_source_files_sha256": source_hashes}
+-        report["verification_scope"] = "Downloaded manifest, SHA256SUMS, six sidecars and the official crate. Every regular src/** file in the crate is byte-identical to the candidate, with an exact file-set match. Archive and installer bytes are matched using GitHub asset digests; installer digests also match candidate source. The official crate also matches the verified receipt bytes; candidate identity, the Git development lock/graph, Cargo.toml.orig, and the separate normalized registry manifest/lock/graph are cross-checked. Cargo metadata feature selection and transitive Git trees remain bound to the successful formal workflow receipt, not re-executed locally. No binary was installed or production service changed."
++        report["execution_binding"] = verify_execution(
++            run, by_name, candidate, version, manifest, assets, crate,
++            api_json=api, api_bytes=api_bytes, download=download,
++            evidence_dir=args.report_dir / (f"evidence-{run_id}-attempt-1"))
++        require(report["execution_binding"].get("verified") is True,
++                "step and artifact provenance has not been verified")
++        final_run = api(f"repos/{repository}/actions/runs/{run_id}")
++        for key in ("id", "event", "head_branch", "head_sha", "path", "workflow_id",
++                    "run_attempt", "status", "conclusion"):
++            require(final_run.get(key) == run.get(key),
++                    "run identity or attempt changed during verification: " + key)
++        report["verification_scope"] = "Downloaded manifest, SHA256SUMS, six sidecars, six public binary archives, the official crate, 18 exact-attempt job logs and seven Actions artifact ZIPs. Each binary archive is byte-identical across the CI artifact and public asset; outer ZIP digests are independently checked. Installer bytes remain matched using GitHub asset digests and exact candidate source. Every regular src/** file in the official crate is byte-identical to the candidate, with an exact file-set match. The crate and verified receipt also match the finalize artifact; candidate identity, Git development lock/graph, Cargo.toml.orig, and the distinct normalized registry manifest/lock/graph are cross-checked. Cargo metadata feature selection and transitive Git trees remain bound to the successful reviewed formal workflow, not re-executed locally. Original dispatch capture, independent native execution readback, run/attempt, step windows and artifact IDs are required. This is an ordinary reviewed CI chain, not malicious-builder attestation. No binary was installed or production service changed."
++        report["provenance_verified"] = True
++        require(report["provenance_verified"] is True, "publication provenance remains unverified")
+         report["status"] = "passed"
+     except Exception as error:
+         report["status"] = "failed"
+--- /dev/null
++++ manual_main_provenance.py
+@@ -0,0 +1,576 @@
++"""Read-only provenance checks for the separately pinned publication recipe.
++
++This is an ordinary reviewed GitHub Actions chain, not an attestation against a
++malicious runner, build script, or compromised action. Job logs are obtained by
++the job IDs in one exact attempt. An ambiguous or missing identity is an error;
++there is no whole-log fallback that searches for a later favorable value.
++"""
++
++from collections import Counter
++from dataclasses import dataclass
++import datetime as dt
++import hashlib
++import io
++import json
++from pathlib import PurePosixPath
++import re
++import stat
++import zipfile
++
++
++REPOSITORY = "LIghtJUNction/ssmcp"
++CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
++UPLOAD = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
++DOWNLOAD = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
++PYTHON = "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
++RUST = "dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca"
++TARGETS = (
++    "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
++    "x86_64-apple-darwin", "aarch64-apple-darwin",
++    "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
++)
++DEFERRED_REASON = (
++    "Preserve active relay sessions until a separate non-disruptive server switch is verified.")
++TIMESTAMP = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z) (.*)$")
++GIT_LOG = re.compile(
++    r'^\[command\](?:/usr/bin/git|/usr/local/bin/git|/opt/homebrew/bin/git|'
++    r'"C:\\Program Files\\Git\\bin\\git\.exe") log -1 --format=%H$')
++
++
++def need(condition, message):
++    if not condition:
++        raise ValueError("execution provenance: " + message)
++
++
++def sha256(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def utc(value):
++    need(isinstance(value, str) and re.fullmatch(
++        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z", value),
++        "missing or malformed UTC timestamp")
++    return dt.datetime.fromisoformat(value[:-1] + "+00:00")
++
++
++def unique_json(text):
++    def pairs(items):
++        result = {}
++        for key, value in items:
++            need(key not in result, "duplicate JSON key")
++            result[key] = value
++        return result
++    return json.loads(text, object_pairs_hook=pairs)
++
++
++@dataclass(frozen=True)
++class Line:
++    number: int
++    text: str
++    time: object
++
++
++class JobLog:
++    def __init__(self, data, job, uploads, downloads):
++        need(isinstance(data, bytes) and 0 < len(data) <= 128 * 1024 * 1024,
++             "empty or oversized job log")
++        text = data.decode("utf-8")
++        if text.startswith("\ufeff"):
++            text = text[1:]
++        # Only the first BOM, one outer timestamp and one CR in CRLF are removed.
++        # Identity records never undergo ANSI removal or arbitrary whitespace repair.
++        self.lines = []
++        for number, physical in enumerate(text.split("\n"), 1):
++            if physical.endswith("\r"):
++                physical = physical[:-1]
++            match = TIMESTAMP.fullmatch(physical)
++            self.lines.append(Line(number, match[2] if match else physical,
++                                   utc(match[1]) if match else None))
++        self.job = job
++        self.steps = {}
++        for step in job["steps"]:
++            number = step.get("number")
++            need(type(number) is int and number > 0 and number not in self.steps,
++                 "duplicate or invalid API step number")
++            need(step.get("status") == "completed"
++                 and step.get("conclusion") in ("success", "skipped"),
++                 "incomplete or failed API step")
++            self.steps[number] = step
++        need(list(self.steps) == sorted(self.steps), "API step order differs")
++        self.step(1, "Set up job")
++        self.step(2, "Run " + CHECKOUT)
++        self.headers = [i for i, line in enumerate(self.lines)
++                        if line.text.startswith("##[group]Run ")]
++        need(self.headers and self.lines[self.headers[0]].text == "##[group]Run " + CHECKOUT,
++             "first executing log action is not the pinned checkout")
++        self.action_counts = {CHECKOUT: 1, UPLOAD: uploads, DOWNLOAD: downloads}
++        for action, count in self.action_counts.items():
++            family = action.split("@", 1)[0]
++            positions = [i for i in self.headers
++                         if self.lines[i].text.startswith("##[group]Run " + family + "@")]
++            need(len(positions) == count and all(
++                self.lines[i].text == "##[group]Run " + action for i in positions),
++                "pinned action count or revision differs: " + family)
++        self.windows = []
++
++    def step(self, number, name):
++        step = self.steps.get(number)
++        need(step is not None and step.get("name") == name
++             and step.get("conclusion") == "success", "API step identity differs: " + name)
++        need(utc(step["started_at"]) <= utc(step["completed_at"]),
++             "API step times are reversed")
++        return step
++
++    def positions(self, header):
++        return [i for i in self.headers if self.lines[i].text == "##[group]Run " + header]
++
++    def timed(self, line, step):
++        need(line.time is not None
++             and utc(step["started_at"]) <= line.time
++             < utc(step["completed_at"]) + dt.timedelta(seconds=1),
++             "identity line falls outside its API step")
++
++    def window(self, number, name, header, *, occurrence=0, total=1,
++               next_header=None, next_number=None, next_name=None):
++        step = self.step(number, name)
++        starts = self.positions(header)
++        need(len(starts) == total and 0 <= occurrence < total,
++             "missing or ambiguous action header: " + header)
++        start = starts[occurrence]
++        following = [i for i in self.headers if i > start]
++        cleanup = [i for i in range(start + 1, len(self.lines))
++                   if self.lines[i].text == "Post job cleanup."]
++        boundary = min(following[:1] + cleanup[:1], default=len(self.lines))
++        next_steps = [s for n, s in self.steps.items() if n > number
++                      and s["conclusion"] != "skipped"
++                      and not s["name"].startswith("Post ") and s["name"] != "Complete job"]
++        if next_header is None:
++            need(boundary < len(self.lines)
++                 and self.lines[boundary].text == "Post job cleanup." and not next_steps,
++                 "final artifact upload is not followed solely by trusted cleanup")
++            need(not following, "a later Run header follows the final artifact upload")
++        else:
++            next_step = self.step(next_number, next_name)
++            need(next_steps and next_steps[0]["number"] == next_number,
++                 "next API execution step differs")
++            expected_total = self.action_counts.get(next_header, 1)
++            need(len(self.positions(next_header)) == expected_total,
++                 "missing or repeated next-step boundary")
++            need(boundary < len(self.lines)
++                 and self.lines[boundary].text == "##[group]Run " + next_header,
++                 "next actual Run boundary differs from the reviewed recipe")
++            self.timed(self.lines[boundary], next_step)
++        self.timed(self.lines[start], step)
++        window = Window(self, step, start, boundary)
++        self.windows.append({"step_number": number, "step_name": name,
++                             "first_line": start + 1, "last_line": boundary,
++                             "boundary_basis": "unique recipe headers plus API step order and timestamps"})
++        return window
++
++
++class Window:
++    def __init__(self, log, step, start, end):
++        self.log, self.step = log, step
++        self.lines = log.lines[start:end]
++
++    def inputs(self, multiline_path=False):
++        need(len(self.lines) > 2 and self.lines[1].text == "with:",
++             "action has no initial with block")
++        self.log.timed(self.lines[1], self.step)
++        fields = {}
++        path_continued = False
++        blank_after_path = False
++        for line in self.lines[2:]:
++            if line.text in ("env:", "##[endgroup]"):
++                self.log.timed(line, self.step)
++                break
++            match = re.fullmatch(r"  ([A-Za-z0-9_-]+): (.*)", line.text)
++            if match:
++                self.log.timed(line, self.step)
++                key, value = match.groups()
++                need(key not in fields, "duplicate action input")
++                fields[key] = value
++                continue
++            # Actual runner multi-line inputs have bare, untimestamped continuation
++            # lines. Only this exact reviewed two-path value is supported here.
++            if (multiline_path and fields.get("path") == "target/package/*.crate"
++                    and not path_continued and line.time is None
++                    and line.text == "target/package/ssmcp-verified-crate.json"):
++                fields["path"] += "\n" + line.text
++                path_continued = True
++                continue
++            if (multiline_path and path_continued and not blank_after_path
++                    and line.time is None and line.text == ""):
++                blank_after_path = True
++                continue
++            need(False, "unsupported or ambiguous action input continuation")
++        else:
++            need(False, "unterminated action input block")
++        return fields
++
++    def matching(self, pattern):
++        result = []
++        compiled = re.compile(pattern)
++        for line in self.lines:
++            match = compiled.fullmatch(line.text)
++            if match:
++                self.log.timed(line, self.step)
++                result.append((line, match))
++        return result
++
++    def one(self, pattern):
++        rows = self.matching(pattern)
++        need(len(rows) == 1, "missing or duplicated identity record in mapped step")
++        return rows[0][1]
++
++    def json(self):
++        rows = [line for line in self.lines
++                if line.text.startswith("{") and line.text.endswith("}")]
++        need(len(rows) == 1, "step JSON is missing or ambiguous")
++        self.log.timed(rows[0], self.step)
++        value = unique_json(rows[0].text)
++        need(isinstance(value, dict), "step JSON must be an object")
++        return value
++
++
++def action_shape(name):
++    if name == "validate":
++        return 0, 0, PYTHON
++    if name.startswith("Build "):
++        return (3 if "windows" in name else 1), 0, RUST
++    if name.startswith("Verify installed server "):
++        return 0, 1, DOWNLOAD
++    if name == "finalize":
++        return 1, 1, RUST
++    if name == "publish_crates":
++        return 0, 1, RUST
++    if name == "publish_release":
++        return 0, 2, RUST
++    if name.startswith("checks / Client ("):
++        return 1, 0, PYTHON
++    if name == "checks / linux (ubuntu-24.04)":
++        return 2, 0, RUST
++    if name == "checks / linux (ubuntu-24.04-arm)":
++        return 1, 0, RUST
++    need(False, "unknown required job name")
++
++
++def verify_checkout(log, candidate, tag, next_action):
++    window = log.window(2, "Run " + CHECKOUT, CHECKOUT,
++                        next_header=next_action, next_number=3, next_name="Run " + next_action)
++    inputs = window.inputs()
++    need(inputs.get("repository") == REPOSITORY
++         and inputs.get("ref") == (tag if log.job["name"] == "validate" else candidate)
++         and inputs.get("persist-credentials") == "false" and inputs.get("clean") == "true",
++         "checkout inputs do not bind the expected source")
++    if not log.job["name"].startswith("Verify installed server "):
++        need(inputs.get("submodules") == "recursive", "recursive source checkout is missing")
++    if log.job["name"] in ("validate", "finalize", "publish_crates", "publish_release"):
++        need(inputs.get("fetch-depth") == "0", "publication checkout is not full-history")
++    commands = [i for i, line in enumerate(log.lines) if GIT_LOG.fullmatch(line.text)]
++    need(len(commands) == 1, "canonical checkout git log is absent or repeated")
++    index = commands[0]
++    need(index + 1 < len(log.lines)
++         and log.lines[index] in window.lines and log.lines[index + 1] in window.lines,
++         "checkout commit was printed outside the initial checkout")
++    log.timed(log.lines[index], window.step)
++    log.timed(log.lines[index + 1], window.step)
++    need(log.lines[index + 1].text == candidate,
++         "the first checkout identity differs; later favorable values are not considered")
++    return {"source_commit": candidate, "requested_ref": inputs["ref"],
++            "git_log_line": log.lines[index].number,
++            "identity_line": log.lines[index + 1].number}
++
++
++def verify_validation(log, candidate, version):
++    window = log.window(
++        4, "Validate the tag, versions, main ancestry and pinned submodules",
++        "python scripts/release.py validate --event", next_header="python - <<'PY'",
++        next_number=5, next_name="Select deployment after validated publication")
++    value = window.json()
++    need(value == {"tag": "v" + version, "version": version, "sha": candidate,
++                   "submodule_count": 4, "prerelease": "false", "publish": "true",
++                   "create_tag": "false", "build_only": "false"},
++         "validate output differs from the exact release candidate or publication mode")
++    policy = log.window(
++        5, "Select deployment after validated publication", "python - <<'PY'",
++        next_header="python -m unittest discover -s scripts -p 'test_release.py' -v",
++        next_number=6, next_name="Test publication safeguards").json()
++    need(policy == {"publish": "true", "deploy_server": "false", "version": version,
++                    "deployment_deferred": DEFERRED_REASON},
++         "effective durable deployment deferral is absent")
++    return {"validate": value, "deployment_policy": policy,
++            "policy_output_does_not_replace_original_dispatch_inputs": True}
++
++
++def package_output(log, target):
++    output = log.window(
++        6, "Smoke test and package executables",
++        'python scripts/release.py package --target "$TARGET"',
++        next_header='python scripts/test_installers.py "$TARGET"', next_number=7,
++        next_name="Verify native installation, update and failed-download handling").json()
++    name = "ssmcp-" + target + (".zip" if "windows" in target else ".tar.gz")
++    need(set(output) == {"archive", "sha256", "bytes"} and output["archive"] == name
++         and type(output["bytes"]) is int and output["bytes"] > 0
++         and re.fullmatch(r"[0-9a-f]{64}", output["sha256"]), "package output differs")
++    return output
++
++
++def artifact_matches(artifact, *, name, size, digest, run):
++    need(type(artifact.get("id")) is int and artifact["id"] > 0
++         and artifact.get("name") == name and artifact.get("size_in_bytes") == size
++         and type(size) is int and size > 0 and artifact.get("digest") == "sha256:" + digest
++         and artifact.get("expired") is False
++         and artifact.get("workflow_run", {}).get("id") == run["id"]
++         and artifact.get("workflow_run", {}).get("head_sha") == run["head_sha"],
++         "artifact API metadata does not match this run and log identity")
++
++
++def upload_output(log, *, number, name, occurrence, total, artifact, run, crate=False):
++    step_name = ("Retain the verified application crate for publishing" if crate else "Run " + UPLOAD)
++    window = log.window(number, step_name, UPLOAD, occurrence=occurrence, total=total)
++    inputs = window.inputs(multiline_path=crate)
++    expected = {"name": name,
++                "path": ("target/package/*.crate\ntarget/package/ssmcp-verified-crate.json"
++                         if crate else "dist/*"),
++                "compression-level": "0", "if-no-files-found": "error", "retention-days": "14",
++                "overwrite": "false", "include-hidden-files": "false", "archive": "true"}
++    need(inputs == expected, "artifact upload inputs differ from the reviewed recipe")
++    digest = window.one(r"SHA256 digest of uploaded artifact is ([0-9a-f]{64})")[1]
++    finalized = window.one(r"Artifact (\S+) successfully finalized\. Artifact ID ([1-9][0-9]*)")
++    result = window.one(
++        r"Artifact (\S+) has been successfully uploaded! Final size is ([1-9][0-9]*) bytes\. Artifact ID is ([1-9][0-9]*)")
++    url = window.one(r"Artifact download URL: (https://github\.com/[^ ]+)")[1]
++    artifact_id, size = int(result[3]), int(result[2])
++    need(finalized[1] == result[1] == name and int(finalized[2]) == artifact_id == artifact["id"]
++         and url == f"https://github.com/{REPOSITORY}/actions/runs/{run['id']}/artifacts/{artifact_id}",
++         "upload ID/name/URL records disagree")
++    artifact_matches(artifact, name=name, size=size, digest=digest, run=run)
++    return {"job_id": log.job["id"], "step_number": number, "artifact_id": artifact_id,
++            "name": name, "bytes": size, "sha256": digest}
++
++
++def download_output(log, *, number, occurrence, total, artifacts, run,
++                    name=None, path, next_header, next_number, next_name):
++    window = log.window(number, "Run " + DOWNLOAD, DOWNLOAD, occurrence=occurrence, total=total,
++                        next_header=next_header, next_number=next_number, next_name=next_name)
++    inputs = window.inputs()
++    expected = {"path": path, "merge-multiple": "false" if name else "true",
++                "repository": REPOSITORY, "run-id": str(run["id"]),
++                "skip-decompress": "false", "digest-mismatch": "error"}
++    expected["name" if name else "pattern"] = name if name else "ssmcp-*"
++    need(inputs == expected, "artifact download inputs differ from this exact run")
++    rows = window.matching(
++        r"- (\S+) \(ID: ([1-9][0-9]*), Size: ([1-9][0-9]*), Expected Digest: sha256:([0-9a-f]{64})\)")
++    need(len(rows) == len(artifacts), "download selection count differs")
++    selected = {}
++    for _, match in rows:
++        artifact_name, artifact_id, size, digest = match.groups()
++        need(artifact_name not in selected and artifact_name in artifacts,
++             "download selection has duplicate or unexpected names")
++        artifact = artifacts[artifact_name]
++        need(int(artifact_id) == artifact["id"], "download is from another producer artifact")
++        artifact_matches(artifact, name=artifact_name, size=int(size), digest=digest, run=run)
++        selected[artifact_name] = {"id": int(artifact_id), "sha256": digest}
++    computed = [match[1] for _, match in window.matching(
++        r"SHA256 digest of downloaded artifact is ([0-9a-f]{64})")]
++    need(Counter(computed) == Counter(row["sha256"] for row in selected.values()),
++         "downloaded digest multiset differs; parallel output cannot be paired by order")
++    need(int(window.one(r"Total of ([1-9][0-9]*) artifact\(s\) downloaded")[1]) == len(artifacts),
++         "download final count differs")
++    window.one(r"Download artifact has finished successfully")
++    need(len(window.matching(r"Artifact download completed successfully\.")) == len(artifacts),
++         "individual artifact download completions are missing")
++    return {"job_id": log.job["id"], "step_number": number, "artifacts": selected}
++
++
++def save_bytes(directory, name, data):
++    need(re.fullmatch(r"[A-Za-z0-9_.-]+", name), "invalid local evidence filename")
++    path = directory / name
++    if path.exists():
++        need(path.is_file() and not path.is_symlink() and path.read_bytes() == data,
++             "existing evidence differs; refusing to overwrite it")
++    else:
++        with path.open("xb") as stream:
++            stream.write(data)
++    return {"file": name, "bytes": len(data), "sha256": sha256(data)}
++
++
++def list_artifacts(api_json, run):
++    result = []
++    total = None
++    for page in range(1, 11):
++        value = api_json(f"repos/{REPOSITORY}/actions/runs/{run['id']}/artifacts?per_page=100&page={page}")
++        need(type(value.get("total_count")) is int and 0 <= value["total_count"] <= 1000,
++             "unexpected artifact collection size")
++        if total is None:
++            total = value["total_count"]
++        need(value["total_count"] == total and isinstance(value.get("artifacts"), list),
++             "artifact collection changed during pagination")
++        result.extend(value["artifacts"])
++        if len(result) >= total:
++            break
++        need(len(value["artifacts"]) == 100, "artifact pagination is incomplete")
++    need(len(result) == total and len({a["id"] for a in result}) == len(result),
++         "artifact enumeration is incomplete or duplicated")
++    return result
++
++
++def read_zip(data, expected):
++    """Inspect exact regular members in memory; never extract a ZIP path to disk."""
++    members = {}
++    with zipfile.ZipFile(io.BytesIO(data)) as archive:
++        entries = archive.infolist()
++        need(len(entries) == len(expected), "artifact ZIP has an unexpected member count")
++        for entry in entries:
++            name = entry.filename
++            path = PurePosixPath(name)
++            kind = stat.S_IFMT(entry.external_attr >> 16)
++            need(name == path.as_posix() and not path.is_absolute()
++                 and ".." not in path.parts and "\\" not in name
++                 and name in expected and name not in members
++                 and not entry.is_dir() and kind in (0, stat.S_IFREG)
++                 and not entry.flag_bits & 1,
++                 "artifact ZIP contains an unsafe, duplicate or unexpected member")
++            need(0 < entry.file_size <= 512 * 1024 * 1024, "artifact member size is invalid")
++            value = archive.read(entry)
++            need(len(value) == entry.file_size, "artifact member size differs")
++            members[name] = value
++    need(set(members) == set(expected), "artifact ZIP regular file set differs")
++    return members
++
++
++def verify_execution(run, jobs, candidate, version, manifest, assets, official_crate,
++                     *, api_json, api_bytes, download, evidence_dir):
++    """Bind a single successful attempt through its real uploads and consumers."""
++    need(run["event"] == "workflow_dispatch" and run["head_branch"] == "main"
++         and run["run_attempt"] == 1 and run["conclusion"] == "success",
++         "not the original successful manual-main attempt")
++    need(jobs["deploy_server"]["conclusion"] == "skipped", "deployment did not remain skipped")
++    evidence_dir.mkdir(exist_ok=True)
++    need(evidence_dir.is_dir() and not evidence_dir.is_symlink(), "invalid evidence directory")
++    logs, log_receipts = {}, {}
++    for name, job in sorted(jobs.items()):
++        if name == "deploy_server":
++            continue
++        need(job["run_id"] == run["id"] and job["run_attempt"] == 1
++             and job["head_sha"] == run["head_sha"] and job["conclusion"] == "success",
++             "job does not belong to this successful attempt")
++        data = api_bytes(f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs")
++        receipt = save_bytes(evidence_dir, f"job-{job['id']}.log", data)
++        receipt["acquisition"] = "authenticated GET /actions/jobs/{job_id}/logs response body"
++        api_snapshot = json.dumps(job, sort_keys=True, ensure_ascii=False, indent=2).encode() + b"\n"
++        receipt["api_job"] = save_bytes(evidence_dir, f"job-{job['id']}-api-decoded.json", api_snapshot)
++        receipt["api_job"]["encoding"] = "canonical JSON of the fixed-attempt API record, not HTTP wire bytes"
++        uploads, downloads, next_action = action_shape(name)
++        log = JobLog(data, job, uploads, downloads)
++        receipt["checkout"] = verify_checkout(log, candidate, "v" + version, next_action)
++        logs[name], log_receipts[name] = log, receipt
++    need(len(logs) == 18, "required checkout count differs")
++    validation = verify_validation(logs["validate"], candidate, version)
++    all_artifacts = list_artifacts(api_json, run)
++    snapshot = json.dumps(all_artifacts, sort_keys=True, ensure_ascii=False, indent=2).encode() + b"\n"
++    artifact_snapshot = save_bytes(evidence_dir, "artifact-api-decoded.json", snapshot)
++    artifact_snapshot["encoding"] = "canonical JSON of decoded API records, not HTTP wire bytes"
++    expected_names = {"ssmcp-" + target for target in TARGETS}
++    relevant = [a for a in all_artifacts if a["name"].startswith("ssmcp-")
++                or a["name"] == "verified-crates"]
++    artifacts = {a["name"]: a for a in relevant}
++    need(set(artifacts) == expected_names | {"verified-crates"}
++         and len(relevant) == len(artifacts), "release artifact names are missing or duplicated")
++    uploaded, packages = {}, {}
++    for target in TARGETS:
++        name = "ssmcp-" + target
++        log = logs["Build " + target]
++        packages[name] = package_output(log, target)
++        count = 3 if "windows" in target else 1
++        uploaded[name] = upload_output(log, number=12, name=name, occurrence=count - 1,
++                                       total=count, artifact=artifacts[name], run=run)
++        if "windows" in target:
++            # The two diagnostic upload headers must precede the final package;
++            # their API identities are checked without treating them as release assets.
++            for number, step_name, occurrence in (
++                (10, "Retain real Windows browser dependency evidence", 0),
++                (11, "Retain Windows browser bootstrap evidence", 1)):
++                step = log.step(number, step_name)
++                log.timed(log.lines[log.positions(UPLOAD)[occurrence]], step)
++    uploaded["verified-crates"] = upload_output(
++        logs["finalize"], number=9, name="verified-crates", occurrence=0, total=1,
++        artifact=artifacts["verified-crates"], run=run, crate=True)
++    consumed = []
++    release_artifacts = {name: artifacts[name] for name in expected_names}
++    for target in TARGETS[:2]:
++        name = "ssmcp-" + target
++        consumed.append(download_output(
++            logs["Verify installed server " + target], number=3, occurrence=0, total=1,
++            artifacts={name: artifacts[name]}, run=run, name=name, path="dist",
++            next_header="sudo apt-get update", next_number=4,
++            next_name="Install system runtime dependencies"))
++    consumed.append(download_output(
++        logs["finalize"], number=5, occurrence=0, total=1, artifacts=release_artifacts,
++        run=run, path="dist", next_header='if [ -n "$RELEASE_TAG" ]; then', next_number=6,
++        next_name="Recheck the source, submodules and existing release tag"))
++    consumed.append(download_output(
++        logs["publish_crates"], number=5, occurrence=0, total=1,
++        artifacts={"verified-crates": artifacts["verified-crates"]}, run=run,
++        name="verified-crates", path="target/package",
++        next_header='python scripts/release.py validate --tag "$RELEASE_TAG"', next_number=6,
++        next_name="Recheck release tag identity"))
++    consumed.append(download_output(
++        logs["publish_release"], number=5, occurrence=0, total=2, artifacts=release_artifacts,
++        run=run, path="dist", next_header=DOWNLOAD, next_number=6, next_name="Run " + DOWNLOAD))
++    consumed.append(download_output(
++        logs["publish_release"], number=6, occurrence=1, total=2,
++        artifacts={"verified-crates": artifacts["verified-crates"]}, run=run,
++        name="verified-crates", path="target/package",
++        next_header='python scripts/release.py validate --tag "$RELEASE_TAG"', next_number=7,
++        next_name="Recheck tag identity and every target archive"))
++    records = {record["name"]: record for record in manifest["artifacts"]}
++    bridges = {}
++    for name, artifact in sorted(artifacts.items()):
++        data = api_bytes(f"repos/{REPOSITORY}/actions/artifacts/{artifact['id']}/zip")
++        need(len(data) == artifact["size_in_bytes"]
++             and "sha256:" + sha256(data) == artifact["digest"],
++             "downloaded outer artifact ZIP differs from GitHub metadata")
++        receipt = save_bytes(evidence_dir, f"artifact-{artifact['id']}.zip", data)
++        if name == "verified-crates":
++            crate_name = "ssmcp-" + version + ".crate"
++            contents = read_zip(data, {crate_name, "ssmcp-verified-crate.json"})
++            need(contents[crate_name] == official_crate,
++                 "finalize crate bytes differ from the official registry archive")
++            crate_receipt = unique_json(contents["ssmcp-verified-crate.json"].decode("utf-8"))
++            need(crate_receipt == manifest["verified_crate"],
++                 "finalize verified-crate receipt differs from the release manifest")
++        else:
++            package = packages[name]
++            archive_name = package["archive"]
++            contents = read_zip(data, {archive_name, archive_name + ".sha256"})
++            archive = contents[archive_name]
++            archive_sha = sha256(archive)
++            need(len(archive) == package["bytes"] == records[archive_name]["bytes"]
++                 and archive_sha == package["sha256"] == records[archive_name]["sha256"],
++                 "inner release archive differs from package JSON or manifest")
++            # package() writes through the native platform text stream.
++            newline = "\r\n" if archive_name.endswith("-pc-windows-msvc.zip") else "\n"
++            need(contents[archive_name + ".sha256"]
++                 == f"{archive_sha}  {archive_name}{newline}".encode(),
++                 "inner release sidecar differs")
++            public = download(assets[archive_name]["browser_download_url"])
++            need(public == archive and len(public) == assets[archive_name]["size"]
++                 and assets[archive_name].get("digest") == "sha256:" + sha256(public),
++                 "public release archive bytes differ from the CI-produced archive")
++            receipt["public_archive"] = {"name": archive_name, "bytes": len(public),
++                                         "sha256": sha256(public), "byte_identical": True}
++        receipt["members"] = {key: {"bytes": len(value), "sha256": sha256(value)}
++                              for key, value in sorted(contents.items())}
++        receipt["artifact_id"] = artifact["id"]
++        bridges[name] = receipt
++    for name, log in logs.items():
++        log_receipts[name]["mapped_windows"] = sorted(log.windows, key=lambda w: w["first_line"])
++    return {"verified": True, "run_id": run["id"], "run_attempt": 1,
++            "workflow_api_head_sha": run["head_sha"], "candidate_source_sha": candidate,
++            "checkout_count": len(logs), "validation": validation,
++            "job_logs": log_receipts, "artifact_api": artifact_snapshot,
++            "producer_uploads": uploaded, "consumer_downloads": consumed,
++            "downloaded_artifact_bytes": bridges,
++            "trust_boundary": "Reviewed recipe, pinned actions and GitHub runner; not malicious-builder attestation"}
+--- /dev/null
++++ dispatch_receipt_adapter.py
+@@ -0,0 +1,385 @@
++"""Parse an operator-captured GitHub dispatch, without executing anything.
++
++The expected hashes and native binding are independent trusted inputs.  Hashes
++bind bytes; they do not prove that a command was issued.  Authenticity depends on
++the operator's original tool receipt and the reviewer's independent observation.
++This module performs no file, process, network, or clock operations.
++"""
++
++import base64
++import binascii
++import datetime
++import hashlib
++import json
++import re
++
++
++CAPTURE_SCHEMA = "ssmcp-gh-api-capture-v1"
++API_VERSION = "2026-03-10"
++REPOSITORY = "LIghtJUNction/ssmcp"
++DISPATCH_ENDPOINT = (
++    "repos/" + REPOSITORY + "/actions/workflows/release.yml/dispatches"
++)
++API_REPOSITORY_URL = "https://api.github.com/repos/" + REPOSITORY
++HTML_REPOSITORY_URL = "https://github.com/" + REPOSITORY
++
++_CAPTURE_FIELDS = {
++    "schema", "argv", "stdin_base64", "stdout_base64", "stderr_base64",
++    "exit_code", "started_utc", "finished_utc",
++}
++_NATIVE_FIELDS = {
++    "id", "exit_code", "running", "stdout", "stderr", "stdout_eof",
++    "stderr_eof", "stdout_cursor", "error",
++}
++_SHA256 = re.compile(r"[0-9a-f]{64}")
++_UTC = re.compile(
++    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
++    r"(?:\.\d{1,6})?(?:Z|\+00:00)"
++)
++_HTTP_STATUS = re.compile(
++    rb"HTTP/(?:1\.0|1\.1|2(?:\.0)?) ([0-9]{3})(?: [\x20-\x7e]*)?"
++)
++_HEADER_NAME = re.compile(rb"[!#$%&'*+\-.^_\x60|~0-9A-Za-z]+")
++
++
++class DispatchReceiptError(ValueError):
++    """The supplied original-byte evidence does not meet this contract."""
++
++
++def _require(condition, message):
++    if not condition:
++        raise DispatchReceiptError(message)
++
++
++def _json_document(raw, label):
++    _require(type(raw) is bytes, label + " must be original bytes")
++
++    def unique_object(pairs):
++        result = {}
++        for key, value in pairs:
++            _require(key not in result, label + " has duplicate JSON keys")
++            result[key] = value
++        return result
++
++    def reject_constant(_value):
++        raise DispatchReceiptError(label + " has a non-finite JSON value")
++
++    try:
++        return json.loads(
++            raw.decode("utf-8", errors="strict"),
++            object_pairs_hook=unique_object,
++            parse_constant=reject_constant,
++        )
++    except DispatchReceiptError:
++        raise
++    except (UnicodeError, ValueError, RecursionError) as exc:
++        raise DispatchReceiptError(label + " is not one UTF-8 JSON document") from exc
++
++
++def _utf8(value, label):
++    _require(type(value) is str, label + " must be a string")
++    try:
++        return value.encode("utf-8", errors="strict")
++    except UnicodeError as exc:
++        raise DispatchReceiptError(label + " has invalid Unicode") from exc
++
++
++def _sha256_matches(raw, expected, label):
++    _require(type(raw) is bytes and len(raw) > 0, label + " must be nonempty bytes")
++    _require(
++        type(expected) is str and _SHA256.fullmatch(expected) is not None,
++        label + " needs an independently supplied lowercase SHA-256",
++    )
++    actual = hashlib.sha256(raw).hexdigest()
++    _require(actual == expected, label + " SHA-256 mismatch")
++    return actual
++
++
++def _base64_bytes(value, label):
++    _require(type(value) is str, label + " must be a base64 string")
++    try:
++        encoded = value.encode("ascii", errors="strict")
++        decoded = base64.b64decode(encoded, validate=True)
++    except (UnicodeError, ValueError, binascii.Error) as exc:
++        raise DispatchReceiptError(label + " is not strict base64") from exc
++    _require(
++        base64.b64encode(decoded).decode("ascii") == value,
++        label + " is not canonical base64",
++    )
++    return decoded
++
++
++def _utc_time(value, label):
++    _require(
++        type(value) is str and _UTC.fullmatch(value) is not None,
++        label + " must be an explicit UTC timestamp",
++    )
++    try:
++        parsed = datetime.datetime.fromisoformat(
++            value[:-1] + "+00:00" if value.endswith("Z") else value
++        )
++    except ValueError as exc:
++        raise DispatchReceiptError(label + " is not a valid UTC timestamp") from exc
++    _require(parsed.utcoffset() == datetime.timedelta(0), label + " is not UTC")
++    return parsed
++
++
++def _same_json_value(left, right):
++    # Python equality alone conflates False with 0 and True with 1.
++    options = {"sort_keys": True, "separators": (",", ":"), "ensure_ascii": True}
++    return json.dumps(left, **options) == json.dumps(right, **options)
++
++
++def _parse_argv(argv):
++    _require(
++        type(argv) is list
++        and all(type(item) is str for item in argv)
++        and argv[:2] == ["gh", "api"],
++        "capture argv must start with gh api",
++    )
++    options = {}
++    endpoint = None
++    index = 2
++    value_options = {"--method", "--header", "--hostname", "--input"}
++    while index < len(argv):
++        item = argv[index]
++        if item == "--include":
++            _require(item not in options, "duplicate --include option")
++            options[item] = True
++            index += 1
++        elif item in value_options:
++            _require(item not in options, "duplicate gh api option")
++            _require(index + 1 < len(argv), "incomplete gh api option")
++            options[item] = argv[index + 1]
++            index += 2
++        else:
++            _require(not item.startswith("-"), "unsupported gh api option")
++            _require(endpoint is None, "multiple gh api endpoints")
++            endpoint = item
++            index += 1
++    _require(
++        set(options) == value_options | {"--include"},
++        "capture argv is missing a required gh api option",
++    )
++    _require(endpoint == DISPATCH_ENDPOINT, "dispatch endpoint mismatch")
++    _require(options["--method"] == "POST", "capture is not a POST dispatch")
++    _require(options["--hostname"] == "github.com", "explicit GitHub hostname required")
++    _require(options["--input"] == "-", "dispatch body must come from captured stdin")
++    header = options["--header"].split(":", 1)
++    _require(
++        len(header) == 2
++        and header[0].lower() == "x-github-api-version"
++        and header[1].strip() == API_VERSION,
++        "dispatch API version mismatch",
++    )
++    return {
++        "method": "POST",
++        "url": "https://api.github.com/" + DISPATCH_ENDPOINT,
++        "api_version": API_VERSION,
++    }
++
++
++def _explicit_false(value):
++    return value is False or (type(value) is str and value == "false")
++
++
++def _parse_request_body(stdin):
++    body = _json_document(stdin, "captured request body")
++    _require(
++        type(body) is dict and set(body) == {"ref", "inputs"},
++        "dispatch body must contain exactly ref and inputs",
++    )
++    _require(body["ref"] == "main", "dispatch workflow ref must be main")
++    inputs = body["inputs"]
++    _require(
++        type(inputs) is dict
++        and set(inputs) == {"tag", "build_only", "deploy_server"},
++        "dispatch inputs must explicitly contain tag, build_only and deploy_server",
++    )
++    _require(
++        type(inputs["tag"]) is str and len(inputs["tag"]) > 0,
++        "dispatch tag must be a nonempty string",
++    )
++    _require(
++        _explicit_false(inputs["build_only"]),
++        "build_only must be explicit false",
++    )
++    _require(
++        _explicit_false(inputs["deploy_server"]),
++        "deploy_server must be explicit false",
++    )
++    return body
++
++
++def _parse_http_response(stdout):
++    _require(type(stdout) is bytes and len(stdout) > 0, "captured stdout is empty")
++    status_line, separator, remainder = stdout.partition(b"\n")
++    _require(separator == b"\n", "missing gh --include status line")
++    if status_line.endswith(b"\r"):
++        status_line = status_line[:-1]
++    match = _HTTP_STATUS.fullmatch(status_line)
++    _require(match is not None, "invalid gh --include HTTP status line")
++    status = int(match.group(1))
++    _require(status == 200, "dispatch did not return HTTP 200")
++
++    # Observed gh output uses LF for the status line and CRLF for headers.
++    # Accept that representation and uniform LF/CRLF without changing body bytes.
++    separators = [
++        (position, marker)
++        for marker in (b"\r\n\r\n", b"\n\n")
++        for position in [remainder.find(marker)]
++        if position >= 0
++    ]
++    _require(len(separators) > 0, "missing HTTP header/body boundary")
++    boundary, marker = min(separators, key=lambda item: item[0])
++    raw_headers = remainder[:boundary].replace(b"\r\n", b"\n")
++    _require(b"\r" not in raw_headers, "bare CR in HTTP headers")
++    headers = {}
++    for line in raw_headers.split(b"\n"):
++        name, colon, value = line.partition(b":")
++        _require(
++            colon == b":" and _HEADER_NAME.fullmatch(name) is not None,
++            "invalid HTTP header",
++        )
++        _require(
++            all(byte == 9 or 32 <= byte <= 126 or byte >= 128 for byte in value),
++            "control character in HTTP header",
++        )
++        headers.setdefault(name.lower(), []).append(value.strip(b" \t"))
++
++    selected = headers.get(b"x-github-api-version-selected")
++    if selected is not None:
++        _require(
++            selected == [API_VERSION.encode("ascii")],
++            "server-selected API version mismatch",
++        )
++    content_types = headers.get(b"content-type")
++    if content_types is not None:
++        _require(len(content_types) == 1, "ambiguous HTTP content type")
++        media_type = content_types[0].split(b";", 1)[0].strip().lower()
++        _require(
++            media_type == b"application/json"
++            or (media_type.startswith(b"application/") and media_type.endswith(b"+json")),
++            "dispatch response content type is not JSON",
++        )
++
++    body = _json_document(
++        remainder[boundary + len(marker):], "captured dispatch response"
++    )
++    _require(type(body) is dict, "dispatch response must be a JSON object")
++    run_id = body.get("workflow_run_id")
++    _require(type(run_id) is int and run_id > 0, "dispatch response lacks a real run ID")
++    _require(
++        body.get("run_url") == API_REPOSITORY_URL + "/actions/runs/" + str(run_id),
++        "dispatch response run_url mismatch",
++    )
++    _require(
++        body.get("html_url") == HTML_REPOSITORY_URL + "/actions/runs/" + str(run_id),
++        "dispatch response html_url mismatch",
++    )
++    return {"status": status, "body": body}
++
++
++def parse_dispatch_capture(
++    capture_bytes,
++    *,
++    expected_capture_sha256,
++    native_execution_receipt_bytes,
++    expected_native_execution_receipt_sha256,
++    expected_native_execution_binding,
++):
++    """Return request/response facts derived from recorded original bytes.
++
++    The caller must obtain both expected hashes, native_job_id and capture_path
++    from an independently reviewed original tool observation.  Supplying two
++    self-authored JSON files and their hashes does not establish authenticity.
++    Later run/attempt, expected tag, workflow SHA, jobs and release binding remain
++    the responsibility of the main verifier.
++    """
++    capture_sha = _sha256_matches(
++        capture_bytes, expected_capture_sha256, "capture"
++    )
++    _sha256_matches(
++        native_execution_receipt_bytes,
++        expected_native_execution_receipt_sha256,
++        "native execution receipt",
++    )
++    binding = expected_native_execution_binding
++    _require(
++        type(binding) is dict
++        and set(binding) == {"native_job_id", "capture_path"}
++        and all(type(value) is str and len(value) > 0 for value in binding.values()),
++        "independently reviewed native job/path binding is required",
++    )
++    native = _json_document(native_execution_receipt_bytes, "native execution receipt")
++    _require(
++        type(native) is dict and _NATIVE_FIELDS <= set(native),
++        "native execution receipt fields are incomplete",
++    )
++    _require(native["id"] == binding["native_job_id"], "native job binding mismatch")
++    _require(
++        type(native["exit_code"]) is int and native["exit_code"] == 0,
++        "native capture command did not exit successfully",
++    )
++    _require(native["running"] is False, "native capture command is still running")
++    _require(
++        native["stdout_eof"] is True and native["stderr_eof"] is True,
++        "native capture receipt does not contain both complete streams",
++    )
++    _require(
++        type(native["stdout_cursor"]) is int and native["stdout_cursor"] >= 0,
++        "native stdout cursor is invalid",
++    )
++    _require(type(native["stderr"]) is str, "native stderr is not recorded")
++    _require(native["error"] is None, "native execution receipt contains an error")
++    for flag in ("truncated", "stdout_truncated", "stderr_truncated"):
++        if flag in native:
++            _require(native[flag] is False, "native execution receipt is truncated")
++
++    native_stdout = _utf8(native["stdout"], "native stdout")
++    _require(
++        native["stdout_cursor"] == len(native_stdout),
++        "native stdout must contain the complete stream from byte zero",
++    )
++    envelope = _json_document(native_stdout, "native stdout")
++    _require(
++        type(envelope) is dict and set(envelope) == {"file", "capture"},
++        "native stdout must be the complete file/capture envelope",
++    )
++    file_binding = envelope["file"]
++    _require(
++        type(file_binding) is dict and set(file_binding) == {"path", "bytes", "sha256"},
++        "native capture file descriptor is invalid",
++    )
++    _require(file_binding["path"] == binding["capture_path"], "native capture path mismatch")
++    _require(
++        type(file_binding["bytes"]) is int and file_binding["bytes"] == len(capture_bytes),
++        "native capture byte length mismatch",
++    )
++    _require(file_binding["sha256"] == capture_sha, "native capture SHA-256 mismatch")
++
++    capture = _json_document(capture_bytes, "capture")
++    _require(
++        type(capture) is dict and set(capture) == _CAPTURE_FIELDS,
++        "capture must contain the original collector fields only",
++    )
++    _require(capture["schema"] == CAPTURE_SCHEMA, "capture schema mismatch")
++    _require(
++        _same_json_value(envelope["capture"], capture),
++        "native envelope capture differs from the original capture",
++    )
++    _require(
++        type(capture["exit_code"]) is int and capture["exit_code"] == 0,
++        "captured gh command did not exit successfully",
++    )
++    started = _utc_time(capture["started_utc"], "capture start")
++    finished = _utc_time(capture["finished_utc"], "capture finish")
++    _require(finished >= started, "capture timestamps are reversed")
++
++    request = _parse_argv(capture["argv"])
++    stdin = _base64_bytes(capture["stdin_base64"], "captured stdin")
++    stdout = _base64_bytes(capture["stdout_base64"], "captured stdout")
++    _base64_bytes(capture["stderr_base64"], "captured stderr")
++    request["body"] = _parse_request_body(stdin)
++    response = _parse_http_response(stdout)
++    return {"request": request, "response": response}

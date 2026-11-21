@@ -1,0 +1,96 @@
+{
+  "schema": "ssmcp.manual-main-verifier.preparation.v1",
+  "status": "UNBOUND",
+  "prepared_at_utc": "2026-11-21T03:00:14.835010+00:00",
+  "prepared_version": "0.10.25",
+  "route": "workflow_dispatch/main, original attempt only",
+  "files": {
+    "verify_published_manual_main.py": {
+      "bytes": 45719,
+      "sha256": "d84c6a02b73a9752e0a5b5ad2658deba3afe6c3dcccc83a8b0a1df2d913c0479"
+    },
+    "manual_main_provenance.py": {
+      "bytes": 30695,
+      "sha256": "26c25c00314530ef297fc8d56451ccec696325db7d5ad1140447bce1afc9ca48"
+    },
+    "dispatch_receipt_adapter.py": {
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    },
+    "changes-from-v25-push.diff": {
+      "bytes": 72404,
+      "sha256": "0cc931a8c956ec3276fe09dce72644b231787f032898741484fa137a76edfd47"
+    },
+    "README.md": {
+      "bytes": 10732,
+      "sha256": "86ddad0d88624c2723380ea7cd33bea635c31846cb332f22f933a6ef2402ed8e"
+    },
+    "static-preparation.json": {
+      "bytes": 2652,
+      "sha256": "84eb0f12d3d36987a03bd97174b1d7d4a3e6fc05f7f40f9cebd813aa189ad251"
+    },
+    "dispatch-capture.schema.json": {
+      "bytes": 4833,
+      "sha256": "8b1777c6168584ba418a88e3776801f1e12b9a40e803925a0d4ef9661b951274"
+    }
+  },
+  "baseline": {
+    "path": "../publication-verifier-v25-unbound/verify_published_candidate.py",
+    "bytes": 30229,
+    "sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109",
+    "unchanged": true
+  },
+  "recipe_review_source": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+  "recipe_pins": {
+    ".github/workflows/release.yml": {
+      "bytes": 18881,
+      "sha256": "6dd28b97b77386edb6fa8d6538ed9954f0ed00b1b97e1baa2651f339415c2295"
+    },
+    ".github/workflows/ci.yml": {
+      "bytes": 14941,
+      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "bytes": 54070,
+      "sha256": "43e995d675689f3c881f4452172796f4e2f7b195dbceef3dbb9b1ed1d9f95be4"
+    },
+    "scripts/install.sh": {
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    }
+  },
+  "final_bindings": {
+    "candidate_sha": null,
+    "workflow_sha": null,
+    "release_run_id": null,
+    "dispatch_capture_sha256": null,
+    "native_execution_receipt_sha256": null,
+    "native_job_id": null,
+    "remote_capture_path": null
+  },
+  "implementation": {
+    "dispatch_adapter": "parse_dispatch_capture",
+    "execution_bridge": "verify_execution",
+    "unconditional_provenance_stub": false
+  },
+  "verification_executed": false,
+  "raw_dispatch_originality": "Requires independently reviewed original execution readback; hashes/self-authored JSON do not self-authenticate.",
+  "limits": [
+    "Static preparation only; no parser, helper, offline test or publication execution",
+    "Historical samples demonstrate formats only",
+    "Requires final accepted S and actual P containing S with unchanged reviewed recipe bytes",
+    "Requires actual original HTTP200 dispatch receipt and matching attempt1",
+    "Requires live complete logs, seven nonexpired release artifacts, final assets and official crate",
+    "Ordinary reviewed CI chain, not malicious-builder attestation"
+  ],
+  "public_bundle_note": "Three active source files and complete diff are byte-identical to the frozen preparation; documentation and metadata omit private recovery identities.",
+  "private_preparation_manifest_sha256": "c9d833a44352f27b9f509a590aa7853c5003c45817ad7c00312e2ad3632fef00"
+}
