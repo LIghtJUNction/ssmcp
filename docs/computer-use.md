@@ -6,7 +6,7 @@ computer-use 是 ssmcp 客户端内置的控制能力。它提供 Linux、Window
 
 ## zuse 后端与平台适配
 
-桌面核心固定使用 `zuse-computer 0.2.2`，由 SSMCP 的受管工作进程执行。SSMCP 负责连接授权、私有桌面、输入取消与清理，以及需要保留的平台身份和结果确认。状态结果的 `zuse` 字段包含实际库版本、后端、可用性和探测失败原因；`engine_routes` 按操作给出真正使用的引擎。[zuse 适配入口](../src/computer/zuse_backend.rs) · [路由与状态汇总](../src/computer/routing.rs)
+桌面核心使用 zuse 默认 Git 分支解析出的 `zuse-computer 0.3.0`，由 SSMCP 的受管工作进程执行。当前锁和 gitlink 对应提交 `830fcefd2277cbba46536c67d206f29058ba7fb3`。SSMCP 负责连接授权、私有桌面、输入取消与清理，以及需要保留的平台身份和结果确认。状态结果的 `zuse` 字段包含实际库版本、后端、可用性和探测失败原因；`engine_routes` 按操作给出真正使用的引擎。[zuse 适配入口](../src/computer/zuse_backend.rs) · [路由与状态汇总](../src/computer/routing.rs)
 
 | 操作 | Linux | Windows / macOS |
 | --- | --- | --- |

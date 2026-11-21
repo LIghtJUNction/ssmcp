@@ -7,11 +7,11 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 | `crates/ztuio` | `ztuio = 0.1.0`，Rust 库名 `ztuio` | 终端布局、文本行和 ANSI 差分帧 | [ztuio](https://github.com/LIghtJUNction/ztuio) |
 | `crates/zharness` | `zharness = 0.6.0` | 原生扩展接口与调用原语 | [zharness](https://github.com/LIghtJUNction/zharness) |
 | `crates/zplugin` | `zplugin = 0.3.1` | 显式指定的本机动态库加载与 ABI 校验 | [zplugin](https://github.com/LIghtJUNction/zplugin) |
-| `crates/zuse` | `zuse-computer = 0.2.2`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
+| `crates/zuse` | `zuse-computer = 0.3.0`，Rust 库名 `zuse` | 通过受管工作进程调用桌面输入、窗口与截图 API | [zuse](https://github.com/LIghtJUNction/zuse) |
 
-应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 保留四项直接依赖的精确版本、包别名和 feature，以便 Cargo 生成外部发布包。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
+应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 直接声明 Git 默认分支来源，保留包别名和 feature。实际解析版本来自上游 manifest，提交由 Cargo.lock 记录。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
 
-四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/cb63a9a0aa163214c6062664cd62fefb357be5a8/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/cf02c1d9db575b92b36297dfe1fde72de9ee51e4/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/564ede15db66530a6dbb78e8b1f4a85998b6f0d8/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/0fc2d9cb61feb27c49a797e2dcaa8f805ec89460/Cargo.toml)
+四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/cb63a9a0aa163214c6062664cd62fefb357be5a8/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/cf02c1d9db575b92b36297dfe1fde72de9ee51e4/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/317c52f101f112c6af671a629d8406305a168e4a/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml)
 
 ## 每轮迭代与发行前同步
 
@@ -19,7 +19,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 2. 同步 manifest、相关 Git 锁项和源码 gitlink。同一个仓库的包版本取自实际 manifest。仅执行 `cargo update --workspace` 不会刷新已有的 Git heads。按当前 Cargo 图更新相应 Git 包，再核对完整锁定元数据与 checkout。
 3. 对受影响的消费者执行定向编译、契约或集成检查。记录已核对的版本、提交和结果。最终门禁使用协调者冻结的同一批源码和锁文件。
 
-外部发行还要通过独立的 registry 路径。Cargo 的标准打包过程会规范化 manifest，并使用包内的 registry 锁文件构建。预检检查解包后的 `Cargo.toml`、`Cargo.lock`、源提交和实际元数据，再将结果、Git 图和各项摘要写入发行收据。仅凭开发图能编译无法确认 registry 包可用。[Cargo 打包说明](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
+外部发行还要通过独立的 registry 路径。Cargo 的标准打包过程会规范化 manifest，并使用包内的 registry 锁文件构建。预检检查解包后的 `Cargo.toml`、`Cargo.lock`、源提交和实际元数据，再将结果、Git 图和各项摘要写入发行收据。当前 Git-only 依赖声明缺少现有发布预检要求的 registry 版本选择器。外部打包流程还需要适配，并实际验证 registry 包。[Cargo 打包说明](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 
 ### 2026-11-20 迁移前核对记录
 
@@ -68,7 +68,7 @@ SSMCP 的 crates.io workflow 只发布应用包。独立依赖版本必须在各
 
 ## zuse 桌面调用
 
-zuse 的 Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，当前直接版本约束为 `=0.2.2`。开发图的实际提交以 Cargo.lock 和对应 gitlink 的一致性检查为准。相同版本字符串可出现在多个不同 Git 提交上。
+zuse 的 Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，当前 Git 源以默认分支提交 `830fcefd2277cbba46536c67d206f29058ba7fb3` 解析到 `0.3.0`。Cargo.lock 与 `crates/zuse` gitlink 记录同一源码。相同版本字符串可出现在多个不同 Git 提交上。
 
 Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，以保留聚焦身份检查。各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
 
