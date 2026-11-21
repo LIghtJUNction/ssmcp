@@ -12,6 +12,12 @@
 
 已归属会话的回复保留原历史归属，并沿用原有幂等回执。终端批量解码粘贴内容，保留按键顺序、输入限制和草稿。显式选择 Next caller 后使用 `next` 目标投递。[会话历史](conversation-history.md) · [粘贴回归定义](../src/client/terminal/conversation/tests/paste_batch.rs)
 
+## 原生图片与 Unix 输入租约
+
+同一次原生工具调用返回的多张图片分别显示在独立卡片中。预览按各自的事件 ID 关联，保留来源、原会话和调用身份。工具摘要继续独立计数。[图片事件](../src/client/terminal/events.rs#L1550) · [会话与调用回归定义](../src/client/terminal/events/source_tests.rs#L456)
+
+在 Unix 上，主机输入租约的持有对象释放时会显式解锁。派生进程暂时保留旧文件描述符时，其他请求仍可取得已释放的输入锁。回归覆盖关闭旧描述符后新租约继续有效的情况。[输入租约](../src/computer/host_control/storage.rs#L54) · [文件描述符回归定义](../src/computer/host_control/storage.rs#L418)
+
 ## 发布状态
 
 本轮准备 0.10.25 的源码版本。最终整合、构建与运行验证、发布和安装结果均待确认。发布工作流延后本版的生产 relay 部署。此版本提交仅更新 ssmcp 自身版本，继续沿用现有锁定依赖。[发布流程](releases.md)
