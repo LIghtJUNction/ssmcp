@@ -217,7 +217,7 @@ def pi_call(harness, command, arguments=None):
 
 def native_defaults(harness, label, context):
     rows = harness.call("ssmcp.harnesses.list")["harnesses"]
-    names = {"codex", "claude", "pi", "opencode", "playwright", "ssmcp"}
+    names = {"codex", "claude", "pi", "opencode", "ssmcp"}
     providers = {row["provider"]: row for row in rows}
     harness.check(len(rows) == len(providers) == len(names) and set(providers) == names,
                   f"{context}: all optional providers have distinct lazy state records")
@@ -308,10 +308,9 @@ def catalog(harness, mode, label):
         name: sum(tool.startswith((f"{name}.", f"ssmcp.{name}.")) for tool in names)
         for name in harness_names
     }, f"{mode}: harness counts match the complete registered catalog")
-    playwright = providers["playwright"]
-    harness.check(playwright["status"] == "not_loaded" and playwright["tools"] == 0
+    harness.check("playwright" not in providers
                   and not any(name.startswith("playwright.") for name in names),
-                  f"{mode}: the unloaded optional Playwright MCP provider contributes no native tools")
+                  f"{mode}: the retired Playwright MCP provider and its tools are absent")
     harness.check({name for name, count in counts.items() if count} == expected,
                   f"{mode}: explicit loading reports exactly the requested fixture harnesses")
     invocations = harness.external_invocations(label)
