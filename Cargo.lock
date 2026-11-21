@@ -21,6 +21,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arbitrary"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -323,6 +332,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b034bd7d5f032402a2479444dcc6f74e36a03f31854d41680fb240ef682a1ac"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -394,6 +414,16 @@ dependencies = [
  "libc",
  "thiserror 1.0.69",
  "winapi",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1255e7a9f1902190d4c10a75f2f7f495d3d3ce13e9ba26e6c48683a0f4dbed7"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
@@ -1587,6 +1617,7 @@ dependencies = [
  "base64 0.23.1",
  "cap-fs-ext",
  "cap-std",
+ "flate2",
  "futures-util",
  "getrandom 0.4.3",
  "image",
@@ -1603,6 +1634,7 @@ dependencies = [
  "serde_urlencoded",
  "sha2",
  "subtle",
+ "tar",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.30.0",
@@ -1613,9 +1645,9 @@ dependencies = [
  "webpki-roots 1.0.12",
  "windows-sys 0.61.2",
  "zharness",
+ "zip",
  "zplugin",
  "ztuio",
- "zuse-computer",
 ]
 
 [[package]]
@@ -1670,6 +1702,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]
@@ -2419,27 +2461,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "z64"
-version = "0.1.2"
-source = "git+https://github.com/LIghtJUNction/z64.git#7e9cff67beae2c484f8b9749b83ae24a1d0e1bbd"
-
-[[package]]
 name = "zcall"
-version = "0.4.0"
-source = "git+https://github.com/LIghtJUNction/zcall.git#199678d08104bed588e5d10b2c0634a47d7c8417"
+version = "0.4.1"
+source = "git+https://github.com/LIghtJUNction/zcall.git#8dd30a922a0aedbe821f610649b1ab26078d1882"
 dependencies = [
  "zconv",
 ]
 
 [[package]]
-name = "zclap"
-version = "0.1.4"
-source = "git+https://github.com/LIghtJUNction/zclap.git#4d87f3ae3743e81509d5ac5500909955667c860f"
-
-[[package]]
 name = "zconv"
-version = "0.4.0"
-source = "git+https://github.com/LIghtJUNction/zconv.git#0af1f7eb0766ff0ce9db5cee7c6184eff511a8c1"
+version = "0.4.1"
+source = "git+https://github.com/LIghtJUNction/zconv.git#f78b97b7065bbb7cf9ddfd0914d7f2296bbfe712"
 
 [[package]]
 name = "zerocopy"
@@ -2529,7 +2561,7 @@ source = "git+https://github.com/LIghtJUNction/zguard.git#6772b932a65e18f64e1359
 [[package]]
 name = "zharness"
 version = "0.6.0"
-source = "git+https://github.com/LIghtJUNction/zharness.git#fb2948f78467dd92b216aabda6f18a5645f0e7f6"
+source = "git+https://github.com/LIghtJUNction/zharness.git#5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
 dependencies = [
  "zcall",
  "zguard",
@@ -2537,18 +2569,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zip"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2a05c7c36fde6c09b08576c9f7fb4cda705990f73b58fe011abf7dfb24168b"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+]
+
+[[package]]
 name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
-
-[[package]]
-name = "zmcpio"
-version = "0.4.0"
-source = "git+https://github.com/LIghtJUNction/zmcpio.git#04bb6cd05c5295ab41a892a76cbef10b8ac07402"
-dependencies = [
- "zcall",
-]
 
 [[package]]
 name = "zmij"
@@ -2598,15 +2635,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
-]
-
-[[package]]
-name = "zuse-computer"
-version = "0.3.0"
-source = "git+https://github.com/LIghtJUNction/zuse.git#8d37a7df6fd94df1d0939eb6800c238e71f5835d"
-dependencies = [
- "z64",
- "zclap",
- "zmcpio",
- "zsys",
 ]
