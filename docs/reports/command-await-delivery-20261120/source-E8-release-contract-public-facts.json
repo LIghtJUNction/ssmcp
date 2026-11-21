@@ -1,0 +1,205 @@
+{
+  "schema": "ssmcp-release-contract-source-observation-v1",
+  "observed_at_utc": "2026-11-21 07:42:15 UTC",
+  "observation_kind": "immutable source and static workflow contract; not execution evidence",
+  "source": {
+    "commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+    "tree": "f746f33fa6a7ded32e9b4d94ece1404dc8ec6786",
+    "parents": [
+      "9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b"
+    ],
+    "commit_time": "2026-11-21T07:35:54Z",
+    "subject": "fix(release): verify Git binaries separately from registry publication [skip ci]"
+  },
+  "source_files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 14941,
+      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+    },
+    {
+      "path": ".github/workflows/deploy-server.yml",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    {
+      "path": "scripts/release.py",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    {
+      "path": "scripts/test_release.py",
+      "bytes": 107660,
+      "sha256": "df8bd0c461e9ada30a7647c8ef8dcb8afe6c1a3e60b9997252190569c638c103"
+    },
+    {
+      "path": "scripts/install.sh",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    {
+      "path": "docs/releases.md",
+      "bytes": 19574,
+      "sha256": "960f94328c4766c1949aa101186179b90c81027d488f033b4c1c5e59f2f54f4e"
+    },
+    {
+      "path": "docs/dependencies.md",
+      "bytes": 10190,
+      "sha256": "11f428ba4a60d4b165a1bacfd9a2e0efbf5541eb9904ba9bdcca5f92f44039f6"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 66476,
+      "sha256": "5e9d5cecd724991e310e2ec34867545cf6efed7b1a2a24e2e15ca628e2efceb6"
+    },
+    {
+      "path": ".gitmodules",
+      "bytes": 383,
+      "sha256": "6ef5b5c10a4c80a77dc76d1adb5970edb73fe4033de9dc2f376fe2bd9274bb51"
+    }
+  ],
+  "formal_v0_10_25_contract": {
+    "name": "git-source-v1",
+    "version": "0.10.25",
+    "manifest_schema_version": 2,
+    "expected_public_assets": 16,
+    "binary_platforms": 6,
+    "manifest_artifact_records": 8,
+    "crate_publication": {
+      "status": "deferred",
+      "reason": "Independent registry dependencies and the external package require separate verification."
+    },
+    "verified_crate": null,
+    "expected_job_conclusions": {
+      "total": 19,
+      "success": 17,
+      "skipped": [
+        "publish_crates",
+        "deploy_server"
+      ]
+    },
+    "source_artifact": {
+      "name": "verified-source",
+      "path": "target/release-proof/verified-source.json",
+      "members": [
+        "verified-source.json"
+      ],
+      "schema": {
+        "contract": "git-source-v1",
+        "source_fields": [
+          "commit",
+          "tree",
+          "manifest_sha256",
+          "cargo_lock_sha256",
+          "submodules",
+          "dependency_graph",
+          "cargo",
+          "rustc"
+        ]
+      }
+    },
+    "finalized_artifact": {
+      "name": "finalized-release-assets",
+      "path": "dist/",
+      "expected_regular_members": 16
+    },
+    "pipeline": "finalize records verified source and finalized public asset bytes; publish_release downloads both named artifacts and rechecks the finalized manifest and sums before publication",
+    "release_manifest_fields": [
+      "schema_version",
+      "package",
+      "version",
+      "commit",
+      "tree",
+      "source_manifest_sha256",
+      "cargo_lock_sha256",
+      "toolchain",
+      "submodules",
+      "dependency_graph",
+      "crate_publication",
+      "verified_crate",
+      "artifacts"
+    ],
+    "source_comparison": "verified_source_receipt re-derives release_source and requires full JSON equality; source identity and Cargo.lock are checked before/after graph resolution",
+    "registry_path": "A separate release-only manifest derives exact version selectors from checked-out Git packages; registry packaging, lock/checksum, byte and dry-run verification remain separate from the v0.10.25 binary contract.",
+    "legacy_path": "An explicit legacy-tag-v1 branch handles qualifying historical immutable tags selected through manual main; the new H2 verifier will not claim support for that branch."
+  },
+  "h2_preparation": {
+    "baseline_commit": "2257fb1d235bba59e8a0d1747a4f4afc6348bad3",
+    "original_preserved": true,
+    "new_scope": "0.10.25 manual-main git-source-v1 with crate publication deferred",
+    "stage": "static adaptation and independent review completed; helper unexecuted and bindings null",
+    "expected_actions_artifacts": 8,
+    "byte_bridges": [
+      "six build artifacts to public binary archives",
+      "verified-source receipt to immutable source/lock/graph and release manifest",
+      "finalized-release-assets exact 16-member set to all public asset bytes"
+    ],
+    "dispatch_adapter_changed": false,
+    "final_candidate_sha": null,
+    "workflow_sha": null,
+    "tag_binding": null,
+    "run_id": null,
+    "dispatch_capture": null,
+    "module_identities": [
+      {
+        "name": "verify_published_manual_main.py",
+        "bytes": 48867,
+        "sha256": "17f99f187074ab8285c8b386a644c3fd334ccccc8ac2bf0920c074644de6bd26"
+      },
+      {
+        "name": "manual_main_provenance.py",
+        "bytes": 43619,
+        "sha256": "fee247f4ddec119be9d7a2fb98b7d4bb455fb1fd45590e1dcd3fc22c3a6822c9"
+      },
+      {
+        "name": "dispatch_receipt_adapter.py",
+        "bytes": 14758,
+        "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+      }
+    ]
+  },
+  "execution_boundaries": {
+    "source_files_retrieved_with_github_plugin": true,
+    "static_selected_sections_reviewed": true,
+    "runtime_or_product_test_run_by_this_observer": false,
+    "release_script_executed_by_this_observer": false,
+    "helper_imported_or_executed": false,
+    "workflow_dispatched_by_this_observer": false,
+    "formal_release_completed": false,
+    "final_source_gate_result": null,
+    "install_or_production_reload_performed": false,
+    "warning": "Expected jobs/artifacts/schema are source requirements. They are not observations of a completed workflow. Existing W results remain bound to W."
+  },
+  "independent_source_review_reported": {
+    "observer": "original acceptance coordinator",
+    "scope": "fixed 879ba17 release script, workflow, regression source and preserved registry path",
+    "confirmed_blockers": 0,
+    "unchanged_registry_helpers": [
+      "normalized_registry_graph",
+      "check_registry_graph",
+      "require_shared_zplugin"
+    ],
+    "source_hashes_match_root_observation": true,
+    "execution_boundary": "read-only static analysis; no new release test, helper import, Cargo, product run or publication",
+    "original_read_receipts": {
+      "reported_exit_code": 0,
+      "reported_both_eof": true,
+      "independently_reopened_by_this_extractor": false
+    }
+  }
+}

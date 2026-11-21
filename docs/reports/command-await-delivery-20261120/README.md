@@ -1,8 +1,8 @@
-# SSMCP 0.10.25：Git 依赖已更新，继续发布适配与完整验收
+# SSMCP 0.10.25：Git 依赖与发行流程已更新，继续最终验收
 
-本轮已分三次提交并推送，源码检查点为 **`1a2f7591ad0abb53907c048dcaed028434e17c47`**，目录树为 `cb24179edb9900c591afdabfe1b4678c2d50c5f9`。改动包括本地启动错误处理、账户验收场景同步，以及四项内部 Git 依赖声明和 zuse 更新。执行回执确认这轮源码工作于 **2026-11-21 07:08:21 UTC** 正常结束，工作树干净。[本轮源码与回执事实表](source-E7-startup-account-git-public-facts.json)
+E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
-**新的源码检查点还没有编译或执行完整验收。** 发布脚本仍需适配“内部项目使用 Git 最新来源、对外发行使用版本号”的规则；最终候选尚未固定。此前 W 的通过结果和失败记录继续归属于 W，未移用为新源码的成绩。
+**新源码尚未完成编译及整套验收，最终候选仍未固定。** E7、E8 的源码阶段均已结束，E9 功能增量继续由原作者推进。此前 W 的通过结果和失败记录继续归属于 W。
 
 ## 本轮实际提交
 
@@ -11,8 +11,11 @@
 | [7c1cd94](https://github.com/LIghtJUNction/ssmcp/commit/7c1cd94e08636617f4fded83f86048d3c012c7c3) | 本地输出目录被拒绝时停止反复重连；补充工作区、历史和网页打开失败诊断 | 源码、静态记录；没有运行测试 |
 | [a53a0c5](https://github.com/LIghtJUNction/ssmcp/commit/a53a0c5047833ded61193a0b0ce548937e89e959) | 匿名账户夹具完成服务端退出后再进入下一场景；保存脱敏失败上下文 | 原断言保留，尚未执行新脚本 |
 | [1a2f759](https://github.com/LIghtJUNction/ssmcp/commit/1a2f7591ad0abb53907c048dcaed028434e17c47) | 四项直接 Git 依赖去掉固定版本选择器；zuse 锁项和子模块同步到 0.3.0 来源 | 回执记录依赖解析成功；没有编译或产品验收 |
+| [9e1a06c](https://github.com/LIghtJUNction/ssmcp/commit/9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b) | 补充错误类型生命周期和初始输出清理阶段的分类 | 尚未编译；一处新增回归测试的错误字符串调用仍待后续修正 |
+| [879ba17](https://github.com/LIghtJUNction/ssmcp/commit/879ba17fc3ba4bad6a26a85494b79e29acf1938a) | Git 源二进制发行、独立 registry 导出及旧标签发布分支 | 已读取固定源码并静态审阅；尚无新流程运行结果 |
+| [f6ca9d0](https://github.com/LIghtJUNction/ssmcp/commit/f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b) | 在既有 HTTP/WebSocket 测试中扩展同账号双会话元数据乱序完成检查 | 回归定义已提交，尚未运行；没有新增独立 Rust 测试项 |
 
-三次提交依次基于 PR #164 合并点 **P2 `3f678a7`**，形成 P2 → 7c1cd94 → a53a0c5 → 1a2f759 的连续提交链。源码事实表包含完整 commit、tree、差异范围和执行边界。本轮一共涉及 12 个路径；三次普通推送退出码均在回执中记录为 0，公开 GitHub 提交已直接读回。
+E7 三次提交依次基于 PR #164 合并点 **P2 `3f678a7`**，形成 P2 → 7c1cd94 → a53a0c5 → 1a2f759 的连续提交链。源码事实表包含完整 commit、tree、差异范围和执行边界。E7 三次提交一共涉及 12 个路径；E7 三次普通推送退出码均在回执中记录为 0，公开 GitHub 提交已直接读回。
 
 ## 内部依赖使用 Git 最新来源
 
@@ -66,6 +69,8 @@ Git 声明决定更新时从哪里获取源码，锁文件记录这次实际解�
 
 官方文档中的 session、subject 是匿名关联标识；本实现把它们与真实网页地址分别保存，不从匿名标识拼接对话 URL。浏览器启动请求、实际网页加载和用户在网页发送“继续”也分别处理。新启动诊断提交还补充了打开失败时的复制或手动打开提示。[官方字段说明](https://developers.openai.com/plugins/reference#_meta-fields-the-client-provides) · [固定命令说明](https://github.com/LIghtJUNction/ssmcp/blob/1a2f7591ad0abb53907c048dcaed028434e17c47/docs/commands.md) · [已合并源码事实](source-openai-caller-C-C2-public-facts.json)
 
+f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSocket Frame，再通过生产 CallScope/sidecar 接口记录各自捕获的历史 owner；当前选择 B 时先完成 B、再完成 A，检查元数据仍归属原会话。它使用 fixture Reply，并非完整客户端连接循环或真实 exec.wait 作业的端到端运行。现有断言保留，该定义尚未执行。[准确范围](source-E8-completed-public-facts.json)
+
 ## 原现场 socket 与独立的受控实测
 
 用户要求测试的原 socket 路径在 **06:59:32 UTC** 实际预检时不存在，记录为 `FileNotFoundError / ENOENT`，应用发送字节为 0。因此原会话的交付测试尚未完成。[原预检事实](live-input-socket-preflight-public-facts.json)
@@ -74,13 +79,16 @@ Git 声明决定更新时从哪里获取源码，锁文件记录这次实际解�
 
 本次有 **1 次产品启动、1 次 socket 发送、1 次确定性 Python fixture 调用、0 次模型调用**。76 字节原文完整保留，缺失的 file 和 skill 各返回一条 unavailable 警告；写端半关闭后收到 1 条 JSON、EOF 和 `status=completed`。客户端及外层进程均退出 0、已回收，清理无错误，端点已不存在。[实测结果与四份原件摘要](current-entry-socket-smoke-public-facts.json)
 
-这是该隔离本地入口的一次真实通过结果，不表示测到了先前已消失的在线 socket，也不计入 W 的 18 项运行检查、UI、P1 或最终源码验收。报告只提取四份结构化原件；原始认证日志没有读取或公开。
+这是该隔离本地入口的一次真实通过结果，不表示测到了先前已消失的在线 socket，也不计入 W 的 18 项运行检查、UI、P1 或最终源码验收。报告仅包含结构化回执与摘要，未公开原始认证日志。
+
+`--input none` 的现场报错仍是另一项未闭合结果：客户端未得到 relay 对关闭人工聊天能力的确认，启动退出 1。当前没有生产端能力确认的在线通过回执；本地 socket 测试不能证明这一模式已修复。服务器部署仍延期，也没有通过自动退回人工输入来绕过该要求。
 
 ## 已有验收与当前未执行范围
 
 | 范围 | 实际对应源码 | 结果 |
 |---|---|---|
-| 本轮源码与依赖解析 | 1a2f759 | 源码阶段退出 0；解析、格式和差异检查按回执记录；未编译或执行产品测试 |
+| E7 源码与依赖解析 | 1a2f759 | 源码阶段退出 0；解析、格式和差异检查按回执记录；未编译或执行产品测试 |
+| E8 源码阶段 | f6ca9d0；发布配方 879ba17 | 阶段退出 0、三次推送和静态核对完成；尚无编译、测试或发布运行结果 |
 | 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
@@ -93,19 +101,37 @@ W 失败 producer 中的 61 条 true 与 1 条 false 单独保留，未并入 50
 
 上述事实分别见 [W 构建检查](gate-checkpoint-W-r14-completed.json)、[W 运行检查](runtime-W-r14-public-facts.json)、[W 首轮界面失败](ui24-W-account-compat-first-public-facts.json)和[单次诊断及补存退出回执](account-compat-diagnostic-W-public-facts.json)。W、V、U 的详细过程保存在[此前完整报告](https://github.com/LIghtJUNction/ssmcp/blob/a363927a414d122ac562e42187cab1257f47b3d8/docs/reports/command-await-delivery-20261120/current-iteration-W-r14-0539.md)。
 
-## 发布适配与接下来的工作
+## 已提交的发布适配
 
-现有发布脚本仍要求开发 manifest 上携带精确 registry 版本，与当前内部 Git 声明冲突；外发归一化代码也直接读取旧字段。因此发布适配需要同时处理开发来源校验、外发版本映射和包内容证明。本轮三个提交未修改发布配方，下一增量仍由原作者处理，并补齐类型标注和初始清理阶段的错误分类。
+此前开发 manifest 中的四项内部 Git 依赖已经去掉 registry 版本选择器。E8 现在从已检出的 Git 包和锁文件读取实际版本，正式对外需要 registry 包时，再派生单独的版本 manifest、锁文件与包验证流程。开发依赖来源与外部包格式分别处理。[实际发布脚本](https://github.com/LIghtJUNction/ssmcp/blob/879ba17fc3ba4bad6a26a85494b79e29acf1938a/scripts/release.py)
 
-发布协调方已明确下一增量的合同：本轮保留六个平台的版本化 GitHub 二进制、安装器及 16 个公开资产；crate 发布显式延后，且与服务端部署延后分开记录。finalize 与 GitHub 发布阶段将使用重新核验的 `verified-source` 产物，不把它冒称为 `verified-crate`。registry 路径仍保留独立的版本映射、checksum、包字节和 dry-run 校验。**这是已确认的实施方向，尚待实际新源码和运行回执证明完成。** [发布合同记录](publication-plan-git-source-deferred-crate-public-facts.json)
+0.10.25 的正式 GitHub 发行采用 `git-source-v1`，保留六个平台 archive、六份 sidecar、两个安装器、SHA256SUMS 与 release-manifest.json，共 16 个公开附件。manifest 的八条 artifact 记录只对应六个平台 archive 与两个安装器。crate 状态明确为 `deferred`，`verified_crate` 为 null；这与服务器部署延期分别记录。
 
-zuse 0.3.0 的 Git 源已存在；较早对 registry 版本 API 的实际读取为 404。源码可用、构建输入已锁定、外部包已发布是三个分别记录的状态。后续发布范围和依赖可用性，以新工作流和真实回执为准。[来源与发布状态观察](git-latest-dependency-policy-public-facts.json)
+finalize 生成 `verified-source`，记录 commit、tree、manifest、Cargo.lock、子模块、依赖图和工具链；另以 `finalized-release-assets` 保留最终 16 个文件。publish_release 必须下载这两份具名产物，重新计算并比较已有 manifest 与 SHA256SUMS 的原始字节，随后才发布。这样可以追查公开下载文件与完成验证的产物是否一致。
 
-[原 manual-main 核验器](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound) 已静态交付，尚未运行。其旧版本假设也需要按实际新发布配方对齐；最终产品提交 S、main 工作流提交 P、tag、run 和原始请求回执均未绑定。新的静态工作副本已准备，不以旧核验器的完成状态代替新流程验证。
+静态工作流合同仍有 19 个 job，但本轮预期为 **17 个成功、publish_crates 与 deploy_server 两个跳过**。发布核验必须检查八份必要 Actions artifacts：六份平台构建、verified-source 和 finalized-release-assets；其他 CI 测试证据可以另外存在。上述数量是新源码的要求，**尚不是实际运行结果**。[固定合同及读取边界](source-E8-release-contract-public-facts.json)
 
-用户新增的 `ssmcp --version --all` 依赖版本树已纳入后续增量，尚未实现或验证；控制快捷键与直接运行 zuse CLI 的实际权限边界也在只读核查。
+旧版不可变标签通过明确的 legacy-tag-v1 分支处理；0.10.25 不能悄悄回退到旧流程。registry 路径仍保留独立的版本映射、归一化锁图、checksum、包字节和 dry-run 校验，本轮不会把二进制发行冒称为 crates.io 发布。较早对 zuse 0.3.0 registry API 的 404 仍只是当时的观察。[依赖来源观察](git-latest-dependency-policy-public-facts.json)
 
-接下来完成发布适配，固定最终源码和依赖，由原执行者按原流程进行构建、真实进程、完整界面与 P1 验收，再核对正式发行及公开产物。每一阶段继续记录实际来源、失败和未执行项。
+## H2 发布核验器
+
+H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，未发现阻断性合同错配。三份模块的字节摘要及修改差异均已记录，**没有 import 或运行核验器，没有执行测试、Cargo、产品、dispatch 或正式发布**。[H2 使用说明与文件](publication-verifier-git-source-unbound/README.md) · [静态准备身份表](publication-verifier-git-source-unbound/preparation-identity.json)
+
+新模块要求 17 次实际初始 checkout，并按 upload/download 的具体步骤、运行编号和 artifact ID 核对八份发布产物。六个平台 archive 与公开下载逐字节相等，最终附件 ZIP 的 16 个成员也必须全部对应公开文件；两个 installer 还须与最终 S 的脚本原字节相等。原始 dispatch 解析器保持原字节。
+
+[原 H 核验器](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound) 继续保留。H2 仅处理本轮 0.10.25 / manual-main / git-source-v1 / crate 延期合同；legacy、registry 和 build-only 不属于它的通过范围。
+
+最终产品提交 S、main 工作流提交 P、tag、run 和原始请求回执均未绑定。校验器将要求 S 是 P 的真实祖先，并核对 S/P 中六份发布配方与事先审阅的固定字节；不能仅靠相同版本号或相同目录树推断提交关系。SHA256 用于核对字节，实际执行仍须由原始工具回执、run/attempt、step 与 artifact ID 证明。
+
+## 依赖版本树与统一控制开关
+
+用户要求的 `ssmcp --version --all` 依赖版本树，以及“移除 foreground/background 区别，统一为 Computer use On/Off”已纳入 E9。此时尚无 E9 完成源码或运行验收结果。原协调方报告，07:49:51 UTC 的启动前锁校验中止了首次启动尝试，E9 作者模型尚未启动、没有执行 Cargo；这是执行准备阶段的检查问题，没有记成产品或测试失败。协调方正在核对实际文件描述符和内核锁记录，旧失败记录保留。
+
+已确认的控制范围是 SSMCP 内的 Computer、CDP Browser、Omarchy 与启用时的 Playwright 控制或变更路径。Off 要阻止新的控制动作，并取消尚未执行的旧操作；再次 On 不能复活旧 generation 的 ticket。只读观察与自有资源清理保留，默认 isolated 目标保持原规则。已经送达的点击或导航不能承诺回滚。
+
+这个应用层开关不承诺拦截同一 UID 任意 shell、独立 zuse 或外部 Browser 插件，也不修改主机权限。依赖版本树应报告当前二进制编译时实际锁定的来源，不能把运行命令时的远端最新提交冒充为构建来源。
+
+接下来完成 E8/E9 源码，刷新并固定实际依赖与最终候选，由原执行者按原流程完成构建、真实进程、多用户、完整界面与 P1 验收，再核对正式发行及公开产物。新的失败和未执行项继续单独记录。
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
 

@@ -1,0 +1,68 @@
+{
+  "schema": "ssmcp-h2-static-preparation-v1",
+  "prepared_at_utc": "2026-11-21T07:51:06.433897+00:00",
+  "status": "static_reviewed_unexecuted_unbound",
+  "baseline_commit": "2257fb1d235bba59e8a0d1747a4f4afc6348bad3",
+  "recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+  "supported_contract": "v0.10.25/manual-main/git-source-v1/crate-deferred",
+  "bindings": {
+    "product_sha": null,
+    "workflow_sha": null,
+    "tag": null,
+    "run_id": null,
+    "run_attempt": null,
+    "dispatch_capture": null,
+    "native_execution_receipt": null
+  },
+  "files_excluding_this_identity": [
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48867,
+      "sha256": "17f99f187074ab8285c8b386a644c3fd334ccccc8ac2bf0920c074644de6bd26"
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 43619,
+      "sha256": "fee247f4ddec119be9d7a2fb98b7d4bb455fb1fd45590e1dcd3fc22c3a6822c9"
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    },
+    {
+      "name": "README.md",
+      "bytes": 4899,
+      "sha256": "f60008aca5f962989d434857d32000eb0ef31ab8a0bb63c7825813ad21f7d567"
+    },
+    {
+      "name": "reviewed-recipe.json",
+      "bytes": 1280,
+      "sha256": "b225cf3be2a6622c18f2700144dc583f3db855f01212d4c3b2e7b7efcab0e1a1"
+    },
+    {
+      "name": "changes-from-H.patch",
+      "bytes": 81870,
+      "sha256": "2946a2f3138e70c5ce15d54af8e66adf12af618415fa62fe3fe1268dd8c51dad"
+    },
+    {
+      "name": "static-review.json",
+      "bytes": 1896,
+      "sha256": "3a4c6980f777162b47face2c0d37730811b2b332e307bc8701bb306a81969aa2"
+    }
+  ],
+  "verification": {
+    "ast_parse": true,
+    "recipe_constants_equal_reviewed_source": true,
+    "main_provenance_interface_agrees": true,
+    "independent_static_review_blockers": 0,
+    "modules_imported": false,
+    "helper_executed": false,
+    "tests_run": false,
+    "cargo_or_product_run": false,
+    "workflow_dispatch_or_publication": false,
+    "install_or_production_reload": false
+  },
+  "original_adapter_bytes_unchanged": true,
+  "original_H_commit_preserved": true
+}

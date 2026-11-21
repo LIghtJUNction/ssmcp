@@ -1,0 +1,41 @@
+{
+  "schema": "ssmcp-h2-reviewed-recipe-v1",
+  "recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+  "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 14941,
+      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+    },
+    {
+      "path": ".github/workflows/deploy-server.yml",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    {
+      "path": "scripts/release.py",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    {
+      "path": "scripts/install.sh",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    }
+  ],
+  "candidate_sha": null,
+  "workflow_sha": null,
+  "run_id": null,
+  "execution_performed": false
+}
