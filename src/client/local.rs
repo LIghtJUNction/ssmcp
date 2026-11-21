@@ -34,6 +34,9 @@ terminal open. The displayed MCP URL uses one-time connection-code OAuth.
                          Custom PATH: absolute, with an existing 0700 parent
   --public-url URL       HTTPS NAME.local origin of an existing local TLS proxy;
                          requires a fixed nonzero --listen port; excludes --socket
+  --input MODE           Chat input (terminal by default; none disables chat)
+  --agent RECIPIENT      Chat recipient (next-caller by default)
+  --load-harness NAME    Preload one native harness; see ssmcp --list-harnesses
   --name NAME            Device name
   --title TEXT           Session title
   --context-root PATH    Additional local context directory
@@ -256,7 +259,7 @@ pub(super) struct Host {
 }
 
 impl Host {
-    pub async fn start(settings: &Settings) -> crate::Result<Self> {
+    pub async fn start(settings: &Settings, chat_disabled: bool) -> crate::Result<Self> {
         settings.validate()?;
         if !settings.listen.ip().is_loopback() {
             return Err("local mode only binds loopback addresses".into());
@@ -274,6 +277,7 @@ impl Host {
         let runner = directory.install_runner()?;
         let mut broker = Broker::local(origin.clone())?;
         broker.code_mode_runner = Some(runner);
+        broker.local_chat_disabled = chat_disabled;
         let broker = Arc::new(broker);
         let unix = UnixListener::bind(directory.socket())?;
         fs::set_permissions(directory.socket(), fs::Permissions::from_mode(0o600))?;
@@ -503,7 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_checks_all_origins_and_has_no_portal_routes() {
-        let host = Host::start(&Settings::default()).await.unwrap();
+        let host = Host::start(&Settings::default(), false).await.unwrap();
         let client = crate::http_client::builder().no_proxy().build().unwrap();
         let url = format!("{}/healthz", host.origin);
         assert_eq!(client.get(&url).send().await.unwrap().status(), 200);

@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.24"
+version = "0.10.25"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -26,7 +26,9 @@ include = [
     "/docs/thread-messaging.md",
     "/docs/session-groups.md",
     "/scripts/e2e_session_groups.py",
+    "/scripts/e2e_paste_performance.py",
     "/scripts/e2e_reload_state.py",
+    "/scripts/e2e_connection_context_reload.py",
     "/scripts/e2e_listener_transports.py",
     "/scripts/e2e_force_send.py",
     "/docs/rtk.md",
@@ -73,6 +75,8 @@ include = [
     "/docs/commands.md",
     "/docs/client-accounts.md",
     "/docs/client-server.md",
+    "/docs/local-mode.md",
+    "/scripts/e2e_local_socket.py",
     "/docs/client-ui.md",
     "/docs/tool-group-summaries.md",
     "/scripts/e2e_tool_summaries.py",
@@ -157,12 +161,9 @@ include = [
     "/docs/optional-harnesses.md",
     "/docs/agent-entry.md",
     "/docs/time-primitives.md",
-    "/docs/local-mode.md",
     "/scripts/e2e_agent_entry.py",
     "/scripts/e2e_local.py",
-    "/scripts/e2e_local_socket.py",
     "/scripts/e2e_time_primitives.py",
-    "/scripts/e2e_connection_context_reload.py",
     "/docs/dependencies.md",
     "/docs/native-plugins.md",
     "/scripts/ssmcp-ztty.sh",

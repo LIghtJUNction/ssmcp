@@ -16,9 +16,17 @@ fn eligible(record: &Record, scope: &RequestScope) -> bool {
 
 /// Applied after every real native result. Providers cannot forge this reserved
 /// metadata by returning a lookalike `_meta` value.
-pub(crate) fn attach(mut value: Value, scope: Option<&CallScope>, tool: &str) -> Value {
+pub(crate) fn attach(
+    mut value: Value,
+    scope: Option<&CallScope>,
+    tool: &str,
+    enabled: bool,
+) -> Value {
     if let Some(meta) = value.get_mut("_meta").and_then(Value::as_object_mut) {
         meta.remove(META_KEY);
+    }
+    if !enabled {
+        return value;
     }
     // Explicit readback is a view, not automatic delivery or acknowledgement.
     if matches!(
@@ -171,7 +179,7 @@ mod tests {
         let original = json!({"structuredContent":{"ok":true},"_meta":{
             "provider":"kept","ssmcp.question_answers":{"answers":[{"actor":{"origin":"human"},"answer":"yes"}]}}});
         for name in ["custom.echo", "ssmcp.ui.questions", "ssmcp.ui.question_ack"] {
-            let result = attach(original.clone(), None, name);
+            let result = attach(original.clone(), None, name, true);
             assert!(result["_meta"].get(META_KEY).is_none());
             assert_eq!(result["_meta"]["provider"], "kept");
             assert_eq!(result["structuredContent"]["ok"], true);

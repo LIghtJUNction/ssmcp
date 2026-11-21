@@ -211,7 +211,7 @@ ssmcp ui check
 
 ssmcp 默认启用内置命令、文件、浏览器和会话工具，不要求安装其他 harness。Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
 
-启动时可用 `ssmcp --agent codex` 或 `ssmcp --agent claude-code` 显式选择协议，`ssmcp --agent list` 查看支持项；原生参数放在 `--` 后。`--agent ssmcp` 连接一个明确指定并完成认证的 MCP 网关。详见 [Agent 入口](docs/agent-entry.md)。
+`--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。要在启动时加载原生协议，请用 `--load-harness codex` 或 `--load-harness claude-code`。用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 

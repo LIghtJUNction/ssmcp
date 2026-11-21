@@ -391,6 +391,7 @@ pub(crate) struct DevicePeer {
     pub version_notice: bool,
     pub wait_display: bool,
     pub time_observation: bool,
+    pub chat_disabled: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -402,6 +403,7 @@ impl From<Registration> for DevicePeer {
             version_notice: false,
             wait_display: false,
             time_observation: false,
+            chat_disabled: false,
             account: Some(account),
         }
     }
@@ -788,6 +790,7 @@ async fn connect(
         version_notice: capability_requested(&headers, wire::versions::CAPABILITY),
         wait_display: capability_requested(&headers, wire::wait_display::CAPABILITY),
         time_observation: capability_requested(&headers, wire::wait_display::TIME_CAPABILITY),
+        chat_disabled: capability_requested(&headers, wire::CHAT_DISABLED_CAPABILITY),
     };
     let transport = broker
         .admit_transport()

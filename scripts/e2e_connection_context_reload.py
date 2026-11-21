@@ -52,8 +52,8 @@ class ContextReload(Local):
                 "--listen", f"127.0.0.1:{self.listen_port}", "--shell", "/bin/sh",
                 "--theme", "nord", "--no-color", "--no-watchdog", "--no-browser"]
         if self.cross_features:
-            # The optional socket path must not consume the following --agent.
-            command += ["--socket", "--agent", "claude-code", "--", *self.native_arguments]
+            # The optional socket path must not consume the following --load-harness.
+            command += ["--socket", "--load-harness", "claude-code", "--", *self.native_arguments]
         return command
 
     def request(self, *args, **kwargs):

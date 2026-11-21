@@ -11,7 +11,7 @@ pub(crate) use listener::{
 pub(crate) use ownership::with_test_history;
 pub(crate) use ownership::{
     HistoryId, HistoryOwner, capture, current_owner, record_owned_agent, record_owned_answer,
-    record_owned_request, remember_visible_reply,
+    record_owned_program_reply, record_owned_request, remember_visible_reply,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

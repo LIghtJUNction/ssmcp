@@ -750,7 +750,6 @@ fn observation(name: &str, arguments: &Value) -> Option<ObservationSpec> {
         "ssmcp.exec.read" | "terminal.read" | "ssmcp.output.read" | "ssmcp.audit.events" => {
             (Some(0), true)
         }
-        "ssmcp.ui.finish" => (None, false),
         "ssmcp.ui.questions" if arguments["op"] == "wait" => (None, false),
         _ if name.starts_with("ssmcp.ui.") => return None,
         _ if name.ends_with(".wait") => (None, false),

@@ -384,6 +384,7 @@ mod tests {
     #[test]
     fn foreground_reload_pins_the_resolved_server_and_preserves_literal_values() {
         let root = std::env::current_dir().unwrap();
+        let chat_token = root.join("test input token").into_os_string();
         let trailing = vec![
             OsString::from("--title"),
             OsString::from("--context"),
@@ -397,6 +398,16 @@ mod tests {
             OsString::from("nord"),
             OsString::from("--no-color"),
             OsString::from("--no-watchdog"),
+            OsString::from("--input"),
+            OsString::from("mcp-http"),
+            OsString::from("--input-host"),
+            OsString::from("localhost"),
+            OsString::from("--input-port"),
+            OsString::from("08181"),
+            OsString::from("--input-token-file"),
+            chat_token,
+            OsString::from("--agent"),
+            OsString::from("claude-code"),
         ];
         let mut initial = args(&["--server", "https://original.example"]);
         initial.extend(trailing.clone());
@@ -424,13 +435,15 @@ mod tests {
             assert_eq!(restored.theme, options.theme);
             assert_eq!(restored.no_color, options.no_color);
             assert_eq!(restored.watchdog, options.watchdog);
+            assert_eq!(restored.chat, options.chat);
         }
     }
 
     #[test]
-    fn foreground_reload_preserves_agent_selection_and_native_arguments_after_separator() {
+    fn foreground_reload_preserves_harness_selection_and_native_arguments_after_separator() {
         let native = args(&[
-            "--agent",
+            "--agent=next-caller",
+            "--load-harness",
             "codex",
             "--",
             "--server",
@@ -466,27 +479,29 @@ mod tests {
         expected.extend(native);
         assert_eq!(pinned, expected);
         let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
-        assert_eq!(restored.agent, options.agent);
+        assert_eq!(restored.harness, options.harness);
+        assert_eq!(restored.chat, options.chat);
         assert_eq!(restored.server, options.server);
         assert_eq!(restored.title, options.title);
         let saved = restored.session_spec().unwrap();
         super::super::validate_session_spec(&saved).unwrap();
         let from_saved = super::super::Options::parse_saved(&saved).unwrap().unwrap();
-        assert_eq!(from_saved.agent, options.agent);
+        assert_eq!(from_saved.harness, options.harness);
+        assert_eq!(from_saved.chat, options.chat);
         assert_eq!(from_saved.server, options.server);
         assert_eq!(super::super::session_title(&saved).unwrap(), options.title);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn foreground_local_reload_preserves_agent_and_socket_before_native_separator() {
+    fn foreground_local_reload_preserves_harness_and_socket_before_native_separator() {
         for socket in [
             args(&["--socket"]),
             args(&["--socket=/tmp/ssmcp-cross/mcp.sock"]),
         ] {
             let mut trailing = socket;
             trailing.extend(args(&[
-                "--agent",
+                "--load-harness",
                 "claude-code",
                 "--",
                 "--server",
@@ -511,7 +526,7 @@ mod tests {
             assert_eq!(pinned, expected);
             let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();
             assert!(restored.is_local());
-            assert_eq!(restored.agent, options.agent);
+            assert_eq!(restored.harness, options.harness);
             assert_eq!(
                 restored.local.as_ref().unwrap().socket_path(),
                 options.local.as_ref().unwrap().socket_path()

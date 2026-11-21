@@ -2,13 +2,47 @@
 
 本文对应当前源码中的客户端交互。连接、工具目录与权限以运行中的客户端实际返回为准；本页不表示某台设备已经安装或重载这些功能。
 
+## 启动时选择输入和处理方
+
+`--input` 默认是 `terminal`，从终端聊天框接收消息。`--agent` 默认是 `next-caller`，让下一次符合条件的工具调用领取要求。可以只改其中一个。默认配置不会主动运行模型。需要启动时预加载协议可另用 [`--load-harness`](agent-entry.md)。显式选择的原生收件人、组发和 `/send` 仍走各自的投递路径。
+
+```sh
+ssmcp local --agent codex
+printf '%s\n' '请检查 @还没创建.md，价格 $100 保持原文' | ssmcp local --input pipe
+ssmcp local --input mcp-stdio
+```
+
+用 `ssmcp local --input none` 禁用当前连接的聊天框、聊天提示和人的回复或确认工具。普通命令、终端、文件、审计、独立原生消息和已启用的时间原语继续可用。调用本连接的普通问题、等待或回复工具会返回 `chat_disabled`。全局退役的工具继续返回 `tool_retired`。此模式支持独立的 `--load-harness`，显式聊天处理方仅能使用默认的 `next-caller`。该选择可随保存会话和重载保留。账户连接需要 relay 确认该能力；旧 relay 仍可使用默认聊天模式。[输入选项](../src/client/chat_io/options.rs) · [工具准入](../src/broker.rs)
+
+`local` 是 Linux 私有会话。其他平台可以把示例中的 `local` 换成已登录的 `USERNAME@SERVER`。管道按 UTF-8 行提交，接受没有换行的最后一行。到达 EOF 后会话仍可让下一位调用方领取已入队的消息。MCP stdio 按行读写 JSON-RPC，客户端应保持连接至收到回复，关闭 stdin 会结束会话。它只在 stdout 输出协议帧。管道回执和日志使用 stderr。本机非终端输入的原生 MCP URL、一次性 OAuth 登录码及有效期也会直接显示在操作者的 stderr。登录码与下面的输入令牌分开使用。Windows 支持 Web 和 MCP HTTP，使用管道、MCP stdio 或 Unix socket 会收到明确的平台错误。
+
+Web 与 MCP HTTP 都需要显式指定回环 host、port 和私有令牌文件。下面的命令生成一个随机令牌并启动 Web 输入。打开打印的回环地址，把该文件中的内容填入页面的 Input token 字段。
+
+```sh
+token_file=$(mktemp /tmp/ssmcp-input-token.XXXXXX)
+openssl rand -hex 32 > "$token_file"
+ssmcp local --input web --input-host 127.0.0.1 --input-port 8181 --input-token-file "$token_file"
+```
+
+改用 `--input mcp-http` 即在相同地址的 `/mcp` 提供 Streamable HTTP。为 MCP 客户端配置 `Authorization: Bearer …`，令牌由私有文件或客户端的私有存储提供。两个 MCP 入口都公开 `chat_submit`，参数是 `{"text":"消息正文"}`。令牌文件须归当前系统用户独占读取。删除或更换令牌会拒绝原授权的新输入，并取消尚在等待的原授权派发。已经入队或交付的消息仍按原队列规则处理。[MCP 传输规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) · [入口实现](../src/client/chat_io/transport.rs)
+
+Linux 的 `ssmcp local --input sock` 默认监听 `/tmp/ssmcp-UID/chat-input.sock`。`--input-socket` 可指定另一个绝对路径，其父目录须为当前用户独占的私有目录。每个同 UID 的连接发送一行 UTF-8 文本，发完可关闭写半端，保留读半端接收实际 JSON 回执。完全关闭连接会取消仍在等待的确认，已入队的消息不会被自动撤回。已在监听的 socket 会导致启动失败。
+
+`--agent codex`、`--agent claude` 和 `--agent opencode` 使用本机安装的 CLI。每条普通消息启动一次处理，沿用各 CLI 的配置与非交互权限策略。进程正常退出并返回正文后，客户端将实际回复保存到发起时的会话，再返回 `completed`。发起正文使用原会话中的请求 ID。失败会报告退出状态与可识别的错误类别，并保留草稿。单个标准流最多读取 64 KiB，历史中的长回复会按 16 KiB 的消息限制保留带提示的预览。若需接入自己的处理程序，用 `--agent exec --agent-exec /绝对路径/程序`，可选的 `--agent-argv-file` 是私有 JSON 字符串数组文件。程序接收固定参数、分隔符 `--` 和一个完整的消息参数。为另一个 SSMCP 选择 `--agent ssmcp --agent-peer "$recipient" --agent-account "$account"`，其中 `recipient` 是已认证消息列表中的完整收件人 ID，`account` 是对应的 `github:账号数字ID`。收件人不可用或账号不符会报错。[程序处理实现](../src/client/chat_io/process.rs) · [原生消息与收据](thread-messaging.md)
+
+程序路由使用现有 `@文件` 和 `$技能` 准备流程。缺失引用保留正文并给出提示。原生 SSMCP 收件人收到字面正文。队列的 `queued` 与原生收据的 `included` 或 `acknowledged` 表示各自已确认的投递阶段。若回执为 `unconfirmed`，先核对请求 ID 和队列，客户端不会自动重发。保存会话与重载保留两个选项和已解析的连接目标，令牌内容留在私有文件中。管道与 MCP stdio 需要前台标准流，终端程序路由需要前台仪表板。后台会话可禁用聊天，也可用 Web、MCP HTTP 或 Linux socket 接收消息并选择处理方。
+
 ## 1. 发送要求与选择 Agent
 
-在前台客户端底部输入要求，按 Enter 入队。输入框立即留给下一份草稿；`sending` 表示仍在等服务器确认，`delivered` 只表示要求已附加到一次符合目标的工具响应，并不证明模型已经阅读或执行。
+使用默认处理方时，在前台客户端底部输入要求，按 Enter 入队。输入框立即留给下一份草稿；`sending` 表示仍在等服务器确认，`delivered` 只表示要求已附加到一次符合目标的工具响应，并不证明模型已经阅读或执行。
 
-光标在草稿开头时按 ← 打开 Agent 面板，↑/↓ 选择，Enter/→ 设为收件人并返回会话；Esc/← 返回时保留原收件人、草稿与光标。`Next caller` 是下一次有资格领取要求的调用方。普通被观察调用只供查看，定向投递使用实际登记成员的 ID。
+光标在草稿开头时按 ← 打开 Agent 面板，↑/↓ 选择，Enter/→ 设为收件人并返回会话；Esc/← 返回时保留原收件人、草稿与光标。`Next caller` 是下一次有资格领取要求的调用方。即使启动时配置了其他处理方，显式选中 `Next caller` 仍走队列；在同一面板里可切回配置的处理方。普通被观察调用只供查看，定向投递使用实际登记成员的 ID。
 
 `/queue` 可以取回、编辑和取消仍可撤回的要求。编辑必须等服务器确认取回；交付已经发生时不能撤销。具体状态及失败恢复见[队列说明](client-ui.md#输入要求与队列)。
+
+### 查看当前计时
+
+有活动计时时，会话分隔栏显示倒计时剩余、已计时或本轮观察剩余。观察预算耗尽后，底层任务仍可能继续运行。`/wait` 打开带完整 ID 的当前快照；分隔栏继续更新。在客户端能力中查看 `timing.primitives_available` 查询该连接是否启用了时间工具。`ssmcp.time.now` 的单调计数只能在同一个 `monotonic_scope` 内比较。[计时显示](../src/client/terminal/conversation/timing.rs) · [时间原语](../src/runtime/time.rs)
 
 ## 2. 用 @ 引用文件，用 $ 引用技能
 

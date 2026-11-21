@@ -791,6 +791,15 @@ pub(super) async fn wait(
             ));
         }
     };
+    if !scope.session.chat_enabled()
+        && args
+            .targets
+            .iter()
+            .flatten()
+            .any(|target| matches!(target, Target::UserInput { .. }))
+    {
+        return Err(crate::wire::CHAT_DISABLED.into());
+    }
     let record = match broker.awaiting.record(scope.actor(), &args) {
         Ok(record) => record,
         Err((status, code)) => {

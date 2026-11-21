@@ -21,7 +21,7 @@ ssmcp 默认只启用自己的原生工具。命令执行、文件、会话、�
 
 ## 只加载需要的一项
 
-启动时可以用 `--agent codex` 或 `--agent claude-code` 明确选择一个协议；`ssmcp --agent list` 显示真实支持的 provider、别名和 peer 参数。选择沿用同一个按需加载入口，先完成握手与工具枚举，后续任务再调用原生工具。完整语法和明确的 MCP peer 连接见 [`--agent` 用法](agent-entry.md)。
+启动时可用 `--load-harness codex` 或 `--load-harness claude-code` 加载一个协议。`ssmcp --list-harnesses` 列出支持的 provider、别名和 peer 参数。启动复用按需加载入口，先完成握手与工具枚举。完整参数与 MCP peer 连接见[协议加载](agent-entry.md)。
 
 通过现有 `call` 调用原生入口，不需要新增 relay helper：
 

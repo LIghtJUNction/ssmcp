@@ -178,7 +178,7 @@ async fn http_socket_uses_the_same_origin_and_authenticated_mcp_router() {
     let mut settings = super::super::Settings::default();
     let path = directory.0.join("mcp.sock");
     settings.set_socket(Some(path.clone())).unwrap();
-    let host = super::super::Host::start(&settings).await.unwrap();
+    let host = super::super::Host::start(&settings, false).await.unwrap();
     let authority = host.origin.strip_prefix("http://").unwrap();
     assert!(
         http(&path, authority, "/healthz", "")
@@ -222,7 +222,7 @@ async fn dropping_the_host_cleans_its_socket_without_explicit_shutdown() {
     let path = directory.0.join("mcp.sock");
     let mut settings = super::super::Settings::default();
     settings.set_socket(Some(path.clone())).unwrap();
-    let host = super::super::Host::start(&settings).await.unwrap();
+    let host = super::super::Host::start(&settings, false).await.unwrap();
     assert!(path.exists());
     drop(host);
     tokio::time::timeout(Duration::from_secs(3), async {

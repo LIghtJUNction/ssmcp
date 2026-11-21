@@ -101,6 +101,20 @@ pub(super) fn restrict_to_self(command: &mut Command) {
     );
 }
 
+pub(super) fn offer_chat_disabled(command: &mut Command) {
+    let offer = command
+        .as_std()
+        .get_envs()
+        .find(|(name, _)| *name == "SSMCP_RELAY_CAPABILITIES")
+        .and_then(|(_, value)| value)
+        .and_then(|value| value.to_str())
+        .map_or_else(String::new, |value| format!("{value},"));
+    command.env(
+        "SSMCP_RELAY_CAPABILITIES",
+        format!("{offer}{}", crate::wire::CHAT_DISABLED_CAPABILITY),
+    );
+}
+
 /// Read the actual parent-generated offer, including the self-only override.
 /// A Ready claim cannot enable a capability this process did not request.
 pub(super) fn timing_offer(command: &Command) -> (bool, bool) {
@@ -142,6 +156,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::versions::CAPABILITY
                 | crate::wire::wait_display::CAPABILITY
                 | crate::wire::wait_display::TIME_CAPABILITY
+                | crate::wire::CHAT_DISABLED_CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;

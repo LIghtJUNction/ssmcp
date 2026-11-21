@@ -84,6 +84,16 @@ struct InputStamp {
     revision: u64,
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct InputWork {
+    decoder_calls: usize,
+    paste_spans: usize,
+    paste_bytes: usize,
+    completion_queries: usize,
+    completion_input_bytes: usize,
+}
+
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
@@ -120,12 +130,15 @@ pub(super) struct Conversation {
     native_last: Option<Value>,
     native_refreshed: bool,
     native_picker: bool,
+    native_lookup: Option<messaging::PendingPicker>,
     #[cfg(test)]
     native_fixture: Option<Value>,
     #[cfg(test)]
     native_connection: Option<crate::client::messaging::test_connection::Connection>,
     editing: Option<String>,
     submitting: Option<(String, String)>,
+    agent_pending: Option<(InputStamp, crate::client::chat_io::Ticket)>,
+    agent_unconfirmed: Option<InputStamp>,
     recalling: Option<String>,
     force_task: Option<listener::Task>,
     force_displayed: std::collections::VecDeque<(String, String)>,
@@ -137,6 +150,8 @@ pub(super) struct Conversation {
     text_pending: Vec<u8>,
     paste: Option<Vec<u8>>,
     paste_overflow: bool,
+    #[cfg(test)]
+    input_work: InputWork,
     input_task: Option<attachments::Task>,
     paste_recovery: Option<String>,
     retrying_paste: bool,
@@ -255,7 +270,14 @@ fn agent_key(value: &Value) -> String {
 impl State {
     fn chat_recipients(&mut self, data: &Value) -> Vec<Value> {
         let observed = self.audit.observed_controllers();
-        let entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        let mut entries = recipients(data, &self.caller_tracker.groups(&observed, data));
+        if let Some(label) = crate::client::chat_io::terminal_agent_label() {
+            entries.insert(
+                1,
+                json!({"agent_id":"configured", "name":label,
+                "role":"configured chat agent","status":"explicit chat dispatch"}),
+            );
+        }
         sessions::arrange(
             entries,
             self.chat_native_entries(),
@@ -300,6 +322,7 @@ impl State {
     }
 
     fn chat_recipient_changed(&mut self, group: bool) {
+        self.chat_cancel_native_lookup();
         self.conversation.send_to_group = group;
         self.conversation.recipient_revision = self.conversation.recipient_revision.wrapping_add(1);
     }
@@ -470,6 +493,7 @@ impl State {
         }
         self.chat_poll_native();
         if self.preview {
+            self.chat_poll_native_lookup();
             return;
         }
         self.chat_poll_input();
@@ -478,6 +502,7 @@ impl State {
         self.chat_poll_logout();
         self.chat_poll_goal();
         self.chat_poll_force_send();
+        self.chat_poll_agent();
         let mut failed_notice = None;
         for event in steering::take_events() {
             match event {
@@ -552,6 +577,7 @@ impl State {
         if let Some(message) = failed_notice {
             self.notice = Some(message);
         }
+        self.chat_poll_native_lookup();
         self.chat_persist_draft();
     }
 
@@ -629,7 +655,13 @@ impl State {
                     .unwrap_or_else(|| format!("native:{id}")),
             );
         } else {
-            let target = self.conversation.target.as_deref().unwrap_or("next");
+            let target = self.conversation.target.as_deref().unwrap_or_else(|| {
+                if crate::client::chat_io::terminal_agent_label().is_some() {
+                    "configured"
+                } else {
+                    "next"
+                }
+            });
             self.conversation.selected = entries
                 .iter()
                 .position(|entry| field(entry, "agent_id") == target)
@@ -928,6 +960,12 @@ impl State {
             && !(self.conversation.send_to_group
                 && listener::body(self.conversation.composer.text()).is_some())
             && !self.chat_native_has_mention();
+        #[cfg(test)]
+        if enabled {
+            self.conversation.input_work.completion_queries += 1;
+            self.conversation.input_work.completion_input_bytes +=
+                self.conversation.composer.text().len();
+        }
         self.conversation.composer.refresh_completions(enabled);
     }
 
@@ -983,6 +1021,7 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        self.chat_cancel_native_lookup();
         // Exit and logout remain local while editing a queued request or awaiting acknowledgement.
         let text = self.conversation.composer.text().to_owned();
         if matches!(
@@ -1063,8 +1102,12 @@ impl State {
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart"))
-                        && !groups::retains_draft(&text)
+                    if let Some(lookup) = &mut self.conversation.native_lookup {
+                        lookup.clear_command = true;
+                    } else if !matches!(
+                        text.split_whitespace().next(),
+                        Some("/reload" | "/restart")
+                    ) && !groups::retains_draft(&text)
                     {
                         self.conversation.composer.take_text();
                     }
@@ -1085,6 +1128,33 @@ impl State {
             self.notice = Some("Preview only · connect a session to queue a requirement".into());
             return;
         }
+        if self.conversation.editing.is_none() && self.conversation.target.is_none() {
+            if self.conversation.agent_pending.is_some() {
+                self.notice = Some(
+                    "Chat agent is still handling the previous message · draft retained".into(),
+                );
+                return;
+            }
+            let stamp = self.chat_composer_stamp();
+            if self.conversation.agent_unconfirmed.as_ref() == Some(&stamp) {
+                self.notice = Some("Previous delivery is unconfirmed · check its receipt before editing or sending again".into());
+                return;
+            }
+            match crate::client::chat_io::terminal_submit(&text) {
+                Ok(Some(ticket)) => {
+                    self.conversation.agent_pending = Some((stamp, ticket));
+                    self.notice =
+                        Some("Waiting for the configured chat agent · draft retained".into());
+                    self.dirty = true;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.notice = Some(error);
+                    return;
+                }
+            }
+        }
         // The native edit API treats omitted target as "keep the previous one".
         // The composer always shows a deliberate choice, including Next caller.
         let target = Some(self.conversation.target.as_deref().unwrap_or("next"));
@@ -1097,6 +1167,67 @@ impl State {
             Ok(id) => self.chat_enqueued(id, text),
             Err(error) => self.notice = Some(error),
         }
+    }
+
+    fn chat_poll_agent(&mut self) {
+        let Some((_, ticket)) = self.conversation.agent_pending.as_mut() else {
+            return;
+        };
+        let outcome = match ticket.try_recv() {
+            Ok(outcome) => outcome,
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                Err("chat agent disconnected before confirming the result".into())
+            }
+        };
+        let (stamp, _) = self.conversation.agent_pending.take().unwrap();
+        match outcome {
+            Ok(receipt) => {
+                if receipt.status == "unconfirmed" {
+                    self.conversation.agent_unconfirmed = Some(stamp.clone());
+                } else if receipt.status != "failed" {
+                    self.conversation.agent_unconfirmed = None;
+                    self.conversation.composer.remember(&stamp.text);
+                    if self.chat_composer_stamp() == stamp {
+                        self.conversation.composer.take_text();
+                    }
+                }
+                if let (Some(display), Some(answer)) = (receipt.display, receipt.output) {
+                    let source = crate::runtime::call_scope::DisplaySource {
+                        history: crate::runtime::call_scope::DisplayHistory::Local(display.history),
+                        call: None,
+                    };
+                    let text = panel::safe_text(&stamp.text);
+                    self.log_scoped_event(
+                        "message",
+                        &json!({"type":"ssmcp.message","role":"user","text":text,
+                            "message_id":display.request_message}),
+                        format!("\n[USER]\n{text}\n").as_bytes(),
+                        source.clone(),
+                    );
+                    let answer = panel::safe_text(&answer);
+                    let event = json!({"type":"ssmcp.message","author":"Chat agent","text":answer,
+                        "message_id":display.reply_message});
+                    let bytes = format!("\n[CHAT AGENT]\n{answer}\n");
+                    self.log_scoped_event("agent", &event, bytes.as_bytes(), source);
+                }
+                let mut notice = format!("Chat route: {}", receipt.status);
+                if let Some(id) = receipt.request_id {
+                    let _ = write!(notice, " · {id}");
+                }
+                if !receipt.warnings.is_empty() {
+                    let _ = write!(notice, " · {}", receipt.warnings.join("; "));
+                }
+                if matches!(receipt.status.as_str(), "unconfirmed" | "failed") {
+                    notice.push_str(" · draft retained");
+                }
+                self.notice = Some(panel::safe_text(&notice));
+            }
+            Err(error) => {
+                self.notice = Some(panel::safe_text(&format!("{error} · draft retained")));
+            }
+        }
+        self.dirty = true;
     }
 
     fn chat_selected(&mut self) -> Option<Value> {
@@ -1166,8 +1297,8 @@ impl State {
                     }
                     self.conversation.native_recipient = None;
                     self.conversation.native_account = None;
-                    self.conversation.target = (field(&agent, "agent_id") != "next")
-                        .then(|| field(&agent, "agent_id").into());
+                    let id = field(&agent, "agent_id");
+                    self.conversation.target = (id != "configured").then(|| id.into());
                     self.chat_recipient_changed(false);
                     self.chat_change_view(View::Activity);
                     self.notice = Some(format!(
@@ -1379,6 +1510,7 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        self.chat_cancel_native_lookup();
         if matches!(key, Key::ComputerToggle) {
             self.sleep_key(key);
             self.computer_toggle();
@@ -1424,8 +1556,7 @@ impl State {
             && button & 3 == 2
             && button & (32 | 64) == 0
         {
-            if self.conversation.view == View::Agents {
-                self.chat_thread_history_mouse(x, y);
+            if self.conversation.view == View::Agents && self.chat_thread_history_mouse(x, y) {
                 return;
             }
             if self.conversation.view == View::History && self.conversation.scoped_history.is_some()
@@ -1860,8 +1991,14 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        self.chat_cancel_native_lookup();
         self.chat_disarm_exit();
-        self.chat_refresh_completions();
+        // Ordinary edits do not read the suggestion menu. Refresh once after
+        // the input batch, and before the controls that consume suggestions.
+        // Navigation keys refresh separately in chat_key.
+        if matches!(character, '\t' | '\r' | '\u{1b}') {
+            self.chat_refresh_completions();
+        }
         if self.selection {
             if character == '\u{1b}' {
                 self.chat_key(Key::Select);
@@ -2153,7 +2290,7 @@ impl State {
             } else if context {
                 "Reading local context…"
             } else {
-                "Preparing local input… · keep this draft unchanged to insert the result"
+                "Preparing local input… · You can keep editing; changed drafts will not be replaced"
             }
             .into(),
         );
@@ -2339,6 +2476,7 @@ impl State {
             return;
         }
         if output == b"\x1b[200~" && self.conversation.paste.is_none() {
+            self.chat_cancel_native_lookup();
             self.conversation.paste = Some(Vec::new());
             self.conversation.paste_overflow = false;
             return;
@@ -2403,6 +2541,11 @@ impl State {
     }
 
     pub(super) fn chat_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        // Already-arrived input must win over a ready picker result, including
+        // an Escape prefix whose decoding will finish on a subsequent flush.
+        if !bytes.is_empty() {
+            self.chat_cancel_native_lookup();
+        }
         // Run before accepting the next input, including a real Ctrl-C after a
         // truncated image, and discard only the unfinished paste, never the draft.
         if self.keyboard.image_paste_expired(now) {
@@ -2415,9 +2558,32 @@ impl State {
         if bytes.iter().any(|byte| *byte != 0x03) {
             self.chat_disarm_exit();
         }
-        // Keep text and navigation in their original order, including coalesced reads.
-        for byte in bytes {
-            let (output, keys) = self.keyboard.feed(&[*byte], now, false, true, false);
+        self.chat_process_input(bytes, now, flush);
+        self.chat_persist_draft();
+        Vec::new()
+    }
+
+    /// Keep controls in order while accumulating literal paste spans in bulk.
+    fn chat_process_input(&mut self, mut bytes: &[u8], now: Instant, flush: bool) {
+        while !bytes.is_empty() {
+            let length = self.keyboard.paste_literal_prefix(bytes, now);
+            if length > 0 {
+                #[cfg(test)]
+                {
+                    self.conversation.input_work.paste_spans += 1;
+                    self.conversation.input_work.paste_bytes += length;
+                }
+                self.sleep_wake_text(&bytes[..length]);
+                self.chat_output(&bytes[..length]);
+                bytes = &bytes[length..];
+                continue;
+            }
+            #[cfg(test)]
+            {
+                self.conversation.input_work.decoder_calls += 1;
+            }
+            let (output, keys) = self.keyboard.feed(&bytes[..1], now, false, true, false);
+            bytes = &bytes[1..];
             self.sleep_wake_text(&output);
             self.chat_output(&output);
             for key in keys {
@@ -2425,6 +2591,10 @@ impl State {
             }
         }
         if flush {
+            #[cfg(test)]
+            {
+                self.conversation.input_work.decoder_calls += 1;
+            }
             let (output, keys) = self.keyboard.feed(&[], now, true, true, false);
             self.sleep_wake_text(&output);
             self.chat_output(&output);
@@ -2433,8 +2603,6 @@ impl State {
             }
         }
         self.chat_refresh_completions();
-        self.chat_persist_draft();
-        Vec::new()
     }
 
     /// Reuse one bounded row parser; serialize cells, never cursor/erase controls.
@@ -2840,13 +3008,20 @@ impl State {
             .target
             .as_ref()
             .map(|target| {
+                if target == "next" {
+                    return "Next caller".into();
+                }
                 agents
                     .iter()
                     .find(|agent| field(agent, "agent_id") == target)
                     .map(|agent| field(agent, "name").to_owned())
                     .unwrap_or_else(|| "offline recipient".into())
             })
-            .unwrap_or_else(|| "next caller".into());
+            .unwrap_or_else(|| {
+                crate::client::chat_io::terminal_agent_label()
+                    .unwrap_or("next caller")
+                    .into()
+            });
         if self.conversation.send_to_group {
             label = format!("group for /send · {}", self.conversation.groups.len());
         } else if let Some(native_label) = self.chat_native_label() {
@@ -3170,6 +3345,7 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    mod paste_batch;
     mod tool_groups;
     use super::*;
 
@@ -4091,6 +4267,18 @@ mod tests {
     }
 
     #[test]
+    fn choosing_next_caller_sets_the_literal_queue_target() {
+        let mut state = preview(28, 120);
+        state.conversation.composer.set_text("keep this draft");
+        state.chat_agents();
+        assert!(state.conversation.target.is_none());
+        state.chat_open(false);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.conversation.target.as_deref(), Some("next"));
+        assert_eq!(state.conversation.composer.text(), "keep this draft");
+    }
+
+    #[test]
     fn choosing_an_agent_returns_to_chat_and_preserves_the_current_edit() {
         let mut state = preview(28, 120);
         state.conversation.composer.set_text("draft under review");
@@ -4270,14 +4458,9 @@ mod tests {
             y: body_top(state.geometry.rows),
             release: false,
         });
-        assert_eq!(state.conversation.view, view);
-        assert!(!state.conversation.logs_open);
+        assert_eq!(state.conversation.view, View::Logs);
+        assert!(state.conversation.logs_open);
         assert!(state.conversation.scoped_history.is_none());
-        assert_eq!(
-            state.conversation.selected,
-            start + 1,
-            "right-clicking the header is not a thread-history target"
-        );
         state.chat_key(Key::Mouse {
             button: 2,
             x: 1,

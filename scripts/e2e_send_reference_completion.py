@@ -103,7 +103,7 @@ class SendReferenceCompletion(ForceSend, MessageReferences):
         self.focus_input(front)
         self.activate_column(front, "sessions")
         front.send(HOME + ENTER)
-        self.wait_state(front, lambda state: state["target"] is None
+        self.wait_state(front, lambda state: state["target"] == "next"
                         and state["native_recipient"] is None
                         and state["view"] == "activity" and state["focus"] == "input",
                         "the explicitly selected local Next caller route")
@@ -136,7 +136,7 @@ class SendReferenceCompletion(ForceSend, MessageReferences):
                     front, lambda current: current["draft"]["text"] == completed,
                     "the first " + key_name + " must select the reference without sending")
                 self.check(state["draft"]["cursor"] == len(completed.encode())
-                           and state["target"] is None and state["native_recipient"] is None,
+                           and state["target"] == "next" and state["native_recipient"] is None,
                            "completion preserves the UTF-8 cursor and the exact local route")
                 snapshot = self.listener("status")
                 self.check(not state["force_pending"] and snapshot["pending"] is None

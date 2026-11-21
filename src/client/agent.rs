@@ -9,8 +9,8 @@ use serde_json::json;
 use std::{ffi::OsString, sync::Arc};
 
 pub(crate) const HELP: &str = "\
-ssmcp [connection options] --agent NAME [-- native protocol arguments]
-ssmcp --agent list [--json]
+ssmcp [connection options] --load-harness NAME [-- native protocol arguments]
+ssmcp --list-harnesses [--json]
 
 codex                     Codex App Server (installed codex executable)
 claude, claude-code, cc    Claude Code MCP server (installed claude executable)
@@ -45,7 +45,7 @@ impl Selection {
             .iter()
             .find(|(_, canonical)| *canonical == name)
             .map(|(provider, _)| *provider)
-            .ok_or("unknown --agent; use ssmcp --agent list")?;
+            .ok_or("unknown --load-harness; use ssmcp --list-harnesses")?;
         if arguments.len() > 128 || arguments.iter().map(|arg| arg.len()).sum::<usize>() > 16 * 1024
         {
             return Err("agent arguments exceed 128 arguments or 16384 bytes".into());
@@ -61,7 +61,7 @@ impl Selection {
         } else {
             if !arguments.is_empty() && !matches!(provider, Provider::Codex | Provider::Claude) {
                 return Err(format!(
-                    "--agent {name} uses its existing attachment configuration and does not accept process arguments after --; see ssmcp --agent list"
+                    "--load-harness {name} uses its existing attachment configuration and does not accept process arguments after --; see ssmcp --list-harnesses"
                 ));
             }
             None
@@ -82,7 +82,7 @@ impl Selection {
 
     pub fn append_saved(&self, args: &mut Vec<OsString>) {
         args.extend([
-            OsString::from("--agent"),
+            OsString::from("--load-harness"),
             OsString::from(self.provider.label()),
         ]);
         if !self.arguments.is_empty() {
@@ -100,7 +100,7 @@ impl Selection {
             .await?;
         if result["isError"] == true || result["structuredContent"]["status"] != "ready" {
             return Err(format!(
-                "selected agent {} did not finish native protocol initialization",
+                "selected harness {} did not finish native protocol initialization",
                 self.provider.label()
             ));
         }
@@ -111,15 +111,12 @@ impl Selection {
 /// This exact, local information command runs before config/account resolution.
 /// It never looks for executables, credentials, contexts, or a running peer.
 pub(super) fn dispatch(args: &[OsString]) -> Result<bool, String> {
-    let tail = if args.first().is_some_and(|arg| arg == "--agent")
-        && args.get(1).is_some_and(|arg| arg == "list")
-    {
-        &args[2..]
-    } else if args.first().is_some_and(|arg| arg == "--agent=list") {
-        &args[1..]
-    } else {
+    let Some((first, tail)) = args.split_first() else {
         return Ok(false);
     };
+    if first != "--list-harnesses" {
+        return Ok(false);
+    }
     if tail.is_empty() {
         print!("{HELP}");
     } else if tail == [OsString::from("--json")] {
@@ -137,7 +134,7 @@ pub(super) fn dispatch(args: &[OsString]) -> Result<bool, String> {
             .collect::<Vec<_>>();
         println!("{}", json!({"providers":providers,"help":HELP}));
     } else {
-        return Err("ssmcp --agent list accepts only --json".into());
+        return Err("ssmcp --list-harnesses accepts only --json".into());
     }
     Ok(true)
 }
@@ -154,51 +151,85 @@ mod tests {
     }
 
     #[test]
-    fn agent_cli_aliases_and_separator_preserve_native_arguments() {
+    fn harness_cli_aliases_and_separator_preserve_native_arguments() {
         for alias in ["claude", "claude-code", "cc"] {
             let selected = options(&[
                 "--list-tools",
-                "--agent",
+                "--load-harness",
                 alias,
                 "--",
                 "--help",
                 "--name",
                 "中文",
+                "",
             ]);
-            let selection = selected.agent.unwrap();
+            let selection = selected.harness.unwrap();
             assert_eq!(selection.provider, Provider::Claude);
             assert_eq!(
                 selection.arguments,
-                ["--help", "--name", "中文"].map(OsString::from)
+                ["--help", "--name", "中文", ""].map(OsString::from)
             );
             assert!(selected.name.is_none());
         }
         assert_eq!(
-            options(&["--list-tools", "--agent=codex"])
-                .agent
+            options(&["--list-tools", "--load-harness=codex"])
+                .harness
                 .unwrap()
                 .provider,
             Provider::Codex
         );
         assert_eq!(
-            options(&["--list-tools", "--title", "--agent"])
+            options(&["--list-tools", "--title", "--load-harness"])
                 .title
                 .as_deref(),
-            Some("--agent")
+            Some("--load-harness")
         );
     }
 
     #[test]
-    fn agent_cli_rejects_ambiguous_or_unsupported_selection() {
+    fn harness_cli_rejects_ambiguous_or_unsupported_selection() {
         for args in [
-            vec!["--list-tools", "--agent"],
-            vec!["--list-tools", "--agent", "native"],
-            vec!["--list-tools", "--agent", "codex", "--agent=claude"],
+            vec!["--list-tools", "--load-harness"],
+            vec!["--list-tools", "--load-harness", "native"],
+            vec![
+                "--list-tools",
+                "--load-harness",
+                "codex",
+                "--load-harness=claude",
+            ],
             vec!["--list-tools", "--", "--help"],
-            vec!["--list-tools", "--agent", "pi", "--", "--model", "test"],
-            vec!["--list-tools", "--agent", "opencode", "--", "serve"],
-            vec!["--list-tools", "--agent", "playwright", "--", "--headless"],
-            vec!["--list-tools", "--agent", "ssmcp"],
+            vec!["--list-tools", "--agent", "list"],
+            vec![
+                "--server",
+                "https://relay.example",
+                "--agent=codex",
+                "--",
+                "--help",
+            ],
+            vec![
+                "--server",
+                "https://relay.example",
+                "--agent",
+                "next-caller",
+                "--agent=codex",
+            ],
+            vec![
+                "--list-tools",
+                "--load-harness",
+                "pi",
+                "--",
+                "--model",
+                "test",
+            ],
+            vec!["--list-tools", "--load-harness", "opencode", "--", "serve"],
+            vec![
+                "--list-tools",
+                "--load-harness",
+                "playwright",
+                "--",
+                "--headless",
+            ],
+            vec!["--list-tools", "--load-harness", "ssmcp"],
             vec!["--list-tools", "--type", "codex"],
         ] {
             assert!(
@@ -209,8 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn agent_saved_session_native_flags_do_not_change_metadata_or_validation() {
-        assert!(super::super::connection_option_takes_value("--agent"));
+    fn harness_saved_session_native_flags_do_not_change_metadata_or_validation() {
+        assert!(super::super::connection_option_takes_value(
+            "--load-harness"
+        ));
         let parsed = options(&[
             "--server",
             "https://relay.example",
@@ -218,7 +251,7 @@ mod tests {
             "selected",
             "--title",
             "session title",
-            "--agent",
+            "--load-harness",
             "codex",
             "--",
             "--help",
@@ -235,7 +268,7 @@ mod tests {
             Some("session title")
         );
         let restored = Options::parse_saved(&spec).unwrap().unwrap();
-        assert_eq!(parsed.agent, restored.agent);
+        assert_eq!(parsed.harness, restored.harness);
         assert_eq!(restored.title.as_deref(), Some("session title"));
         let mut invalid = spec.clone();
         invalid.args.insert(0, "--help".into());
@@ -243,11 +276,70 @@ mod tests {
     }
 
     #[test]
-    fn agent_session_roundtrip_keeps_selection_and_native_separator() {
+    fn legacy_saved_harness_needs_explicit_migration_with_or_without_native_tail() {
+        let parsed = options(&["--server", "https://relay.example", "--name", "legacy"]);
+        for tail in [vec![], vec!["--", "--title", "native title", ""]] {
+            let mut spec = parsed.session_spec().unwrap();
+            spec.args.extend(
+                ["--agent", "codex"]
+                    .into_iter()
+                    .chain(tail)
+                    .map(String::from),
+            );
+            let error = super::super::validate_session_spec(&spec).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("recreate the session with --load-harness")
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_chat_and_protocol_startup_roundtrip_independently() {
         let parsed = options(&[
             "--server",
             "https://relay.example",
+            "--name",
+            "quiet",
+            "--load-harness",
+            "codex",
+            "--input",
+            "none",
+            "--agent=next-caller",
+            "--",
             "--agent",
+            "",
+            "中文",
+        ]);
+        let spec = parsed.session_spec().unwrap();
+        super::super::validate_session_spec(&spec).unwrap();
+        assert!(!super::super::saved_chat_enabled(&spec));
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.chat, parsed.chat);
+        assert_eq!(restored.harness, parsed.harness);
+        assert_eq!(
+            restored.harness.unwrap().arguments,
+            ["--agent", "", "中文"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn harness_session_roundtrip_keeps_selection_and_native_separator() {
+        let token = std::env::temp_dir().join("chat token");
+        let parsed = options(&[
+            "--server",
+            "https://relay.example",
+            "--input",
+            "mcp-http",
+            "--input-host",
+            "127.0.0.1",
+            "--input-port",
+            "8181",
+            "--input-token-file",
+            token.to_str().unwrap(),
+            "--agent=codex",
+            "--load-harness",
             "claude-code",
             "--",
             "--model",
@@ -256,12 +348,15 @@ mod tests {
         ]);
         let spec = parsed.session_spec().unwrap();
         let restored = Options::parse_saved(&spec).unwrap().unwrap();
-        assert_eq!(parsed.agent, restored.agent);
+        assert_eq!(parsed.harness, restored.harness);
         assert_eq!(restored.server.as_deref(), Some("https://relay.example"));
+        assert_eq!(restored.chat, parsed.chat);
+        assert_eq!(restored.chat.agent, super::super::chat_io::Agent::Codex);
+        super::super::validate_session_spec(&spec).unwrap();
         assert!(
             spec.args
                 .windows(2)
-                .any(|args| args == ["--agent", "claude"])
+                .any(|args| args == ["--load-harness", "claude"])
         );
         assert!(
             spec.args

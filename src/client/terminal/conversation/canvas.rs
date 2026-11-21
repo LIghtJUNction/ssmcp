@@ -355,6 +355,7 @@ impl State {
     }
 
     fn canvas_restore(&mut self, index: usize) {
+        self.chat_cancel_native_lookup();
         self.conversation.canvas.active = index;
         let (view, position) = {
             let column = &mut self.conversation.canvas.columns[index];

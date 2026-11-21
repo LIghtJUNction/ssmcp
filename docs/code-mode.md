@@ -14,13 +14,11 @@ Batch the independent steps you can already determine into one `code_mode` reque
 
 Keep dependent edits, approvals and operations on the same mutable resource ordered. Return a compact result for every item, preserving errors, job IDs and output completeness. Start long work with `exec.start`, return its job ID, and use later requests to observe that job.
 
-Send human updates through say and keep diagnostic output in print/console. Inspect response errors, new user requirements, running jobs and output completeness before deciding the next action.
+Inspect response errors, running jobs and output completeness before deciding the next action. Use print/console for diagnostic output.
 
-## Conversation reminders
+Human chat instructions apply to selected clients with `chat_enabled:true`. Disabled clients return `chat_disabled` for supported human chat tools. Execution, scoped collaboration, independent native messages and negotiated time tools retain their permissions.
 
-Responses no longer inject `conversation_reminders`, `continuation_reminder` or end-consent instructions. Progress and final replies still use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`; final replies require the original conversation owner but no completion approval. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
-
-Only a successful native receipt with `accepted: true`, `duplicate: false` and a valid message ID clears the pending reminder. External chat, failed sends and duplicate retries do not establish a new terminal reply. Binding is captured when the call is dispatched, so changing members later does not reassign the receipt; an older receipt cannot acknowledge a newer request. Acceptance does not prove the user read the message.
+Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`, with the original conversation owner and idempotency checks. Use `ssmcp.ui.reply` for progress or a result tied to an authenticated thread input. Responses omit forced continuation, conversation reminders and end-consent instructions. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
 
 ## Helper contracts
 
@@ -213,7 +211,7 @@ The wire-v7 text queue keeps editable @references. Local /paste and /attach impo
 
 ### Waiting for authenticated user input
 
-Continue authorized work unless the user explicitly agrees to end. When input is needed, use a bounded wait and return its result promptly:
+When input is needed from a chat-enabled client, use a bounded wait and return its receipt:
 
 ```js
 return await ui.wait(clientId, {
@@ -224,7 +222,7 @@ return await ui.wait(clientId, {
 });
 ```
 
-`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Only one wait per client is allowed in a run; after `timed_out`, call `ui.wait` again in a new `code_mode` call. Timeout is not permission to stop, and repeated waits do not require busy polling.
+`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client. After `timed_out`, another `code_mode` call can wait again if the task needs it.
 
 The server binds the wait to the authenticated owner and live client connection. An existing valid `collab.bind` or `agent` binding also permits messages addressed to that exact agent; an unbound caller can receive only next-caller messages. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notification delivery is best effort and deduplicated for the same waiting episode; `sent` means the system accepted a notification request, not that the user saw it.
 

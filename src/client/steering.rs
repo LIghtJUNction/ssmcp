@@ -361,6 +361,8 @@ struct DeliveredMemory {
 struct Manager {
     outbox: Outbox,
     connected: bool,
+    // A connection without chat owns a control channel but no outbox room.
+    disabled_chat_client_id: Option<String>,
     supported: bool,
     ready: bool,
     revision: u64,
@@ -468,10 +470,23 @@ impl Manager {
         self.events.push_back(event);
     }
 
+    fn chat_enabled(&self) -> bool {
+        self.disabled_chat_client_id.is_none()
+    }
+
+    fn queue_connected(&self) -> bool {
+        self.connected && self.chat_enabled()
+    }
+
     fn snapshot(&self) -> Value {
+        let session_id = self
+            .disabled_chat_client_id
+            .as_ref()
+            .or(self.outbox.room_id.as_ref());
         json!({
             "schema_version":1,"connected":self.connected,"supported":self.supported,
-            "room_id":self.outbox.room_id,"session_id":self.outbox.room_id,"revision":self.revision,
+            "chat_enabled":self.chat_enabled(),
+            "room_id":self.outbox.room_id,"session_id":session_id,"revision":self.revision,
             "agents":self.agents.iter().map(|agent| {
                 let mut value = serde_json::to_value(agent).expect("serializable agent");
                 value["thread_id"] = json!(agent.agent_id);
@@ -482,7 +497,7 @@ impl Manager {
             "draft_context":self.outbox.context,
             "queue":self.outbox.records.iter().map(|record| json!({
                 "id":record.message.id,"text":record.message.text,"target":record.message.target,
-                "revision":record.message.revision,"status":record.status(self.connected),
+                "revision":record.message.revision,"status":record.status(self.queue_connected()),
                 "created_at_ms":record.message.created_at_ms,"updated_at_ms":record.message.updated_at_ms,
                 "delivery":record.message.delivery,"error":record.error,"room_id":record.room_id,
                 "reference_warnings":record.reference_warnings,"retry_of":record.retry_of,
@@ -498,12 +513,15 @@ impl Manager {
             .records
             .iter()
             .find(|record| record.message.id == id)
-            .map(|record| record.status(self.connected))
+            .map(|record| record.status(self.queue_connected()))
     }
 
     fn mutable(&self) -> Result<(), String> {
         if self.frozen {
             return Err("client reload is preparing; the draft is retained".into());
+        }
+        if !self.chat_enabled() {
+            return Err(crate::wire::CHAT_DISABLED.into());
         }
         if self.connected && !self.supported {
             return Err(
@@ -593,8 +611,18 @@ impl Manager {
     }
 
     fn submit(&mut self, text: &str, target: Option<&str>) -> Result<String, String> {
+        self.submit_with_warnings(text, target, Vec::new())
+    }
+
+    fn submit_with_warnings(
+        &mut self,
+        text: &str,
+        target: Option<&str>,
+        reference_warnings: Vec<String>,
+    ) -> Result<String, String> {
         self.mutable()?;
         validate_text(text)?;
+        validate_reference_warnings(&reference_warnings)?;
         let target = self.target(target)?;
         self.reserve_record(text.len())?;
         let id = random_id()?;
@@ -617,7 +645,7 @@ impl Manager {
             resume_after_reload: false,
             pending: None,
             error: None,
-            reference_warnings: Vec::new(),
+            reference_warnings,
             retry_of: None,
         });
         let index = self.outbox.records.len() - 1;
@@ -855,7 +883,7 @@ impl Manager {
     }
 
     fn enqueue(&mut self, command: SteeringCommand) -> Result<u64, String> {
-        if !self.connected || !self.supported {
+        if !self.queue_connected() || !self.supported {
             return Err("request queue is not connected".into());
         }
         let id = self
@@ -941,12 +969,21 @@ impl Manager {
         Ok(())
     }
 
+    #[cfg(test)]
     fn connect(&mut self, room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
+        self.connect_with_chat(room_id, protocol, true)
+    }
+
+    fn connect_with_chat(
+        &mut self,
+        client_id: &str,
+        protocol: u32,
+        chat_enabled: bool,
+    ) -> mpsc::Receiver<Transport> {
         self.disconnect();
         let (sender, receiver) = mpsc::channel(MAX_RECORDS + 8);
-        let changed = self.outbox.room_id.as_deref() != Some(room_id);
-        self.outbox.room_id = Some(room_id.into());
         self.connected = true;
+        self.disabled_chat_client_id = (!chat_enabled).then(|| client_id.to_owned());
         self.supported = protocol >= 7;
         self.ready = false;
         self.revision = 0;
@@ -954,6 +991,12 @@ impl Manager {
         self.error = None;
         self.reload_requested = false;
         self.frozen = false;
+        if !chat_enabled {
+            return receiver;
+        }
+        let room_id = client_id;
+        let changed = self.outbox.room_id.as_deref() != Some(room_id);
+        self.outbox.room_id = Some(room_id.into());
         if changed {
             for record in &mut self.outbox.records {
                 if record.terminal() {
@@ -1417,7 +1460,7 @@ impl Manager {
     }
 
     fn poll(&mut self) -> Result<(), String> {
-        if !self.connected || !self.supported {
+        if !self.queue_connected() || !self.supported {
             return Ok(());
         }
         let expired = self
@@ -1457,9 +1500,25 @@ impl Manager {
         self.request_snapshot()
     }
 
+    fn request_reload(&mut self) -> Result<(), String> {
+        if !self.connected {
+            return Err("client is not connected; draft and queue are retained".into());
+        }
+        if self.reload_requested || self.frozen {
+            return Err("client reload is already pending".into());
+        }
+        self.sender
+            .as_ref()
+            .ok_or("client is not connected")?
+            .try_send(Transport::Reload)
+            .map_err(|_| "client control queue is busy")?;
+        self.reload_requested = true;
+        Ok(())
+    }
+
     fn begin_reload(&mut self) -> Result<(), String> {
         self.frozen = true;
-        if self.connected && self.supported {
+        if self.queue_connected() && self.supported {
             self.request_snapshot()?;
         }
         Ok(())
@@ -1468,8 +1527,10 @@ impl Manager {
     fn abort_reload(&mut self, error: &str) {
         self.frozen = false;
         self.reload_requested = false;
-        for record in &mut self.outbox.records {
-            record.resume_reclaimed(self.outbox.room_id.as_deref());
+        if self.chat_enabled() {
+            for record in &mut self.outbox.records {
+                record.resume_reclaimed(self.outbox.room_id.as_deref());
+            }
         }
         self.event(UiEvent::Failed {
             id: String::new(),
@@ -1478,7 +1539,9 @@ impl Manager {
     }
 
     fn reload_ready(&mut self) -> Result<bool, String> {
-        if !self.supported {
+        // There is no live chat room to reclaim. The native reload path still
+        // waits for the broker's ReloadCommit before restarting.
+        if !self.chat_enabled() || !self.supported {
             return Ok(true);
         }
         if !self.requests.is_empty() || !self.ready {
@@ -1544,6 +1607,42 @@ pub(super) fn submit(text: &str, target: Option<&str>) -> Result<String, String>
     super::interface::questions::user_input(target);
     Ok(id)
 }
+
+pub(super) fn require_chat_connection() -> Result<(), String> {
+    with(|manager| {
+        manager.mutable()?;
+        if !manager.connected || manager.reload_requested {
+            return Err("chat connection is closed or reloading".into());
+        }
+        Ok(())
+    })
+}
+
+pub(super) fn submit_chat_prepared(
+    prepared: super::references::PreparedReferences,
+) -> Result<String, String> {
+    let id = with(|manager| {
+        if !manager.connected || manager.reload_requested {
+            return Err("chat connection is closed or reloading".into());
+        }
+        manager.submit_with_warnings(&prepared.text, Some("next"), prepared.warnings)
+    })?;
+    super::interface::questions::user_input(Some("next"));
+    Ok(id)
+}
+
+pub(super) fn chat_receipt(id: &str) -> (Option<&'static str>, Option<String>) {
+    with(|manager| {
+        let Ok(index) = manager.index(id) else {
+            return (None, None);
+        };
+        let record = &manager.outbox.records[index];
+        (
+            Some(record.status(manager.queue_connected())),
+            record.error.clone(),
+        )
+    })
+}
 pub(super) fn publish_edit(id: &str, text: &str, target: Option<&str>) -> Result<(), String> {
     with(|manager| manager.publish_edit(id, text, target))?;
     // An omitted edit target preserves its stored recipient; conservatively
@@ -1588,11 +1687,26 @@ pub(super) fn set_draft(text: &str, cursor: usize) -> Result<(), String> {
 pub(super) fn take_events() -> Vec<UiEvent> {
     with(|manager| manager.events.drain(..).collect())
 }
+#[cfg(all(test, target_os = "linux"))]
 pub(super) fn connect(room_id: &str, protocol: u32) -> mpsc::Receiver<Transport> {
-    let transport = with(|manager| manager.connect(room_id, protocol));
-    super::interface::listener::connect(room_id);
-    super::interface::user_wait::connect(room_id);
-    super::interface::questions::connect(room_id);
+    connect_with_chat(room_id, protocol, true)
+}
+
+pub(super) fn connect_with_chat(
+    room_id: &str,
+    protocol: u32,
+    enabled: bool,
+) -> mpsc::Receiver<Transport> {
+    let transport = with(|manager| manager.connect_with_chat(room_id, protocol, enabled));
+    if enabled {
+        super::interface::listener::connect(room_id);
+        super::interface::user_wait::connect(room_id);
+        super::interface::questions::connect(room_id);
+    } else {
+        super::interface::listener::disconnect();
+        super::interface::user_wait::disconnect();
+        super::interface::questions::disconnect();
+    }
     transport
 }
 pub(super) fn disconnect() {
@@ -1693,22 +1807,7 @@ pub(super) fn abort_reload(error: &str) {
     with(|manager| manager.abort_reload(error));
 }
 pub(super) fn request_reload() -> Result<(), String> {
-    with(|manager| {
-        if !manager.connected {
-            return Err("client is not connected; draft and queue are retained".into());
-        }
-        if manager.reload_requested || manager.frozen {
-            return Err("client reload is already pending".into());
-        }
-        manager
-            .sender
-            .as_ref()
-            .ok_or("client is not connected")?
-            .try_send(Transport::Reload)
-            .map_err(|_| "client control queue is busy")?;
-        manager.reload_requested = true;
-        Ok(())
-    })
+    with(Manager::request_reload)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2281,6 +2380,28 @@ mod tests {
                 .claim("room_one", "second", None, 8, 64 * 1024)
                 .is_empty()
         );
+        std::fs::remove_file(root.join("missing.txt")).unwrap();
+        let prepared = super::super::references::prepare(&draft, &workspace, &context)
+            .await
+            .unwrap();
+        let notices = prepared.warnings.clone();
+        let mut ingress = Manager::default();
+        let mut wire = ingress.connect("room_two", crate::wire::VERSION);
+        ready(&mut ingress, &mut wire, "room_two");
+        let message = ingress
+            .submit_with_warnings(&prepared.text, Some("next"), prepared.warnings)
+            .unwrap();
+        let Transport::Wire { id } = wire.try_recv().unwrap() else {
+            panic!("prepared external input must publish");
+        };
+        assert!(!ingress.needs_preparation(id));
+        let command = ingress.pending_command(id).unwrap();
+        assert!(ingress.sent(id));
+        let accepted = server.command("room_two", vec![], command).unwrap();
+        assert_eq!(accepted.messages[0].text, draft);
+        ingress.reply(id, Ok(accepted)).unwrap();
+        assert_eq!(ingress.request_status(&message), Some("queued"));
+        assert_eq!(ingress.outbox.records[0].reference_warnings, notices);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3068,6 +3189,57 @@ mod tests {
         let (_, request) = command(&mut manager, &mut receiver);
         assert_eq!(request, SteeringCommand::Snapshot {});
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn disabled_chat_keeps_the_outbox_and_advances_reload_without_queue_commands() {
+        let mut manager = Manager::default();
+        let mut wire = manager.connect("room_one", crate::wire::VERSION);
+        ready(&mut manager, &mut wire, "room_one");
+        let queued = publish(&mut manager, &mut wire, "Retained broker request", None);
+        manager.disconnect();
+        let unsent = manager.submit("Retained unsent request", None).unwrap();
+        manager.set_draft("未发送草稿", "未发送".len()).unwrap();
+        manager.outbox.context.target = Some("agent_one".into());
+        let retained = serde_json::to_value(&manager.outbox).unwrap();
+
+        let mut wire = manager.connect_with_chat("no_chat_client", crate::wire::VERSION, false);
+        let snapshot = manager.snapshot();
+        assert_eq!(snapshot["connected"], true);
+        assert_eq!(snapshot["supported"], true);
+        assert_eq!(snapshot["chat_enabled"], false);
+        assert_eq!(snapshot["room_id"], "room_one");
+        assert_eq!(snapshot["session_id"], "no_chat_client");
+        assert_eq!(manager.request_status(&unsent), Some("offline"));
+        assert_eq!(
+            manager.submit("Must not enqueue", None).unwrap_err(),
+            crate::wire::CHAT_DISABLED
+        );
+        manager.poll().unwrap();
+        assert!(matches!(
+            wire.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        manager.request_reload().unwrap();
+        assert!(matches!(wire.try_recv(), Ok(Transport::Reload)));
+        manager.begin_reload().unwrap();
+        assert!(manager.reload_ready().unwrap());
+        assert!(manager.frozen);
+        assert!(!manager.ready, "reload must not forge a queue snapshot");
+        assert!(manager.requests.is_empty());
+        assert!(matches!(
+            wire.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        manager.abort_reload("Server did not confirm reload");
+        assert_eq!(serde_json::to_value(&manager.outbox).unwrap(), retained);
+        assert_eq!(manager.outbox.records[0].message.id, queued.id);
+        assert!(matches!(
+            wire.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 
     #[test]

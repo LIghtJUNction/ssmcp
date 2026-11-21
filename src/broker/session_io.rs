@@ -104,6 +104,7 @@ impl Target {
         recipient: Recipient,
     ) -> Result<Self, String> {
         recipient.validate()?;
+        session.require_chat()?;
         if !session.io_reply_advertised() {
             return Err("io_reply_unsupported: selected client has not advertised ssmcp.ui.reply; update the client before sending chat input".into());
         }
@@ -167,7 +168,7 @@ pub(crate) fn process_directory(
         "account":{"provider":main_account.provider,"subject":main_account.subject,"login":main_account.login}}));
     json!({"id":info.id,"name":info.name,"title":info.title,"type":info.mode.name(),"hostname":info.hostname,"cwd":info.cwd,
         "kind":"process","threads":threads,"chat_io_version":1,"reply_native_supported":session.io_reply_advertised(),
-        "history_thread_supported":session.thread_history_advertised(),"unavailable_reason":if session.io_reply_advertised(){Value::Null}else{json!("Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update.")}})
+        "history_thread_supported":session.thread_history_advertised(),"unavailable_reason":if !session.chat_enabled(){json!(crate::wire::CHAT_DISABLED)}else if session.io_reply_advertised(){Value::Null}else{json!("Native ssmcp.ui.reply is not advertised; send verifies the catalog and otherwise requires a client update.")}})
 }
 
 struct Input {
@@ -694,7 +695,7 @@ impl Hub {
         let mut outputs = Vec::new();
         let mut bytes = 4096;
         let mut next = cursor;
-        for output in &matching {
+        for &output in &matching {
             let size = serde_json::to_vec(output)
                 .map_err(|_| "cannot encode chat output")?
                 .len();
@@ -703,7 +704,7 @@ impl Hub {
             }
             bytes += size;
             next = output["global_sequence"].as_u64().unwrap_or(next);
-            outputs.push(*output);
+            outputs.push(output);
         }
         let more = outputs.len() < matching.len();
         if !more {

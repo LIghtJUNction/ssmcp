@@ -145,7 +145,7 @@ fn verify_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
+pub(super) fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
     read_private_limit(path, STORE_LIMIT)
 }
 
@@ -155,7 +155,7 @@ fn read_private_limit(path: &Path, limit: usize) -> Result<Option<Vec<u8>>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {

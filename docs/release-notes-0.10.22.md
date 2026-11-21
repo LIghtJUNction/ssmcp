@@ -12,7 +12,7 @@ UI 验收夹具同步本轮实际交互：成员行右键打开该线程历史�
 
 Linux 的 `ssmcp local --socket` 在现有本机 HTTP/MCP 服务上增加 Unix socket。默认使用 `$XDG_RUNTIME_DIR/ssmcp/mcp.sock`，未设置运行目录时使用 `/tmp/ssmcp-<有效 UID>/mcp.sock`；`--socket PATH` 可指定私有绝对路径。相同系统 UID 的程序可通过该 socket 连接，原有 Host、Origin 和 OAuth 校验继续生效，回环 HTTP 入口也继续可用。活动监听器不会被覆盖，正常关闭只清理本次持有的 socket。[本机连接与 curl 示例](local-mode.md)
 
-`--agent` 显式选择要连接的原生协议，支持 `codex`、`claude-code`、`pi`、`opencode`、`playwright`，并可用 `--agent list` 查看支持项。启动只进行协议初始化与工具目录加载，实际模型任务仍需另行调用。`--agent ssmcp` 通过指定 endpoint 和令牌环境变量连接经过认证的 MCP 网关；Linux 上还可选择对端 Unix socket。[Agent 入口与协议范围](agent-entry.md)
+`--load-harness` 选择要连接的原生协议。用 `--list-harnesses` 查看支持项。启动只初始化协议并加载目录。通过 `--load-harness ssmcp` 可连接明确指定且已认证的 MCP 网关，Unix 平台也可使用对端私有 Unix socket。`--agent` 单独选择聊天消息的处理方，默认 `next-caller`。[协议加载](agent-entry.md) · [聊天处理方](client-input.md)
 
 原生参数在 `--` 之后按原样传递，保存会话和重载都会保留参数顺序、空参数及看起来像 ssmcp 选项的字面值。重载保留当前连接选择、启动目录和文件访问根，不会因默认连接配置后来改变而切换目标。[连接上下文](connection-contexts.md) · [重载验收](../scripts/e2e_connection_context_reload.py)
 
@@ -20,7 +20,7 @@ Linux 的 `ssmcp local --socket` 在现有本机 HTTP/MCP 服务上增加 Unix s
 
 远程 `ssmcp attach` 默认进入聊天输入与输出；原有 Shell PTY 通过 `--terminal` 或 `-i` 显式选择。`ssmcp list` 的数字对应有期限、绑定账号与服务器的目录快照；选择线程时发送到精确身份，选择进程时固定该次目录中的接收集合。[目录与 attach](client-accounts.md)
 
-`ssmcp send` 和 `ssmcp wait` 支持把真实执行结果接入命令管道。最终结果写入标准输出，进度写入标准错误；等待支持任意一个、全部或指定数量的不同输入结果。交付回执和运行进度不计作完成，超时也不会取消接收方工作。接收方在下一次符合交付条件的原生调用中取得请求，这些接口不会自动启动模型。[发送、等待与计数](client-accounts.md) · [原生回复确认](../src/http/session_io.rs)
+`ssmcp send` 和 `ssmcp wait` 支持把真实执行结果接入命令管道。最终结果写入标准输出，进度写入标准错误；等待支持任意一个、全部或指定数量的不同输入结果。交付回执和运行进度不计作完成，超时也不会取消接收方工作。接收方在下一次符合交付条件的原生调用中取得请求，这些接口不会自动启动模型。[发送、等待与计数](client-accounts.md) · [原生回复确认](../src/broker/session_io.rs)
 
 请求和回复使用中继内存中的有界保留区，最长保留一小时，服务器重启会丢失其中的请求和回复。线程历史按实际调用时记录的身份筛选，右键读取所点线程的历史；无法归属的旧记录留在进程视图，不补造线程身份。聊天接口需要命令端、接收端和中继共同支持。[保留与兼容边界](client-accounts.md#聊天接口的兼容与保留边界)
 

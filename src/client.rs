@@ -5,6 +5,7 @@ pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
+mod chat_io;
 mod clipboard;
 pub(crate) mod completion;
 mod composer;
@@ -93,7 +94,10 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --agent NAME           Load one explicit agent protocol; --agent list shows providers
+  --input MODE  Chat input (terminal by default, none disables chat)
+  --agent NAME  Chat recipient (next-caller by default)
+  --load-harness NAME  Preload one native protocol
+  --list-harnesses     List supported harness providers
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -132,6 +136,14 @@ Usage: ssmcp username@server [options]
 
   --server URL         Relay for this command; overrides config and last login
   --context NAME       Named local or HTTPS target; overrides SSMCP_CONTEXT and context use
+  --input MODE         terminal (default), none, pipe, web, mcp-stdio, mcp-http or sock
+  --input-host HOST    Loopback host for web or MCP HTTP (required)
+  --input-port PORT    Port for web or MCP HTTP (required)
+  --input-token-file PATH  Private bearer token file for web or MCP HTTP
+  --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
+  --agent RECIPIENT    next-caller (default), codex, claude, opencode, exec or ssmcp
+  --agent-exec PATH    Absolute executable for exec; optional --agent-argv-file PATH
+  --agent-peer ID      Exact native message recipient for ssmcp; also set --agent-account PROVIDER:SUBJECT
   --username NAME      Named account on the selected server
   --no-browser         Print the GitHub authorization link without opening it
   -i, --interactive    Select an authorized account session and open its terminal
@@ -160,14 +172,15 @@ Usage: ssmcp username@server [options]
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
   --list-tools         List native and workspace tools as JSON, then exit
-  --agent NAME         Load one explicit protocol at startup; --agent list shows providers
-  -- ARGS              Native Codex/Claude protocol arguments; never parsed as ssmcp flags
+  --load-harness NAME  Preload one native protocol at startup
+  --list-harnesses     List supported providers without starting them (optional --json)
+  -- ARGS              Native arguments for an explicit --load-harness; never parsed as ssmcp flags
 
 The client provides native tools without another harness. Optional Codex, Claude
 Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
 Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
---agent codex|claude-code selects that same explicit startup load, not a model turn.
---agent ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
+--load-harness codex|claude-code preloads the protocol without submitting a model turn.
+--load-harness ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
 The peer URL identifies an authenticated MCP gateway, not a device/session.
 Tools keep their native schemas and permission/approval behavior.
 
@@ -416,6 +429,7 @@ struct Options {
     title: Option<String>,
     allow: Vec<String>,
     context_roots: Vec<PathBuf>,
+    chat: chat_io::Settings,
     list_tools: bool,
     daemon: bool,
     session_control: bool,
@@ -432,7 +446,7 @@ struct Options {
     config: Option<OsString>,
     shell: PathBuf,
     tty: Option<String>,
-    agent: Option<agent::Selection>,
+    harness: Option<agent::Selection>,
 }
 
 impl Options {
@@ -462,6 +476,37 @@ impl Options {
     // Older saved manifests omitted --no-watchdog. Their recorded policy remains
     // authoritative as the parsing default; explicit flags must still match it.
     fn parse_saved(spec: &crate::session::SessionSpec) -> Result<Option<Self>, String> {
+        // Published legacy harness records used --agent without any chat input
+        // option. An explicit non-default chat recipient could only be saved
+        // with a separate, background-capable input. Never reinterpret the
+        // legacy argv as permission to send chat or to launch a harness.
+        let mut args = spec.args.iter();
+        let mut explicit_input = false;
+        let mut ambiguous_agent = false;
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            match arg.as_str() {
+                "--input" => {
+                    explicit_input = true;
+                    args.next();
+                }
+                "--agent" => {
+                    ambiguous_agent |= args.next().is_some_and(|value| value != "next-caller");
+                }
+                value if value.starts_with("--agent=") => {
+                    ambiguous_agent |= value != "--agent=next-caller";
+                }
+                value if connection_option_takes_value(value) => {
+                    args.next();
+                }
+                _ => {}
+            }
+        }
+        if !explicit_input && ambiguous_agent {
+            return Err("saved --agent has no explicit chat input and may select a legacy harness; recreate the session with --load-harness for protocol startup or configure a supported saved chat input and recipient".into());
+        }
         Self::parse_with_policy(
             spec.args.iter().map(OsString::from),
             None,
@@ -500,6 +545,7 @@ impl Options {
         let mut title = None;
         let mut allow = Vec::new();
         let mut context_roots = Vec::new();
+        let mut chat = chat_io::Flags::default();
         let mut list_tools = false;
         let mut daemon = false;
         let mut session_control = false;
@@ -515,35 +561,40 @@ impl Options {
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
         let mut tty = None;
-        let mut agent_name = None;
-        let mut agent_arguments = Vec::new();
+        let mut harness_name = None;
+        let mut harness_arguments = Vec::new();
         while let Some(arg) = args.next() {
             match arg.to_str() {
-                Some("--agent") => {
-                    if agent_name.is_some() {
-                        return Err("--agent may be supplied only once".into());
+                Some("--load-harness") => {
+                    if harness_name.is_some() {
+                        return Err("--load-harness may be supplied only once".into());
                     }
-                    agent_name = Some(
+                    harness_name = Some(
                         args.next()
-                            .ok_or("--agent requires a provider; use ssmcp --agent list")?
+                            .ok_or(
+                                "--load-harness requires a provider; use ssmcp --list-harnesses",
+                            )?
                             .into_string()
-                            .map_err(|_| "--agent must be UTF-8")?,
+                            .map_err(|_| "--load-harness must be UTF-8")?,
                     );
                 }
-                Some(value) if value.starts_with("--agent=") => {
-                    if agent_name
-                        .replace(value["--agent=".len()..].to_owned())
+                Some(value) if value.starts_with("--load-harness=") => {
+                    if harness_name
+                        .replace(value["--load-harness=".len()..].to_owned())
                         .is_some()
                     {
-                        return Err("--agent may be supplied only once".into());
+                        return Err("--load-harness may be supplied only once".into());
                     }
                 }
                 Some("--") => {
-                    if agent_name.is_none() {
-                        return Err("arguments after -- require an explicit --agent".into());
+                    if harness_name.is_none() {
+                        return Err("arguments after -- require an explicit --load-harness".into());
                     }
-                    agent_arguments.extend(args.by_ref());
+                    harness_arguments.extend(args.by_ref());
                     break;
+                }
+                Some(value) if value.starts_with("--agent=") => {
+                    chat.set("--agent", OsString::from(&value["--agent=".len()..]))?;
                 }
                 Some("-h" | "--help") => {
                     #[cfg(target_os = "linux")]
@@ -762,6 +813,13 @@ impl Options {
                     crate::observer::validate_terminal(value)?;
                     tty = Some(value.into());
                 }
+                Some(flag) if chat_io::takes_value(flag) => {
+                    chat.set(
+                        flag,
+                        args.next()
+                            .ok_or_else(|| format!("{flag} requires a value"))?,
+                    )?;
+                }
                 Some("--shell") => {
                     shell = PathBuf::from(args.next().ok_or("--shell requires an absolute path")?);
                 }
@@ -771,9 +829,13 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
-        let agent = agent_name
+        let chat = chat.finish()?;
+        if list_tools && !chat.arguments().is_empty() {
+            return Err("--list-tools cannot configure chat input or an agent".into());
+        }
+        let harness = harness_name
             .as_deref()
-            .map(|name| agent::Selection::new(name, agent_arguments))
+            .map(|name| agent::Selection::new(name, harness_arguments))
             .transpose()?;
         if context.is_some() && !new_connection {
             return Err("saved sessions must record a concrete server, not --context".into());
@@ -947,6 +1009,7 @@ impl Options {
             title,
             allow,
             context_roots,
+            chat,
             list_tools,
             daemon,
             session_control,
@@ -963,7 +1026,7 @@ impl Options {
             config,
             shell,
             tty,
-            agent,
+            harness,
         }))
     }
 
@@ -1039,6 +1102,7 @@ impl Options {
         }
         let metadata = self.metadata()?;
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
+        args.extend_from_slice(self.chat.arguments());
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
             if let Some(value) = value {
                 args.extend([
@@ -1101,8 +1165,8 @@ impl Options {
                     .ok_or("missing connection destination")?,
             ));
         }
-        if let Some(agent) = &self.agent {
-            agent.append_saved(&mut args);
+        if let Some(harness) = &self.harness {
+            harness.append_saved(&mut args);
         }
         let args = args
             .into_iter()
@@ -1186,6 +1250,7 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     }
     let options =
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
+    options.chat.validate_saved_input()?;
     if options.daemon
         || options.list_tools
         || (options.destination.is_none() && options.server.is_none())
@@ -1201,6 +1266,23 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
         );
     }
     Ok(())
+}
+
+/// Read the chat mode of an already validated saved session without opening
+/// context roots or resolving the session's credentials.
+pub(crate) fn saved_chat_enabled(spec: &crate::session::SessionSpec) -> bool {
+    let mut args = spec.args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--" => break,
+            "--input" => return args.next().is_none_or(|value| value != "none"),
+            arg if connection_option_takes_value(arg) => {
+                args.next();
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 /// Read display metadata without reopening optional context roots or transports.
@@ -1234,6 +1316,16 @@ pub(crate) fn child_session_spec(
 ) -> crate::Result<crate::session::SessionSpec> {
     let mut options =
         Options::parse_saved(template)?.ok_or("invalid management connection template")?;
+    if !matches!(
+        options.chat.input,
+        chat_io::Input::Terminal | chat_io::Input::None
+    ) || options.chat.agent != chat_io::Agent::NextCaller
+    {
+        return Err(
+            "remote child sessions cannot inherit a privately authorized chat input or agent"
+                .into(),
+        );
+    }
     options.name = Some(name);
     options.title = title.or(options.title);
     options.daemon = false;
@@ -1318,6 +1410,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
+    options.chat.validate_saved_input()?;
     apply_account(&mut options, true).await?;
     let mut spec = options.session_spec()?;
     spec.cwd = cwd;
@@ -1337,31 +1430,32 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
 }
 
 fn connection_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "--name"
-            | "--agent"
-            | "--server"
-            | "--context"
-            | "--username"
-            | "--identity"
-            | "--title"
-            | "--allow"
-            | "--context-root"
-            | "--listen"
-            | "--public-url"
-            | "--portal"
-            | "--reconnect-delay"
-            | "--log-format"
-            | "--ui-config"
-            | "--theme"
-            | "--max-inline-output"
-            | "-i"
-            | "-p"
-            | "-F"
-            | "--shell"
-            | "--tty"
-    )
+    chat_io::takes_value(option)
+        || matches!(
+            option,
+            "--name"
+                | "--load-harness"
+                | "--server"
+                | "--context"
+                | "--username"
+                | "--identity"
+                | "--title"
+                | "--allow"
+                | "--context-root"
+                | "--listen"
+                | "--public-url"
+                | "--portal"
+                | "--reconnect-delay"
+                | "--log-format"
+                | "--ui-config"
+                | "--theme"
+                | "--max-inline-output"
+                | "-i"
+                | "-p"
+                | "-F"
+                | "--shell"
+                | "--tty"
+        )
 }
 
 fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
@@ -1612,6 +1706,9 @@ pub async fn run() -> crate::Result<()> {
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    if service.is_some() || options.daemon {
+        options.chat.validate_saved_input()?;
+    }
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
@@ -1620,7 +1717,8 @@ pub async fn run() -> crate::Result<()> {
             return Err("local mode requires a foreground session".into());
         }
     } else {
-        apply_account(&mut options, service.is_none()).await?;
+        let interactive_login = service.is_none() && !options.chat.input.uses_stdio();
+        apply_account(&mut options, interactive_login).await?;
     }
     if let Some(runner) = &service
         && (options.daemon
@@ -1690,7 +1788,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start_with_agent(&options.shell, options.tty.as_deref(), options.agent.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -1704,6 +1802,7 @@ pub async fn run() -> crate::Result<()> {
             // Offline discovery lists this binary's native tools. It has no
             // relay, queued requests or public-await display to negotiate.
             runtime.configure_timing(true, false)?;
+            runtime.configure_chat(options.chat.input != chat_io::Input::None)?;
             runtime.enable_default_skill_sources()?;
             Ok(runtime)
         }) {
@@ -1715,7 +1814,7 @@ pub async fn run() -> crate::Result<()> {
         };
         let tools = tokio::select! {
             result = timeout(Duration::from_secs(180),async {
-                if let Some(agent) = &options.agent { agent.activate(&backend).await?; }
+                if let Some(harness) = &options.harness { harness.activate(&backend).await?; }
                 backend.wait_discovery().await;
                 backend.tools().await
             }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
@@ -1766,6 +1865,7 @@ pub async fn run() -> crate::Result<()> {
             if service.is_none()
                 && !options.account_compat
                 && !options.temporary
+                && !options.chat.input.uses_stdio()
                 && options.username.is_some()
                 && !reauthenticated
             {
@@ -1853,6 +1953,7 @@ pub async fn run() -> crate::Result<()> {
             && service.is_none()
             && !options.account_compat
             && !options.temporary
+            && !options.chat.input.uses_stdio()
             && options.username.is_some()
             && !reauthenticated
         {
@@ -1939,6 +2040,7 @@ struct RegisteredSsh {
     ready: (String, String, u64, String),
     access_supported: bool,
     messaging_supported: bool,
+    chat_disabled_acknowledged: bool,
     time_observation_supported: bool,
     wait_display_supported: bool,
     version_notice: Option<crate::wire::versions::Notice>,
@@ -2050,9 +2152,13 @@ async fn register_ssh(
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::SESSION_ACCESS_CAPABILITY),
-            capabilities
-                .iter()
-                .all(|capability| capability == crate::wire::CONTROL_ATTRIBUTION_CAPABILITY),
+            capabilities.iter().all(|capability| {
+                matches!(
+                    capability.as_str(),
+                    crate::wire::CONTROL_ATTRIBUTION_CAPABILITY
+                        | crate::wire::CHAT_DISABLED_CAPABILITY
+                )
+            }),
             capabilities
                 .iter()
                 .any(|capability| capability == crate::wire::messages::CAPABILITY),
@@ -2064,6 +2170,9 @@ async fn register_ssh(
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_timing(timing_offer, &capabilities).1,
+            capabilities
+                .iter()
+                .any(|capability| capability == crate::wire::CHAT_DISABLED_CAPABILITY),
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut ssh, &mut stderr_pump).await?;
@@ -2096,6 +2205,7 @@ async fn register_ssh(
         version_notice,
         time_observation_supported,
         wait_display_supported,
+        chat_disabled_acknowledged,
     ) = ready;
     if account_compat
         && (!metadata.allow.is_empty()
@@ -2125,6 +2235,7 @@ async fn register_ssh(
         ready,
         access_supported,
         messaging_supported,
+        chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_supported,
         version_notice,
@@ -2292,7 +2403,7 @@ async fn connect(
 ) -> crate::Result<ConnectionExit> {
     #[cfg(target_os = "linux")]
     if let Some(settings) = &options.local {
-        let host = local::Host::start(settings).await?;
+        let host = local::Host::start(settings, options.chat.input == chat_io::Input::None).await?;
         let result = connect_inner(
             options,
             ui,
@@ -2381,6 +2492,7 @@ async fn connect_inner(
         }
     };
     let mut metric_channel = None;
+    let chat_enabled = options.chat.input != chat_io::Input::None;
     let registration = register_ssh(
         &wire_metadata,
         options.account_compat,
@@ -2389,6 +2501,9 @@ async fn connect_inner(
             let mut command = transport.command(&executable);
             if options.account_compat {
                 relay::restrict_to_self(&mut command);
+            }
+            if !chat_enabled && matches!(&transport, Transport::Account { .. }) {
+                relay::offer_chat_disabled(&mut command);
             }
             if matches!(&transport, Transport::Account { .. })
                 && ui.dashboard
@@ -2408,6 +2523,14 @@ async fn connect_inner(
     registration
         .require_allow_access(&wire_metadata.allow)
         .await?;
+    if chat_enabled == registration.chat_disabled_acknowledged {
+        stop_registration(&mut registration.ssh, &mut registration.stderr_pump).await?;
+        return Err(Box::new(relay::PermanentFailure(if chat_enabled {
+            "relay disabled human chat without a matching local request".into()
+        } else {
+            "--input none requires a relay that acknowledges disabled human chat".into()
+        })));
+    }
     let RegisteredSsh {
         mut ssh,
         stderr_pump: _stderr_pump,
@@ -2416,6 +2539,7 @@ async fn connect_inner(
         ready: (url, login_code, login_expires_in, client_id),
         access_supported,
         messaging_supported,
+        chat_disabled_acknowledged: _,
         time_observation_supported,
         wait_display_supported,
         version_notice,
@@ -2424,7 +2548,7 @@ async fn connect_inner(
         transport.timing_support((time_observation_supported, wait_display_supported));
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
-    let display_session =
+    let display_session = if options.chat.input == chat_io::Input::Terminal {
         match transport.start_display(ui, &metadata.cwd, metadata.title.as_deref(), &url) {
             Ok(session) => session,
             Err(error) => {
@@ -2435,7 +2559,19 @@ async fn connect_inner(
                 );
                 None
             }
-        };
+        }
+    } else {
+        None
+    };
+    if options.chat.input == chat_io::Input::Terminal
+        && options.chat.agent != chat_io::Agent::NextCaller
+        && display_session.is_none()
+    {
+        let _ = ssh.kill().await;
+        return Err(Box::new(relay::PermanentFailure(
+            "terminal agent dispatch requires a live dashboard; select another --input mode for headless use".into(),
+        )));
+    }
     if let Some(notice) = version_notice {
         update::report_connection(notice, options.server.as_deref().unwrap_or(&url));
     }
@@ -2453,8 +2589,8 @@ async fn connect_inner(
     let _link_metrics = display_session
         .as_ref()
         .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
-    if let Some(agent) = &options.agent
-        && let Err(error) = agent.check_target(Some(&url))
+    if let Some(harness) = &options.harness
+        && let Err(error) = harness.check_target(Some(&url))
     {
         let _ = ssh.kill().await;
         incoming.stop().await;
@@ -2463,8 +2599,8 @@ async fn connect_inner(
     render::status(
         "shell",
         "Progress",
-        if options.agent.is_some() {
-            "Starting native tools and the explicitly selected agent protocol"
+        if options.harness.is_some() {
+            "Starting native tools and the explicitly selected harness protocol"
         } else {
             "Starting native tools; optional harnesses stay unloaded"
         },
@@ -2479,7 +2615,7 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start_with_agent(&options.shell, options.tty.as_deref(), options.agent.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),
@@ -2490,6 +2626,7 @@ async fn connect_inner(
     .and_then(|runtime| {
         runtime.bind_client_id(&client_id)?;
         runtime.configure_timing(time_observation_supported, wait_display_supported)?;
+        runtime.configure_chat(chat_enabled)?;
         runtime.enable_default_skill_sources()?;
         Ok(runtime)
     }) {
@@ -2515,7 +2652,7 @@ async fn connect_inner(
             return Err(error);
         }
     };
-    // Only an explicit --agent performs a startup load; other providers stay unloaded.
+    // An explicit --load-harness uses the same lazy registry as a later tool call.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -2526,7 +2663,7 @@ async fn connect_inner(
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         result = timeout(Duration::from_secs(180), async {
-            if let Some(agent) = &options.agent { agent.activate(&backend).await?; }
+            if let Some(harness) = &options.harness { harness.activate(&backend).await?; }
             backend.tools().await
         }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
@@ -2543,8 +2680,8 @@ async fn connect_inner(
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
-    if let Some(agent) = &options.agent {
-        output["agent"] = json!(agent.provider.label());
+    if let Some(harness) = &options.harness {
+        output["agent"] = json!(harness.provider.label());
         output["agent_scope"] = json!("protocol_catalog");
     }
     if options.is_local() {
@@ -2573,6 +2710,14 @@ async fn connect_inner(
     }
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
+    } else if chat_enabled && options.chat.input != chat_io::Input::Terminal {
+        // External input owns stdout. A local OAuth client still needs its
+        // connection URL and one-time code on the operator's stderr.
+        if options.is_local() {
+            render::local_connection_stderr(&output).map_err(Into::into)
+        } else {
+            Ok(())
+        }
     } else {
         render::connection(&output).map_err(Into::into)
     };
@@ -2594,13 +2739,21 @@ async fn connect_inner(
     render::status(
         "shell",
         "Result",
-        if github_auth {
+        if !chat_enabled {
+            "Human chat is disabled. Ctrl-C disconnects this client."
+        } else if options.chat.input != chat_io::Input::Terminal {
+            "Chat input is enabled. Ctrl-C disconnects this client."
+        } else if github_auth {
             "Sign in with an allowed GitHub account. Ctrl-C disconnects this client."
         } else {
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
-    let local_input = match input::Input::attach(backend.terminals()) {
+    let local_input = match if options.chat.input == chat_io::Input::Terminal {
+        input::Input::attach(backend.terminals())
+    } else {
+        Ok(None)
+    } {
         Ok(input) => input,
         Err(error) => {
             let _ = ssh.start_kill();
@@ -2617,9 +2770,32 @@ async fn connect_inner(
     let mut ui_updates = tokio::time::interval(Duration::from_secs(1));
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
-    let mut steering_commands = steering::connect(&client_id, VERSION);
+    let mut steering_commands = steering::connect_with_chat(&client_id, VERSION, chat_enabled);
     let mut access_commands = access::connect(access_supported);
     let mut message_commands = messaging::connect(messaging_supported);
+    let mut chat = if !chat_enabled
+        || (options.chat.input == chat_io::Input::Terminal
+            && options.chat.agent == chat_io::Agent::NextCaller)
+    {
+        None
+    } else {
+        match chat_io::Session::start(&options.chat, backend.clone()).await {
+            Ok(session) => Some(session),
+            Err(error) => {
+                steering::disconnect();
+                access::disconnect();
+                messaging::disconnect();
+                if let Some(input) = local_input {
+                    input.shutdown().await;
+                }
+                let _ = ssh.start_kill();
+                backend.shutdown().await;
+                incoming.stop().await;
+                let _ = ssh.wait().await;
+                return Err(Box::new(relay::PermanentFailure(error)));
+            }
+        }
+    };
     let mut steering_updates = tokio::time::interval(Duration::from_secs(1));
     steering_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut requests: JoinSet<io::Result<bool>> = JoinSet::new();
@@ -2629,8 +2805,15 @@ async fn connect_inner(
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut result: crate::Result<()> = 'connected: loop {
         tokio::select! {
+            ended = chat_io::input_ended(&mut chat) => match ended {
+                Ok(()) if options.chat.input == chat_io::Input::Pipe => {
+                    render::status("chat input", "Ready", "Pipe reached EOF; the connected session stays available");
+                }
+                Ok(()) => { intentionally_stopped = true; break Ok(()); }
+                Err(error) => break Err(Box::new(relay::PermanentFailure(error)) as crate::Error),
+            },
             _ = steering_updates.tick() => {
-                if let Err(error) = steering::poll() { terminal::notice(&error); }
+                if chat_enabled && let Err(error) = steering::poll() { terminal::notice(&error); }
                 access::poll();
                 messaging::poll();
             },
@@ -2849,8 +3032,14 @@ async fn connect_inner(
             _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
+    if let Some(chat) = &chat {
+        chat.stop();
+    }
     if let Some(input) = local_input {
         input.shutdown().await;
+    }
+    if let Some(chat) = chat.take() {
+        chat.shutdown().await;
     }
     backend.disconnect_timing();
     steering::disconnect();
@@ -3243,6 +3432,60 @@ mod tests {
     #[test]
     fn retired_join_is_not_a_reusable_connection_destination() {
         assert!(Options::parse(["join", "--token", "retired"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn disabled_chat_is_saved_as_a_literal_and_inherited_by_local_children() {
+        let options = Options::parse(
+            [
+                "--name",
+                "quiet",
+                "--server",
+                "https://relay.example",
+                "--title",
+                "--input",
+                "--input",
+                "none",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        let spec = options.session_spec().unwrap();
+        validate_session_spec(&spec).unwrap();
+        assert!(!saved_chat_enabled(&spec));
+        let restored = Options::parse_saved(&spec).unwrap().unwrap();
+        assert_eq!(restored.chat.input, chat_io::Input::None);
+        assert_eq!(restored.chat.agent, chat_io::Agent::NextCaller);
+        assert_eq!(restored.title.as_deref(), Some("--input"));
+        let child = child_session_spec(
+            &spec,
+            "quiet-child".into(),
+            spec.cwd.clone(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!saved_chat_enabled(&child));
+        assert_eq!(
+            Options::parse_saved(&child).unwrap().unwrap().chat.input,
+            chat_io::Input::None
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--server",
+                    "https://relay.example",
+                    "--input",
+                    "none",
+                    "--agent",
+                    "codex",
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
+        );
     }
 
     #[test]

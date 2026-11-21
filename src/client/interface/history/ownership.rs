@@ -286,6 +286,20 @@ pub(crate) fn record_owned_request(
     })
 }
 
+/// Store the actual reply to a locally dispatched program without contributing
+/// explicit agent messages to shared automatic context memory.
+pub(crate) fn record_owned_program_reply(
+    owner: &HistoryOwner,
+    request: &str,
+    output: &str,
+) -> Result<String, String> {
+    let reply = super::request_identity(&format!("program_reply_{request}"), "")?;
+    with_owner(owner, |history, owner| {
+        history.record_owned(owner, "assistant", output, Some(reply.clone()))?;
+        Ok(reply)
+    })
+}
+
 /// Check and update the leaf copy cache while selection remains stable.
 pub(crate) fn remember_visible_reply(owner: &HistoryOwner, text: &str) -> bool {
     with_owner(owner, |history, owner| {
@@ -351,6 +365,51 @@ mod tests {
                 Some(expected)
             );
         });
+    }
+
+    #[tokio::test]
+    async fn program_reply_keeps_original_owner_and_one_copy_after_selection_changes() {
+        let temp = super::super::tests::Temporary::new();
+        let mut history = temp.history();
+        history
+            .record_request("other", "Other conversation")
+            .unwrap();
+        let other = history.current().unwrap().unwrap();
+        history.release_current();
+        let store = HistoryStore {
+            current: history.ownership.current.clone(),
+            state: Mutex::new(Some(history)),
+        };
+        TEST_HISTORY
+            .scope(Arc::new(store), async {
+                let owner = capture(None).unwrap();
+                let source = "Review this literal @missing-fixture.txt";
+                record_owned_request(&owner, "chat_fixture", source).unwrap();
+                with(|history| history.resume(&other.metadata.id)).unwrap();
+                let later = capture(None).unwrap();
+                assert_ne!(owner, later);
+
+                for _ in 0..2 {
+                    record_owned_program_reply(&owner, "chat_fixture", "Actual program output")
+                        .unwrap();
+                }
+                assert!(
+                    record_owned_program_reply(&owner, "chat_fixture", "A different reply")
+                        .is_err()
+                );
+                let original = with(|history| history.read(owner.id())).unwrap();
+                assert_eq!(
+                    original
+                        .messages
+                        .iter()
+                        .map(|item| (item.role.as_str(), item.content.as_str()))
+                        .collect::<Vec<_>>(),
+                    [("user", source), ("assistant", "Actual program output")]
+                );
+                assert_eq!(with(|history| history.current()).unwrap(), Some(other));
+                assert_eq!(current_owner(), Some(later));
+            })
+            .await;
     }
 
     #[test]

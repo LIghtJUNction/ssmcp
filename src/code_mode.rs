@@ -325,6 +325,9 @@ impl AuditRun {
         agent_id: Option<&str>,
         result: &Value,
     ) -> bool {
+        if !session.chat_enabled() {
+            return false;
+        }
         self.question_answers
             .lock()
             .unwrap_or_else(|error| error.into_inner())

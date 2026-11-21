@@ -61,9 +61,9 @@ impl Settings {
             }
         }
         let endpoint =
-            endpoint.ok_or("--agent ssmcp requires -- --endpoint URL --token-env NAME")?;
+            endpoint.ok_or("--load-harness ssmcp requires -- --endpoint URL --token-env NAME")?;
         let endpoint = endpoint_url(&endpoint)?;
-        let token_env = token_env.ok_or("--agent ssmcp requires --token-env NAME after --; supply its OAuth bearer in that environment variable")?;
+        let token_env = token_env.ok_or("--load-harness ssmcp requires --token-env NAME after --; supply its OAuth bearer in that environment variable")?;
         if token_env.len() > 128
             || !token_env.bytes().enumerate().all(|(i, byte)| {
                 byte == b'_' || byte.is_ascii_alphabetic() || (i > 0 && byte.is_ascii_digit())

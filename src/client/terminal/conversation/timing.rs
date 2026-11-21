@@ -24,7 +24,7 @@ fn caption(entry: &Entry) -> &'static str {
     match entry.kind {
         "timer" => "计时",
         "task" => "任务",
-        _ => "等待",
+        _ => "观察",
     }
 }
 
@@ -47,7 +47,7 @@ fn selected(snapshot: &Snapshot) -> Option<&Entry> {
 
 fn clock_label(entry: &Entry) -> String {
     if matches!(entry.status, Status::Elapsed | Status::Expired) {
-        return "计时 已到期".into();
+        return format!("{} 已到期", caption(entry));
     }
     match entry.remaining_ms {
         // A job/wait can still be cleaning up after its deadline. This is a
@@ -57,16 +57,22 @@ fn clock_label(entry: &Entry) -> String {
             if entry.kind == "task" {
                 "运行"
             } else {
-                "等待"
+                caption(entry)
             }
         ),
+        Some(remaining) if !matches!(entry.kind, "task" | "timer") => {
+            format!("观察剩余 {}", duration(remaining, true))
+        }
         Some(remaining) => format!("剩余 {}", duration(remaining, true)),
         None => format!(
             "{} {}",
             if entry.kind == "task" {
                 "运行"
             } else {
-                caption(entry)
+                match entry.kind {
+                    "timer" => "计时",
+                    _ => "观察已用",
+                }
             },
             duration(entry.elapsed_ms, false)
         ),
@@ -134,6 +140,7 @@ fn detail(snapshot: &Snapshot) -> Option<String> {
         ));
     }
     lines.push("经过与剩余时间由单调时钟计算，不受系统日期调整影响。".into());
+    lines.push("观察剩余是本轮等待预算。".into());
     lines.push("计时到期不代表任务完成；取消计时不会停止任务。".into());
     Some(lines.join("\n"))
 }

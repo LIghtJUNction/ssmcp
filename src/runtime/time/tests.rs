@@ -304,17 +304,10 @@ async fn observation_drop_and_cancel_only_remove_the_observer() {
             .observe("ssmcp.exec.start", &json!({"command":["fixture"]}), &source)
             .is_none()
     );
-    let finish = clock
-        .observe("ssmcp.ui.finish", &json!({"timeout_ms":1000}), &source)
-        .unwrap();
     assert!(
-        !clock
-            .snapshot(&None, Instant::now())
-            .active
-            .into_iter()
-            .find(|entry| entry.id == finish.id)
-            .unwrap()
-            .cancellable
+        clock
+            .observe("ssmcp.ui.finish", &json!({"timeout_ms":1000}), &source)
+            .is_none()
     );
     assert!(clock.observe("ssmcp.ui.get", &json!({}), &source).is_none());
 }
@@ -445,6 +438,38 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                     .count(),
                 2
             );
+            runtime.configure_chat(false).unwrap();
+            let tools = runtime.tools().await.unwrap();
+            assert!(tools.iter().all(|tool| {
+                !tool["name"]
+                    .as_str()
+                    .is_some_and(crate::wire::human_chat_tool)
+            }));
+            for name in ["ssmcp.ui.get", "terminal.status", "ssmcp.time.wait"] {
+                assert!(
+                    tools.iter().any(|tool| tool["name"] == name),
+                    "missing {name}"
+                );
+            }
+            let rejected = runtime
+                .perform(crate::wire::Operation::CallTool {
+                    name: "ssmcp.ui.ask".into(),
+                    arguments: json!({"question":"disabled fixture"}),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(rejected, crate::wire::CHAT_DISABLED);
+            for name in ["request_finish", "ssmcp.ui.finish", "ssmcp.ui.answer"] {
+                assert!(tools.iter().all(|tool| tool["name"] != name));
+                let error = runtime
+                    .perform(crate::wire::Operation::CallTool {
+                        name: name.into(),
+                        arguments: json!({}),
+                    })
+                    .await
+                    .unwrap_err();
+                assert!(error.starts_with("tool_retired:"), "{name}: {error}");
+            }
             let now = runtime
                 .perform(crate::wire::Operation::CallTool {
                     name: "ssmcp.time.now".into(),
@@ -453,7 +478,22 @@ async fn remote_time_catalog_and_hard_coded_calls_fail_closed_without_negotiatio
                 .await
                 .unwrap();
             assert_eq!(now["structuredContent"]["deadline_clock"], "monotonic");
+            let capabilities = || crate::wire::Operation::CallTool {
+                name: "ssmcp.client.capabilities".into(),
+                arguments: json!({}),
+            };
+            let enabled = runtime.perform(capabilities()).await.unwrap();
+            assert_eq!(enabled["structuredContent"]["chat_enabled"], false);
+            assert_eq!(
+                enabled["structuredContent"]["timing"]["primitives_available"],
+                true
+            );
             runtime.configure_timing(false, false).unwrap();
+            let disabled = runtime.perform(capabilities()).await.unwrap();
+            assert_eq!(
+                disabled["structuredContent"]["timing"]["primitives_available"],
+                false
+            );
             assert!(
                 runtime
                     .perform(operation())

@@ -9,6 +9,18 @@ pub(super) struct Pending {
     stamp: InputStamp,
 }
 
+const LOOKUP_PENDING: &str = "Looking up native recipients · draft retained";
+const NO_MATCH: &str = "No verified native recipient matches this name · draft retained";
+
+pub(super) struct PendingPicker {
+    query: String,
+    directory: transport::DirectoryLookup,
+    stamp: InputStamp,
+    owner: Option<crate::client::interface::history::HistoryOwner>,
+    content_focus: bool,
+    pub(super) clear_command: bool,
+}
+
 enum Body<'a> {
     Literal(&'a str),
     WithOptionalMention(&'a str),
@@ -43,6 +55,17 @@ fn names(entry: &Value, token: &str) -> bool {
     ["id", "client_id", "agent_id", "display_name"]
         .iter()
         .any(|key| !field(entry, key).is_empty() && field(entry, key) == token)
+}
+
+fn picker_entry(entries: impl IntoIterator<Item = Value>, query: &str) -> Option<Value> {
+    let exact_id = crate::wire::messages::parse_recipient(query).is_ok();
+    entries.into_iter().filter(valid_entry).find(|entry| {
+        if exact_id {
+            field(entry, "id") == query
+        } else {
+            query.is_empty() || names(entry, query)
+        }
+    })
 }
 
 fn message_body<'a>(text: &'a str, recipient: &Value) -> &'a str {
@@ -192,39 +215,72 @@ impl State {
         }
     }
 
-    pub(super) fn chat_native_picker(&mut self, query: &str) -> Result<(), String> {
-        if self.conversation.editing.is_some()
+    fn chat_native_picker_blocked(&self) -> bool {
+        self.conversation.editing.is_some()
             || self.conversation.submitting.is_some()
             || self.conversation.recalling.is_some()
             || self.conversation.parked.is_some()
-        {
+    }
+
+    pub(super) fn chat_native_picker(&mut self, query: &str) -> Result<(), String> {
+        self.chat_cancel_native_lookup();
+        if self.chat_native_picker_blocked() {
             return Err("Finish the current queue edit before choosing a native recipient".into());
         }
-        self.chat_native_refresh();
         let snapshot = self.native_snapshot();
         if snapshot["available"] != true || snapshot["connected"] != true {
             return Err(
                 "Native messaging is unavailable on this connection · draft retained".into(),
             );
         }
-        let entries = self.native_entries();
         let query = query.trim().trim_start_matches('@');
-        let selected = entries
-            .iter()
-            .find(|entry| query.is_empty() || names(entry, query))
-            .ok_or(if query.is_empty() {
-                "No verified native recipients are loaded · retry /message after refresh"
-            } else {
-                "No verified native recipient matches this name · draft retained"
-            })?;
-        let id = field(selected, "id").to_owned();
+        if let Some(entry) = picker_entry(items(&snapshot, "recipients"), query) {
+            self.chat_native_refresh();
+            return self.chat_open_native_picker(field(&entry, "id"));
+        }
+        if query.is_empty() {
+            self.chat_native_refresh();
+            return Err(
+                "No verified native recipients are loaded · retry /message after refresh".into(),
+            );
+        }
+        if !self.chat_native_sending_enabled() {
+            return Err(NO_MATCH.into());
+        }
+        let stamp = self
+            .chat_input_stamp()
+            .ok_or("No active draft for native lookup")?;
+        #[cfg(test)]
+        let directory = if let Some(connection) = &mut self.conversation.native_connection {
+            connection.lookup_directory()
+        } else {
+            transport::lookup_directory()
+        };
+        #[cfg(not(test))]
+        let directory = transport::lookup_directory();
+        self.conversation.native_lookup = Some(PendingPicker {
+            query: query.into(),
+            directory: directory.map_err(|error| format!("{error} · draft retained"))?,
+            stamp,
+            owner: (!self.preview)
+                .then(crate::client::interface::history::current_owner)
+                .flatten(),
+            content_focus: self.conversation.content_focus,
+            clear_command: false,
+        });
+        self.notice = Some(LOOKUP_PENDING.into());
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn chat_open_native_picker(&mut self, id: &str) -> Result<(), String> {
         let data = self.chat_data();
         let selected = self
             .chat_recipients(&data)
             .iter()
-            .find(|entry| sessions::group_id(entry) == Some(id.as_str()))
+            .find(|entry| sessions::group_id(entry) == Some(id))
             .map(agent_key)
-            .unwrap_or_else(|| format!("native:{id}"));
+            .ok_or("Verified native recipient left the directory · draft retained")?;
         self.chat_change_view(View::Agents);
         // Restoring the Agents column also restores its local queue selection.
         // Apply the explicit native-picker intent after that view transition.
@@ -235,6 +291,90 @@ impl State {
         self.notice = Some("Choose an inbox or verified agent · only message text is sent".into());
         self.dirty = true;
         Ok(())
+    }
+
+    pub(in crate::client::terminal) fn chat_cancel_native_lookup(&mut self) {
+        if self.conversation.native_lookup.is_some() {
+            self.conversation.native_lookup = None;
+            if self.notice.as_deref() == Some(LOOKUP_PENDING) {
+                self.notice = None;
+                self.dirty = true;
+            }
+        }
+    }
+
+    pub(super) fn chat_poll_native_lookup(&mut self) {
+        let Some(pending) = self.conversation.native_lookup.as_ref() else {
+            return;
+        };
+        if self.ui.layout != Layout::Chat
+            || self.help
+            || self.selection
+            || self.conversation.content_focus != pending.content_focus
+            || self.chat_native_picker_blocked()
+            || self.chat_input_stamp().as_ref() != Some(&pending.stamp)
+            || (!self.preview
+                && pending.owner != crate::client::interface::history::current_owner())
+        {
+            self.chat_cancel_native_lookup();
+            return;
+        }
+        let mut pending = self
+            .conversation
+            .native_lookup
+            .take()
+            .expect("active native lookup");
+        #[cfg(test)]
+        let result = if let Some(connection) = &self.conversation.native_connection {
+            connection.directory_result(&mut pending.directory)
+        } else {
+            transport::directory_result(&mut pending.directory)
+        };
+        #[cfg(not(test))]
+        let result = transport::directory_result(&mut pending.directory);
+        let Some(result) = result else {
+            self.conversation.native_lookup = Some(pending);
+            return;
+        };
+        let lookup_failure = |error: String| {
+            format!(
+                "Native recipient lookup failed · {} · draft retained",
+                panel::safe_text(&error)
+            )
+        };
+        let resolved = result.map_err(lookup_failure).and_then(|recipients| {
+            if let Some(entry) =
+                picker_entry(recipients.iter().map(|entry| json!(entry)), &pending.query)
+            {
+                self.chat_open_native_picker(field(&entry, "id"))?;
+                return Ok(None);
+            }
+            #[cfg(test)]
+            let follow_up = if let Some(connection) = &mut self.conversation.native_connection {
+                connection.confirm_directory_miss(&pending.directory)
+            } else {
+                transport::confirm_directory_miss(&pending.directory)
+            };
+            #[cfg(not(test))]
+            let follow_up = transport::confirm_directory_miss(&pending.directory);
+            match follow_up.map_err(lookup_failure)? {
+                Some(directory) => Ok(Some(directory)),
+                None => Err(NO_MATCH.into()),
+            }
+        });
+        match resolved {
+            Ok(Some(directory)) => {
+                pending.directory = directory;
+                self.conversation.native_lookup = Some(pending);
+                self.notice = Some(LOOKUP_PENDING.into());
+            }
+            Ok(None) if pending.clear_command => {
+                self.conversation.composer.take_text();
+            }
+            Ok(None) => {}
+            Err(error) => self.notice = Some(error),
+        }
+        self.dirty = true;
     }
 
     pub(super) fn chat_native_has_mention(&self) -> bool {
@@ -617,7 +757,10 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::terminal::{Layout, Ui, preview_state};
+    use crate::{
+        client::terminal::{Layout, Ui, preview_state},
+        wire::messages::{Command, Reply},
+    };
     use std::time::Instant;
 
     fn descriptor(id: &str, name: &str, subject: &str) -> Value {
@@ -718,6 +861,255 @@ mod tests {
         assert_ne!(state.conversation.view, View::Agents);
         assert!(state.conversation.native_recipient.is_none());
         assert_eq!(state.conversation.composer.text(), draft);
+    }
+
+    fn cold_state() -> State {
+        let mut state = state(120);
+        state.conversation.native_fixture = None;
+        state.conversation.native_connection =
+            Some(transport::test_connection::Connection::new(vec![]));
+        state
+    }
+
+    fn fixture_transport(state: &mut State) -> &mut transport::test_connection::Connection {
+        state.conversation.native_connection.as_mut().unwrap()
+    }
+
+    fn recipient(digit: &str) -> Recipient {
+        let id = format!("client:{}", digit.repeat(64));
+        serde_json::from_value(descriptor(&id, "verified inbox", "123")).unwrap()
+    }
+
+    #[test]
+    fn cold_exact_lookup_highlights_merged_process_row_without_selecting_or_sending() {
+        let mut state = cold_state();
+        let own = recipient("1");
+        state.conversation.process_id.clone_from(&own.client_id);
+        state.conversation.target = Some("existing-route".into());
+        let mut other = recipient("2");
+        other.display_name.clone_from(&own.id);
+        state
+            .conversation
+            .groups
+            .selected
+            .insert(other.id.clone(), other.clone());
+        state.conversation.send_to_group = true;
+        state.conversation.composer.left();
+        let original = state.chat_saved_draft();
+
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
+        assert!(matches!(old_list.command, Command::List {}));
+        let sampled_before_query = Reply {
+            recipients: vec![other.clone()],
+            ..Default::default()
+        };
+        state.chat_native_picker(&own.id).unwrap();
+        assert!(fixture_transport(&mut state).next_request().is_none());
+        state.chat_updates();
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+
+        fixture_transport(&mut state).reply(old_list.id, Ok(sampled_before_query));
+        state.chat_updates();
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+        let connection = fixture_transport(&mut state);
+        let fresh_list = connection.next_request().unwrap();
+        assert!(fresh_list.id > old_list.id);
+        assert!(matches!(fresh_list.command, Command::List {}));
+        assert!(connection.next_request().is_none());
+
+        connection.reply(
+            fresh_list.id,
+            Ok(Reply {
+                recipients: vec![other.clone(), own.clone()],
+                ..Default::default()
+            }),
+        );
+        state.chat_updates();
+        assert_eq!(state.conversation.view, View::Agents);
+        assert!(state.conversation.native_picker);
+        assert_eq!(
+            state.conversation.selected_agent.as_deref(),
+            Some("member:next")
+        );
+        assert_eq!(
+            sessions::group_id(&state.chat_selected().unwrap()),
+            Some(own.id.as_str())
+        );
+        assert_eq!(state.chat_saved_draft(), original);
+        assert!(state.conversation.native_lookup.is_none());
+        assert_eq!(state.conversation.groups.selected.len(), 1);
+        assert_eq!(
+            state.conversation.groups.selected.get(&other.id),
+            Some(&other)
+        );
+        // Opening the Agents canvas may request a refresh; it must not send.
+        while let Some(request) = fixture_transport(&mut state).next_request() {
+            assert!(matches!(request.command, Command::List {}));
+        }
+    }
+
+    #[test]
+    fn explicit_lookup_reports_fresh_miss_or_failure_without_clearing_the_command() {
+        for (reply, notice) in [
+            (Ok(Reply::default()), NO_MATCH),
+            (
+                Err("directory denied".into()),
+                "Native recipient lookup failed · directory denied · draft retained",
+            ),
+        ] {
+            let mut state = cold_state();
+            state
+                .conversation
+                .composer
+                .set_text("/message missing-recipient");
+            state.conversation.composer.left();
+            let original = state.chat_saved_draft();
+            state.chat_submit();
+            assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+            let connection = fixture_transport(&mut state);
+            let list = connection.next_request().unwrap();
+            connection.reply(list.id, reply);
+            state.chat_updates();
+            assert_eq!(state.conversation.view, View::Activity);
+            assert_eq!(state.chat_saved_draft(), original);
+            assert!(state.conversation.native_lookup.is_none());
+            assert_eq!(state.notice.as_deref(), Some(notice));
+            assert!(fixture_transport(&mut state).next_request().is_none());
+        }
+    }
+
+    #[test]
+    fn coalesced_miss_joins_a_query_after_list_and_finishes_on_its_empty_reply() {
+        let mut state = cold_state();
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
+        let command = format!("/message {}", recipient("1").id);
+        state.conversation.composer.set_text(&command);
+        state.conversation.composer.left();
+        let original = state.chat_saved_draft();
+        state.chat_submit();
+
+        let connection = fixture_transport(&mut state);
+        assert!(connection.next_request().is_none());
+        connection.reply(old_list.id, Ok(Reply::default()));
+        // A background refresh can start after the old reply but before the
+        // terminal consumes it. It already satisfies the query's freshness.
+        connection.quiet_refresh();
+        let fresh_list = connection.next_request().unwrap();
+        assert!(fresh_list.id > old_list.id);
+        assert!(matches!(fresh_list.command, Command::List {}));
+        state.chat_updates();
+        assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.conversation.view, View::Activity);
+
+        let connection = fixture_transport(&mut state);
+        assert!(connection.next_request().is_none());
+        connection.reply(fresh_list.id, Ok(Reply::default()));
+        state.chat_updates();
+        state.chat_updates();
+        assert_eq!(state.notice.as_deref(), Some(NO_MATCH));
+        assert!(state.conversation.native_lookup.is_none());
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(fixture_transport(&mut state).next_request().is_none());
+    }
+
+    #[test]
+    fn queued_lookup_reply_cannot_override_escape_navigation_or_a_newer_draft() {
+        let actions: [fn(&mut State); 4] = [
+            |state| {
+                // A ready reply must lose to Escape, even before its prefix is decoded.
+                state.chat_keyboard(b"\x1b", Instant::now(), false);
+                state.chat_keyboard(b"", Instant::now(), true);
+            },
+            |state| {
+                state.canvas_focus(View::Audit);
+                state.canvas_focus(View::Activity);
+            },
+            |state| {
+                // An edit can also arrive without a keyboard event.
+                state.conversation.composer.set_text("newer draft");
+                state.conversation.composer.left();
+            },
+            |state| {
+                state.conversation.target = Some("next".into());
+                state.chat_recipient_changed(false);
+            },
+        ];
+        for change in actions {
+            let mut state = cold_state();
+            let own = recipient("1");
+            let connection = fixture_transport(&mut state);
+            connection.quiet_refresh();
+            let old = connection.next_request().unwrap();
+            state.chat_native_picker(&own.id).unwrap();
+            fixture_transport(&mut state).reply(old.id, Ok(Reply::default()));
+            state.chat_updates();
+            let connection = fixture_transport(&mut state);
+            let list = connection.next_request().unwrap();
+            assert!(list.id > old.id);
+            connection.reply(
+                list.id,
+                Ok(Reply {
+                    recipients: vec![own],
+                    ..Default::default()
+                }),
+            );
+
+            change(&mut state);
+            let expected = state.chat_saved_draft();
+            state.chat_updates();
+            assert_eq!(state.conversation.view, View::Activity);
+            assert_eq!(state.chat_saved_draft(), expected);
+            assert!(state.conversation.native_lookup.is_none());
+            assert!(state.conversation.native_recipient.is_none());
+            assert!(fixture_transport(&mut state).next_request().is_none());
+        }
+    }
+
+    #[test]
+    fn newer_query_coalesces_the_list_and_consumes_only_its_own_command() {
+        let mut state = cold_state();
+        let old = recipient("1");
+        let new = recipient("2");
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
+        state.chat_native_picker(&old.id).unwrap();
+        fixture_transport(&mut state).reply(old_list.id, Ok(Reply::default()));
+        state.chat_updates();
+
+        let list = fixture_transport(&mut state).next_request().unwrap();
+        assert!(list.id > old_list.id);
+        let command = format!("/message {}", new.id);
+        state.conversation.composer.set_text(&command);
+        state.chat_submit();
+        assert_eq!(state.conversation.composer.text(), command);
+        let connection = fixture_transport(&mut state);
+        assert!(connection.next_request().is_none());
+        connection.reply(
+            list.id,
+            Ok(Reply {
+                recipients: vec![old, new.clone()],
+                ..Default::default()
+            }),
+        );
+        state.chat_updates();
+        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(
+            sessions::group_id(&state.chat_selected().unwrap()),
+            Some(new.id.as_str())
+        );
+        assert!(state.conversation.native_recipient.is_none());
+        assert!(state.conversation.composer.is_empty());
     }
 
     #[test]

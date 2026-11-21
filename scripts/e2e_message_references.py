@@ -250,7 +250,7 @@ class MessageReferences(InputHistory):
         # Next caller row, then consume only through the bound fixture member.
         self.agents(front)
         front.send(HOME + ENTER)
-        self.wait_state(front, lambda state: state["target"] is None
+        self.wait_state(front, lambda state: state["target"] == "next"
                         and state["native_recipient"] is None
                         and state["view"] == "activity" and state["focus"] == "input",
                         "keyboard selection of Next caller for the reference queue")

@@ -267,7 +267,7 @@ class Composer(Dashboard):
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         selected = self.ui("/display/conversation")
-        self.check(selected["target"] == (None if member is None else member["agent_id"])
+        self.check(selected["target"] == ("next" if member is None else member["agent_id"])
                    and selected["native_recipient"] is None,
                    "Enter selects the exact steering recipient and closes Sessions")
         self.command(front, "/queue")
@@ -512,7 +512,7 @@ class Composer(Dashboard):
                    and held["draft"] == {"text": retargeted["text"], "cursor": 0},
                    "Left preserves the held request, exact recipient and original text during retargeting")
         front.send(HOME + ENTER)
-        front.until(lambda shot: editing_queue(shot, "next caller")
+        front.until(lambda shot: editing_queue(shot, "Next caller")
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
@@ -560,7 +560,7 @@ class Composer(Dashboard):
         escaped = self.queue()
         self.check(escaped["draft"]["text"] == parked and escaped["draft"]["cursor"] == parked_cursor
                    and escaped["draft_context"]["parked"] is None
-                   and escaped["draft_context"]["target"] is None,
+                   and escaped["draft_context"]["target"] == "next",
                    "Escape restores the parked request, recipient, and UTF-8 cursor")
         self.select_request(front, first["id"])
         front.send(b"r")

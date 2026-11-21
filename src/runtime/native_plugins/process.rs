@@ -97,7 +97,7 @@ fn reject_self_program(program: &Path) -> Result<(), String> {
     #[cfg(not(unix))]
     let same_file = false;
     if same_path || same_file {
-        return Err("an agent executable resolves to the running ssmcp; use --agent ssmcp with an explicit authenticated MCP peer endpoint".into());
+        return Err("an agent executable resolves to the running ssmcp; use --load-harness ssmcp with an explicit authenticated MCP peer endpoint".into());
     }
     Ok(())
 }
@@ -113,7 +113,8 @@ pub struct Process {
     loads: lazy::Loads,
     installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
-    agent: Option<crate::client::agent::Selection>,
+    chat_enabled: AtomicBool,
+    harness: Option<crate::client::agent::Selection>,
 }
 impl Process {
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
@@ -125,13 +126,13 @@ impl Process {
         .await
     }
     pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {
-        Self::start_with_agent(shell_path, tty, None).await
+        Self::start_with_harness(shell_path, tty, None).await
     }
 
-    pub(crate) async fn start_with_agent(
+    pub(crate) async fn start_with_harness(
         shell_path: &Path,
         tty: Option<&str>,
-        agent: Option<&crate::client::agent::Selection>,
+        harness: Option<&crate::client::agent::Selection>,
     ) -> crate::Result<Arc<Self>> {
         let observer = match tty {
             Some(terminal) => Some(crate::observer::Pool::new(terminal).await?),
@@ -142,7 +143,7 @@ impl Process {
             std::env::current_dir()?,
             OutputStore::new_connection()?,
             observer,
-            agent.cloned(),
+            harness.cloned(),
         )
         .await
     }
@@ -159,7 +160,7 @@ impl Process {
         root: PathBuf,
         output: Arc<OutputStore>,
         observer: Option<Arc<crate::observer::Pool>>,
-        agent: Option<crate::client::agent::Selection>,
+        harness: Option<crate::client::agent::Selection>,
     ) -> crate::Result<Arc<Self>> {
         if let Some(observer) = &observer {
             output.set_observer(observer);
@@ -185,10 +186,34 @@ impl Process {
             loads: lazy::Loads::default(),
             installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
-            agent,
+            chat_enabled: AtomicBool::new(true),
+            harness,
         });
         Ok(backend)
     }
+    pub(crate) fn configure_chat(&self, enabled: bool) -> Result<(), String> {
+        self.registry.replace(
+            Provider::Ui,
+            crate::client::interface::tools_for_chat(enabled),
+        )?;
+        self.chat_enabled.store(enabled, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn chat_enabled(&self) -> bool {
+        self.chat_enabled.load(Ordering::Acquire)
+    }
+
+    fn admit_chat_tool(&self, name: &str) -> Result<(), String> {
+        if let Some(error) = crate::wire::retired_tool_error(name) {
+            return Err(error.into());
+        }
+        if !self.chat_enabled() && crate::wire::human_chat_tool(name) {
+            return Err(crate::wire::CHAT_DISABLED.into());
+        }
+        Ok(())
+    }
+
     #[cfg(all(test, unix))]
     pub(crate) fn observe_exec_projection(
         &self,
@@ -260,7 +285,7 @@ impl Process {
             if provider == Provider::Peer {
                 return self.refresh_peer().await;
             }
-            let arguments = self.agent.as_ref().filter(|agent| agent.provider == provider)
+            let arguments = self.harness.as_ref().filter(|agent| agent.provider == provider)
                 .map_or(&[][..], |agent| agent.arguments.as_slice());
             let program = if provider == Provider::Playwright { playwright::installed()? } else { crate::program::executable(name)? };
             reject_self_program(&program)?;
@@ -377,8 +402,8 @@ impl Process {
     }
 
     async fn refresh_peer(&self) -> Result<Value, String> {
-        let settings = self.agent.as_ref().and_then(|agent| agent.peer.as_ref())
-            .ok_or("ssmcp peer requires explicit startup configuration: --agent ssmcp -- --endpoint URL --token-env NAME")?;
+        let settings = self.harness.as_ref().and_then(|agent| agent.peer.as_ref())
+            .ok_or("ssmcp peer requires explicit startup configuration: --load-harness ssmcp -- --endpoint URL --token-env NAME")?;
         let existing = self.drivers.lock().unwrap().get(&Provider::Peer).cloned();
         let driver = match existing {
             Some(driver) => driver,
@@ -424,6 +449,7 @@ impl Process {
                 )
             }
             Operation::CallTool { name, arguments } => {
+                self.admit_chat_tool(&name)?;
                 let tool = self.registry.lookup(&name)?;
                 self.dispatch(&tool, arguments).await
             }
@@ -459,6 +485,7 @@ impl Process {
             generation,
             arguments,
         } = call;
+        self.admit_chat_tool(&native_name)?;
         self.registry
             .validate_route(&id, provider, generation, &native_name)?;
         match provider {
@@ -698,7 +725,10 @@ impl NativePlugin for Process {
                 terminal_tools().as_array().unwrap().clone(),
             ),
             (Provider::Exec, shell::Shell::tools()),
-            (Provider::Ui, crate::client::interface::tools()),
+            (
+                Provider::Ui,
+                crate::client::interface::tools_for_chat(self.chat_enabled()),
+            ),
             (Provider::Harnesses, lazy::tools()),
         ]
     }

@@ -2775,6 +2775,27 @@ pub(crate) fn status(label: &str, level: &str, message: &str) {
     );
 }
 
+/// Connection credentials are shown directly to the local operator, outside
+/// the protocol stdout, event capture and audit streams.
+pub(super) fn local_connection_stderr(output: &Value) -> io::Result<()> {
+    let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = io::stderr().lock();
+    writeln!(
+        out,
+        "Native MCP endpoint: {}",
+        clean(output["url"].as_str().unwrap_or_default())
+    )?;
+    if let Some(code) = output["login_code"].as_str() {
+        writeln!(
+            out,
+            "Local OAuth login: {} · expires in {}s",
+            clean(code),
+            output["login_expires_in"]
+        )?;
+    }
+    out.flush()
+}
+
 pub(crate) fn connection(output: &Value) -> io::Result<()> {
     let _emission = EMISSION.lock().unwrap_or_else(|e| e.into_inner());
     let tty = io::stdout().is_terminal();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise --agent through the actual CLI using private fake protocol processes.
+"""Exercise --load-harness through the actual CLI using private fake protocol processes.
 
 No coding model, saved account, or external MCP service is contacted.
 """
@@ -158,7 +158,7 @@ def run(binary, repository, output):
             (config / "config.toml").write_text("invalid TOML would fail configuration loading [")
             bad_context = dict(environment, SSMCP_CONTEXT="does-not-exist")
             before = {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
-            listed, _ = cli(["--agent", "list", "--json"], env=bad_context)
+            listed, _ = cli(["--list-harnesses", "--json"], env=bad_context)
             assert {p["name"] for p in json.loads(listed)["providers"]} == {
                 "codex", "claude", "pi", "opencode", "playwright", "ssmcp"}
             assert not log.exists()
@@ -172,7 +172,7 @@ def run(binary, repository, output):
             checks.append("default_startup_keeps_optional_providers_unprobed")
 
             extra = ["--config", "fixture=中文", "--help", "-i", "--agent", "literal"]
-            codex, _ = cli(["--list-tools", "--agent", "codex", "--", *extra])
+            codex, _ = cli(["--list-tools", "--load-harness", "codex", "--", *extra])
             assert any(t["name"] == "codex.thread_start" for t in json.loads(codex)["tools"])
             observed = records(log)
             native_server = [row for row in observed if row["argv"][:3] == ["app-server", "--listen", "stdio://"]]
@@ -184,7 +184,7 @@ def run(binary, repository, output):
             cc_dir = root / "cc"
             cc_dir.mkdir()
             extra = ["--fixture-dir", str(cc_dir), "--model", "fixture-model", "--name", "中文", "--verbose"]
-            claude, _ = cli(["--list-tools", "--agent=claude-code", "--", *extra])
+            claude, _ = cli(["--list-tools", "--load-harness=claude-code", "--", *extra])
             assert any(t["name"].startswith("claude.") for t in json.loads(claude)["tools"])
             assert json.loads((cc_dir / "argv.json").read_text()) == ["mcp", "serve", *extra]
             assert {row["program"] for row in records(log)} == {"codex", "claude"}
@@ -192,17 +192,17 @@ def run(binary, repository, output):
             checks.append("claude_code_alias_loads_real_mcp_fixture_and_cleans_owned_process")
 
             before = log.read_bytes()
-            for arguments in (["--agent", "opencode", "--", "serve"],
-                              ["--agent", "pi", "--", "prompt"],
-                              ["--agent", "playwright", "--", "--headless"],
-                              ["--agent", "ssmcp"], ["--type", "codex"]):
+            for arguments in (["--load-harness", "opencode", "--", "serve"],
+                              ["--load-harness", "pi", "--", "prompt"],
+                              ["--load-harness", "playwright", "--", "--headless"],
+                              ["--load-harness", "ssmcp"], ["--type", "codex"]):
                 cli(["--list-tools", *arguments], expected=1)
             assert log.read_bytes() == before
             checks.append("unsupported_or_legacy_entry_arguments_fail_before_provider_probe")
 
             _, saved_error = cli([
                 "sessions", "create", "selected", "--server", "https://relay.example",
-                "--agent", "codex", "--allow", "alice@other.example", "--",
+                "--load-harness", "codex", "--allow", "alice@other.example", "--",
                 "--cwd", "/nonexistent-ssmcp-native-agent-dir", "--json", "--name", "native",
                 "--help", "--server", "https://native.example", "--context", "native",
             ], expected=1)
@@ -217,7 +217,7 @@ def run(binary, repository, output):
             serving.start()
             try:
                 peer_env = dict(environment, FIXTURE_PEER_TOKEN=server.fixture_token)
-                peer_tools, peer_stderr = cli(["--list-tools", "--agent", "ssmcp", "--",
+                peer_tools, peer_stderr = cli(["--list-tools", "--load-harness", "ssmcp", "--",
                     "--endpoint", f"http://127.0.0.1:{server.server_port}/fixture", "--token-env", "FIXTURE_PEER_TOKEN"], env=peer_env)
                 assert {t["name"] for t in json.loads(peer_tools)["tools"] if t["name"].startswith("peer.")} == {"peer.Read", "peer.Write"}
                 assert [body["method"] for body in server.received] == ["initialize", "notifications/initialized", "tools/list", "tools/list"]
@@ -232,7 +232,7 @@ def run(binary, repository, output):
 
             local_cc = root / "local-cc"
             local_cc.mkdir()
-            child = subprocess.Popen([str(binary), "local", "--raw", "--no-watchdog", "--agent", "claude-code",
+            child = subprocess.Popen([str(binary), "local", "--raw", "--no-watchdog", "--load-harness", "claude-code",
                 "--", "--fixture-dir", str(local_cc)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, env=environment, cwd=work, start_new_session=True)
             captured = bytearray()

@@ -17,6 +17,8 @@
 
 ## 异步问题与答案
 
+`--input none` 禁用所选连接的普通问题、人工等待和回复。仍受支持的聊天入口返回 `chat_disabled`，全局退役的名称继续返回 `tool_retired`。独立的原生消息仍可按已认证收件人投递。[连接能力](client-input.md)
+
 `ssmcp.ui.ask` 创建问题后立即返回，真实用户在终端按 Shift+Up 查看并回答。回答通过独立的 `question_answers` 交付；`ssmcp.ui.questions` 可以手动查看，读取不会消费答案。历史记录里的 `human` 与 `agent` 来源继续保留，不把旧 agent 答案改写成用户要求。[问题队列](../src/client/interface/questions.rs) · [答案交付](../src/client/interface/questions/delivery.rs)
 
 自动交付仍绑定认证账户、原客户端连接和已验证的提问线程。使用现有 `collab` 成员的 ID 和私有 token，在 `code_mode.agent` 或 `collab.bind` 中绑定；`collab.join` 只登记当前参与者，不启动模型。未绑定的普通问题明确要求手动读取，系统不会把答案改投下一个任意调用者。[调用范围](../src/runtime/call_scope.rs) · [协作登记](../src/collab.rs)
@@ -27,7 +29,7 @@
 
 ## 线程结果与原生消息
 
-`ssmcp.ui.reply` 继续回传已交付线程输入的进度和结果。它只完成被指定的输入，服务器按真实调用者身份重新检查原连接和接收线程，并在记录结果后返回 `accepted: true`；结果保留 agent 来源。[原生结果](../src/client/interface/reply.rs) · [服务器提交](../src/http/session_io.rs)
+`ssmcp.ui.reply` 继续回传已交付线程输入的进度和结果。它只完成被指定的输入，服务器按真实调用者身份重新检查原连接和接收线程，并在记录结果后返回 `accepted: true`；结果保留 agent 来源。[原生结果](../src/client/interface/reply.rs) · [服务器提交](../src/broker/session_io.rs)
 
 公共 `messages` 工具按完整收件人 ID 路由消息。设备账户收件箱为 `client:<client_id>`，已验证线程为 `agent:<client_id>:<agent_id>`；设备消息在该账户下一次合格调用中领取，不自动启动模型。原生消息通过独立的 `native_messages` 返回，并保留发送者来源。[消息协议](../src/wire/messages.rs) · [授权路由](../src/broker/messaging.rs)
 
