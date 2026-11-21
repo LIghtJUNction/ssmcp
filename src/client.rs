@@ -1434,7 +1434,10 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         return Ok(());
     };
     if options.resume_history.load(Ordering::Relaxed) {
-        return Err("ssmcp resume opens a foreground history picker and cannot create a background session".into());
+        return Err(
+            "ssmcp resume opens a foreground history picker and cannot create a background session"
+                .into(),
+        );
     }
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
@@ -1751,7 +1754,9 @@ pub async fn run() -> crate::Result<()> {
     }
     if options.resume_history.load(Ordering::Relaxed) {
         if interface::history::sessions()?.is_empty() {
-            println!("No saved conversations in this workspace. Start ssmcp to begin a conversation.");
+            println!(
+                "No saved conversations in this workspace. Start ssmcp to begin a conversation."
+            );
             return Ok(());
         }
         use std::io::IsTerminal;
@@ -3270,7 +3275,10 @@ mod tests {
             let error = Options::parse_new(args.into_iter().map(OsString::from))
                 .err()
                 .unwrap();
-            assert!(error.contains("foreground interactive dashboard"), "{error}");
+            assert!(
+                error.contains("foreground interactive dashboard"),
+                "{error}"
+            );
         }
         for flag in ["--help", "--help-full"] {
             assert!(
