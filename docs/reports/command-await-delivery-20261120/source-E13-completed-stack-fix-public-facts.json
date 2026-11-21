@@ -1,0 +1,322 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-e13-source-completed-before-union-acceptance",
+  "observed_utc": "2026-11-21T10:17:00Z",
+  "author_phase": {
+    "file": "author-exit.json",
+    "bytes": 2168,
+    "sha256": "4f23cf5754ae2055d9c79fef6119967acf342da67a6f6d3ac1078c75e53de84f",
+    "started_utc": "2026-11-21T09:59:42.389341+00:00",
+    "finished_utc": "2026-11-21T10:03:48.174407+00:00",
+    "exit_code": 0,
+    "error": null,
+    "source_start": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+    "source_tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "final_acceptance_allowed": false,
+    "allowed_checks": [
+      "scripts/test_release.py",
+      "cargo check --tests --locked --offline --jobs 1"
+    ],
+    "launch_receipt": {
+      "file": "launch-receipt.json",
+      "bytes": 2008,
+      "sha256": "e680f3ab048bc3395e5f0e9fe9bd16d937fc2a9b58b37b7534db0693f2ca408d"
+    }
+  },
+  "source": {
+    "commit": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+    "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+    "parents": [
+      "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc"
+    ],
+    "subject": "fix: box scoped computer-use futures at construction [skip ci]",
+    "committed_utc": "2026-11-21T10:00:57Z",
+    "start": {
+      "commit": "01fbbcf1bfc6c0a0881af6d4ef50559952d453dc",
+      "tree": "ad3d3ec97b6cf36ddd157fdd6d263614665c09cc",
+      "parents": [
+        "814c07c4374b3a800e3842f5cd676af7cfc1f32d"
+      ],
+      "subject": "chore: synchronize zuse to ac5713 [skip ci]"
+    },
+    "changed_paths": [
+      "src/computer/host_control.rs"
+    ],
+    "additions": 6,
+    "deletions": 5,
+    "ordinary_push_count": 1,
+    "ordinary_push_exit_code": 0,
+    "remote_readback_exit_code": 0,
+    "remote_head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+    "clean_status": {
+      "porcelain": "",
+      "worktree_and_index_clean": true,
+      "submodules_clean": true
+    }
+  },
+  "change": {
+    "file": "src/computer/host_control.rs",
+    "scope": "Synchronous construction returns a task-local future containing Pin<Box<F>>; run returns the existing HostControl::run future.",
+    "preserved": [
+      "Same Permit/ticket/generation and shared lease",
+      "Same PERMIT.scope wrapper",
+      "Existing HostControl::run cancellation and after-completion checks",
+      "No spawn, dynamic dispatch or added Send bound",
+      "Browser and action source bytes, existing regression assertions and 25-second deadline",
+      "Dependency declarations, lock, all four gitlinks and all six recipe files within this author commit"
+    ],
+    "construction_timing_change": "Permit clone, boxing and scope construction occur when scope() is called, rather than when the previous async wrapper is first polled.",
+    "construction_does_not_poll_business_future": true,
+    "box_pin_guarantees_no_stack_temporary": false,
+    "all_observable_construction_and_destruction_timing_claimed_identical": false,
+    "measured_future_or_stack_sizes": false,
+    "crash_frame_available": false,
+    "gate16_root_cause_confirmed": false,
+    "fixed_rust_regression_pass_confirmed": false,
+    "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/e3d8f00f559da097627988407ea6b14ec00e92f6/src/computer/host_control.rs"
+  },
+  "checks": {
+    "result": {
+      "file": "result.json",
+      "bytes": 85155,
+      "sha256": "e27cd9d8f39fa57d8203312ba6a931bebc32badb0b94315d2df0c247076cd648"
+    },
+    "schema": "ssmcp-e9-author-checks-v1",
+    "started_utc": "2026-11-21T10:01:34.792446+00:00",
+    "finished_utc": "2026-11-21T10:02:04.945040+00:00",
+    "status": "passed",
+    "exit_code": 0,
+    "error": null,
+    "check_commands_started": 2,
+    "final_35_stage_gate_executed": false,
+    "owned_cleanup_complete": true,
+    "target_lock_acquired": true,
+    "target_lock_held_until_owned_cleanup": true,
+    "stop_signal": null,
+    "stages": [
+      {
+        "name": "release-policy",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "inputs_equal": true,
+        "actual": {
+          "argv": [
+            "python3",
+            "-B",
+            "scripts/test_release.py"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T10:01:35.590175+00:00",
+          "finished_utc": "2026-11-21T10:01:42.883979+00:00",
+          "duration_seconds": 7.293803962995298,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "target_lock_held_through_cleanup": true
+        },
+        "source_before": {
+          "head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+          "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+          "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2",
+          "untracked_files": 0,
+          "snapshot": {
+            "file": "release-policy-before.source.json",
+            "bytes": 541979,
+            "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2"
+          },
+          "snapshot_reopened_in_full_by_root": false
+        },
+        "source_after": {
+          "head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+          "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+          "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2",
+          "untracked_files": 0,
+          "snapshot": {
+            "file": "release-policy-after.source.json",
+            "bytes": 541979,
+            "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2"
+          },
+          "snapshot_reopened_in_full_by_root": false
+        }
+      },
+      {
+        "name": "cargo-check-tests",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "inputs_equal": true,
+        "actual": {
+          "argv": [
+            "cargo",
+            "check",
+            "--tests",
+            "--locked",
+            "--offline",
+            "--jobs",
+            "1"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T10:01:43.989785+00:00",
+          "finished_utc": "2026-11-21T10:02:04.301567+00:00",
+          "duration_seconds": 20.311781763011822,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "target_lock_held_through_cleanup": true
+        },
+        "source_before": {
+          "head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+          "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+          "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2",
+          "untracked_files": 0,
+          "snapshot": {
+            "file": "cargo-check-tests-before.source.json",
+            "bytes": 541979,
+            "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2"
+          },
+          "snapshot_reopened_in_full_by_root": false
+        },
+        "source_after": {
+          "head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+          "tree": "3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c",
+          "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2",
+          "untracked_files": 0,
+          "snapshot": {
+            "file": "cargo-check-tests-after.source.json",
+            "bytes": 541979,
+            "sha256": "621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2"
+          },
+          "snapshot_reopened_in_full_by_root": false
+        }
+      }
+    ],
+    "release_policy_result": {
+      "tests_run": 106,
+      "reported_seconds": 7.098,
+      "result": "OK"
+    },
+    "cargo_check_result": {
+      "test_targets_type_checked": true,
+      "reported_seconds": 20.24,
+      "rust_tests_executed": false
+    },
+    "logs": [
+      {
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "16435908e9e3f1d36fcea34e5ef7df4cdc4304b13e50ab1ae2397462ceec9d10",
+        "read_scope": "entire file"
+      },
+      {
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "2eff44739cb608f37db7a00956b9afa25750dcd2608b6f4b426a5b74a6948050",
+        "read_scope": "entire file"
+      },
+      {
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "read_scope": "entire file"
+      },
+      {
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 185,
+        "sha256": "4cd39cb1bbc21721fc162d4620b09f0a7159a473e089a1eec8b36217128d16e5",
+        "read_scope": "entire file"
+      }
+    ],
+    "fixture_publication_text_is_actual_publication": false
+  },
+  "original_evidence": {
+    "source_receipt": {
+      "file": "source-changes-receipt.json",
+      "bytes": 35183,
+      "sha256": "6f3d8d0d748db0758ebdcbae67e16644c8858524329401e3ac1ebd1e1af1c3ce",
+      "read_scope": "Whole original hashed; selected source, scope, push, check, preservation fields read. Not all static command output records independently reviewed."
+    },
+    "author_launch_and_exit_read_in_full": true,
+    "check_result_read_scope": "Whole original hashed; actual stage, times, exit status, source identity, fixed input equality and cleanup fields read.",
+    "github_fixed_compare_read": true,
+    "git_diff_scope_independently_confirmed": true
+  },
+  "advanced_main_observation": {
+    "commit": "5f4a35482c6353750248ddee8761e5fd3daffad6",
+    "tree": "1c2162abe806fe866b870081f14612e21a965559",
+    "ahead_of_gate16_commits": 6,
+    "changed_paths": 14,
+    "is_e13_merged_result": false,
+    "is_final_accepted_source": false,
+    "PR168": {
+      "state_at_read": "open",
+      "merged": false,
+      "head": "e3d8f00f559da097627988407ea6b14ec00e92f6",
+      "base": "5f4a35482c6353750248ddee8761e5fd3daffad6",
+      "mergeable": true,
+      "synthetic_merge_sha_not_used_as_actual_source": true
+    },
+    "checks_reassigned_to_union": false,
+    "ci_change": {
+      "commit": "5f4a35482c6353750248ddee8761e5fd3daffad6",
+      "ci_bytes": 15324,
+      "ci_sha256": "c154b14dcc67b5794c82762881d65bfcb70f8ed904442ed070e80375ad0d9508",
+      "added_lines": 8,
+      "candidate_artifact": "ssmcp-linux-x86_64-candidate",
+      "expected_linux_upload_count": 3,
+      "old_linux_upload_count": 2,
+      "release_download_glob": "ssmcp-*",
+      "matches_release_glob": true,
+      "production_issue_static_not_executed": true,
+      "H2_successor_not_implemented_yet": true,
+      "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context",
+      "source_owner_notified": true,
+      "original_conflicting_recipe_still_historical": true
+    },
+    "planned_followup": {
+      "phase": "E14",
+      "status": "prepared_by_source_owner_no_launch_receipt_read_yet",
+      "same_original_author": true,
+      "planned_base_union": [
+        "e3d8f00f559da097627988407ea6b14ec00e92f6",
+        "5f4a35482c6353750248ddee8761e5fd3daffad6"
+      ],
+      "source_owner_reported_findings": [
+        "Num Lock uncertain release propagation",
+        "Restrict debug candidate upload to standalone CI dispatch so Release reusable CI skips it"
+      ],
+      "root_independently_reviewed_release_glob_collision": true,
+      "root_independently_reviewed_num_lock_call_chain_at_this_snapshot": false,
+      "future_release_linux_upload_counts": [
+        2,
+        1
+      ],
+      "H2_logic_updated_before_fixed_source": false,
+      "launch_completed_or_passed_claimed": false
+    }
+  },
+  "unrun": {
+    "rust_tests_on_e13": true,
+    "complete_gate_on_union": true,
+    "runtime_on_union": true,
+    "multi_uid_on_union": true,
+    "ui_on_union": true,
+    "P1_on_union": true,
+    "version_tree_command_on_union": true,
+    "H2_executed": false,
+    "formal_publication": false,
+    "production_deployment": false
+  }
+}

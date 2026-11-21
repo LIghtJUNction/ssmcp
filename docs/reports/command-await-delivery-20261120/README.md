@@ -1,10 +1,14 @@
-# SSMCP 0.10.25：完整检查遇到栈溢出，窄修复待复验
+# SSMCP 0.10.25：栈修复窄检查通过，合并后验收待执行
 
-**记录截止：2026-11-21 10:05 UTC。** 第 16 轮完整检查已经在合并提交 **`64738751cb59af9ef0d467ce34c50f091d2f6fa4`** 上实际运行并失败：35 个阶段中，**4 个通过、1 个失败、30 个未运行**。第五阶段 `library-private` 退出 **134**，原日志明确记录 `browser::tests::act_deadline_includes_time_queued_without_starting_input` 栈溢出并中止。这是实际栈溢出，不是已记录的测试超时；没有完整 libtest 汇总，不能给出整批库测试的通过数量。[Gate16 实际失败及原件摘要](gate-S647-r16-failure-public-facts.json)
+**记录截止：2026-11-21 10:17 UTC；状态以本文注明的实际读回为准。** 第 16 轮完整检查已经在合并提交 **`64738751cb59af9ef0d467ce34c50f091d2f6fa4`** 上实际运行并失败：35 个阶段中，**4 个通过、1 个失败、30 个未运行**。第五阶段 `library-private` 退出 **134**，原日志明确记录 `browser::tests::act_deadline_includes_time_queued_without_starting_input` 栈溢出并中止。这是实际栈溢出，不是已记录的测试超时；没有完整 libtest 汇总，不能给出整批库测试的通过数量。[Gate16 实际失败及原件摘要](gate-S647-r16-failure-public-facts.json)
+
+E13 已提交 [`e3d8f00`](https://github.com/LIghtJUNction/ssmcp/commit/e3d8f00f559da097627988407ea6b14ec00e92f6)，只修改权限包装的一个源码文件。**106 项发布策略测试与测试目标编译检查通过**，源码和输入前后相同；Rust 用例没有在这个窄检查阶段执行。主分支另已合入 zuse 输入／观察改动，本报告读到的提交为 **`5f4a35482c6353750248ddee8761e5fd3daffad6`**。PR #168 的已读回执仍为 open，不能把两条分支各自的结果认定为合并后的验收。[E13 固定补丁与原检查事实](source-E13-completed-stack-fix-public-facts.json)
+
+新 CI 增加了一个调试客户端 artifact，但其 `ssmcp-` 名称与现有发布下载通配符重叠。源码侧已将此项与 Num Lock 不确定释放处理列入 E14 窄修准备；截至本快照尚未读取 E14 实际启动或结果。H2 后继版本须按最终真实配方更新，原核验器继续保留且未执行。以下 Gate16 失败仍是原提交的实际结果。
 
 Gate16 从 **09:44:52 UTC 至 09:49:37 UTC**。源码目录树为 `ad3d3ec97b6cf36ddd157fdd6d263614665c09cc`，九项固定输入前后相同，验收工作树仍干净并停留在 6473875。完整检查没有通过，此版本的后续真实进程、多用户、UI、P1、版本树命令和发布核验均未执行。此前 W 的成绩继续归属于 W。
 
-原作者沿原会话进行了 E13 窄修复阶段，**09:59:42 UTC 开始，10:03:48 UTC 正常退出**。本报告组已完整读取启动与退出回执；补丁及窄检查正在独立核对，尚无修复后完整检查结果。原失败、原测试断言和 25 秒产品期限继续保留；不能仅凭作者正常退出就认定根因已证实或修复已经通过。
+原作者沿原会话完成 E13 窄修复，**09:59:42 UTC 开始，10:03:48 UTC 正常退出**。启动与退出回执、固定补丁、两个实际检查阶段及四份原始日志已经核对，尚无修复后完整检查结果。原失败、测试断言和 25 秒产品期限保留；窄检查通过不等于已确认根因或完成运行回归。
 
 [PR #167](https://github.com/LIghtJUNction/ssmcp/pull/167) 于 **09:35:30 UTC** 正常合并了 E12，形成上述 Gate16 源码。两个真实父提交为 f69db30 与 01fbbcf，树与原作者提交一致；Git commit 时间为 09:35:29，PR merged_at 为 09:35:30，按原字段分别记录。[E12 源码、窄检查与合并事实](source-E12-merged-zuse-public-facts.json)
 
@@ -14,7 +18,7 @@ E12 只修改四个路径并普通推送一次：锁文件、zuse 子模块指�
 
 E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
-E7 至 E12 的源码阶段均已结束。新合并源码的 Gate16 已实际失败，E13 后继修复须另行核对。E9 至 E12 的窄检查仍各自绑定当时源码；本报告按源码阶段、合并后完整检查和后续运行验收分别记录。
+E7 至 E12 的源码阶段均已结束。6473875 的 Gate16 已实际失败，E13 后继修复已完成窄检查；后续两线合并源码仍须完整验收。E9 至 E12 的窄检查仍各自绑定当时源码；本报告按源码阶段、合并后完整检查和后续运行验收分别记录。
 
 ## 本轮实际提交
 
@@ -143,7 +147,8 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 | 首轮完整界面流程 | W | 24 套中启动 7 套：6 通过、1 失败、17 未执行；通过套件共 503 条记录 |
 | 单次账户诊断 | W 产物 | 69 条通过；未复现旧失败，未加入 503 |
 | Gate16 后续真实进程、多用户、UI 与 P1 | 合并结果 6473875 | 未执行；当前不得移用 W 的结果 |
-| E13 作者阶段 | 起点 01fbbcf，与 6473875 相同目录树 | 09:59:42 至 10:03:48，作者正常退出；补丁及窄检查仍在独立核对，尚无后继完整检查结果 |
+| E13 最后窄检查 | e3d8f00／3a3ade1，前后指纹一致 | 106 项策略测试、cargo check --tests 通过；没有执行 Rust 用例或后继完整 Gate |
+| 两线合并准备 | E13 e3d8f00；已读 main 5f4a354 | PR #168 已读回执仍 open；没有把临时 merge SHA 或单支结果作为最终验收来源 |
 | 正式发布与公开产物核验 | 最终来源待绑定 | 尚未完成 |
 
 W 失败 producer 中的 61 条 true 与 1 条 false 单独保留，未并入 503；`human_finish` 仅由 `interactions` 覆盖。W 首轮未执行 `session_groups` 和 `composer`，所以没有用旧 V 的通过记录补齐 W。剩余 ignored 项与多用户驱动也按实际运行边界记录。
@@ -185,7 +190,7 @@ H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始�
 | 路径 | 问题与当前状态 |
 |---|---|
 | CDP 同页操作 | 2951c06 让单动作与批次都先取得 page、再取得输入租约，等待后复核原会话。原锁顺序问题静态闭合；对应源码阶段没有运行回归，Gate16 的逐项结果未在此核定。 |
-| Playwright 写入队列 | 8ce982c 已在取得 writer 锁后、创建半帧清理 guard 和首次写入前重新检查 permit。固定 27e9733 调用链静态核对闭合；无 permit 的普通 RPC 检查为空操作。尚无运行验证。 |
+| Playwright 写入队列 | 8ce982c 已在取得 writer 锁后、创建半帧清理 guard 和首次写入前重新检查 permit。固定 27e9733 调用链静态核对闭合；无 permit 的普通 RPC 检查为空操作。对应源码阶段未运行回归；Gate16 的逐项结果未在此核定。 |
 | Playwright 已发送但无回复 | 9b1581d 为控制调用跟踪可能开始的写入及有效回复。请求错误或撤权结束后，没有回复的写入报告未知或部分执行、replay_safe=false，并清理确切的自有驱动；实际返回的 native 结果保持。新增夹具已由 814c07c 修正为无效 JSON 注入；E11 窄检查未执行该夹具，Gate16 的逐项结果未在此核定。 |
 | Omarchy 取消与清理 | 4cd3940 用自有任务持有输入租约和串行锁，直到异步清理路径返回。正常取消生命周期静态闭合；Managed.shutdown 不向调用者传播 wait 错误这一既有限制仍在，不能概括所有异常清理都已确认成功。 |
 
@@ -223,7 +228,7 @@ E11 从 **09:03:00 UTC 至 09:08:36 UTC**，只提交两个文件并普通推送
 
 产品发布说明已吸收草稿中的命令、依赖和权限范围，原互发、引用、技能完整读取、历史归属、图片卡片与 Unix 租约说明均保留。814c07c 只进一步澄清两处条件：Omarchy 持有输入租约直到清理流程返回；Playwright 在错误或撤权结束调用、可能已写入且没有有效回复时，报告未知结果并清理其自有驱动。前者没有扩大为所有异常子进程清理均已确认成功，后者也没有把正常等待回复当作错误。
 
-PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69db30 的两个父提交与 tree 相符。随后原执行者在 **09:14:07 UTC** 命名的最新来源观察中发现 zuse 默认分支已前进到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，当前锁仍为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。其余十个仓库与锁定来源一致；预备步骤退出 1，完整第 16 轮 Gate 尚未绑定或运行。原失败回执记录于 **09:18:51 UTC**，实际错误为 `fresh upstream heads differ from final lock`；当时尚未创建源码验收工作树或冻结 heads 文件。这个历史观察继续保留；后续依赖同步由 E12 完成，不能反过来改写当时的失败。
+PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69db30 的两个父提交与 tree 相符。随后原执行者在 **09:14:07 UTC** 命名的最新来源观察中发现 zuse 默认分支已前进到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，当时锁仍为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。其余十个仓库与锁定来源一致；预备步骤退出 1，当时完整第 16 轮 Gate 尚未绑定或运行。原失败回执记录于 **09:18:51 UTC**，实际错误为 `fresh upstream heads differ from final lock`；当时尚未创建源码验收工作树或冻结 heads 文件。这个历史观察继续保留；后续依赖同步由 E12 完成，不能反过来改写当时的失败。
 
 4b4cbff 的第 15 轮未运行记录保留，f69db30 的上述来源预检失败也单独保留。H2 的六份固定发布配方、Cargo manifest/lock 和四个 gitlink 在 E10、E11 均未变化；E12 随后仅更新 zuse 锁项与 gitlink，六份配方仍保持固定字节，核验器仍未执行。
 
@@ -251,7 +256,37 @@ E12 从 **09:26:19 UTC 至 09:31:02 UTC**，原退出回执完整读取，退出
 
 固定源码比较确认，该失败测试连同 `#[tokio::test]` 标记与此前 W 完全一致，仍使用 25 秒产品期限和外层额外 3 秒上限。正常测试路径先持有 page 锁，再调用 act 并检查队列等待也计入期限。新增的 `Permit::scope/run` 与 Browser 异步调用层把 future 按值嵌套，构成栈压力的候选解释；尚无 future 尺寸测量或实际崩溃帧，不能确定崩溃发生在构造、poll 还是销毁阶段，也不能称根因已确认。[失败版本 Browser](https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/browser.rs) · [权限封装](https://github.com/LIghtJUNction/ssmcp/blob/64738751cb59af9ef0d467ce34c50f091d2f6fa4/src/computer/host_control.rs) · [W 对照](https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/browser.rs)
 
-E13 作者阶段的启动与退出回执已经读取，原作者正常退出、两个 wrapper 保持原字节。此快照尚未把后继补丁或窄检查列为独立核定完成，更没有修复后的完整验收结果。后继实际合并源码须重新绑定固定输入，由原执行者从原 35 阶段完整检查开始，再按既定顺序继续运行验收。H2 仍仅为静态准备，正式发布尚未完成。[Gate16 事实、读取范围与后继边界](gate-S647-r16-failure-public-facts.json)
+E13 后继补丁与窄检查已经按下节核对，两个 wrapper 保持原字节；修复后的完整验收结果仍未产生。后继实际合并源码须重新绑定固定输入，由原执行者从原 35 阶段完整检查开始，再按既定顺序继续运行验收。H2 仍仅为静态准备，正式发布尚未完成。[Gate16 事实、读取范围与后继边界](gate-S647-r16-failure-public-facts.json)
+
+## E13 窄修复与两线合并边界
+
+E13 的唯一提交为 **`e3d8f00f559da097627988407ea6b14ec00e92f6`**，tree 为 `3a3ade1e5c2979bf23a4fe1182514bfdd5f8026c`，真实父提交为 01fbbcf。GitHub 固定比较确认只改 `src/computer/host_control.rs`，**6 行增加、5 行删除**。一次普通推送退出 0，远端读回相同提交，工作树与子模块干净。
+
+异步操作需要保存等待期间的状态。原来的两层 async 包装按值携带内部 future；E13 让 `Permit::scope` 在创建 task-local 包装前用 `Box::pin` 保存业务 future，并让 `run` 直接返回原有取消控制 future，从而减少大型状态在这些包装中的内联嵌套。原 ticket、generation、共享租约、取消选择和操作完成后的复验逻辑保留，没有新增任务或重新授权。[固定修改](https://github.com/LIghtJUNction/ssmcp/commit/e3d8f00f559da097627988407ea6b14ec00e92f6)
+
+构造时序有明确变化：Permit 克隆、装箱和 scoped future 的构造提前到调用 `scope()` 时；构造本身不会 poll 业务 future。这个改动不证明业务 future 从未在栈上形成，也没有测得具体尺寸或覆盖所有可能的栈溢出路径。根因判断与实际修复效果仍须由后继固定源码运行结果支持。
+
+窄检查从 **10:01:34 UTC 至 10:02:04 UTC**，两个阶段实际退出 0、没有超时或错误。策略日志记录 **106 项／7.098 秒／OK**；Cargo 日志记录测试目标检查完成，用时 **20.24 秒**。前后源码均为 e3d8f00／3a3ade1，指纹 `621a5c52d97acfc9e584dce8bd845ba4e81317997c78422064c06b6b842d8ea2` 一致，输入未变、未跟踪文件为 0，自有检查进程回收完成。未执行 Rust 用例、完整 Gate 或发布；策略测试输出中的模拟标签和发布文本继续只按夹具记录。
+
+结果 JSON 为 **85,155 字节**／`e27cd9d8f39fa57d8203312ba6a931bebc32badb0b94315d2df0c247076cd648`，已按整件字节核对摘要并读取实际阶段、时间、退出、源码、输入和清理字段；四份 stdout/stderr 全文读取。541,979 字节源码快照只核对原结果引用的身份与摘要，未逐件全文重审。源码回执 35,183 字节同样按整件计算摘要并读取选定字段，没有宣称审阅其中所有静态命令输出。[E13 原件摘要与读取范围](source-E13-completed-stack-fix-public-facts.json)
+
+主分支的另一组改动在已读 `6473875..5f4a354` 比较中包含 6 个提交、14 个路径；其中有 Zuse 输入／观察、Browser 分派装箱与回归、权限储存和 isolated 路径变更。源码侧正在按两线合并后的实际代码审阅。这里没有把另一份文档中的 2,105 项／26 ignored 成绩转移到本轮后继来源，也没有把 PR #168 的试算 merge SHA 当作已合并提交。[固定比较](https://github.com/LIghtJUNction/ssmcp/compare/64738751cb59af9ef0d467ce34c50f091d2f6fa4...5f4a35482c6353750248ddee8761e5fd3daffad6) · [PR #168](https://github.com/LIghtJUNction/ssmcp/pull/168)
+
+## 新 CI 辅助产物与发布配方
+
+固定 5f4a354 的 `.github/workflows/ci.yml` 仅新增 8 行：在 Ubuntu x86 的手动触发流程中，上传 `target/debug/ssmcp`，命名 `ssmcp-linux-x86_64-candidate`，保留 3 天；upload action 仍固定为原提交。文件现为 **15,324 字节**／`c154b14dcc67b5794c82762881d65bfcb70f8ed904442ed070e80375ad0d9508`。这份辅助产物在后续 DCR、账户和 UI 检查之前上传，因此仅有 artifact 不能证明后续验收成功。[固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/5f4a35482c6353750248ddee8761e5fd3daffad6/.github/workflows/ci.yml)
+
+现有 Release 的 finalize 步骤使用 `pattern: ssmcp-*` 下载到 dist。新增名字会被同一规则选中；GitHub 官方规定可复用工作流的 github context 关联调用方，因此不能仅因 CI 由 workflow_call 调用就认为该手动触发条件不会成立。这是固定源码与平台语义的推导，尚未执行真实发布。[固定 Release 配方](https://github.com/LIghtJUNction/ssmcp/blob/5f4a35482c6353750248ddee8761e5fd3daffad6/.github/workflows/release.yml) · [GitHub 调用方 context 规则](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context)
+
+源码侧已经确认此冲突，并选择将该上传限制为**独立 CI 的手动运行**，让 Release 调用的 CI 跳过它。当前 c154 配方会增加实际上传，计划中的条件修正则应保持 Release 的 Ubuntu x86／ARM 实际上传数量为 2／1。这个状态转换仍须以 E14 最终固定源码和将来的真实日志核对；没有先行改写 H2 来忽略多出的调试客户端。
+
+H2 保留六个平台 archive、八个必要发布 artifact、16 个公开附件及 19 个 job 的原合同。原版本继续按固定 E8 字节归档，后继将只同步 E14 的实际 CI 字节及必要的跳过步骤核对；三个核验模块均未执行，最终 S、P、run、tag 和 dispatch 仍未绑定。
+
+## E14 准备状态
+
+源码协调方在两线合并窄审中报告了两个具体待修问题：上述 CI 辅助产物范围，以及 Num Lock 提交失败后的释放不确定性传播。后者涉及底层可能已发送按下动作、释放结果未确认，却仍以清理成功返回的路径；应保留未知状态和禁止直接重放的合同。本报告此处按源码侧审阅消息记录，没有将其写成已经运行复现或修复成功。
+
+计划仍由原作者沿原会话先合入固定 5f4a354，再最小修改这两项；PR #168 在已读状态保持未合并。新增默认测试由原库测试批次纳入，新增的专门 ignored 场景按原执行者安排补验，不改写原 35 阶段、14 项 mandatory ignored 和 6 项宿主用例的历史合同。E14 实际启动、提交与检查须另凭原件更新。
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
 
