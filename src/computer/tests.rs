@@ -465,6 +465,18 @@ fn zuse_06_zip_rejects_unsafe_source_paths() {
 }
 
 #[test]
+fn zip_rejects_zip64_extensible_data() {
+    let target = "x86_64-pc-windows-msvc";
+    let (_, bytes, _) = package(target);
+    let mut archive = zip::ZipWriter::new_append(Cursor::new(bytes)).unwrap();
+    archive.set_raw_zip64_extensible_data_sector(Box::from(*b"metadata"));
+    let bytes = archive.finish().unwrap().into_inner();
+
+    let error = archive::executable(&bytes, &release(target, &bytes), target).unwrap_err();
+    assert!(error.contains("unsupported or ambiguous layout"), "{error}");
+}
+
+#[test]
 fn windows_zip_accepts_the_official_dos_creator_without_posix_execute_bits() {
     let target = "x86_64-pc-windows-msvc";
     let executable = binary(target);

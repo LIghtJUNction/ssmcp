@@ -148,7 +148,7 @@ fn zip(bytes: &[u8], release: &Release) -> Result<Vec<u8>, String> {
         || archive.len() > MAX_ENTRIES
         || archive.offset() != 0
         || !archive.comment().is_empty()
-        || archive.zip64_comment().is_some()
+        || archive.raw_zip64_extensible_data_sector().is_some()
         || archive
             .has_overlapping_files()
             .map_err(|error| error.to_string())?
