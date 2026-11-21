@@ -1,0 +1,98 @@
+{
+  "schema": "ssmcp-h2-cli-v26-static-preparation-v1",
+  "prepared_at_utc": "2026-11-21T18:33:28.206339+00:00",
+  "status": "independently_static_reviewed_unexecuted_unbound",
+  "baseline_static_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+  "recipe_source_commit": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+  "supported_contract": "v0.10.26/manual-main/git-source-v1/crate-deferred",
+  "bindings": {
+    "product_sha": null,
+    "workflow_sha": null,
+    "tag": null,
+    "run_id": null,
+    "run_attempt": null,
+    "dispatch_capture": null,
+    "native_execution_receipt": null
+  },
+  "files_excluding_this_identity": [
+    {
+      "name": "README.md",
+      "bytes": 7549,
+      "sha256": "13a22467893dc0480fc03216cbc0af3f9bd3fc70e2465ec6db0e594d4adb87db"
+    },
+    {
+      "name": "changes-from-H2-CLI-v25.patch",
+      "bytes": 15783,
+      "sha256": "270b5bf605b1f17f25fbbbf0fe151b9e346c690f7cc933b18027610365c676eb"
+    },
+    {
+      "name": "dispatch_receipt_adapter.py",
+      "bytes": 14758,
+      "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+    },
+    {
+      "name": "manual_main_provenance.py",
+      "bytes": 43709,
+      "sha256": "4683164cc124e4f048f6d64c8fd481f1b9970be0ff4c2364607039f6b24d9bcf"
+    },
+    {
+      "name": "reviewed-recipe.json",
+      "bytes": 3506,
+      "sha256": "58529002b276cb8584e833cb23fc81a37ea807b51d8c8a422b4c9266fbc8bdfd"
+    },
+    {
+      "name": "static-review.json",
+      "bytes": 1709,
+      "sha256": "787e2d21001f9c8252b4cab2bfd42405bf7601036a658e7b344bb4214eddd7c1"
+    },
+    {
+      "name": "verify_published_manual_main.py",
+      "bytes": 48801,
+      "sha256": "04945d54734ce8b6c62900d71ca365217030cda486ed204e76cafa6972a59e12"
+    }
+  ],
+  "verification": {
+    "schema": "ssmcp-h2-cli-v26-static-review-v1",
+    "status": "independently_static_reviewed_unexecuted_unbound",
+    "source": "4c6cd21b2ab46c11febbac7c1921e302da49f4b2",
+    "tree": "6b40a2f7e2349c888d78a98d1f70692a938351a3",
+    "baseline_commit": "840629d64e3915bbe2b17496aa600d067e34b7e3",
+    "recipe_bytes_git_blob_identity_matched": true,
+    "recursive_source_tree_truncated": false,
+    "actual_gitlink_count": 3,
+    "ast_parse": true,
+    "changed_functions": {
+      "verify_published_manual_main.py": [
+        "verify_source_contract"
+      ],
+      "manual_main_provenance.py": [
+        "validated_release"
+      ],
+      "dispatch_receipt_adapter.py": []
+    },
+    "changed_function_bodies_are_version_message_literals_only": true,
+    "function_signatures_unchanged": true,
+    "logic_unchanged_after_allowed_version_recipe_constants_and_message_normalization": true,
+    "dispatch_adapter_unchanged": true,
+    "bindings": {
+      "product_sha": null,
+      "workflow_sha": null,
+      "tag": null,
+      "run_id": null,
+      "run_attempt": null,
+      "dispatch_capture": null,
+      "native_execution_receipt": null
+    },
+    "modules_imported": false,
+    "helper_executed": false,
+    "tests_run": false,
+    "native_execution": false,
+    "cargo_or_product_run": false,
+    "workflow_dispatch_or_publication": false,
+    "install_or_production_reload": false,
+    "independent_static_review_blockers": 0,
+    "independent_review": "Direct collaborator read actual baseline and successor files, independently recomputed all six recipe byte/SHA256/Git blob identities, verified exact patch and metadata, and confirmed normalized AST, signatures, unchanged adapter and all provenance/job/asset constraints. No import, execution, fixtures or product tests."
+  },
+  "original_v25_H2_commit_preserved": true,
+  "verified_at_utc": "2026-11-21T18:36:34.264895+00:00"
+}
