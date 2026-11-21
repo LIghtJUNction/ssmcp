@@ -1,14 +1,18 @@
-# SSMCP 0.10.25：控制与夹具修正已合并，依赖来源继续同步
+# SSMCP 0.10.25：依赖同步已合并，完整验收准备中
 
-[PR #166](https://github.com/LIghtJUNction/ssmcp/pull/166) 已于 **2026-11-21 09:13:10 UTC** 正常合并，主仓提交为 **`f69db30c3a9e461c48731c81dbde5a35ea176dc2`**，目录树为 `98f89ac6be9dd4867d45b017ea56c687f7a55147`。两个真实父提交为 4b4cbff 与 814c07c，树与原作者的夹具修正提交一致。[E11 完成及实际合并事实](source-E11-merged-fixture-public-facts.json)
+**记录截止：2026-11-21 09:40 UTC。** 本文记录实际合并与各轮窄检查；完整验收状态以后续执行回执更新。
 
-E10 的三个控制问题修正已先经 [PR #165](https://github.com/LIghtJUNction/ssmcp/pull/165) 合并；E11 又修正了 Playwright 回归夹具的故障触发方式。E11 已于 **09:08:36 UTC** 正常退出，普通推送成功；814c07c 工作树通过 **106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1`**，源码与输入前后相同，自有检查进程回收完成。这些是合并前的窄检查，新增 Rust 回归用例尚未实际运行。
+[PR #167](https://github.com/LIghtJUNction/ssmcp/pull/167) 已于 **2026-11-21 09:35:30 UTC** 正常合并，新的验收源码为 **`64738751cb59af9ef0d467ce34c50f091d2f6fa4`**，目录树为 `ad3d3ec97b6cf36ddd157fdd6d263614665c09cc`。两个真实父提交为 f69db30 与 01fbbcf，树与原作者提交一致。Git commit 的时间为 09:35:29，PR 的 merged_at 为 09:35:30，分别按原字段记录。[E12 源码、检查与实际合并事实](source-E12-merged-zuse-public-facts.json)
 
-**第 16 轮完整验收尚未绑定或运行，当前合并结果仍是待验候选。** 原执行者在最新依赖预检中观察到 zuse 默认分支从锁定的 830fcef 前进到 ac5713c，其余十个来源一致，预备步骤退出 1 并保留原件。下一步先审阅并同步这项上游来源，再从实际合并结果选择验收源码；没有将旧检查转移给新提交。本报告已独立读取全部 11 份原始 HEAD 输出及错误流、合并身份和树差异，并核对完整锁文件摘要、Git 来源条目与实际预备失败字段。[来源观察与执行边界](source-E11-merged-fixture-public-facts.json)
+E12 已于 **09:31:02 UTC** 正常结束，只修改四个路径并普通推送一次：锁文件、zuse 子模块指针及两份说明。zuse 的实际来源从 830fcef 更新到 **ac5713c**，包版本仍为 **0.3.0**；SSMCP 继续仅声明 `std`，没有启用新的可选 `vision` 特性。合并前的 01fbbcf 通过 **106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1`**，源码和输入前后相同，检查进程清理完成。没有把这些窄检查转移为合并提交的完整验收。
+
+**截至 09:39 UTC 的已读状态，第 16 轮完整验收尚未启动。** 原执行者正在对新合并源码重新观察 11 个上游默认分支，并准备验收工作树与固定输入。本组已针对 6473875 重新确认构建和运行窗口空闲，旧 f69db30 的确认不复用。此前 f69db30 因 zuse 上游变化而停止的预检原件继续保留；新的完整构建、真实进程、界面和 P1 结果仍须等待实际回执。
+
+统一控制的三项后继修正先经 [PR #165](https://github.com/LIghtJUNction/ssmcp/pull/165) 合并，Playwright 无效 JSON 夹具修正再经 [PR #166](https://github.com/LIghtJUNction/ssmcp/pull/166) 合并。E11 的 814c07c 窄检查仍独立保存；这些新增 Rust 回归尚未实际运行。[E10 事实](source-E10-merged-control-fixes-public-facts.json) · [E11 事实与依赖预检历史](source-E11-merged-fixture-public-facts.json)
 
 E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
-E7 至 E11 的源码阶段均已结束；当前继续处理新观察到的依赖来源变化。此前 W 的通过结果和失败记录继续归属于 W，E9、E10、E11 的窄检查也各自绑定当时源码，不替代后续合并结果的完整验收。
+E7 至 E12 的源码阶段均已结束，当前进入新合并源码的完整验收准备。此前 W 的通过结果和失败记录继续归属于 W，E9 至 E12 的窄检查也各自绑定当时源码，不替代后续合并结果的完整验收。
 
 ## 本轮实际提交
 
@@ -30,6 +34,7 @@ E7 至 E11 的源码阶段均已结束；当前继续处理新观察到的依赖
 | [9b1581d](https://github.com/LIghtJUNction/ssmcp/commit/9b1581d1bfd8b723d32d2c032a8369c5980dcbfd) | 记录 Playwright 实际写入与回复进度，区分未知结果与未发送失败 | 产品路径静态审阅完成；夹具触发方式后续由 814c07c 修正，尚未实际运行 |
 | [5623e52](https://github.com/LIghtJUNction/ssmcp/commit/5623e52a48a03727f3341613beaa767bd94ea98d) | 明确拒绝混合启动与版本参数，修正旧错误文案并整合发布说明 | 106 项策略测试与测试目标检查通过；五个新增 Rust 回归未运行 |
 | [814c07c](https://github.com/LIghtJUNction/ssmcp/commit/814c07c4374b3a800e3842f5cd676af7cfc1f32d) | 将 Playwright 夹具改为刷新无效 JSON；澄清两处清理说明 | 106 项策略测试及测试目标检查通过；原严格断言与 10 秒上限保留，Rust 夹具未运行 |
+| [01fbbcf](https://github.com/LIghtJUNction/ssmcp/commit/01fbbcf1bfc6c0a0881af6d4ef50559952d453dc) | 将 zuse 锁项、gitlink 和当前说明同步到 ac5713c | 106 项策略测试及测试目标检查通过；没有新增 Rust 源码修改或运行结果 |
 
 E7 三次提交依次基于 PR #164 合并点 **P2 `3f678a7`**，形成 P2 → 7c1cd94 → a53a0c5 → 1a2f759 的连续提交链。源码事实表包含完整 commit、tree、差异范围和执行边界。E7 三次提交一共涉及 12 个路径；E7 三次普通推送退出码均在回执中记录为 0，公开 GitHub 提交已直接读回。
 
@@ -61,6 +66,10 @@ E9 又在固定 `43fde19` 更新了实际锁定来源。源码回执记录 **08:
 | zplugin 0.3.1 | `592a1be623b81a775026c470e6f0efe91fcf78f3` | 更新锁项与 gitlink |
 
 实际差异涉及 zcall、zharness、zmcpio、zplugin 和 zplugin-macros 五个包；各包版本号没有因这次 Git revision 更新而改动。`Cargo.lock` 仍为 66,476 字节，新 SHA256 为 `0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14`。本报告读取了源码回执内的观察、feature 与 checkout 身份字段，并核对公开提交差异；没有再次打开其引用的 44,984 字节 resolver 原件或运行 Cargo。[E9 依赖快照及读取范围](source-E9-completed-control-review-public-facts.json)
+
+随后默认分支继续前进。E12 的 01fbbcf 将 zuse 锁项与 gitlink 同步到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，其他十个 Git 来源不变。新的 Cargo.lock 仍为 **66,476 字节**，SHA256 为 `0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992`。这是实际源提交的变化，版本仍为 0.3.0。
+
+上游 zuse 的 manifest 字节有变化，不能把“依赖声明与锁文件未变”扩大为完整 manifest 未变。SSMCP 自身的 Cargo.toml 保持原字节，仍为 `default-features = false, features = ["std"]`；本次没有启用可选 vision。这一结论描述 SSMCP 的声明和锁记录，没有宣称验证了上游全部新增功能。[E12 来源及读取范围](source-E12-merged-zuse-public-facts.json)
 
 ## 本地启动和 Linux 多用户处理
 
@@ -121,13 +130,15 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 | E10 最后窄检查 | 5623e52 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；五个新增 Rust 定义未运行 |
 | 第 15 轮完整验收准备 | 合并结果 4b4cbff | 未执行；夹具问题的原准备记录保留，不覆盖 |
 | E11 最后窄检查 | 814c07c 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；不是 Rust 测试运行 |
-| 第 16 轮合并候选与依赖预检 | 合并结果 f69db30 | zuse 默认分支新提交与锁定来源不一致，预备退出 1；完整 Gate 尚未绑定或运行 |
+| 第 16 轮较早的来源预检 | 合并结果 f69db30 | zuse 默认分支新提交与当时锁定来源不一致，预备退出 1；原件保留，未启动完整 Gate |
+| E12 最后窄检查 | 01fbbcf 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；Rust 测试未运行 |
+| 当前完整验收准备 | 合并结果 6473875 | 重新核对上游来源与固定输入；截至 09:39 UTC 已读状态，完整 Gate 尚未启动 |
 | 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
 | 首轮完整界面流程 | W | 24 套中启动 7 套：6 通过、1 失败、17 未执行；通过套件共 503 条记录 |
 | 单次账户诊断 | W 产物 | 69 条通过；未复现旧失败，未加入 503 |
-| 本轮完整构建、UI 与 P1 | 待依赖同步后的最终合并候选 | 尚未执行 |
+| 本轮完整构建、UI 与 P1 | 当前合并候选 6473875 | 尚无实际执行结果 |
 | 正式发布与公开产物核验 | 最终来源待绑定 | 尚未完成 |
 
 W 失败 producer 中的 61 条 true 与 1 条 false 单独保留，未并入 503；`human_finish` 仅由 `interactions` 覆盖。W 首轮未执行 `session_groups` 和 `composer`，所以没有用旧 V 的通过记录补齐 W。剩余 ignored 项与多用户驱动也按实际运行边界记录。
@@ -154,7 +165,7 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 [原 H 核验器](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound) 继续保留。H2 仅处理本轮 0.10.25 / manual-main / git-source-v1 / crate 延期合同；legacy、registry 和 build-only 不属于它的通过范围。
 
-最终产品提交 S、main 工作流提交 P、tag、run 和原始请求回执均未绑定。校验器将要求 S 是 P 的真实祖先，并核对 S/P 中六份发布配方与事先审阅的固定字节；不能仅靠相同版本号或相同目录树推断提交关系。SHA256 用于核对字节，实际执行仍须由原始工具回执、run/attempt、step 与 artifact ID 证明。
+H2 尚未与最终产品提交 S、main 工作流提交 P、tag、run 和原始请求回执的完整证据链绑定。校验器将要求 S 是 P 的真实祖先，并核对 S/P 中六份发布配方与事先审阅的固定字节；不能仅靠相同版本号或相同目录树推断提交关系。SHA256 用于核对字节，实际执行仍须由原始工具回执、run/attempt、step 与 artifact ID 证明。
 
 ## 依赖版本树与统一控制开关
 
@@ -177,7 +188,7 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 持久状态与配置迁移的窄审没有发现额外的旧 Off 自动开启或旧 ticket 复活问题；旧浏览器 focus_policy 只迁移展示设置，不写入控制开关。现有 e2e_computer_controls 定义覆盖 CLI、双终端状态同步、generation、草稿/快捷键和重启后 Off 持久性，没有执行真实的四类后端控制动作。此前“Background browser control remains enabled”旧错误文案已在 5623e52 修正，现在准确说明观察与控制所需的状态；该历史问题属于文案错配，没有被算作已证实的开关绕过。
 
-这个开关约束应用内入口，同一系统用户的 Shell、独立程序以及本机切换命令仍拥有原有主机权限。当前源码明确 `os_permission_boundary=false`，不承诺阻止同 UID 任意程序直接控制桌面。要建立系统边界，需要让 agent 无法直接取得桌面权限，由唯一受控入口执行获准动作；该方案仍在准备，当前没有修改生产账户、权限或安装隔离服务。
+这个开关约束应用内入口，同一系统用户的 Shell、独立程序以及本机切换命令仍拥有原有主机权限。当前源码明确 `os_permission_boundary=false`，不承诺阻止同 UID 任意程序直接控制桌面。要建立系统边界，需要让 agent 无法直接取得桌面权限，由唯一受控入口执行获准动作。[后续设计草案](computer-use-permission-boundary-design-draft.md)已明确可信启动、桌面与 IPC／网络能力、继承资源、管理身份以及预算状态的要求；它仍是设计建议，当前没有修改生产账户、权限或安装隔离服务，也不增加本轮验收条件。
 
 ## E9 检查记录与后续整合
 
@@ -189,7 +200,7 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 [发布说明审阅草稿](release-notes-review-unbound/README.md)已单独交付，正文、补丁、固定原件及证据复核均已推送并逐件读回。草稿按 2619686 的状态冻结；交付说明列出后续依赖刷新、写帧修正与三项剩余问题，原作者整合时须按最新事实更新，不能直接套用到已变化的文档。
 
-## E10、E11 与当前验收候选
+## E10、E11 与此前验收候选
 
 E10 从 **08:39:28 UTC 至 08:49:59 UTC**，只修改十个路径并进行四次普通推送。原退出回执已完整读取；源码回执 51,715 字节，按整件字节计算摘要并读取了提交、未变化绑定、检查和新回归字段，没有宣称独立审阅全部 95 条源码命令记录。
 
@@ -207,9 +218,17 @@ E11 从 **09:03:00 UTC 至 09:08:36 UTC**，只提交两个文件并普通推送
 
 产品发布说明已吸收草稿中的命令、依赖和权限范围，原互发、引用、技能完整读取、历史归属、图片卡片与 Unix 租约说明均保留。814c07c 只进一步澄清两处条件：Omarchy 持有输入租约直到清理流程返回；Playwright 在错误或撤权结束调用、可能已写入且没有有效回复时，报告未知结果并清理其自有驱动。前者没有扩大为所有异常子进程清理均已确认成功，后者也没有把正常等待回复当作错误。
 
-PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69db30 的两个父提交与 tree 相符。随后原执行者在 **09:14:07 UTC** 命名的最新来源观察中发现 zuse 默认分支已前进到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，当前锁仍为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。其余十个仓库与锁定来源一致；预备步骤退出 1，完整第 16 轮 Gate 尚未绑定或运行。原失败回执记录于 **09:18:51 UTC**，实际错误为 `fresh upstream heads differ from final lock`；当时尚未创建源码验收工作树或冻结 heads 文件。原观察文件保留，尚不能把依赖同步写成已完成。
+PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69db30 的两个父提交与 tree 相符。随后原执行者在 **09:14:07 UTC** 命名的最新来源观察中发现 zuse 默认分支已前进到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，当前锁仍为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。其余十个仓库与锁定来源一致；预备步骤退出 1，完整第 16 轮 Gate 尚未绑定或运行。原失败回执记录于 **09:18:51 UTC**，实际错误为 `fresh upstream heads differ from final lock`；当时尚未创建源码验收工作树或冻结 heads 文件。这个历史观察继续保留；后续依赖同步由 E12 完成，不能反过来改写当时的失败。
 
-依赖同步后仍须从实际正常合并结果重新选择验收源码，核对 tree、差异、真实父链和新的来源观察；再由原执行者运行原 35 阶段、真实进程、多用户、完整界面与 P1 验收，最后核对正式发行及公开产物。4b4cbff 的第 15 轮未运行记录保留。H2 的六份固定发布配方、Cargo manifest/lock 和四个 gitlink 在 E10、E11 均未变化，核验器仍未执行。
+4b4cbff 的第 15 轮未运行记录保留，f69db30 的上述来源预检失败也单独保留。H2 的六份固定发布配方、Cargo manifest/lock 和四个 gitlink 在 E10、E11 均未变化；E12 随后仅更新 zuse 锁项与 gitlink，六份配方仍保持固定字节，核验器仍未执行。
+
+## E12 完成与新的完整验收准备
+
+E12 从 **09:26:19 UTC 至 09:31:02 UTC**，原退出回执完整读取，退出码 0，作者和 rustc wrapper 保持原字节。源码回执 41,111 字节按整件计算摘要，已读取提交、锁项、gitlink、保护配方、推送、清理状态与检查字段；没有宣称独立审阅全部 82 条静态命令记录。
+
+唯一一次窄检查从 **09:29:06 UTC 至 09:30:26 UTC**，两个实际命令均退出 0、未超时，前后源码均为 01fbbcf／ad3d3ec，指纹 `6dc409bbac607100d593c4a352097e61f16014bbac653c3ee1174d61b13a0b82` 相同，输入未变、未跟踪文件为 0，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取；Cargo 日志明确检查了 zuse-computer 0.3.0／ac5713c2 与 ssmcp 0.10.25。这仍是测试目标的编译检查，不是 Rust 用例实际运行。
+
+新主仓合并结果 **6473875** 的 tree、两个真实父提交及 PR #167 已分别直接读取。接下来以这个实际合并结果和新的上游来源观察固定第 16 轮输入，由原执行者执行既定的 35 阶段、真实进程、多用户、完整界面与 P1 验收，随后核对正式发行及公开产物。此处只记录已经发生的源码、窄检查和合并；完整验收结果另凭实际原件更新。[E12 原件摘要、合并身份与未执行范围](source-E12-merged-zuse-public-facts.json)
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
 
