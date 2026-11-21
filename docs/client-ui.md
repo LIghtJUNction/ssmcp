@@ -190,6 +190,12 @@ ssmcp ui preview --static --rows 36 --cols 120 --theme light
 
 `/pi`、`/cc`、`/codex` 以及后接 `tools [OFFSET]` 只列出当前已注册工具；后接工具名只查看原始描述与参数 schema。显式追加 JSON 对象才异步调用原生工具，沿用其授权要求。`cc` 对应 Claude 的规范工具命名空间；工具缺失时直接报错。Pi RPC 的 `get_commands` 不等于内部 LSP 或模型工具清单，界面不会虚构这类接口。[目录与显式调用示例](client-input.md)
 
+## 旧版 SSMCP 兼容开关
+
+`/computer` 或 `/computer status` 只观察旧版共享状态；`/computer on`、`/computer off`、`/computer toggle` 是显式手动操作。命令经本地队列在终端绘制锁之外执行，保留当前草稿。界面始终标明“旧版 SSMCP 兼容开关 · 不控制独立 Zuse CLI”；没有有效旧记录时显示“未设置”，读取失败显示“不可用”。状态查询不创建目录或初始化默认 On。
+
+这些命令只供仍读取旧协议的 SSMCP 会话使用，不控制当前四个 Zuse 管理工具、普通 exec 或独立 Zuse CLI。独立 CLI 常规操作无需先切换开关或进入 takeover。默认 `Super + Alt + C` 保持移除，普通 Alt+C 复制模式不变；不会安装全局快捷键。`ssmcp.ui.get` 的 `computer` 字段是只读快照，远程 `ui.action` 不提供开关操作。Off 成功只说明旧状态已发布，不证明旧动作已全部清理。[完整兼容范围](computer-use.md#兼容旧版-ssmcp-的手动开关)
+
 ## 本地历史标题与摘要
 
 `/resume` 列出未归档的本地会话。`/archived` 查看已归档会话，Enter 恢复并继续所选项。内容区用 ↑/↓ 移动、PgUp/PgDn 翻页，滚轮也可移动选择。鼠标左键选择条目，点摘要行仍选中同一会话。列表按窗口宽度缩略显示摘要。

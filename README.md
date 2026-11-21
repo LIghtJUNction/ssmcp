@@ -216,7 +216,7 @@ ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求�
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 
 - **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
-- **桌面与浏览器**：直接运行独立 Zuse CLI，通过通用 `exec` 传递 argv、管理任务和读取结果。`computer` 只提供版本查询、下载、安装、卸载；没有内置动作代理或隐藏 fallback。[Zuse 工作流](docs/computer-use.md) · [Windows 安装范围](docs/windows-browser-setup.md)
+- **桌面与浏览器**：直接运行独立 Zuse CLI，通过通用 `exec` 传递 argv、管理任务和读取结果。`computer` 原生工具只提供版本查询、下载、安装、卸载；没有内置动作代理或隐藏 fallback。[Zuse 工作流](docs/computer-use.md) · [Windows 安装范围](docs/windows-browser-setup.md)
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
 指定已有浏览器时，先确认所选 Zuse 版本支持的连接方式和实际会话，再操作用户选定的目标。OAuth 登录、用户打开链接和已授权外部 MCP 的通用转发仍保留；它们不恢复旧内置浏览器工具。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/code-mode.md)
@@ -231,7 +231,9 @@ ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
 
 版本来自实际 CLI 的 `--version`。下载选择官方稳定版并核验资产身份、大小与 SHA-256；安装仅写入当前管理器的私有目录，不覆盖外部 Zuse、不修改 PATH。使用返回的可执行路径运行任务；卸载必须提供真实 `installation_id`，且所有权和字节仍匹配。[四个管理工具与示例](docs/computer-use.md)
 
-SSMCP 已撤去旧 Computer Use 开关和桌面/浏览器动作入口。通用 Shell 与独立 Zuse 仍遵循操作系统权限；需要隔离时配置实际的账户、会话或沙箱边界。
+默认 `Super + Alt + C` 快捷键已移除。显式 `ssmcp computer on|off|toggle|status` 与聊天中的 `/computer` 保留为**旧版 SSMCP 兼容开关**，只供仍读取旧协议的 SSMCP 会话使用；它不控制本版工具、通用 exec 或独立 Zuse CLI。独立 CLI 常规使用无需先切换或取得 takeover。`status` 只观察已有记录，缺失显示“未设置”。[兼容开关的范围](docs/computer-use.md#兼容旧版-ssmcp-的手动开关)
+
+通用 Shell 与独立 Zuse 仍遵循操作系统权限；需要隔离时配置实际的账户、会话或沙箱边界。
 
 ## 独立核心库
 

@@ -30,6 +30,25 @@ ssmcp computer uninstall INSTALLATION_ID_FROM_REPLY --json
 
 `--json` 输出完整 MCP 结果；默认输出结果正文。下载结果正文中读取 `download_id`，安装结果正文中读取 `installation_id` 与可执行文件 `path`。这些命令不会自动把后续步骤串起来。SSMCP 自身的版本仍由 `ssmcp --version` 查询。
 
+## 兼容旧版 SSMCP 的手动开关
+
+默认 `Super + Alt + C` 快捷键已移除。以下入口保留为显式、手动的旧版兼容命令：
+
+```sh
+ssmcp computer status --json
+ssmcp computer off
+ssmcp computer on
+ssmcp computer toggle
+```
+
+聊天中使用 `/computer [status|on|off|toggle]`，省略参数时查看状态；CLI 的 `ssmcp computer` 默认仍是 Zuse `version`。兼容命令不会安装全局按键绑定，也没有新增 `computer.on/off/toggle/status` 原生工具。四个管理工具保持不变，`ssmcp.ui.get` 中的 `computer` 仅是只读快照，远程 `ui.action` 不提供这些开关动作。[本地解析](../src/client/computer_control.rs) · [手动 UI 接线](../src/client/interface/computer.rs)
+
+兼容状态只供仍运行且遵守旧门禁的 SSMCP 版本读取。Unix 使用 `/var/tmp/ssmcp-host-input-<有效 UID>/state.json`，Windows 使用 `%LOCALAPPDATA%/ssmcp/host-input/state.json`；继续使用原来的 schema 1、`enabled`、16 字节 `generation` 和稳定文件锁协议。状态改变会更新代次。旧动作消费者仍自行持有 `input.lock`；兼容开关不替换或夺取这个锁，发布 Off 不必等旧输入 lease 释放。[兼容核心](../src/computer_control.rs) · [原协议读写](../src/computer_control/storage.rs)
+
+`status` 不创建目录、不初始化默认 On，也不改变已有状态。无有效旧记录时返回 `available:false, mode:"unset"`；读取或安全检查失败时返回 `mode:"unavailable"` 和实际错误。只有显式 on/off/toggle 才写状态；记录缺失时，toggle 按旧缺失记录的 Off 值切换为 On，不冒充此前已有有效状态。损坏记录不能被 On 或 toggle 静默接受，显式 Off 可以按原协议修复损坏内容，仍须通过所有权、权限和文件身份检查。
+
+所有兼容输出都标明 `compatibility_only:true`、`controls_this_version:false`、`standalone_zuse_controlled:false`。当前版本没有这些旧动作消费者；普通 exec 和独立 Zuse CLI 不读这个开关，常规使用无需先运行 On 或取得 takeover。显式 Off 成功只证明旧状态已发布，不证明正在执行的旧操作已经全部退出、已送达的动作被撤销，或独立 CLI 已停止。
+
 ## 版本、来源与平台
 
 版本查询优先选择 PATH 中的 Zuse；没有 PATH 条目时，再查询该管理目录记录的受管安装。已找到的程序如果损坏、输出身份不符或超时，会返回真实错误，不悄悄改用另一个程序。查询具有三秒期限与输出上限，版本来自实际进程输出，不能用安装记录或 SSMCP 的版本代替。[版本探测](../src/computer/probe.rs)
@@ -74,6 +93,6 @@ return job;
 
 旧的 `ssmcp.browser.*`、`ssmcp.omarchy.*`、`cua` / `browser` / `omarchy` 便捷命名空间，以及 `computer` 中的截图、键鼠、窗口和私有桌面动作已撤去。`ssmcp setup browser`、Playwright 专用加载与内部 worker 入口也不再提供。发现这些旧调用时，改写为独立 Zuse 程序和通用命令调用。
 
-旧 `/computer on|off`、`ssmcp computer on|off|toggle|status` 和 SSMCP 的 `Super + Alt + C` 控制开关已撤去。普通 exec 仍使用启动客户端的操作系统权限；SSMCP 不宣称能够撤销同一系统用户通过其他 Shell 或程序获得的桌面权限。需要操作系统隔离时，应配置明确的账户、会话或沙箱边界。
+显式手动开关只保留上文说明的旧版兼容范围，默认快捷键已移除。普通 exec 仍使用启动客户端的操作系统权限；SSMCP 不宣称能够撤销同一系统用户通过其他 Shell 或程序获得的桌面权限。需要操作系统隔离时，应配置明确的账户、会话或沙箱边界。
 
 OAuth 登录在浏览器中打开授权页、用户显式打开链接，以及已授权外部 MCP 的通用转发仍保留；这些能力不恢复旧内置动作工具。历史实机报告只记录当时实现，不作为这次迁移的验证成绩。
