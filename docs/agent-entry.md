@@ -1,6 +1,6 @@
 # 用 `--load-harness` 加载原生协议
 
-`--load-harness` 在客户端启动时加载一个明确指定的协议适配器。原生命令、文件和电脑工具继续使用同一份 runtime 与工具目录；适配器完成握手和工具枚举后，连接才报告就绪。启动过程不提交 prompt 或模型回合。需要执行任务时，调用已枚举的原生工具，并遵循该工具的参数和审批流程。[入口](../src/client/agent.rs) · [加载与关闭](../src/runtime/native_plugins/process.rs)
+`--load-harness` 在客户端启动时加载一个明确指定的协议适配器。原生命令、文件和 Zuse CLI 管理工具继续使用同一份 runtime 与工具目录；适配器完成握手和工具枚举后，连接才报告就绪。启动过程不提交 prompt 或模型回合。需要执行任务时，调用已枚举的原生工具，并遵循该工具的参数和审批流程。[入口](../src/client/agent.rs) · [加载与关闭](../src/runtime/native_plugins/process.rs)
 
 `--agent` 单独选择聊天消息的处理方，默认 `next-caller`。两项可同时使用，例如 `ssmcp local --agent next-caller --load-harness codex`。聊天输入和收件人见[客户端输入](client-input.md)。
 
@@ -26,10 +26,9 @@ ssmcp --list-tools --load-harness claude-code
 | `claude` | `claude-code`、`cc` | 已安装 `claude` 的 `mcp serve` 接口 | `--` 后的参数追加到协议进程 |
 | `pi` | — | 已初始化的本机私有 RPC socket | `SSMCP_PI_RPC_SOCKET` |
 | `opencode` | — | 已运行的原生 loopback HTTP 服务 | `SSMCP_OPENCODE_URL`、`OPENCODE_PASSWORD` |
-| `playwright` | — | 已安装的 Playwright MCP 扩展接口 | 现有 Playwright 配置；它提供浏览器工具 |
 | `ssmcp` | — | 明确指定的 MCP peer 网关 | `--` 后的 `--endpoint`、`--token-env`，可选 `--socket` |
 
-表中的前五项复用现有适配器，包括程序解析、协议校验、原生审批和退出清理。Pi 与 OpenCode 连接操作者已准备好的服务；Playwright 使用固定扩展传输。这三项收到额外进程参数会直接报错，避免参数被忽略。实际支持的工具以握手后返回的目录为准。[适配器](../src/backend.rs) · [按需加载](optional-harnesses.md)
+表中的前四项复用现有适配器，包括程序解析、协议校验、原生审批和退出清理。Pi 与 OpenCode 连接操作者已准备好的服务；这两项收到额外进程参数会直接报错，避免参数被忽略。实际支持的工具以握手后返回的目录为准。[适配器](../src/backend.rs) · [按需加载](optional-harnesses.md)
 
 ## 用 `--` 分开两层参数
 

@@ -1,6 +1,6 @@
 # 终端、并行任务与控制者
 
-`code_mode` 同时提供独立命令任务、多终端和电脑操作。先调用 `list` 选择客户端，再读取该客户端的工具目录；旧连接只提供它实际注册的能力。
+`code_mode` 提供独立命令任务、多终端和 Zuse CLI 管理；电脑操作直接通过 exec 运行独立 Zuse 程序。先调用 `list` 选择客户端，再读取该客户端的工具目录；旧连接只提供它实际注册的能力。
 
 | 需要完成的工作 | 原语 | 状态保留范围 |
 | --- | --- | --- |
@@ -8,7 +8,7 @@
 | 同时执行一组有结束时间的命令 | `exec.parallel` | 返回全部结果；按真实运行状态限制并发 |
 | 启动开发服务器或持续任务 | `exec.start` | 保留到任务完成、取消或客户端断开 |
 | 运行交互程序，保留 shell 环境 | `terminal.open/write/read` | 每个 terminal 保留自己的 shell 和画面 |
-| 操作电脑或浏览器 | `cua.*` / `cua.browser.*` | 使用客户端的原生桌面与 CDP 接口 |
+| 操作电脑或浏览器 | 通过 `exec.start/run` 调用独立 Zuse CLI | 状态由所选 CLI 进程维护；SSMCP 保留任务和输出 |
 
 ## 前台观察与终端输入
 
@@ -128,19 +128,23 @@ return {
 
 控制者元数据自协议 v5 开始提供，源码审计从 v6 开始提供，用户要求队列和本地登记成员快照使用 v7。新版服务端继续接收旧版本客户端，并省略旧端无法识别的字段；list 中的 controller_metadata 表明连接是否支持身份显示。先升级服务端，再升级客户端，随后新建或重载连接。以新连接实际返回的工具目录为准，仅更新仓库文件不会替换正在运行的进程。
 
-## 原生 CUA 与 Codex 工具
+## Zuse 程序与图片结果
 
-cua 复用桌面接口，cua.browser 复用浏览器接口。截图必须通过 image 发出，图片字节与 JSON 文本分开：
+桌面和浏览器任务使用独立 Zuse CLI。先用 `computer.version` 读取实际可执行路径；管理器只另提供 `download/install/uninstall`，不代理截图或输入动作。[管理命令与直接执行](computer-use.md)
+
+对 CLI 生成的工作区图片，按实际文件路径调用已有文件图片工具。图片字节与 JSON 文本分开：
 
 ```javascript
-const shot = await cua.screenshot(clientId, {max_width: 1600});
-image(shot);
-return shot.structuredContent;
+const picture = await call(clientId, "ssmcp.fs.read_image", {
+  path: "images/observed.png"
+});
+image(picture);
+return picture.structuredContent;
 ```
 
-cua 提供 status、monitors、windows、focus、screenshot、move、click、drag、key、type 和 scroll。使用截图返回的坐标映射定位点击，浏览器元素操作使用当前 snapshot 的 ref。具体系统权限和可用工具由 status 报告。
+先确认文件确实由该任务产生，并遵守文件工具的工作区、类型与大小限制；上述路径是示例，不代表已捕获截图。[文件图片与预览](client-input.md#原生读取与本地缩略图)
 
-Codex 已连接的 CUA MCP 工具通过真实目录中返回的 codex.mcp.* 名称调用。调用结果保留图片、structuredContent、isError 和原生审批状态；直接桌面操作和 Codex 原生工具都沿用同一 code_mode 返回通道。详细例子见[电脑操作](computer-use.md)。
+已授权的外部 MCP 工具仍通过其真实目录名称调用，保留 image、structuredContent、isError 和原生审批状态。它们与独立 Zuse 任务都使用通用结果通道，不恢复旧 CUA 或内置浏览器接口。
 
 ## 验证入口
 
@@ -149,5 +153,5 @@ Codex 已连接的 CUA MCP 工具通过真实目录中返回的 codex.mcp.* 名�
 - 浏览输入分派、设备回复与独立终端状态：src/client/input.rs、src/client/terminal.rs。
 - 源码浏览、日志筛选与布局：src/client/audit_view.rs、scripts/e2e_client_ui.py。
 - 并发、调用预算、stdin/terminal helper：scripts/test_execution_helpers.mjs。
-- CUA 图片及错误透传：scripts/test_cua_facade.mjs。
+- Zuse 生命周期助手与通用图片/错误透传：scripts/test_cua_facade.mjs。
 - 真实 SSH、MCP 与客户端画面：scripts/e2e_terminal_control.py。

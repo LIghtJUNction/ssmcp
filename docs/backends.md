@@ -41,17 +41,16 @@ ssmcp --server https://relay.example --name dev --title "继续项目开发" --a
 | ssmcp | 交互式终端、独立后台进程、文件、上下文原语 | 不依赖安装 coding harness；文件读写与命令执行直接在本机完成 |
 | Codex | `codex app-server --listen stdio://`，并须支持 `app-server generate-json-schema --experimental` | App Server 方法；成功发现时注册 `codex.mcp.*`，通过原生 MCP 调用接口转发 |
 | Claude Code | `claude mcp serve` | 该入口实际返回的 MCP 工具目录，统一加 `claude.` 前缀 |
-| Playwright MCP | 已安装的 `playwright-mcp` 或显式配置的本机入口，固定 `--extension` | 原生 MCP 握手和分页枚举后注册 `playwright.*`；扩展连接和批准仍由原生接口处理 |
 | Pi | 显式连接已初始化的本机私有 Unix RPC socket | `pi.rpc` 与事件、请求、回复四项桥接操作；内部模型、插件和 MCP 工具 Schema 不可枚举 |
 | OpenCode | 操作者已启动的本机 HTTP 服务；显式配置 loopback 地址 | 从 `/api/info` 握手和 `/openapi.json` 发现操作；发现阶段不代为启动服务 |
 
 发现成功才会加入对应工具；缺少 CLI、版本不兼容或初始化失败会记录本机诊断，shell 连接仍可使用。调用 `ssmcp.harnesses.list` 可查看当前注册数量，完整名称、参数和权限以 `list({client_id})` 为准。安装一个 harness 不等于它的每个内部功能都提供可直接调用的接口。[自动发现与分派](../src/backend.rs)
 
-各提供者在后台独立探测和刷新；Shell 的连接与目录不等待可选 Harness。版本、握手或目录读取超时只使该提供者不可用，断线会取消仍挂起的发现。时间、页数和工具数量有界，具体限制由对应适配器定义。[启动回归测试](../tests/client_startup.rs)
+提供者按明确的加载请求独立初始化或刷新，普通 Shell 和目录查询不会自动扫描它们。版本、握手或目录读取失败保留该项实际诊断；客户端关闭会取消尚未完成的加载。时间、页数和工具数量有界，具体限制由对应适配器定义。[按需加载](optional-harnesses.md) · [加载实现](../src/runtime/native_plugins/process/lazy.rs)
 
 发现只使用已有程序，不安装运行时、依赖或 Harness，也不提交模型任务。mise、asdf、Volta 等 shim 需要解析到已安装入口；无法确认安全启动的版本保留为 unavailable，并给出原因。关闭网络下载不能证明不会从缓存安装依赖。参见 [OpenCode 的启动限制](#8-opencode从-openapi-发现操作) 和 [原生程序解析](../src/program.rs)。
 
-Playwright 的显式入口通过 `SSMCP_PLAYWRIGHT_MCP=/absolute/path/to/already-installed/cli.js` 配置；JavaScript 入口由已验证的真实 Node.js 执行。发现先检查版本，再启动 `--extension` 模式并执行 MCP 握手和工具枚举。不会使用 `npx`、`npm`、`corepack` 或 shim 去下载安装，缺失时只保留 unavailable 诊断。已有环境传给原生程序，但 ssmcp 不读取扩展 token 存储、不生成 token，也不代替 Chrome 中的确认。`ssmcp.playwright.events/requests/respond` 只用于已发现的原生事件和待处理请求，参数以实时 Schema 为准。[现有浏览器流程](browser-existing-session.md) · [适配器](../src/backend/playwright.rs)
+桌面与浏览器程序直接调用独立 Zuse CLI，经通用 exec 管理任务；`computer` 只提供版本、下载、安装和卸载。SSMCP 不再加载 Playwright 专用桥或内置浏览器后端。外部 MCP 的通用目录与调用转发继续遵循真实 schema 和授权。[Zuse 管理与执行](computer-use.md)
 
 后续显式调用是否使用模型由原生方法决定。例如 Codex 的 turn、Pi 的 prompt 控制请求，以及 Claude 目录中可能存在的 Agent 工具会进入其任务流程；直接 MCP 工具也可能在内部使用模型。开发与验收默认使用协议 fixture、状态查询和已确认无模型的工具。普通读写文件与 Shell 命令可直接使用 `fs` 和 `exec`。
 
