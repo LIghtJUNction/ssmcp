@@ -1073,7 +1073,7 @@ pub(crate) fn sessions() -> Result<Vec<SessionSummary>, String> {
 pub(crate) fn read(id: &str) -> Result<Conversation, String> {
     with(|history| history.read(id))
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn resume_test_history(id: &str) -> Result<Conversation, String> {
     // Test selections must not reset the process-wide last-reply copy cache.
     ownership::TEST_HISTORY
