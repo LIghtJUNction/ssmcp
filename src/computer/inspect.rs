@@ -116,17 +116,15 @@ impl Schema {
     }
 
     fn verify(&self, version: &str, request: &Request) -> Result<(), String> {
-        // Page WebSocket ownership and target receipts are verified against the 0.4.2 contract.
         let stable = release::version(version)?;
-        if stable != version
-            || self.version != version
-            || !version
+        let supported = version == "0.5.0"
+            || version
                 .strip_prefix("0.4.")
                 .and_then(|n| n.parse::<u32>().ok())
-                .is_some_and(|n| n >= 2)
-        {
+                .is_some_and(|n| n >= 2);
+        if stable != version || self.version != version || !supported {
             return Err(format!(
-                "Incompatible Zuse version: executable {version}, schema {}; expected 0.4.x from 0.4.2",
+                "Incompatible Zuse version: executable {version}, schema {}; expected 0.4.x from 0.4.2 or exactly 0.5.0",
                 self.version
             ));
         }

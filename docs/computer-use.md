@@ -32,7 +32,7 @@ ssmcp computer uninstall INSTALLATION_ID_FROM_REPLY --json
 
 ## 本机限定目标观察
 
-`ssmcp computer check` 使用实际选中的 CLI 读取 `--version` 和 `schema`，然后用无桌面 I/O 的计时器测试 `eval`、从标准输入读取的 `run -` 和保留状态的 `shell`。观察适配器支持从 0.4.2 起的 0.4.x 合同。每次观察会核对该操作的参数类型、必填项与只读标记；CLI 缺失、版本不匹配、进程退出失败或回执不完整都会给出错误。
+`ssmcp computer check` 使用实际选中的 CLI 读取 `--version` 和 `schema`，然后用无桌面 I/O 的计时器测试 `eval`、从标准输入读取的 `run -` 和保留状态的 `shell`。观察适配器支持从 0.4.2 起的 0.4.x，以及经夹具验证的 0.5.0。每次观察会核对该操作的参数类型、必填项与只读标记；CLI 缺失、版本不匹配、进程退出失败或回执不完整都会给出错误。
 
 在本机显式授权后，每次调用指定一个目标。下面的大写参数须替换为已确认的实际值：
 

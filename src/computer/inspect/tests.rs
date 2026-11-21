@@ -38,18 +38,32 @@ fn incompatible_version_and_schema_fail_before_dispatch() {
             .unwrap()
             .verify(version, &req)
     };
-    assert!(check(schema.clone(), "0.4.2").is_ok());
-    for version in ["0.3.0", "0.4.1", "0.5.0", "0.4.3", "unknown"] {
-        assert!(check(schema.clone(), version).is_err());
+    for version in ["0.4.2", "0.4.3", "0.5.0"] {
+        let mut matching = schema.clone();
+        matching["version"] = json!(version);
+        assert!(check(matching.clone(), version).is_ok(), "{version}");
+        matching["commands"][0]["read_only"] = json!(false);
+        assert!(check(matching, version).is_err(), "{version}");
     }
+    for version in [
+        "0.3.0",
+        "0.4.1",
+        "0.5.1",
+        "0.5.0-rc.1",
+        "0.6.0",
+        "1.0.0",
+        "unknown",
+    ] {
+        let mut matching = schema.clone();
+        matching["version"] = json!(version);
+        assert!(check(matching, version).is_err(), "{version}");
+    }
+    assert!(check(schema.clone(), "0.5.0").is_err());
     for (key, value) in [("type", json!("integer")), ("name", json!("other"))] {
         let mut changed = schema.clone();
         changed["commands"][0]["parameters"][0][key] = value;
         assert!(check(changed, "0.4.2").is_err());
     }
-    let mut changed = schema.clone();
-    changed["commands"][0]["read_only"] = json!(false);
-    assert!(check(changed, "0.4.2").is_err());
     for addition in [
         json!({"name":"unknown", "type":"integer","required":true}),
         schema["commands"][0]["parameters"][0].clone(),
@@ -256,7 +270,7 @@ async fn cancellation_reaps_owned_descendant_before_return() {
 
 /// Opt-in release compatibility check. Only a loopback protocol fixture and timer are used.
 #[tokio::test]
-#[ignore = "requires an explicit standalone 0.4.2+ test binary"]
+#[ignore = "requires a supported standalone Zuse binary in SSMCP_TEST_ZUSE"]
 async fn standalone_cli_against_owned_page_fixture() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{
