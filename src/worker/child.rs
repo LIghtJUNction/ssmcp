@@ -38,7 +38,7 @@ pub(crate) enum Command {
         task_id: String,
         attempt: u64,
     },
-    Shutdown,
+    Shutdown {},
 }
 
 #[derive(Serialize, Deserialize)]
@@ -214,7 +214,7 @@ pub(crate) async fn run() -> Result<(), String> {
     let (ended, mut end) = tokio::sync::watch::channel(false);
     let reader = tokio::spawn(async move {
         while let Ok(command) = read::<_, Command>(&mut input).await {
-            let shutdown = matches!(command, Command::Shutdown);
+            let shutdown = matches!(command, Command::Shutdown {});
             if sender.send(command).await.is_err() || shutdown {
                 break;
             }
@@ -225,7 +225,7 @@ pub(crate) async fn run() -> Result<(), String> {
     let outcome = async {
         while let Some(command) = incoming.recv().await {
             let Command::Run { task_id, attempt, actor, text, allocation } = command else {
-                if matches!(command, Command::Shutdown) { break; }
+                if matches!(command, Command::Shutdown {}) { break; }
                 continue;
             };
             if task_id.len() > 128 || attempt == 0 || actor.len() != 64 || text.len() > 48 * 1024 || text.contains('\0') {
@@ -248,7 +248,7 @@ pub(crate) async fn run() -> Result<(), String> {
                     command = incoming.recv(), if !stopping => match command {
                         Some(Command::Cancel { task_id: id, attempt: number }) if id == task_id && number == attempt => { cancel.send_replace(true); },
                         Some(Command::Cancel { .. }) => {},
-                        Some(Command::Shutdown) | None => { stopping = true; cancel.send_replace(true); },
+                        Some(Command::Shutdown {}) | None => { stopping = true; cancel.send_replace(true); },
                         Some(Command::Run { .. }) => { stopping = true; cancel.send_replace(true); },
                     },
                 }
@@ -303,6 +303,22 @@ mod tests {
         let mut bytes =
             tokio::io::BufReader::new(&b"{\"op\":\"shutdown\",\"unlimited\":true}\n"[..]);
         assert!(read::<_, Command>(&mut bytes).await.is_err());
+
+        let mut bytes = tokio::io::BufReader::new(
+            &b"{\"op\":\"cancel\",\"task_id\":\"task\",\"attempt\":1,\"unlimited\":true}\n"[..],
+        );
+        assert!(read::<_, Command>(&mut bytes).await.is_err());
+
+        let mut bytes = tokio::io::BufReader::new(&b"{\"op\":\"shutdown\"}\n"[..]);
+        assert!(matches!(
+            read::<_, Command>(&mut bytes).await.unwrap(),
+            Command::Shutdown {}
+        ));
+        assert_eq!(
+            serde_json::to_value(Command::Shutdown {}).unwrap(),
+            serde_json::json!({"op": "shutdown"})
+        );
+
         let data = vec![b'x'; MAX_PACKET + 1];
         let mut bytes = tokio::io::BufReader::new(data.as_slice());
         assert!(read::<_, Command>(&mut bytes).await.is_err());

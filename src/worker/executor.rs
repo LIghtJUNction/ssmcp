@@ -139,7 +139,7 @@ impl Child {
         }
         let _ = tokio::time::timeout(
             Duration::from_secs(1),
-            child::write(&mut self.input, &Command::Shutdown),
+            child::write(&mut self.input, &Command::Shutdown {}),
         )
         .await;
         let stopped = registry::stop_owned(generation, &self.unit).await;
