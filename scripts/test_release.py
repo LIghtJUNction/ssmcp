@@ -1596,7 +1596,7 @@ class BumpWorkflowTests(unittest.TestCase):
     def test_rerun_never_posts_even_without_a_previous_receipt(self):
         with mock.patch.object(bump_release, "verify_dispatch_source") as verify, \
              mock.patch.object(bump_release.subprocess, "run") as post, \
-             self.assertRaisesRegex(ValueError, "new explicit Bump workflow dispatch"):
+             self.assertRaisesRegex(ValueError, "new explicit Release workflow dispatch"):
             self.dispatch("rerun", attempt=2)
         verify.assert_not_called()
         post.assert_not_called()

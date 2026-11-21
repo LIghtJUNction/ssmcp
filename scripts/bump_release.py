@@ -20,9 +20,12 @@ BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 RETRY_HELP = (
     "No Release POST is sent on a Bump workflow rerun. Inspect the first attempt's "
     "dispatch artifact and continue its recorded Release run. If the first attempt "
-    "definitely never sent a POST, start a new explicit Bump workflow dispatch "
-    "with level=none for the prepared version; do not edit receipt state. "
-    "If delivery is uncertain, check Actions before making any new dispatch."
+    "definitely never sent a POST, start a new explicit Release workflow dispatch "
+    "for the recorded immutable tag with build_only=false and deploy_server=false. "
+    "A new Bump dispatch with level=none is suitable only while main still equals "
+    "the prepared commit; a later main with the same version must not move its tag. "
+    "Do not edit receipt state. If delivery is uncertain, check Actions before "
+    "making any new dispatch."
 )
 
 
