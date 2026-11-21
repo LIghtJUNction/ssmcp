@@ -2,7 +2,21 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-21 01:33 UTC）
+## 当前状态（截至 2026-11-21 01:58 UTC）
+
+合流候选 C [`d29dae7e`](https://github.com/LIghtJUNction/ssmcp/commit/d29dae7e2b9ff6794f17f3c96c0cc37977936084) 已正常推送并冻结，tree 为 `bf393700928fd9aa37f2dea8b8683ebe13b114cd`，版本为 **0.10.25**。[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍开放、draft、未合并。合并提交 `c0152934` 的两个父提交为 v25 准备提交 V 与公开修复来源 D4，随后 C 只补充发布说明。原作者于 01:43:14 UTC 退出 0；正常推送于 01:45:16 UTC 退出 0；冻结回执时间为 01:46:07 UTC。主审于 01:50:14 UTC 实读冻结原件及工作树，确认 exact C、tree 相等、工作树干净；随后回读作者、静态检查、推送与 GitHub 身份回执。详见[本次结构化记录](frozen-source-v25-0152.json)。
+
+C 中多图片独立卡片、按事件 ID 绑定预览、历史与调用归属，以及 Unix 输入租约显式解锁修复均已合入。五个图像/UI文件与 D4 的 Git blob 完全相同。Dashboard 采用 D4 的完整版本：先等 Enter Apply 消失与物理光标隐藏，再断言包括 audit focus、可见性、filter 和 scrollback 在内的完整 navigation 状态；它与 B/V 把 focus 放进重试条件的方式不同，focus 检查本身保留。新增图片测试仍限于 `test + unix`，源码存在不等于实际 PTY 或 Windows 已验证。
+
+C 的实际 Gate **已失败**。主审在 01:52:15 UTC 读到的 running 快照保留为过程记录；01:58:00 UTC 对最终回执全文计算摘要并读取其身份、完成状态和全部检查条目，确认同一 `run_id=47ff4beb94d03df6834a6460b493a5d7` 在 `library-private` 步骤退出 101。此前 release-policy、deployment-policy、fmt、library-compile 四步记为退出 0，仍不构成完整验收通过。随后完整读取原日志的三处失败块至 EOF：Rust 汇总为 **2049 通过、3 失败、23 忽略、4 过滤，35.62 秒**；外层该步计时为 35.63 秒。两项 socket 测试被 `/tmp` 父目录所有者/权限安全检查拒绝；session 前台模式测试的错误文本断言未满足，原日志没有打印其实际返回错误文本。源码负责人正在基于这些原始失败诊断，并由同一作者修复，不能先放宽产品安全检查或把失败重记为通过。
+
+该次失败尚未完成五份产物交付集、最终产品运行或 P1 验收；发布核验、tag 和正式发布均未因此启动。启动回执中的独占共享目标锁及九项输入摘要保留其实际阶段归属。V 的 11 项策略测试、D4 的运行成绩和 FC/781 的 A/B 数字继续保留原归属；旧阶段的成功不能抵消 C 的实际失败。
+
+[0.10.25 发布核验工具](publication-verifier-v25-unbound/README.md)已准备为独立 **UNBOUND** 副本，代码只改版本号，旧文件与旧发布副本保持。候选 SHA 与正式 run ID 均未绑定，网络核验尚未执行。静态复核保留 tag-push、19 个 job（18 成功加部署跳过）、16 个发布制品、crate、gitlink 和源码字节检查。实际下载范围是 manifest、校验文件及官方 crate；二进制归档和 installer 使用 GitHub asset size/digest 对照，不能写成全部归档已独立下载。
+
+已核对 C 的[发布工作流](https://github.com/LIghtJUNction/ssmcp/blob/d29dae7e2b9ff6794f17f3c96c0cc37977936084/.github/workflows/release.yml)：顶层按 tag 分组且不取消正在运行的任务；`publish_release` 则共用 `github-release-publication` 组，同样 `cancel-in-progress: false`。按 [GitHub 官方规则](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)，默认同组只有一个 pending 位置，新的排队任务仍可能替换旧 pending。因此正式 tag25 前需与另一发布线协调，并回读实际正式 run 和共用队列；若 24 正式 run 已发起，则先等其结束。01:55 UTC 的实际 GitHub 查询中，tag24 ref 返回 404，latest Release 仍为 0.10.20；最近十条 run 中 D4 分支 create 为 skipped，未见 24 正式 run。这是有限范围的观察，不能证明全局队列空闲。本次没有推 tag 或取消其他任务。
+
+## 历史状态（截至 2026-11-21 01:33 UTC）
 
 0.10.25 准备提交 P [`f4e6ff04`](https://github.com/LIghtJUNction/ssmcp/commit/f4e6ff043eef6686a9013750ffcb8ab66926b9d4) 已公开，tree 为 `d6546dd46464ac1cbb1c3aabc0493638a44649f7`，唯一父提交为 B；[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍开放、draft、未合并。主审于 01:25:44 UTC 核对了完整六文件差异、PR 与实际 Cargo 版本。deferred 列表已加入 0.10.25，未延后对照改为 0.10.26；现有 `DeploymentPolicyTests` 的 11 项测试已执行通过，unittest 计时 2.587 秒。
 

@@ -1,0 +1,106 @@
+{
+  "schema": "ssmcp-publication-verifier-independent-review-v1",
+  "reviewed_at_utc": "2026-11-21T01:51:34.678760+00:00",
+  "reviewer": "ChatGPT /root/review_message_refs",
+  "review_kind": "static_source_and_preparation_document_review",
+  "assessment": "no_blockers_within_reviewed_scope",
+  "preparation_status": "UNBOUND",
+  "target_version": "0.10.25",
+  "target_tag": "v0.10.25",
+  "candidate_sha": null,
+  "formal_release_run_id": null,
+  "inputs": {
+    "original": {
+      "path": "/workspace/scratch/18a2b71ce5be/ssmcp-publication-helper-publish-20261120/verify_published_candidate.py",
+      "bytes": 30229,
+      "sha256": "27804d3605f2d0eecf8434100a193a89829dd7324b6150da5036cafc8bbd0755"
+    },
+    "verify_published_candidate.py": {
+      "bytes": 30229,
+      "sha256": "9f75533684446080b4ae6ec82f17d245b174541a23a29a2c3399536680c95109"
+    },
+    "changes-from-v21.diff": {
+      "bytes": 460,
+      "sha256": "dae5a5cbe9f7de33d23a6480c6e8cb0d3bef6788071f74e6c1eba786583d54f7"
+    },
+    "README.md": {
+      "bytes": 4543,
+      "sha256": "297d23f606fb91b8a9b9070cda8ebc106e439f5f4a52f1863e70937bc6e9b7dd"
+    },
+    "preparation-manifest.json": {
+      "bytes": 2604,
+      "sha256": "88f8d188b7c5aead4940135d2224aa51927578c49fc888d446e78716c0bdc9bf"
+    }
+  },
+  "exact_change": {
+    "file": "verify_published_candidate.py",
+    "line": 378,
+    "old": "version = \"0.10.21\"",
+    "new": "version = \"0.10.25\"",
+    "unique_replacement": true,
+    "all_other_bytes_unchanged": true,
+    "stored_diff_exact": true,
+    "original_preserved": true
+  },
+  "preserved_contracts": [
+    {
+      "lines": "336-371,386-387",
+      "finding": "Required explicit checkout/report paths; exact candidate commit object; all source reads use supplied candidate, not HEAD."
+    },
+    {
+      "lines": "390-414",
+      "finding": "Exact candidate head, release.yml, event push, head_branch v0.10.25, successful completed run and tag commit binding retained."
+    },
+    {
+      "lines": "394-408",
+      "finding": "Exactly 19 unique expected job names: 18 successful and deploy_server skipped."
+    },
+    {
+      "lines": "416-446",
+      "finding": "Exactly 16 uploaded release assets; 8 manifest artifact records; metadata sizes/digests and exact checksum sidecars/SHA256SUMS retained."
+    },
+    {
+      "lines": "447-460",
+      "finding": "Four candidate gitlinks, manifest commit mapping and local exact submodule tree objects retained."
+    },
+    {
+      "lines": "195-333,466-504",
+      "finding": "Official unyanked crate checksum and verified bytes; candidate commit/tree/manifest, development lock/graph, Cargo.toml.orig, separate normalized registry manifest/lock/graph and complete regular src/** file-set/byte checks retained."
+    }
+  ],
+  "download_scope": {
+    "meaning": "Behavior read from source; no downloads or publication verification performed by this review.",
+    "downloaded_if_executed": [
+      "release-manifest.json",
+      "SHA256SUMS",
+      "six archive .sha256 sidecars",
+      "crates.io version metadata",
+      "official .crate"
+    ],
+    "binary_archives": "Six archives are not independently downloaded; GitHub asset sizes/digests are compared with manifest and sidecar records.",
+    "installers": "Two installers are not independently downloaded; GitHub asset sizes/digests are compared with manifest, and hashes are compared with candidate script bytes.",
+    "cargo_metadata": "Not re-executed; features/dependency kinds and transitive Git trees remain formal-workflow receipt data."
+  },
+  "documentation_review": {
+    "readme_and_manifest_match_source": true,
+    "manifest_file_identities_match_actual_bytes": true,
+    "unbound_null_candidate_and_run_explicit": true,
+    "assertions_enabled_and_python_3_11_requirement_explicit": true,
+    "historical_schema_commit_is_provenance_only": true,
+    "producer_ast_parse_claim": "Recorded by preparation author; not rerun by independent reviewer."
+  },
+  "execution": {
+    "helper_imported": false,
+    "helper_executed": false,
+    "network_verifier_executed": false,
+    "tests_or_cargo_or_pty_or_ci_run": false,
+    "historical_8_tests_23_tamper_cases_rerun_or_transferred": false,
+    "tag_release_install_or_deploy_performed": false
+  },
+  "remaining_binding": [
+    "Source/release owner must supply final candidate and successful formal tag-push run.",
+    "Final candidate workflow, expected jobs/assets and release receipt schema must still match before actual verification.",
+    "This review does not establish final source integration, runtime acceptance or publication success."
+  ],
+  "blockers": []
+}
