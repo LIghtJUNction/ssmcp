@@ -283,7 +283,8 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
         return Ok(());
     }
     println!("Checking the official SSMCP tool repository…");
-    let tool_update = crate::tool_repository::update(&std::env::current_dir()?, mode == Mode::Install).await;
+    let tool_update =
+        crate::tool_repository::update(&std::env::current_dir()?, mode == Mode::Install).await;
     match &tool_update {
         Ok(report) => println!("Tool repository: {}", serde_json::to_string(report)?),
         Err(error) => eprintln!("Tool repository check failed: {error}"),

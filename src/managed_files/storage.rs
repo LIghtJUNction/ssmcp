@@ -424,8 +424,8 @@ fn verify_owned_windows(file: &File, directory: bool) -> io::Result<()> {
         Foundation::LocalFree,
         Security::{
             Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
-            EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION,
-            TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
+            EqualSid, GetTokenInformation, OWNER_SECURITY_INFORMATION, TOKEN_OWNER, TOKEN_QUERY,
+            TOKEN_USER, TokenOwner, TokenUser,
         },
         Storage::FileSystem::{
             BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -442,24 +442,39 @@ fn verify_owned_windows(file: &File, directory: bool) -> io::Result<()> {
         || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) != directory
         || (!directory && (!file.metadata()?.is_file() || information.nNumberOfLinks != 1))
     {
-        return Err(invalid("managed path must have its expected type, without reparse points or multiple links"));
+        return Err(invalid(
+            "managed path must have its expected type, without reparse points or multiple links",
+        ));
     }
     let mut owner = std::ptr::null_mut();
     let mut descriptor = std::ptr::null_mut();
     let result = unsafe {
         GetSecurityInfo(
-            file.as_raw_handle(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
-            &mut owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
             &mut descriptor,
         )
     };
-    if result != 0 { return Err(io::Error::from_raw_os_error(result as i32)); }
+    if result != 0 {
+        return Err(io::Error::from_raw_os_error(result as i32));
+    }
     struct SecurityMemory(*mut c_void);
     impl Drop for SecurityMemory {
-        fn drop(&mut self) { unsafe { LocalFree(self.0); } }
+        fn drop(&mut self) {
+            unsafe {
+                LocalFree(self.0);
+            }
+        }
     }
     let _descriptor = SecurityMemory(descriptor);
-    if owner.is_null() { return Err(invalid("managed path has no Windows owner")); }
+    if owner.is_null() {
+        return Err(invalid("managed path has no Windows owner"));
+    }
     let mut raw_token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw_token) } == 0 {
         return Err(io::Error::last_os_error());
@@ -469,17 +484,28 @@ fn verify_owned_windows(file: &File, directory: bool) -> io::Result<()> {
         let mut needed = 0;
         unsafe {
             GetTokenInformation(
-                token.as_raw_handle(), class, std::ptr::null_mut(), 0, &mut needed,
+                token.as_raw_handle(),
+                class,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
             );
         }
-        if needed == 0 { return Err(io::Error::last_os_error()); }
+        if needed == 0 {
+            return Err(io::Error::last_os_error());
+        }
         // usize storage provides the alignment needed by TOKEN_USER/TOKEN_OWNER.
         let mut buffer = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
         if unsafe {
             GetTokenInformation(
-                token.as_raw_handle(), class, buffer.as_mut_ptr().cast(), needed, &mut needed,
+                token.as_raw_handle(),
+                class,
+                buffer.as_mut_ptr().cast(),
+                needed,
+                &mut needed,
             )
-        } == 0 {
+        } == 0
+        {
             return Err(io::Error::last_os_error());
         }
         let sid = if class == TokenUser {
@@ -487,9 +513,13 @@ fn verify_owned_windows(file: &File, directory: bool) -> io::Result<()> {
         } else {
             unsafe { (*(buffer.as_ptr().cast::<TOKEN_OWNER>())).Owner }
         };
-        if unsafe { EqualSid(owner, sid) } != 0 { return Ok(()); }
+        if unsafe { EqualSid(owner, sid) } != 0 {
+            return Ok(());
+        }
     }
-    Err(invalid("managed path is not owned by the current Windows user"))
+    Err(invalid(
+        "managed path is not owned by the current Windows user",
+    ))
 }
 
 pub(super) fn same_at(parent: &Directory, name: &str, expected: &FileIdentity) -> io::Result<bool> {
@@ -504,4 +534,3 @@ fn single_name(name: &str) -> io::Result<()> {
         Ok(())
     }
 }
-

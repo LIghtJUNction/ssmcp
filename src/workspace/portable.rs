@@ -42,7 +42,9 @@ fn lock_managed_writes(
             Err(failure) if failure.kind() == io::ErrorKind::Interrupted => continue,
             Err(failure) if failure.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err("workspace cleanup or file write is busy; retry the file operation".into());
+                    return Err(
+                        "workspace cleanup or file write is busy; retry the file operation".into(),
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -553,4 +555,3 @@ mod tests {
         assert!(Root::components("folder/file.txt").is_ok());
     }
 }
-

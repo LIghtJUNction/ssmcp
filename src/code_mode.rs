@@ -828,10 +828,15 @@ pub(crate) async fn execute_with_runner(
     sources: crate::tool_repository::Bundle,
 ) -> Result<Value, String> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-    let command = tokio::time::timeout_at(deadline,
-        prepare_command(move || sandbox_command_with_runner(local_runner)))
-        .await.map_err(|_| "code_mode timed out during runtime preparation".to_owned())??;
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis();
+    let command = tokio::time::timeout_at(
+        deadline,
+        prepare_command(move || sandbox_command_with_runner(local_runner)),
+    )
+    .await
+    .map_err(|_| "code_mode timed out during runtime preparation".to_owned())??;
+    let remaining = deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .as_millis();
     if remaining == 0 {
         return Err("code_mode timed out during runtime preparation".into());
     }

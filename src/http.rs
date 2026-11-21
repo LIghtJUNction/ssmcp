@@ -33,8 +33,8 @@ mod question_delivery_tests;
 #[cfg(test)]
 mod relay_composer_fixture;
 mod session_io;
-mod tool_summaries;
 mod tool_sources;
+mod tool_summaries;
 mod user_wait;
 
 pub fn router(broker: Arc<Broker>) -> Router {
@@ -991,7 +991,9 @@ async fn execute(
         return Err(format!("timeout_ms must be 1..={MAX_TIMEOUT_MS}"));
     }
     if arguments.code.trim().is_empty() || arguments.code.len() > MAX_CODE_BYTES {
-        return Err(format!("code must contain 1..={MAX_CODE_BYTES} UTF-8 bytes"));
+        return Err(format!(
+            "code must contain 1..={MAX_CODE_BYTES} UTF-8 bytes"
+        ));
     }
     let deadline = tokio::time::Instant::now() + Duration::from_millis(arguments.timeout_ms);
     let sessions = broker.clients(&user, &authorization).await?;
@@ -1018,9 +1020,21 @@ async fn execute(
         audit_run.record_connection(&session)?;
         audit_run.bind(&agent.client_id, &owner, &agent.id, &agent.token)?;
     }
-    let sources = tokio::time::timeout_at(deadline,
-        tool_sources::load(&broker, &user, &access_token, &audit_run, &arguments, &sessions))
-        .await.map_err(|_| "code_mode timed out while loading selected tool sources; no user code was started")??;
+    let sources = tokio::time::timeout_at(
+        deadline,
+        tool_sources::load(
+            &broker,
+            &user,
+            &access_token,
+            &audit_run,
+            &arguments,
+            &sessions,
+        ),
+    )
+    .await
+    .map_err(
+        |_| "code_mode timed out while loading selected tool sources; no user code was started",
+    )??;
     let mut audit_report = CodeRunReport {
         broker: broker.clone(),
         user: user.clone(),
@@ -1037,12 +1051,21 @@ async fn execute(
         controller,
         request_id,
     );
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis();
+    let remaining = deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .as_millis();
     let mut result = if remaining == 0 {
         Err("code_mode deadline expired during tool-source preparation".into())
     } else {
-        code_mode::execute_with_runner(arguments.code, remaining as u64, clients, host, runner,
-            sources.bundle.clone()).await
+        code_mode::execute_with_runner(
+            arguments.code,
+            remaining as u64,
+            clients,
+            host,
+            runner,
+            sources.bundle.clone(),
+        )
+        .await
     };
     let source_authority = sources.verify(&broker, &user, &access_token).await;
     if let Err(error) = &source_authority {
@@ -1061,7 +1084,10 @@ async fn execute(
     if let Err(error) = source_authority {
         return Ok(crate::code_mode::tool_result(Err(error)));
     }
-    Ok(user_wait::append(sources.append(response), &audit_report.run))
+    Ok(user_wait::append(
+        sources.append(response),
+        &audit_report.run,
+    ))
 }
 
 /// Direct server tools share response delivery without starting a JS runner.

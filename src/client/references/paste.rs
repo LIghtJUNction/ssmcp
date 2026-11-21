@@ -176,11 +176,7 @@ pub(super) fn input_directory(root: &Path) -> io::Result<std::fs::File> {
 }
 
 #[cfg(unix)]
-fn save(
-    root: &Path,
-    name: &str,
-    bytes: &[u8],
-) -> io::Result<crate::managed_files::FileIdentity> {
+fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<crate::managed_files::FileIdentity> {
     use std::{ffi::CString, io::Write, os::fd::AsRawFd};
     let inputs = input_directory(root)?;
     let name = CString::new(name).expect("generated ASCII filename");
@@ -312,10 +308,7 @@ mod tests {
     fn paste_reference_remains_usable_when_creation_tracking_is_unavailable() {
         let fixture = Fixture::new();
         fs::create_dir(fixture.0.join(".ssmcp")).unwrap();
-        fs::set_permissions(
-            fixture.0.join(".ssmcp"),
-            fs::Permissions::from_mode(0o700),
-        ).unwrap();
+        fs::set_permissions(fixture.0.join(".ssmcp"), fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(fixture.0.join(".ssmcp/managed-files"), b"not a directory").unwrap();
         let reference = store_at(&fixture.0, "input that must survive a tracking failure").unwrap();
         assert_eq!(reference.len(), REFERENCE_BYTES);
@@ -411,4 +404,3 @@ mod tests {
         assert_eq!(fs::read_to_string(fixture.path(&reference)).unwrap(), text);
     }
 }
-

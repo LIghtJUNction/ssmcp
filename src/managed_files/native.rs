@@ -35,25 +35,37 @@ pub fn tools() -> Vec<Value> {
                 "offset":{"type":"integer","minimum":0,"default":0},
                 "max_entries":{"type":"integer","minimum":1,"maximum":MAX_ENTRIES,"default":DEFAULT_ENTRIES}
             }),
-            &[], true, false, true,
+            &[],
+            true,
+            false,
+            true,
         ),
         tool(
             "ssmcp.files.cleanup",
             "Preview cleanup by default. Set dry_run=false to remove only registered, eligible temporary files under the current configuration. Protected, changed, unknown and active files are retained. Return the actual cleanup summary, including any errors.",
             json!({"dry_run":{"type":"boolean","default":true}}),
-            &[], false, true, false,
+            &[],
+            false,
+            true,
+            false,
         ),
         tool(
             "ssmcp.files.config",
             "Read the current cleanup configuration, or defaults when none exists, without creating managed state.",
             json!({}),
-            &[], true, false, true,
+            &[],
+            true,
+            false,
+            true,
         ),
         tool(
             "ssmcp.files.configure",
             "Validate and replace the cleanup configuration (at most 65536 serialized bytes). Omitted configuration fields use their documented defaults. This operation only sets configuration and does not run cleanup.",
             json!({"config":config_schema}),
-            &["config"], false, false, true,
+            &["config"],
+            false,
+            false,
+            true,
         ),
     ]
 }
@@ -160,7 +172,10 @@ fn request(name: &str, args: Value) -> Result<Request, String> {
 
 fn check_config_size(bytes: usize) -> Result<(), String> {
     if bytes > super::CONFIG_BYTES_LIMIT {
-        Err(format!("cleanup configuration exceeds {} bytes", super::CONFIG_BYTES_LIMIT))
+        Err(format!(
+            "cleanup configuration exceeds {} bytes",
+            super::CONFIG_BYTES_LIMIT
+        ))
     } else {
         Ok(())
     }
@@ -173,9 +188,15 @@ fn parse<T: DeserializeOwned>(name: &str, args: Value) -> Result<T, String> {
     serde_json::from_value(args).map_err(|error| format!("invalid {name} arguments: {error}"))
 }
 
-fn default_entries() -> usize { DEFAULT_ENTRIES }
-fn default_dry_run() -> bool { true }
-fn error(error: impl std::fmt::Display) -> String { error.to_string() }
+fn default_entries() -> usize {
+    DEFAULT_ENTRIES
+}
+fn default_dry_run() -> bool {
+    true
+}
+fn error(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
 
 fn tool(
     name: &str,
@@ -200,34 +221,96 @@ mod tests {
 
     #[test]
     fn native_defaults_preview_cleanup_and_bound_list_pages() {
-        assert!(matches!(request("ssmcp.files.cleanup", json!({})).unwrap(),
-            Request::Cleanup(CleanupArgs { dry_run: true })));
-        assert!(matches!(request("ssmcp.files.cleanup", json!({"dry_run":false})).unwrap(),
-            Request::Cleanup(CleanupArgs { dry_run: false })));
-        assert!(matches!(request("ssmcp.files.list", json!({})).unwrap(),
-            Request::List(ListArgs { offset: 0, max_entries: DEFAULT_ENTRIES })));
-        assert!(matches!(request("ssmcp.files.list", json!({"offset":9,"max_entries":128})).unwrap(),
-            Request::List(ListArgs { offset: 9, max_entries: MAX_ENTRIES })));
+        assert!(matches!(
+            request("ssmcp.files.cleanup", json!({})).unwrap(),
+            Request::Cleanup(CleanupArgs { dry_run: true })
+        ));
+        assert!(matches!(
+            request("ssmcp.files.cleanup", json!({"dry_run":false})).unwrap(),
+            Request::Cleanup(CleanupArgs { dry_run: false })
+        ));
+        assert!(matches!(
+            request("ssmcp.files.list", json!({})).unwrap(),
+            Request::List(ListArgs {
+                offset: 0,
+                max_entries: DEFAULT_ENTRIES
+            })
+        ));
+        assert!(matches!(
+            request("ssmcp.files.list", json!({"offset":9,"max_entries":128})).unwrap(),
+            Request::List(ListArgs {
+                offset: 9,
+                max_entries: MAX_ENTRIES
+            })
+        ));
     }
 
     #[test]
     fn malformed_native_requests_fail_before_workspace_io() {
         let root = Path::new("\0managed-files-no-io");
         for (name, args, expected) in [
-            ("ssmcp.files.list", json!({"max_entries":0}), "max_entries must be"),
-            ("ssmcp.files.list", json!({"max_entries":129}), "max_entries must be"),
-            ("ssmcp.files.list", json!({"offset":-1}), "invalid ssmcp.files.list arguments"),
-            ("ssmcp.files.list", json!({"root":"elsewhere"}), "unknown field"),
-            ("ssmcp.files.cleanup", json!({"dry_run":"false"}), "invalid ssmcp.files.cleanup arguments"),
-            ("ssmcp.files.cleanup", json!({"trigger":"reload"}), "unknown field"),
-            ("ssmcp.files.config", json!({"path":"elsewhere"}), "unknown field"),
+            (
+                "ssmcp.files.list",
+                json!({"max_entries":0}),
+                "max_entries must be",
+            ),
+            (
+                "ssmcp.files.list",
+                json!({"max_entries":129}),
+                "max_entries must be",
+            ),
+            (
+                "ssmcp.files.list",
+                json!({"offset":-1}),
+                "invalid ssmcp.files.list arguments",
+            ),
+            (
+                "ssmcp.files.list",
+                json!({"root":"elsewhere"}),
+                "unknown field",
+            ),
+            (
+                "ssmcp.files.cleanup",
+                json!({"dry_run":"false"}),
+                "invalid ssmcp.files.cleanup arguments",
+            ),
+            (
+                "ssmcp.files.cleanup",
+                json!({"trigger":"reload"}),
+                "unknown field",
+            ),
+            (
+                "ssmcp.files.config",
+                json!({"path":"elsewhere"}),
+                "unknown field",
+            ),
             ("ssmcp.files.config", json!([]), "expected an object"),
             ("ssmcp.files.configure", json!({}), "missing field"),
-            ("ssmcp.files.configure", json!({"config":{},"root":"elsewhere"}), "unknown field"),
-            ("ssmcp.files.configure", json!({"config":{"unknown":true}}), "unknown field"),
-            ("ssmcp.files.configure", json!({"config":[]}), "expected an object"),
-            ("ssmcp.files.configure", json!({"config":{"rules":[[]]}}), "rules must be objects"),
-            ("ssmcp.files.unknown", json!({}), "unknown managed-files capability"),
+            (
+                "ssmcp.files.configure",
+                json!({"config":{},"root":"elsewhere"}),
+                "unknown field",
+            ),
+            (
+                "ssmcp.files.configure",
+                json!({"config":{"unknown":true}}),
+                "unknown field",
+            ),
+            (
+                "ssmcp.files.configure",
+                json!({"config":[]}),
+                "expected an object",
+            ),
+            (
+                "ssmcp.files.configure",
+                json!({"config":{"rules":[[]]}}),
+                "rules must be objects",
+            ),
+            (
+                "ssmcp.files.unknown",
+                json!({}),
+                "unknown managed-files capability",
+            ),
         ] {
             let error = perform(root, name, args).unwrap_err();
             assert!(error.contains(expected), "{name}: {error}");
@@ -236,7 +319,9 @@ mod tests {
 
     #[test]
     fn native_configuration_uses_core_rules_and_storage_size_limit() {
-        let Request::Configure(config) = request("ssmcp.files.configure", json!({"config":{}})).unwrap() else {
+        let Request::Configure(config) =
+            request("ssmcp.files.configure", json!({"config":{}})).unwrap()
+        else {
             panic!("expected a configuration request");
         };
         assert_eq!(config, CleanupConfig::default());
@@ -244,12 +329,18 @@ mod tests {
         let invalid_rule = json!({"config":{"rules":[{
             "relative_prefix":".ssmcp/inputs","category":"temporary"
         }]}});
-        assert!(perform(root, "ssmcp.files.configure", invalid_rule).unwrap_err()
-            .contains("unprotected path"));
+        assert!(
+            perform(root, "ssmcp.files.configure", invalid_rule)
+                .unwrap_err()
+                .contains("unprotected path")
+        );
         let oversized = json!({"config":{"rules":[{
             "relative_prefix":"x".repeat(super::super::CONFIG_BYTES_LIMIT),"category":"temporary"
         }]}});
-        assert!(perform(root, "ssmcp.files.configure", oversized).unwrap_err()
-            .contains("exceeds 65536 bytes"));
+        assert!(
+            perform(root, "ssmcp.files.configure", oversized)
+                .unwrap_err()
+                .contains("exceeds 65536 bytes")
+        );
     }
 }

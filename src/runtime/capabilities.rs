@@ -89,7 +89,11 @@ fn resource_catalog() -> Vec<Value> {
             "application/json",
         ),
         ("tools", "Live native tool schemas", "application/json"),
-        ("tool-sources", "RC-registered editable code-mode sources", "application/json"),
+        (
+            "tool-sources",
+            "RC-registered editable code-mode sources",
+            "application/json",
+        ),
         ("context", "Configured context roots", "application/json"),
         ("skills", "Discovered skills", "application/json"),
         (
@@ -383,7 +387,9 @@ impl Runtime {
                 );
             }
             "capabilities" => return json_content(uri, self.client_capabilities()?),
-            "tool-sources" => return json_content(uri, crate::tool_repository::bundle(&self.tool_root).await?),
+            "tool-sources" => {
+                return json_content(uri, crate::tool_repository::bundle(&self.tool_root).await?);
+            }
             "limits" => return json_content(uri, native_limits(self.chat_enabled())),
             "tools" => {
                 let mut page = match query.get("cursor") {

@@ -711,7 +711,9 @@ fn validate_temporary_write(path: &str, overwrite: bool, temporary: bool) -> Res
         || parts.len() < 3
         || parts[0] != Component::Normal(std::ffi::OsStr::new(".ssmcp"))
         || parts[1] != Component::Normal(std::ffi::OsStr::new("tmp"))
-        || parts.iter().any(|part| !matches!(part, Component::Normal(_)))
+        || parts
+            .iter()
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
         return Err(
             "temporary=true requires overwrite=false and a relative file path under .ssmcp/tmp/"
@@ -1350,7 +1352,10 @@ mod managed_file_integration_tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
-                std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&path)
+                    .unwrap();
             }
             #[cfg(windows)]
             crate::platform::windows::create_private_directory(&path).unwrap();
@@ -1407,7 +1412,10 @@ mod managed_file_integration_tests {
             (".ssmcp/tmp/user.txt", Category::UserFile),
             ("new.rs", Category::UserFile),
         ] {
-            let record = records.iter().find(|record| record.relative_path == path).unwrap();
+            let record = records
+                .iter()
+                .find(|record| record.relative_path == path)
+                .unwrap();
             assert_eq!(record.category, category);
         }
         scratch.expire_immediately();
@@ -1422,8 +1430,14 @@ mod managed_file_integration_tests {
         assert!(cleaned.errors.is_empty(), "{cleaned:?}");
         assert!(!scratch.0.join(".ssmcp/tmp/text.txt").exists());
         assert!(!scratch.0.join(".ssmcp/tmp/binary.bin").exists());
-        assert_eq!(std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/user.txt")).unwrap(), "keep user content");
-        assert_eq!(std::fs::read_to_string(scratch.0.join("new.rs")).unwrap(), "fn main() {}");
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/user.txt")).unwrap(),
+            "keep user content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("new.rs")).unwrap(),
+            "fn main() {}"
+        );
     }
 
     #[tokio::test]
@@ -1465,7 +1479,10 @@ mod managed_file_integration_tests {
         let after = managed_files::list(&scratch.0).unwrap();
         assert_eq!(before.len(), after.len());
         assert_eq!(before[0].id, after[0].id);
-        assert_eq!(std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/existing.txt")).unwrap(), "keep existing content");
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/existing.txt")).unwrap(),
+            "keep existing content"
+        );
     }
 
     #[tokio::test]
@@ -1489,7 +1506,10 @@ mod managed_file_integration_tests {
         let cleaned = managed_files::cleanup(&scratch.0, false, "unit-native-overwrite").unwrap();
         assert_eq!(cleaned.removed_files, 0);
         assert_eq!(cleaned.kept_changed, 1);
-        assert_eq!(std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/replaced.txt")).unwrap(), "new user content");
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/replaced.txt")).unwrap(),
+            "new user content"
+        );
     }
 
     #[tokio::test]
@@ -1497,22 +1517,46 @@ mod managed_file_integration_tests {
         let scratch = Scratch::new();
         let workspace = scratch.workspace();
         std::fs::write(scratch.0.join("existing.txt"), b"before").unwrap();
-        workspace.perform(
-            "ssmcp.fs.write_text",
-            json!({"path":"existing.txt","text":"after","overwrite":true}),
-        ).await.unwrap();
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"existing.txt","text":"after","overwrite":true}),
+            )
+            .await
+            .unwrap();
         assert!(managed_files::list(&scratch.0).unwrap().is_empty());
-        assert_eq!(std::fs::read(scratch.0.join("existing.txt")).unwrap(), b"after");
+        assert_eq!(
+            std::fs::read(scratch.0.join("existing.txt")).unwrap(),
+            b"after"
+        );
         std::fs::create_dir(scratch.0.join(".ssmcp")).unwrap();
-        std::fs::write(scratch.0.join(".ssmcp/managed-files"), b"not a registry directory").unwrap();
-        let result = workspace.perform(
-            "ssmcp.fs.write_text",
-            json!({"path":"created.txt","text":"success survives tracking failure"}),
-        ).await.unwrap();
+        std::fs::write(
+            scratch.0.join(".ssmcp/managed-files"),
+            b"not a registry directory",
+        )
+        .unwrap();
+        let result = workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"created.txt","text":"success survives tracking failure"}),
+            )
+            .await
+            .unwrap();
         assert_eq!(result["written"], "success survives tracking failure".len());
-        assert!(result["tracking_warning"].as_str().unwrap().contains("created successfully"));
-        assert_eq!(std::fs::read_to_string(scratch.0.join("created.txt")).unwrap(), "success survives tracking failure");
-        assert_eq!(std::fs::read(scratch.0.join(".ssmcp/managed-files")).unwrap(), b"not a registry directory");
+        assert!(
+            result["tracking_warning"]
+                .as_str()
+                .unwrap()
+                .contains("created successfully")
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("created.txt")).unwrap(),
+            "success survives tracking failure"
+        );
+        assert_eq!(
+            std::fs::read(scratch.0.join(".ssmcp/managed-files")).unwrap(),
+            b"not a registry directory"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -1525,21 +1569,33 @@ mod managed_file_integration_tests {
             json!({"path":".ssmcp/tmp/shared.txt","text":"old temporary content","temporary":true,"create_parents":true}),
         ).await.unwrap();
         scratch.expire_immediately();
-        let parent = workspace.root.directory(&Root::components(".ssmcp/tmp").unwrap(), false).unwrap();
+        let parent = workspace
+            .root
+            .directory(&Root::components(".ssmcp/tmp").unwrap(), false)
+            .unwrap();
         let write_guard = locked_directory(&parent).unwrap();
         let busy = managed_files::cleanup(&scratch.0, false, "unit-writer-busy").unwrap();
         assert_eq!(busy.removed_files, 0);
         assert_eq!(busy.kept_active, 1);
-        assert_eq!(std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(), "old temporary content");
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(),
+            "old temporary content"
+        );
         drop(write_guard);
-        workspace.perform(
-            "ssmcp.fs.write_text",
-            json!({"path":".ssmcp/tmp/shared.txt","text":"new user content","overwrite":true}),
-        ).await.unwrap();
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":".ssmcp/tmp/shared.txt","text":"new user content","overwrite":true}),
+            )
+            .await
+            .unwrap();
         let replaced = managed_files::cleanup(&scratch.0, false, "unit-replaced").unwrap();
         assert_eq!(replaced.removed_files, 0);
         assert_eq!(replaced.kept_changed, 1);
-        assert_eq!(std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(), "new user content");
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(),
+            "new user content"
+        );
     }
 
     #[cfg(unix)]
@@ -1548,12 +1604,18 @@ mod managed_file_integration_tests {
         let scratch = Scratch::new();
         let workspace = scratch.workspace();
         for path in ["notes:1.txt", "literal\\name.txt"] {
-            let result = workspace.perform(
-                "ssmcp.fs.write_text",
-                json!({"path":path,"text":"ordinary Unix filename"}),
-            ).await.unwrap();
+            let result = workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":path,"text":"ordinary Unix filename"}),
+                )
+                .await
+                .unwrap();
             assert!(result.get("tracking_warning").is_some());
-            assert_eq!(std::fs::read_to_string(scratch.0.join(path)).unwrap(), "ordinary Unix filename");
+            assert_eq!(
+                std::fs::read_to_string(scratch.0.join(path)).unwrap(),
+                "ordinary Unix filename"
+            );
         }
     }
 }
@@ -2203,4 +2265,3 @@ mod tests {
         );
     }
 }
-
