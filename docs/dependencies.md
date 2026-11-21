@@ -11,7 +11,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 
 应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 直接声明 Git 默认分支来源，保留包别名和 feature。实际解析版本来自上游 manifest，提交由 Cargo.lock 记录。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
 
-四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/fb2948f78467dd92b216aabda6f18a5645f0e7f6/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/592a1be623b81a775026c470e6f0efe91fcf78f3/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/199678d08104bed588e5d10b2c0634a47d7c8417/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml)
+四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/fb2948f78467dd92b216aabda6f18a5645f0e7f6/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/592a1be623b81a775026c470e6f0efe91fcf78f3/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/199678d08104bed588e5d10b2c0634a47d7c8417/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc/Cargo.toml)
 
 `ssmcp --version --all` 可离线查看构建所用 Cargo.lock 中从 ssmcp 可达的依赖树。`--version` 仍只输出应用版本。树包含锁定的构建、开发与各目标依赖，实际链接的代码随目标和 features 而变。
 
@@ -70,7 +70,7 @@ SSMCP 的 crates.io workflow 只发布应用包。独立依赖版本必须在各
 
 ## zuse 桌面调用
 
-zuse 的 Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，当前 Git 源以默认分支提交 `830fcefd2277cbba46536c67d206f29058ba7fb3` 解析到 `0.3.0`。Cargo.lock 与 `crates/zuse` gitlink 记录同一源码。相同版本字符串可出现在多个不同 Git 提交上。
+zuse 的 Cargo 依赖键为 `zuse`，发布包名为 `zuse-computer`，当前 Git 源以默认分支提交 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc` 解析到 `0.3.0`。Cargo.lock 与 `crates/zuse` gitlink 记录同一源码。相同版本字符串可出现在多个不同 Git 提交上。
 
 Windows 公共窗口 ID 在 SSMCP 适配边界合并 HWND 与 PID，以保留聚焦身份检查。各操作的实际执行引擎由 `computer.status` 的 `engine_routes` 报告。
 

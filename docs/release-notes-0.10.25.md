@@ -28,13 +28,13 @@
 
 `/computer on`、`/computer off` 和默认快捷键 Super+Alt+C 控制同一系统用户下的 SSMCP 桌面、CDP 浏览器、Omarchy 和 Playwright 操作。桌面默认仍为 `isolated`，宿主操作显式选择 `host`。Off 阻止新控制并撤销旧请求，再次 On 不会恢复它们。只读观察与自有资源清理继续可用。
 
-CDP 批次保留已确认步骤。Omarchy 自有 helper 回收完成后才允许后续输入。Playwright 发出请求但未收到回复时，关闭本连接拥有的驱动，并明确报告结果未知或部分执行。已经送达应用的操作可能生效，继续前应先观察状态。
+CDP 批次保留已确认步骤。Omarchy 的自有任务会等待进程清理流程返回，再释放输入租约并放行后续输入。Playwright 调用因错误或撤权结束时，若请求可能已写入且未收到对应的有效回复，会关闭本连接拥有的驱动，并报告结果未知或可能部分执行。已经送达应用的操作可能生效，继续前应先观察状态。
 
 这个开关只覆盖 SSMCP 的控制路由。普通 Shell、独立 zuse 和同一系统用户运行的其他程序仍使用原有操作系统权限，也可能调用本机开关。要限制这类程序，需要隔离桌面通道，并通过可撤权的受控代理访问。[电脑控制与适用范围](computer-use.md)
 
 ## 依赖和版本
 
-内部跨仓库依赖直接跟踪各仓库的规范 Git 来源，实际提交由 Cargo.lock 记录。本版刷新了 zharness、zplugin、zcall 与 zmcpio 对应的五条锁记录，并同步 zharness、zplugin 的 gitlink。zuse 仍为 0.3.0，提交为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。[依赖来源和核对方法](dependencies.md)
+内部跨仓库依赖直接跟踪各仓库的规范 Git 来源，实际提交由 Cargo.lock 记录。本版刷新了 zharness、zplugin、zcall 与 zmcpio 对应的五条锁记录，并同步 zharness、zplugin 的 gitlink。zuse 仍为 0.3.0，提交为 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`。[依赖来源和核对方法](dependencies.md)
 
 `ssmcp --version` 保持单行输出。`ssmcp --version --all` 离线显示构建期 Cargo.lock 中从 ssmcp 可达的依赖树，包含构建、开发和各锁定目标的依赖。实际链接的代码随平台和 features 而变。
 
