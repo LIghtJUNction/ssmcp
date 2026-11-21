@@ -199,11 +199,14 @@ impl Root {
         tool: &str,
         path: &str,
         data: &[u8],
-        overwrite: bool,
-        create_parents: bool,
-        temporary: bool,
-        expected_sha256: Option<&str>,
+        options: WriteOptions<'_>,
     ) -> Result<Option<String>, String> {
+        let WriteOptions {
+            overwrite,
+            create_parents,
+            temporary,
+            expected_sha256,
+        } = options;
         crate::managed_files::validate_user_write(Path::new(path)).map_err(error)?;
         validate_temporary_write(path, overwrite, temporary)?;
         validate_hash(expected_sha256)?;

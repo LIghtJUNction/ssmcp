@@ -610,7 +610,7 @@ impl Captured {
             // No replace/copy fallback is allowed. Nonregular objects or a
             // filesystem without hard links remain intact in recovery storage.
             let linked = self.restore_link();
-            return match linked {
+            match linked {
                 Ok(()) => match self.directory.remove("captured") {
                     Ok(()) => RestoreOutcome {
                         restored: true,
@@ -628,7 +628,7 @@ impl Captured {
                     recovery_remains: true,
                     error: Some(error.to_string()),
                 },
-            };
+            }
         }
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
         match result {

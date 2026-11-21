@@ -639,10 +639,12 @@ impl Root {
             "ssmcp.fs.write",
             &args.path,
             &data,
-            args.overwrite,
-            args.create_parents,
-            args.temporary,
-            None,
+            WriteOptions {
+                overwrite: args.overwrite,
+                create_parents: args.create_parents,
+                temporary: args.temporary,
+                expected_sha256: None,
+            },
         )?;
         Ok(with_tracking_warning(
             json!({"path":args.path,"written":data.len()}),
@@ -658,10 +660,12 @@ impl Root {
             "ssmcp.fs.write_text",
             &args.path,
             args.text.as_bytes(),
-            args.overwrite,
-            args.create_parents,
-            args.temporary,
-            args.expected_sha256.as_deref(),
+            WriteOptions {
+                overwrite: args.overwrite,
+                create_parents: args.create_parents,
+                temporary: args.temporary,
+                expected_sha256: args.expected_sha256.as_deref(),
+            },
         )?;
         Ok(with_tracking_warning(
             json!({"path":args.path,"written":args.text.len(),"sha256":sha256(args.text.as_bytes())}),
@@ -847,11 +851,14 @@ impl Root {
         tool: &str,
         path: &str,
         data: &[u8],
-        overwrite: bool,
-        create_parents: bool,
-        temporary: bool,
-        expected_sha256: Option<&str>,
+        options: WriteOptions<'_>,
     ) -> Result<Option<String>, String> {
+        let WriteOptions {
+            overwrite,
+            create_parents,
+            temporary,
+            expected_sha256,
+        } = options;
         crate::managed_files::validate_user_write(Path::new(path)).map_err(error)?;
         validate_temporary_write(path, overwrite, temporary)?;
         validate_hash(expected_sha256)?;
@@ -1251,6 +1258,13 @@ struct FileReadArgs {
     #[serde(default = "default_file_bytes")]
     max_bytes: usize,
 }
+struct WriteOptions<'a> {
+    overwrite: bool,
+    create_parents: bool,
+    temporary: bool,
+    expected_sha256: Option<&'a str>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileWriteArgs {
