@@ -2,9 +2,9 @@
 
 ### 把你的电脑接到 Agent。用一个 `code_mode` 调用原生工具。
 
-ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件、浏览器和已安装的开发工具接入授权会话；Agent 通过 MCP 选择设备并调用这些工具。模型可以在云端，工作区、执行环境和工具状态留在你的机器上。
+ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件、会话和已安装的开发工具接入授权会话；Agent 通过 MCP 选择设备并调用这些工具。模型可以在云端，工作区、执行环境和工具状态留在你的机器上。
 
-[演示视频](#演示视频) · [快速开始](#快速开始) · [本地与远程目标](docs/connection-contexts.md) · [会话操作](docs/client-input.md) · [工具与浏览器](docs/backends.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
+[演示视频](#演示视频) · [快速开始](#快速开始) · [本地与远程目标](docs/connection-contexts.md) · [会话操作](docs/client-input.md) · [工具与 Zuse CLI](docs/computer-use.md) · [编写自己的客户端](docs/client-extension.md) · [部署服务器](docs/deployment.md)
 
 [![Rust](https://img.shields.io/badge/Rust-1.100%2B-64748b?style=flat-square)](Cargo.toml) [![License: MIT](https://img.shields.io/badge/License-MIT-64748b?style=flat-square)](LICENSE) [![Releases](https://img.shields.io/badge/Download-Releases-4285f4?style=flat-square)](https://github.com/LIghtJUNction/ssmcp/releases)
 
@@ -19,7 +19,7 @@ ssmcp 是一个可自建的远程 harness 通道。客户端把命令、文件�
 
 | 你想做的事 | ssmcp 提供什么 |
 | --- | --- |
-| 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、浏览器、桌面，以及按需加载的 Codex / Claude Code / Pi / OpenCode / Playwright 工具 |
+| 让云端 Agent 操作开发机 | 原生 Shell、独立命令任务、文件、Zuse CLI 管理，以及按需加载的 Codex / Claude Code / Pi / OpenCode 工具 |
 | 在终端里持续协作 | Markdown 回复、代码高亮、文件和技能引用、问答队列、历史恢复；运行期间仍可继续输入 |
 | 做自己的远程 harness | 客户端拥有工具目录、schema、上下文与 UI；复用协议和客户端扩展 hook，替换自己需要的部分 |
 
@@ -209,26 +209,29 @@ ssmcp ui check
 
 ## 复用现有工具
 
-ssmcp 默认启用内置命令、文件、浏览器和会话工具，不要求安装其他 harness。Codex、Claude Code、Pi、OpenCode 和 Playwright MCP 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
+ssmcp 默认启用命令、文件、会话和 Zuse CLI 管理工具，不要求安装其他 harness。Codex、Claude Code、Pi 和 OpenCode 默认不探测、不启动；需要时用 `ssmcp.harnesses.load` 显式加载一项，`ssmcp.harnesses.list` 只读取缓存状态。加载后保留该工具的完整 schema、会话和审批方式，实际模型调用仍须显式发起。[按需加载说明](docs/optional-harnesses.md)
 
 `--input` 默认从终端接收聊天消息，`--agent` 默认由下一位调用方领取。要在启动时加载原生协议，请用 `--load-harness codex` 或 `--load-harness claude-code`。用 `ssmcp --list-harnesses` 查看支持项。`--load-harness ssmcp` 可以连接明确指定并已认证的 MCP 网关。[客户端输入](docs/client-input.md) · [协议加载](docs/agent-entry.md)
 
 `ssmcp local --socket` 提供默认路径的本机 HTTP/MCP Unix socket，`--socket PATH` 可指定私有路径。时间工具支持当前 UTC、跨时区时间差和倒计时，终端直接显示运行时长与剩余时间，`/wait` 可查看详情。[本机连接](docs/local-mode.md) · [时间原语](docs/time-primitives.md)
 
 - **开发工具**：Codex、Claude Code、Pi、OpenCode；能力以当前成功注册的目录为准。
-- **浏览器**：优先使用内置 Chromium CDP、批量动作和条件等待；明确需要已有浏览器扩展会话时，再加载对应 Playwright MCP。Windows 安装器可同时准备 Node.js、Playwright 与 Chromium。[Windows 浏览器安装](docs/windows-browser-setup.md)
-- **桌面**：观察和输入默认指向独立桌面，`computer.app_launch` 在 Linux 上按需启动私有 Xvfb 桌面；操作宿主桌面需要显式指定 `desktop:"host"`。
+- **桌面与浏览器**：直接运行独立 Zuse CLI，通过通用 `exec` 传递 argv、管理任务和读取结果。`computer` 只提供版本查询、下载、安装、卸载；没有内置动作代理或隐藏 fallback。[Zuse 工作流](docs/computer-use.md) · [Windows 安装范围](docs/windows-browser-setup.md)
 - **上下文**：工作区文件、项目指令、有效技能视图和显式只读 context roots。
 
-ChatGPT Browser 插件由调用方应用直接调用，不是客户端可自行连接的扩展端口。客户端浏览器扩展的安装记录、MCP 握手和浏览器配对分别确认；使用 `ssmcp.browser.discover`、`ssmcp.harnesses.list` 和实际工具目录选择可用路线，再调用原生接口。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/client-input.md)
+指定已有浏览器时，先确认所选 Zuse 版本支持的连接方式和实际会话，再操作用户选定的目标。OAuth 登录、用户打开链接和已授权外部 MCP 的通用转发仍保留；它们不恢复旧内置浏览器工具。[现有浏览器连接](docs/browser-existing-session.md) · [code_mode 示例](docs/code-mode.md)
 
-### 电脑控制
+### 管理 Zuse CLI
 
-同一台电脑上、同一系统用户的 SSMCP 会话共用 Computer Use 开关。首次创建状态时为开启，手动关闭后重连和重启仍保持关闭。
+```sh
+ssmcp computer version --json
+ssmcp computer download --json
+ssmcp computer install DOWNLOAD_ID_FROM_REPLY --json
+```
 
-用 `/computer on` 或 `/computer off`，也可按 **Super + Alt + C** 切换。桌面绑定可调用 `ssmcp computer toggle`。关闭会暂停 SSMCP 电脑、浏览器和系统界面的控制请求，仍可观察状态、清理自有资源和手动操作系统。独立程序与 Shell 保留原有系统权限。
+版本来自实际 CLI 的 `--version`。下载选择官方稳定版并核验资产身份、大小与 SHA-256；安装仅写入当前管理器的私有目录，不覆盖外部 Zuse、不修改 PATH。使用返回的可执行路径运行任务；卸载必须提供真实 `installation_id`，且所有权和字节仍匹配。[四个管理工具与示例](docs/computer-use.md)
 
-宿主和私有桌面的目标选择仍然独立于开关。[命令、平台条件和快捷键](docs/computer-use.md)
+SSMCP 已撤去旧 Computer Use 开关和桌面/浏览器动作入口。通用 Shell 与独立 Zuse 仍遵循操作系统权限；需要隔离时配置实际的账户、会话或沙箱边界。
 
 ## 独立核心库
 
@@ -281,7 +284,7 @@ cargo run --locked --bin ssmcp -- ui preview
 | --- | --- |
 | [账号、设备与临时接入](docs/client-accounts.md) | [工具注册与 harness](docs/backends.md) |
 | [输入框与本地工作流](docs/client-input.md) | [客户端扩展与上下文工程](docs/client-extension.md) |
-| [主题、布局与快捷键](docs/client-ui.md) | [协议、资源与能力](docs/browser-desktop.md) |
+| [主题、布局与快捷键](docs/client-ui.md) | [Zuse、浏览器与能力资源](docs/browser-desktop.md) |
 | [部署服务器](docs/deployment.md) | [完整输出与会话控制](docs/session-control.md) |
 | [信任与默认服务器](docs/client-server.md) | [会话历史格式](docs/conversation-history.md) |
 

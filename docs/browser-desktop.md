@@ -1,166 +1,36 @@
-# Browser control and private desktops
+# Standalone Zuse for desktop and browser tasks
 
-Browser automation defaults to page-scoped input and background tabs. Native
-desktop input uses an explicitly selected surface: an owned private desktop, or
-the operator's desktop when the caller passes `desktop: "host"`.
+Desktop and browser operations run directly in the standalone Zuse CLI through SSMCP's generic exec tools. SSMCP supplies connection authorization, literal argv, process ownership and output collection. Its computer tools manage the CLI installation; they do not implement a browser or desktop action protocol.
 
-Computer Use must be On to launch, attach, navigate or change a page through
-SSMCP. Off permits metadata and read-only CDP observations on an existing
-session, and disconnect. It cancels queued input and stops an SSMCP-owned
-Playwright driver when its generation is revoked. Actions already received by
-the browser can have effects. Attached browsers remain running. The same
-switch applies to both private and host desktops. [Computer Use](computer-use.md)
+Start with the [four lifecycle tools](computer-use.md). Query the actual executable, read that version's `--help` and `schema`, then prepare a Zuse program for the authorized target. Do not infer supported operations from an old SSMCP tool catalog.
 
-## Configure an existing browser
+## Run an explicit program
 
-```sh
-ssmcp setup browser --check --json
-ssmcp setup browser
-ssmcp setup browser --install
-ssmcp setup browser --playwright-mcp /absolute/path/to/cli.js
-```
-
-The first command is read-only. The default setup discovers installed browsers,
-extension manifests and MCP entry points, validates a usable Playwright CLI, and
-saves its absolute path. Installation places a fixed, verified
-`@playwright/mcp@0.0.85` under the ssmcp user configuration directory. It does
-not install another browser, restart an existing browser, or copy profile
-credentials. Repeating setup preserves unrelated TOML settings.
-
-```toml
-[browser]
-playwright_mcp = "/absolute/path/to/cli.js"
-background = true
-```
-
-`SSMCP_PLAYWRIGHT_MCP` takes precedence over the saved executable. An invalid
-explicit override produces a diagnostic. The native provider checks the actual
-CLI's `--help` output for background support before starting it; unsupported
-versions report the missing presentation option. The legacy flags
-`--background` and `--foreground` choose browser presentation and use the same
-Computer Use switch.
-
-The Playwright MCP Bridge extension must be enabled and its native connection
-request approved. A successful CLI probe does not mean a browser is already
-paired. Existing ChatGPT and Claude extension manifests are reported as
-inventory. ssmcp does not read extension token storage or claim a private
-ChatGPT extension API.
-
-Playwright background control requires extension 0.5.0 or newer. Its first
-connection approval page can still appear in the foreground. The upstream
-background pairing path additionally requires an operator-provided token,
-an already-running browser, and Chrome 158.0.8127.2 or newer. Native approval
-remains the authority for tabs that the extension exposes.
-
-## Browser operations
-
-For an existing browser, start with `ssmcp.browser.discover` and the actual
-`playwright.*` tool catalog. This reuses authorized tabs and the provider's
-locator, iframe and waiting support. The direct CDP adapter remains available
-for observed loopback debugging endpoints and isolated test browsers.
-Before the CDP example below, connect to an observed loopback endpoint with
-`browser.connect`, or create an isolated test browser with `browser.launch`.
-Browser setup configures the extension provider; it does not create a CDP session.
+Use the executable path returned by `computer.version` or `computer.install`:
 
 ```javascript
-const api = native(clientId);
-const opened = await api.ssmcp.browser.open({url: "http://127.0.0.1:8000"});
-// open defaults to background:true. Pass false only for intentional activation.
-const target_id = opened.structuredContent.target_id;
-const snapshot = await api.ssmcp.browser.snapshot({target_id});
-const ready = await api.ssmcp.browser.wait_for({
-  target_id, text: "Ready", state: "present", timeout_ms: 5000
+return await exec.start(clientId, {
+  command: [zusePath, "run", "automation.zuse"],
+  cwd: projectDirectory,
+  timeout_ms: 60000
 });
 ```
 
-Direct CDP input targets the browser page rather than moving the system cursor.
-For explicit click, fill, key and scroll operations, the adapter enables CDP
-focus emulation on that target so background pages receive trusted input and
-can render. This does not activate the browser tab or window. SSMCP owns this emulation on its CDP target session and restores it on revocation or disconnect;
-read-only connections do not enable it. Since emulation can change the page's
-reported visibility, tests also check the actual browser window title and an
-independent window's keyboard focus and pointer position.
-`wait_for` waits for text to appear or disappear on the client, avoiding
-repeated remote snapshot calls. It has a bounded deadline and does not invent
-an element condition. Snapshots include implicit control roles and accessible
-names from `aria-labelledby`, `aria-label`, labels and image alternatives.
-The direct snapshot's main-document limitation remains; use the native
-Playwright provider for workflows that need its broader locator support.
+The placeholders above refer to the actual executable, authorized workspace and prepared program. Keep the returned `job_id`; inspect stdout, stderr, exit status and completeness through `exec.read/wait`. Use `exec.cancel` for that owned job when cancellation is needed. A successful process launch does not prove that a page or desktop action completed.
 
-The legacy `[browser].background` setting and saved `focus_policy` choose Playwright presentation.
-Direct CDP `browser.open` has its own per-call `background` argument,
-defaulting to true.
+Keep dependent actions within the same Zuse process. A one-shot invocation does not promise to retain its browser or application state for a later process; use the CLI's documented persistent mode when the workflow requires it. After an interrupted operation, observe the target before deciding what to repeat. [Zuse CLI and program examples](https://github.com/LIghtJUNction/zuse#readme) · [SSMCP command lifecycle](code-mode.md#exec)
 
-`browser.launch` now defaults to a headless owned browser. Explicit
-`headless: false` is available for an intentional headed session, including an
-owned private desktop. Owned Chromium launches enable `CDPScreenshotNewSurface`,
-the same capture path used by Playwright, so background capture does not wait
-for the target tab to be presented in the operator's window.
+## Select the intended desktop or browser
 
-Already-running external browsers retain their original launch configuration.
-In the Linux/Xvfb acceptance environment, default-launched Chromium
-157.0.8103.38 and Chrome 157.0.8103.78 accepted trusted background input but their
-background surface screenshots timed out. Connecting Playwright to the same
-external process did not change that launch-time setting. ssmcp reports the
-capture failure and does not activate a tab to conceal it. Use an owned browser
-or private desktop when that external configuration cannot provide an image.
+For an existing browser, identify the actual browser, endpoint and target supported by the installed Zuse version. Reuse the user's selected session only when that interface is available and authorized. Do not replace it with a fresh profile or another browser family. Zuse's current documentation distinguishes launching an isolated browser, connecting to an explicit debugging endpoint and selecting an existing page. [Existing-session workflow](browser-existing-session.md)
 
-Ordered fill/click/key/scroll/wait sequences use `browser.act`; selector and text
-conditions use `browser.wait`. See [batch actions and condition waits](background-control.md)
-for deadlines, fresh snapshots and partial-failure handling. Existing
-`browser.wait_for` keeps its text present/absent behavior.
+Desktop permissions, display selection and application isolation belong to the selected CLI and its operating-system environment. SSMCP no longer starts an internal private desktop, routes input to a built-in host backend, or provides a Computer Use toggle. Generic exec retains the client's OS permissions; it is not an OS-wide desktop permission switch.
 
-## Native desktop input without using the host pointer
+## Retired SSMCP entry points
 
-Linux clients can allocate one private Xvfb desktop on demand. Its X server
-uses a private authorization cookie, a private runtime directory, and no TCP
-listener. Input helpers and their cancellation cleanup inherit that display
-explicitly; process-global display variables are never changed.
+The old `ssmcp.browser.*`, `ssmcp.omarchy.*`, desktop action methods under `ssmcp.computer.*`, and `browser` / `cua` / `omarchy` JavaScript facades are removed. The four retained computer methods are `version`, `download`, `install` and `uninstall`. There is no `ssmcp setup browser`, Playwright-specific bridge or internal worker fallback.
 
-```javascript
-const api = native(clientId);
-await api.ssmcp.computer.desktop_start({width: 1280, height: 800});
-await api.ssmcp.computer.app_launch({command: ["xmessage", "Private desktop"]});
-const windows = await api.ssmcp.computer.windows({});
-image(await api.ssmcp.computer.screenshot({}));
-// Use observed window IDs and screenshot coordinates for subsequent input.
-await api.ssmcp.computer.desktop_stop({});
-```
-
-Once started, ordinary `computer.*` operations use the private display by
-default. `desktop: "isolated"` makes this choice explicit. If the display
-exits or is stopped, input fails with a clear diagnostic instead of falling
-back to the host. A private session is never allocated by capability listing,
-setup checks or idle client startup.
-
-Host input is still supported when intended:
-
-```javascript
-await api.ssmcp.computer.click({desktop: "host", x: 200, y: 100});
-```
-
-A read such as `computer.status` or `computer.screenshot` can inspect the
-host when no private display exists. Results identify their surface and
-coordinate space. Existing desktop workflows should explicitly select host
-input when that is their intention.
-
-`app_launch` uses argv, a fresh D-Bus session, private XDG directories and
-removes known host application IPC environment variables. Chromium, Firefox and
-VS Code family launchers receive private profiles. Other single-instance apps
-must support the supplied display/session environment or provide their own
-instance option. Applications already open on the host are not moved into the
-private desktop.
-
-The private desktop requires `Xvfb`, `xdotool`, `magick`, `xprop` and
-`dbus-run-session` plus `dbus-daemon`. Setup reports each dependency separately. macOS and
-Windows keep their native host adapters and browser background controls; the
-Xvfb private desktop is Linux-specific.
-
-Stopping or disconnecting terminates only the owned application trees and
-private X server. The cancellation reaper retains authorization and application
-state until those processes exit, then removes the temporary directory.
-Owned X11 socket cleanup checks the original filesystem identity before
-removal, so it does not remove a replacement server's socket.
+Opening an OAuth authorization page or a link explicitly requested by the local user remains supported. Generic external MCP forwarding also preserves discovered schemas and approvals; it does not recreate SSMCP's retired action APIs.
 
 ## Client-owned capabilities and resources
 
@@ -193,21 +63,17 @@ New client resource endpoints are:
 | `ssmcp://clients/{id}/resource?uri=...` | Generic client resource read |
 
 Unknown future resource types and extension fields pass through the generic
-route. Authorization is checked again after remote I/O. Existing wire v4/v5
-and native `call()` remain supported. A new client can expose these
+route. Authorization is checked again after remote I/O. Use each client's advertised wire version and actual schemas;
+native `call()` remains the common forwarding path. A new client can expose these
 capabilities through `call()` on an older relay; the new dynamic JavaScript
 conveniences and generic relay resource URI entry points require the updated
 relay.
 
-## Sources and validation
+## Source references
 
-- [Playwright extension background behavior](https://github.com/microsoft/playwright/blob/main/packages/extension/README.md#working-in-the-background)
-- [Playwright MCP releases](https://github.com/microsoft/playwright-mcp/releases)
-- [Playwright Chromium launch configuration](https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/chromium/chromiumSwitches.ts)
-- [Chromium background screenshot feature](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/common/features.cc)
-- [ChatGPT browser extension documentation](https://learn.chatgpt.com/docs/chrome-extension.md)
-- [Validation and environment scope](validation-cua-client-capabilities.md)
+- [Lifecycle manager and tool schema](../src/computer.rs)
+- [Local CLI parser](../src/client/computer_control.rs)
+- [Generic exec API](code-mode.md#exec)
+- [Zuse CLI documentation](https://github.com/LIghtJUNction/zuse#readme)
 
-This change does not assert complete ChatGPT CUA feature parity or an unmeasured
-memory reduction. The acceptance tests cover the implemented input isolation,
-focus preservation, setup semantics, resource freshness and compatibility paths.
+Older [CUA capability validation](validation-cua-client-capabilities.md) describes the former embedded implementation and its dated environment.
