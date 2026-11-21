@@ -16,6 +16,7 @@ import shutil
 import signal
 import socket
 import struct
+import sys
 import threading
 import subprocess
 import tempfile
@@ -211,7 +212,7 @@ class Fixture:
                    status == 200 and body["identity"]["subject"] == "123"
                    and body["identity"]["username"] == "self-fixture")
 
-    def api(self, method, path, subject=None, body=None):
+    def api(self, method, path, subject=None, body=None, *, capture_invalid_json=False):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
         headers = {"Content-Type": "application/json"}
         if subject is not None:
@@ -220,7 +221,13 @@ class Fixture:
             connection.request(method, path, body=None if body is None else json.dumps(body), headers=headers)
             response = connection.getresponse()
             payload = response.read()
-            return response.status, json.loads(payload) if payload else None
+            try:
+                value = json.loads(payload) if payload else None
+            except (ValueError, UnicodeError):
+                if not capture_invalid_json:
+                    raise
+                value = self.redact(payload.decode("utf-8", errors="replace"))[:2500]
+            return response.status, value
         finally:
             connection.close()
 
@@ -371,7 +378,9 @@ class Fixture:
         status, result = self.call("123", client_id, directory, "compat-owner-ok")
         self.check("owner_executes_real_native_tool", status == 200 and "compat-owner-ok" in json.dumps(result), status=status, response=self.redact(json.dumps(result))[:2500])
         status, result = self.api("GET", "/api/client/sessions", "124")
-        self.check("another_subject_cannot_list_connection", status == 200 and result.get("clients") == [])
+        self.check("another_subject_cannot_list_connection", status == 200 and result.get("clients") == [],
+                   status=status, response=self.redact(json.dumps(result))[:2500],
+                   target_client_id=self.redact(str(client_id))[:128])
         status, _ = self.call("124", client_id, directory, "MUST-NOT-RUN")
         self.check("another_subject_cannot_call_known_client_id", status == 404)
         status, _ = self.api("POST", "/api/client/logout", "123", {})
@@ -417,31 +426,41 @@ class Fixture:
         # The real daemon requires a public HTTPS origin. A raw local wire peer
         # exercises that exact public namespace without test-only TLS bypasses.
         peer = WirePeer(self.port)
-        allow = ["self-fixture@ssmcp-compat.invalid", "other-fixture@ssmcp-compat.invalid"]
-        peer.send({"type": "hello", "version": 7, "mode": "shell", "metadata": {
-            "name": "anonymous-multi-wire", "cwd": str(self.root), "hostname": "fixture",
-            "allow": allow,
-        }})
-        info = peer.frame()
-        self.check("new_anonymous_multi_wire_policy_is_unchanged",
-                   info.get("type") == "ready" and info.get("login_code") == ""
-                   and info.get("login_expires_in") == 0
-                   and set(info.get("capabilities", [])) ==
-                   {"session_access_v1", "control_attribution_v1"})
-        errors = []
-        def serve():
-            try:
-                while True:
-                    frame = peer.frame()
-                    if frame.get("type") == "call":
-                        peer.send({"type": "reply", "id": frame["id"], "result": {
-                            "Ok": {"content": [{"type": "text", "text": "authorized-wire-reply"}]},
-                        }})
-            except (OSError, RuntimeError) as error:
-                errors.append(str(error))
-        worker = threading.Thread(target=serve, daemon=True)
-        worker.start()
+        worker = None
+
+        def join_worker():
+            if worker is not None:
+                worker.join(timeout=2)
+                if worker.is_alive():
+                    raise RuntimeError("anonymous peer worker did not exit after socket close")
+
         try:
+            allow = ["self-fixture@ssmcp-compat.invalid", "other-fixture@ssmcp-compat.invalid"]
+            peer.send({"type": "hello", "version": 7, "mode": "shell", "metadata": {
+                "name": "anonymous-multi-wire", "cwd": str(self.root), "hostname": "fixture",
+                "allow": allow,
+            }})
+            info = peer.frame()
+            self.check("new_anonymous_multi_wire_policy_is_unchanged",
+                       info.get("type") == "ready" and info.get("login_code") == ""
+                       and info.get("login_expires_in") == 0
+                       and set(info.get("capabilities", [])) ==
+                       {"session_access_v1", "control_attribution_v1"},
+                       anonymous_peer_client_id=self.redact(str(info.get("client_id")))[:128])
+
+            def serve():
+                try:
+                    while True:
+                        frame = peer.frame()
+                        if frame.get("type") == "call":
+                            peer.send({"type": "reply", "id": frame["id"], "result": {
+                                "Ok": {"content": [{"type": "text", "text": "authorized-wire-reply"}]},
+                            }})
+                except (OSError, RuntimeError):
+                    return
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
             for subject in ("123", "124"):
                 status, result = self.api("POST", "/api/client/call", subject, {
                     "client_id": info["client_id"], "name": "fixture.echo", "arguments": {},
@@ -453,8 +472,31 @@ class Fixture:
             })
             self.check("unlisted_subject_wire_call_is_denied", status == 404)
         finally:
-            peer.close()
-            worker.join(timeout=2)
+            self.cleanup("anonymous_peer_cleanup", peer.close, join_worker)
+
+        # Local socket close is distinct from daemon retirement. The next
+        # scenario requires this subject's entire session list to be empty.
+        client_id = info["client_id"]
+        details = {"anonymous_peer_client_id": self.redact(str(client_id))[:128]}
+
+        def retired():
+            status, result = self.api("GET", "/api/client/sessions", "124", capture_invalid_json=True)
+            details.update(status=status, response=self.redact(json.dumps(result))[:2500])
+            clients = result.get("clients") if isinstance(result, dict) else None
+            if (status != 200 or not isinstance(clients, list)
+                    or any(not isinstance(entry, dict)
+                           or not isinstance(entry.get("id"), str) or not entry["id"]
+                           for entry in clients)):
+                raise ValueError("invalid session list while waiting for anonymous peer retirement")
+            return all(entry["id"] != client_id for entry in clients)
+
+        try:
+            wait_for(retired, "anonymous peer retirement before self-only scenario")
+        except Exception as error:
+            details["error"] = self.redact(str(error))[:512]
+            self.checks.append({"check": self.label + ":anonymous_peer_retirement", "passed": False, **details})
+            error.add_note(json.dumps(details))
+            raise
 
     @staticmethod
     def stop(process):
@@ -466,11 +508,27 @@ class Fixture:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
 
+    def cleanup(self, name, *steps):
+        primary = sys.exception()
+        errors = []
+        for step in steps:
+            try:
+                step()
+            except Exception as error:
+                errors.append(self.redact(f"{type(error).__name__}: {error}")[:512])
+        if errors:
+            evidence = {"check": self.label + ":" + name, "passed": False,
+                        "cleanup_error_count": len(errors), "cleanup_errors": errors[:4]}
+            self.checks.append(evidence)
+            if primary is not None:
+                primary.add_note(json.dumps(evidence))
+            else:
+                raise RuntimeError(json.dumps(evidence))
+
     def close(self):
-        for process in reversed(self.processes):
-            self.stop(process)
-        for log in self.logs:
-            log.close()
+        self.cleanup("fixture_cleanup",
+                     *(lambda process=process: self.stop(process) for process in reversed(self.processes)),
+                     *(log.close for log in self.logs))
 
 
 def main():
@@ -527,8 +585,10 @@ def main():
                         fixture.default_self()
                     fixture.self_only()
                 finally:
-                    fixture.close()
-                    report["checks"].extend(fixture.checks)
+                    try:
+                        fixture.close()
+                    finally:
+                        report["checks"].extend(fixture.checks)
         report["passed"] = True
     except Exception as error:
         report["error"] = str(error)
