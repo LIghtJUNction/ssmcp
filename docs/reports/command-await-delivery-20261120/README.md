@@ -1,8 +1,16 @@
-# SSMCP 0.10.21 迭代记录
+# SSMCP 迭代记录
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-20 23:41 UTC）
+## 当前状态（截至 2026-11-21 00:13 UTC）
+
+固定候选 [`fc06728a`](https://github.com/LIghtJUNction/ssmcp/commit/fc06728a36d0b4d2920e1e2bc29885721ced5780) 已完成对 781 完整基线的粘贴 A/B：六场景和 Ctrl-V 两侧均通过，候选两步骤退出 0，源码、产物及载荷身份检查通过，输入前后不变。两轮完整冻结 cohort 的 18 个顶层字段逐值相等；产品源码和二进制分别绑定各自构建回执，不要求相同。
+
+本轮每场景各侧 `n=1`，仅作描述性比较。普通输入 16 KiB 的 ready 观测为 2439.160607 → 27.853111 ms；其余六项见文末配对表。结果只属于固定 fc 候选，最终整合源的性能、验收和发布仍待验证。新增七个 Rust 测试仅完成静态审阅，fc 的 CI 结果尚未确认。
+
+[本次候选记录](candidate-ab-0010.json)链接此前固定检查点；下方全部历史和失败尝试按原时间保留。当前正进行与公开 main 的源码整合，版本尚未选定，本次不是发布完成记录。
+
+## 历史状态（截至 2026-11-20 23:41 UTC）
 
 固定 781、同一 `d2204375` build-only 回执的第四轮粘贴基线已通过：六场景和 Ctrl-V 步骤均退出 0，输入前后不变。每场景只有一次描述性观测；前三轮失败保留原归属。当前冻结工具为 R3，R2 作为历史保存。
 
@@ -534,3 +542,42 @@ R2 的完整历史 tuple 仍在 JSON；R3 为当前冻结组合。同源完整 q
 主审已读 v0.10.21 tag 对象 `30cd4949` 指向 [`147dae30`](https://github.com/LIghtJUNction/ssmcp/commit/147dae309cf37af578c0ac1d3aff2cb6008b0f48)，v0.10.22 的 create 事件指向 [`57d3f367`](https://github.com/LIghtJUNction/ssmcp/commit/57d3f36748f22996d3b161d7a0adf4757e0e4a4c)。另一条 [Release 44836598784](https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784) 通过 main 的 workflow_dispatch 运行；23:41 实读其 15 个已创建 job，其中 3 个检查失败、2 个仍运行，尚未取得完整发布结果。最新已发布版本仍为 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)。
 
 [PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 的 781 仍为 draft；[781 与 57d 的比较](https://github.com/LIghtJUNction/ssmcp/compare/781b87df1d364137b6885f17f631a3e9e991bd58...57d3f36748f22996d3b161d7a0adf4757e0e4a4c)为 diverged（ahead 24、behind 22）。这些标签和另一候选的工作流不构成本轮验收或发布完成证明，最终版本及源码合并关系仍由原执行负责人协调。
+
+## 2026-11-21 00:13 检查点：固定 fc 候选完成粘贴 A/B
+
+### 源码与证据范围
+
+候选 [`fc06728a`](https://github.com/LIghtJUNction/ssmcp/commit/fc06728a36d0b4d2920e1e2bc29885721ced5780) 的 parent 为 781，tree 为 `088fe1cde36fe63a33df1f9b7cfb619ae5f8ee35`。产品改动是批量处理字面量输入、降低补全刷新频率，继续使用已有的异步保存路径。新增[七个 Rust 测试](https://github.com/LIghtJUNction/ssmcp/blob/fc06728a36d0b4d2920e1e2bc29885721ced5780/src/client/terminal/conversation/tests/paste_batch.rs)当前只有静态覆盖审查，没有执行通过结论。
+
+候选构建退出 0，两输出流结束，五份产物保留完成、前后 guard 通过；该回执为 build_only，构建阶段产品测试数为 0。随后冻结 PTY 执行也退出 0：六场景 passed、80 条检查、6 帧；Ctrl-V passed、31 条检查、1 帧。80/31 包含账户夹具，不合并为单元测试数量。
+
+主审实际比对两份执行回执，完整冻结 cohort 的 18 个顶层字段相等，差异键为空，包含九个 helper 及其他配置。候选记录的基线六场景 SHA256 为 `7b7c9081616aca563d74efe883cd716e6be8da594e2671e283c904a7b096c64c`，对应此前完整第四轮；源码、二进制与载荷身份分别核对，两侧各自前后不变。全部来源绑定与五份候选产物身份见[小型事实记录](candidate-ab-0010.json)，历史见[固定原报告](https://github.com/LIghtJUNction/ssmcp/blob/a87381bf9861150a994d2b75c1e31a40ba96bfa0/docs/reports/command-await-delivery-20261120/README.md)。
+
+### 本轮配对观测
+
+下表单位为毫秒，基线为 781，候选为 fc；每场景各侧一次，均通过相同预期与载荷检查。“耗时比”是本次基线 ready_ms 除以候选 ready_ms，不是总体性能倍数。
+
+| 场景 | 基线 ready_ms | 候选 ready_ms | 本轮耗时比 |
+| --- | ---: | ---: | ---: |
+| 多行 2,738 B | 67.904495 | 14.919875 | 4.551 |
+| 多行 64 KiB | 34.839222 | 28.644784 | 1.216 |
+| 多行 4 MiB | 370.222459 | 55.933765 | 6.619 |
+| 多行 4 MiB + 1（拒绝） | 337.795869 | 44.152384 | 7.651 |
+| 普通输入 16 KiB | 2439.160607 | 27.853111 | 87.572 |
+| busy 多行 2,738 B | 43.186361 | 29.151625 | 1.481 |
+| Ctrl-V 2,738 B | 50.066292 | 46.399351 | 1.079 |
+
+ready 包含 VT 观察与解码成本。4 MiB + 1 的数值是拒绝反馈；Ctrl-V 使用 fake-private wl-paste 和真实单字节 `0x16`，不是 OS 剪贴板 benchmark。没有发送 Enter 或测量 agent 递送。169.0387 秒的 quiet-lock 等待属于执行排队，不是粘贴延迟，也未并入上述数值。这里不作均值、统计显著性或最终整合源性能结论。
+
+### 原回执与报告身份
+
+| 原件 | 字节数 | SHA256 |
+| --- | ---: | --- |
+| 候选构建 | 79,517 | `8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7` |
+| 候选执行 | 30,277 | `13a685aa21e523c1d42e4c62b4bd61b6fb065fb0d8a5500a819e34218cb1e1bb` |
+| 候选六场景 | 21,212 | `4ef95978b201f9a3a8d3c42cd4ded2282ff4e7c802a269242027a32691cc6b49` |
+| 候选 Ctrl-V | 13,247 | `af2b6f5a996ae60fe2a0bb4bf632e5c1bb39e015111a205deb3b8bf68d88be7f` |
+
+fc 的 CI 状态尚未确认，不能沿用 781 的三平台通过结论。当前源码正与[公开 main f208](https://github.com/LIghtJUNction/ssmcp/commit/f208a03b5403332214f3acf6ee0b176752b5d2c9)整合；最终整合、定向验收（既有 18 项清单待按最终源码确认）、P1 和正式发布仍未完成，版本未选定，完成状态保持 false。
+
+本截止点另行读取的[其他分支 v0.10.22 发布运行](https://github.com/LIghtJUNction/ssmcp/actions/runs/44836598784)已结束为 failure，更新时间为 2026-11-20 23:50:46 UTC；[GitHub 最新正式版](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)仍为 v0.10.20。这些观察单独记录，不改变本组候选的验收或发布状态。

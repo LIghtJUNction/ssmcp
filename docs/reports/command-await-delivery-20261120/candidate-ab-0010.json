@@ -1,0 +1,403 @@
+{
+  "schema": "ssmcp.candidate-paste-ab.v1",
+  "document_status": "working_checkpoint",
+  "cutoff_utc": "2026-11-21T00:13:14Z",
+  "previous_checkpoint": {
+    "commit": "a87381bf9861150a994d2b75c1e31a40ba96bfa0",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/a87381bf9861150a994d2b75c1e31a40ba96bfa0/docs/reports/command-await-delivery-20261120/paste-attempts-2333.json",
+    "prior_facts_referenced_not_duplicated": true
+  },
+  "base_report": {
+    "bytes": 84213,
+    "sha256": "8ffc8c9ab374cdf6c04196dd449316bbc11a491994cc8d3ca953b9e3629f644b",
+    "url": "https://github.com/LIghtJUNction/ssmcp/blob/a87381bf9861150a994d2b75c1e31a40ba96bfa0/docs/reports/command-await-delivery-20261120/README.md",
+    "historical_content_preserved_except_current_heading": true
+  },
+  "source": {
+    "baseline_commit": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "candidate_commit": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "candidate_tree": "088fe1cde36fe63a33df1f9b7cfb619ae5f8ee35",
+    "candidate_parent": "781b87df1d364137b6885f17f631a3e9e991bd58",
+    "candidate_url": "https://github.com/LIghtJUNction/ssmcp/commit/fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "scope": "fixed candidate only; no inference to the later integrated source"
+  },
+  "candidate_build": {
+    "receipt": {
+      "bytes": 79517,
+      "sha256": "8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7"
+    },
+    "status": "build_completed",
+    "scope": "build_only",
+    "process": {
+      "exit_code": 0,
+      "running": false,
+      "stdout_eof": true,
+      "stderr_eof": true
+    },
+    "guards_verified_before_and_after": true,
+    "guard_evidence_origin": "primary reviewer actual receipt verification; selected checkpoint summary is not a separate binary rehash",
+    "steps_all_completed": true,
+    "build_steps": [
+      {
+        "name": "build-library-fixture",
+        "status": "completed",
+        "exit_code": 0
+      },
+      {
+        "name": "build-release-bins",
+        "status": "completed",
+        "exit_code": 0
+      },
+      {
+        "name": "build-vt-snapshot",
+        "status": "completed",
+        "exit_code": 0
+      }
+    ],
+    "artifacts": [
+      {
+        "name": "library-test-fixture",
+        "bytes": 165564392,
+        "sha256": "6ab9368340abb1ec715b3841ddf814aa2fd2bd9e0f371d622fc841e23806b7f3",
+        "fresh": false,
+        "link_public_copy_identity_equal": true
+      },
+      {
+        "name": "ssmcp",
+        "bytes": 15754464,
+        "sha256": "f5690dc624d2f03dd56269f07aa39c49b89e90db226316e75b178096a7dee771",
+        "fresh": false,
+        "link_public_copy_identity_equal": true
+      },
+      {
+        "name": "ssmcp-frontend",
+        "bytes": 1386576,
+        "sha256": "229e65b1f52098b7292d9e387e9442d24c9411ab2e34a55fcbe4a6171e0398b5",
+        "fresh": false,
+        "link_public_copy_identity_equal": true
+      },
+      {
+        "name": "ssmcpd",
+        "bytes": 8252208,
+        "sha256": "909133cae9bfc0d9bcefdf4af4740a9bc3c50a1097025a3178bc8e04daa62e86",
+        "fresh": false,
+        "link_public_copy_identity_equal": true
+      },
+      {
+        "name": "vt_snapshot",
+        "bytes": 440984,
+        "sha256": "efdbeb3f200fcf4404b2612d836433047ecc90eb0744f345fc971ee7441db97f",
+        "fresh": false,
+        "link_public_copy_identity_equal": true
+      }
+    ],
+    "source_manifest": {
+      "bytes": 456274,
+      "sha256": "ee20debe4987bd6b14846edded00cd25b26dec1817b8ba5ba13774851efaa1fb"
+    },
+    "dependency_manifest": {
+      "bytes": 4246542,
+      "sha256": "29db07b51aa093d1f8376af7c80c1b478610aedf12b2213d5fbde1fc03f9e2bc"
+    },
+    "git_heads_binding_sha256": "67bb70f192abe64d162e96ea743d3caa6ae157be2cfb65b9e266cf40c662f705",
+    "product_tests_executed_during_build": 0,
+    "package_validation_gates_executed": 0,
+    "benchmark_executed_during_build": false,
+    "release_gate_executed": false,
+    "separate_independent_binary_rehash_claimed": false
+  },
+  "candidate_execution": {
+    "receipt": {
+      "bytes": 30277,
+      "sha256": "13a685aa21e523c1d42e4c62b4bd61b6fb065fb0d8a5500a819e34218cb1e1bb"
+    },
+    "process": {
+      "exit_code": 0,
+      "running": false,
+      "stdout_eof": true,
+      "stderr_eof": true
+    },
+    "status": "passed",
+    "source_commit": "fc06728a36d0b4d2920e1e2bc29885721ced5780",
+    "build_receipt_sha256": "8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7",
+    "inputs_unchanged": true,
+    "steps": [
+      {
+        "name": "six-cases",
+        "status": "completed",
+        "exit_code": 0
+      },
+      {
+        "name": "ctrlv",
+        "status": "completed",
+        "exit_code": 0
+      }
+    ],
+    "six_cases": {
+      "report": {
+        "bytes": 21212,
+        "sha256": "4ef95978b201f9a3a8d3c42cd4ded2282ff4e7c802a269242027a32691cc6b49"
+      },
+      "status": "passed",
+      "checks": 80,
+      "frames": 6,
+      "inputs_unchanged": true,
+      "source_before_after_equal": true,
+      "binaries_before_after_equal": true,
+      "build_receipt_before_after_equal": true,
+      "samples": [
+        {
+          "name": "multiline-2738",
+          "status": "passed",
+          "payload_bytes": 2738,
+          "payload_sha256": "20bcff3825dcba6114a09a7f0c38f6e8b6a3dd85a02e10be940e2b8418251f73",
+          "bracketed": true,
+          "expected": "reference",
+          "ready_ms": 14.919875,
+          "pty_write_ms": 0.009907
+        },
+        {
+          "name": "multiline-64k",
+          "status": "passed",
+          "payload_bytes": 65536,
+          "payload_sha256": "dfb6033a34e449a083601ca74ba79ee74809697a304fe3772f60a610900085c0",
+          "bracketed": true,
+          "expected": "reference",
+          "ready_ms": 28.644784,
+          "pty_write_ms": 0.291445
+        },
+        {
+          "name": "multiline-4m-exact",
+          "status": "passed",
+          "payload_bytes": 4194304,
+          "payload_sha256": "ec889ada3f281adf269b46a7f5d2a1b7e65b710f6c7816e91c282195eb6f134e",
+          "bracketed": true,
+          "expected": "reference",
+          "ready_ms": 55.933765,
+          "pty_write_ms": 25.966284
+        },
+        {
+          "name": "multiline-4m-plus-one",
+          "status": "passed",
+          "payload_bytes": 4194305,
+          "payload_sha256": "68cb0be0df40fdf711a5ea3844f15f911893ba1d55687f3c4548432e45b2043a",
+          "bracketed": true,
+          "expected": "rejected",
+          "ready_ms": 44.152384,
+          "pty_write_ms": 22.376305
+        },
+        {
+          "name": "ordinary-16k",
+          "status": "passed",
+          "payload_bytes": 16384,
+          "payload_sha256": "7b223a5949adf2bb2f7b701386cba30ed24701a1fc857b22ff4a8af70d2a6dbb",
+          "bracketed": false,
+          "expected": "inline",
+          "ready_ms": 27.853111,
+          "pty_write_ms": 0.019377
+        },
+        {
+          "name": "busy-multiline-2738",
+          "status": "passed",
+          "payload_bytes": 2738,
+          "payload_sha256": "20bcff3825dcba6114a09a7f0c38f6e8b6a3dd85a02e10be940e2b8418251f73",
+          "bracketed": true,
+          "expected": "reference",
+          "ready_ms": 29.151625,
+          "pty_write_ms": 0.008528,
+          "busy_output_ticks_during_input": 14,
+          "busy_running_before": true,
+          "busy_running_after": true
+        }
+      ]
+    },
+    "ctrlv": {
+      "report": {
+        "bytes": 13247,
+        "sha256": "af2b6f5a996ae60fe2a0bb4bf632e5c1bb39e015111a205deb3b8bf68d88be7f"
+      },
+      "status": "passed",
+      "checks": 31,
+      "frames": 1,
+      "inputs_unchanged": true,
+      "identity_before_after_equal": true,
+      "build_receipt_sha256": "8e6154ba2bbb16bab14cfa8d4b0a693775c28656e3dc554ad1e5d5301108ddd7",
+      "sample": {
+        "name": "ctrl-v-multiline-2738",
+        "status": "passed",
+        "expected": "reference",
+        "trigger": "PTY Ctrl+V",
+        "trigger_hex": "16",
+        "clipboard_payload_bytes": 2738,
+        "clipboard_payload_sha256": "20bcff3825dcba6114a09a7f0c38f6e8b6a3dd85a02e10be940e2b8418251f73",
+        "wire_bytes": 1,
+        "accepted_bytes": 1,
+        "ready_ms": 46.399351
+      },
+      "provider": "fake private wl-paste; not OS clipboard benchmark"
+    },
+    "checks_include_private_account_fixture_and_are_not_unit_test_counts": true,
+    "reported_quiet_lock_wait_seconds": 169.0387,
+    "quiet_lock_wait_is_paste_latency": false
+  },
+  "frozen_cohort": {
+    "baseline_execution_receipt_sha256": "aefc6b8a20c8bec808057acae758c60fb44630c5912cb1851cced2a7dc2eef63",
+    "candidate_execution_receipt_sha256": "13a685aa21e523c1d42e4c62b4bd61b6fb065fb0d8a5500a819e34218cb1e1bb",
+    "cohort_exact_equal": true,
+    "top_level_field_count": 18,
+    "cohort_differing_keys": [],
+    "comparison_evidence_origin": "primary reviewer actual read-only comparison of both complete receipt cohort objects; private paths and environment values omitted",
+    "helper_count": 9,
+    "helper_sha256": {
+      "e2e.py": "138eebca6b1fdd546c66096ae175fdbba257cdef174a1b4396720545f629f2fe",
+      "e2e_account_gateway.py": "54d94dd8768c4dbbf32ccf277061935163f98fccf0bed8946e27aa8d6bfd697a",
+      "e2e_account_relay.py": "66913456fee0e72606a788ef43386464abf35eff7abff4faf5d6b4239031a919",
+      "e2e_client_ui.py": "736cc0accfabb35d13dd72b7604c7f06495b9adb8657064345e66b40d9ba87db",
+      "e2e_composer.py": "e50c0b66eca08e382a005f4960bc924ec85d32f00950aa8668060862086f40e1",
+      "e2e_dashboard.py": "5ec2c5a6a15d2650e0ed3540e9724b5a31d87cb17023597184b3af6f07b585c6",
+      "e2e_input_history.py": "b0558d1ff4d2984b4bafd95162c88731cade0f6960e0b7593c236fcde5a1b4e2",
+      "e2e_interactions.py": "b4b3671f51c57e458eb00284e47864fe4846fa379ac3db27d55d4259006f36f2",
+      "e2e_paste_performance.py": "ccdcc2fed932114125bf832be8370bc17ecfd082a18b95822dd2c3153190784e"
+    },
+    "ctrlv_sha256": "d840813f8135dc5feece1f03e8daff1011726f1144f55ca0f92be271473cbe40",
+    "case_timeout_seconds": 180,
+    "candidate_and_baseline_product_binaries_claimed_identical": false,
+    "source_and_product_artifacts_bind_to_their_respective_build_receipts": true
+  },
+  "baseline_pairing": {
+    "baseline_six_report_sha256": "7b7c9081616aca563d74efe883cd716e6be8da594e2671e283c904a7b096c64c",
+    "baseline_six_report_is_complete_fourth_attempt": true,
+    "six_fixture_hash_maps_equal": true,
+    "all_payload_and_expected_identities_match": true,
+    "both_sides_all_passed": true,
+    "rows": [
+      {
+        "name": "multiline-2738",
+        "baseline_ms": 67.904495,
+        "candidate_ms": 14.919875,
+        "ratio": 4.551277741938186,
+        "latency_reduction_percent": 78.02814821021789,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "multiline-64k",
+        "baseline_ms": 34.839222,
+        "candidate_ms": 28.644784,
+        "ratio": 1.2162501207898793,
+        "latency_reduction_percent": 17.78006983049162,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "multiline-4m-exact",
+        "baseline_ms": 370.222459,
+        "candidate_ms": 55.933765,
+        "ratio": 6.618944013513126,
+        "latency_reduction_percent": 84.89184984857982,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "multiline-4m-plus-one",
+        "baseline_ms": 337.795869,
+        "candidate_ms": 44.152384,
+        "ratio": 7.650682441065923,
+        "latency_reduction_percent": 86.92927058856365,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "ordinary-16k",
+        "baseline_ms": 2439.160607,
+        "candidate_ms": 27.853111,
+        "ratio": 87.57228616221721,
+        "latency_reduction_percent": 98.85808622359406,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "busy-multiline-2738",
+        "baseline_ms": 43.186361,
+        "candidate_ms": 29.151625,
+        "ratio": 1.4814392336619313,
+        "latency_reduction_percent": 32.49807502882681,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      },
+      {
+        "name": "ctrl-v-multiline-2738",
+        "baseline_ms": 50.066292,
+        "candidate_ms": 46.399351,
+        "ratio": 1.0790300062602167,
+        "latency_reduction_percent": 7.32417132069616,
+        "identities_match": true,
+        "both_passed": true,
+        "baseline_observations": 1,
+        "candidate_observations": 1,
+        "comparison_type": "descriptive single observation per side"
+      }
+    ]
+  },
+  "interpretation": {
+    "observations_per_scene_per_side": 1,
+    "statistical_or_mean_claim": false,
+    "ready_includes_vt_observation_and_decode": true,
+    "quiet_lock_wait_excluded_from_paste_timings": true,
+    "over_limit_case_measures_rejection_feedback": true,
+    "ctrlv_is_fake_provider_plus_single_real_pty_0x16": true,
+    "os_clipboard_benchmark_claimed": false,
+    "enter_or_agent_delivery_measured": false,
+    "final_integrated_source_performance_claimed": false,
+    "product_change": "batch literal input and reduce completion refresh frequency; asynchronous saving already existed"
+  },
+  "new_rust_tests": {
+    "count": 7,
+    "source_url": "https://github.com/LIghtJUNction/ssmcp/blob/fc06728a36d0b4d2920e1e2bc29885721ced5780/src/client/terminal/conversation/tests/paste_batch.rs",
+    "review_scope": "static source review only",
+    "execution_pass_claimed": false
+  },
+  "remaining_status": {
+    "fixed_candidate_paste_ab_passed": true,
+    "candidate_ci_confirmed": false,
+    "integrated_source_validation_complete": false,
+    "runtime18_complete": false,
+    "final_p1_passed": false,
+    "release_version_selected": false,
+    "formal_release_verified": false,
+    "finish_approval": false
+  },
+  "integration_status": {
+    "stage": "source-only integration in progress",
+    "public_main_commit": "f208a03b5403332214f3acf6ee0b176752b5d2c9",
+    "public_main_url": "https://github.com/LIghtJUNction/ssmcp/commit/f208a03b5403332214f3acf6ee0b176752b5d2c9",
+    "results_from_fc_not_relabelled_as_integrated_source": true
+  },
+  "evidence_observed_through_utc": "2026-11-21T00:13:14Z",
+  "publication_observation": {
+    "latest_published_release": "v0.10.20",
+    "other_v22_run_id": 44836598784,
+    "other_v22_run_status": "completed",
+    "other_v22_run_conclusion": "failure",
+    "other_v22_run_updated_utc": "2026-11-20T23:50:46Z",
+    "does_not_establish_candidate_release": true
+  }
+}
