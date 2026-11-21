@@ -1,12 +1,70 @@
-# SSMCP 0.10.25：E14 已合并，Gate17 在 Windows 检查处停止
+# SSMCP 0.10.25：平台修复已合并，完整检查与一次性恢复待实测
 
-**记录截止：2026-11-21 10:53:44 UTC。** 本轮改动已通过 [PR #168](https://github.com/LIghtJUNction/ssmcp/pull/168) 正常合并，实际主分支提交为 **`401581267005e64f1ccf99e1590df285a9d7c158`**，目录树为 **`be0e7801b3455d406781cde880824fc937c1b8f4`**。第 17 轮完整检查已实际结束：原 35 个阶段中，**7 个通过、1 个失败、27 个未运行**。失败发生在 Windows GNU Clippy，原因是测试辅助函数 `resume_test_history` 未使用，被现有 `-D warnings` 规则判为错误。[Gate17 原结果与读取范围](gate-S401-r17-failure-public-facts.json)
+**记录截止：2026-11-21 11:15:57 UTC。** E15 的平台边界修复已通过 [PR #169](https://github.com/LIghtJUNction/ssmcp/pull/169) 正常合并。实际主分支提交为 **`b8d94f5e12788ed19d1b74eecdcc068ea9fc0078`**，tree 为 **`1391701c52db5066e7a25bbe3a32c1d5a82c47d5`**。报告组分别读取 main、固定合并提交与 PR：真实父提交为 S401 与作者 `bef89f57aea0167b830096d596a2cb39fd86f5cd`，合并树与已审阅作者树一致。[E15 源码及实际合并事实](source-E15-history-cfg-public-facts.json)
 
-已有明确的修复后运行证据：**2101 项 private 库测试和 6 项 host 测试通过**，原栈溢出用例、浏览器小栈回归以及两个新增 Num Lock 回归均在原日志中显示 `ok`。这些结果归属于 S401 及本次记录的库二进制；整套检查没有通过，后续运行、UI、多 UID、P1 和正式发布均未执行。
+PR merged_at 为 **11:12:59 UTC**，Git commit 时间为 **11:12:58 UTC**，按原字段分别记录。E15 只修改一个文件的一行平台条件，普通推送一次；格式和 Git 差异检查通过，作者阶段没有执行 Cargo 编译或测试。新主分支的 Gate18 正在准备，**本快照尚未读取实际绑定或启动记录**，不能把 Windows GNU 问题记成已经运行验证通过。
 
-E14 作者阶段完成两线源码合并及三项窄修，共形成 **4 个作者提交、2 次普通推送**。两次窄检查分别保存：首次锁忙，0 个检查命令启动；第二次通过 106 项发布策略测试及测试目标编译检查。第 16 轮的栈溢出失败也继续保留，不能由后来的成绩覆盖。[E14 源码、检查与合并事实](source-E14-merged-public-facts.json)
+前一源码 S401 的 Gate17 保持 **7 阶段通过、1 阶段失败、27 阶段未运行**：private 库 **2101** 项、host **6** 项，以及原栈溢出、小栈和两个 Num Lock 回归均有实际成功记录；Windows GNU Clippy 因辅助函数未使用退出 101。结果继续绑定 S401，未转移给新提交。[Gate17 原结果](gate-S401-r17-failure-public-facts.json)
 
-## 本轮改动及其作用
+按用户在终端中提出的一次性重启恢复要求，恢复入口、脚本、配置和检查点已经落地。报告组只读核对了文件身份、入口内容、脚本逻辑及未消费状态；它等待**下一次重启后的桌面登录**，没有实际打开窗口或确认连接的执行结果。[恢复配置事实与边界](reboot-once-prepared-public-facts.json)
+
+## E15：使定义与调用者的平台范围一致
+
+该辅助函数原先标为 `#[cfg(test)]`，意味着所有测试目标都会编入它；三处调用都位于 `device` 模块，而整个模块只在 Linux 编译。Windows 测试目标因此留下了没有调用者的定义，现有 `-D warnings` 规则将 dead_code 诊断作为错误。
+
+E15 只修改定义上的条件：
+
+```rust
+#[cfg(all(test, target_os = "linux"))]
+```
+
+函数体、Linux 调用、测试断言和警告规则均保留。生产构建原本就不编入这个测试 helper；改动的作用是让测试定义与真实调用范围一致。报告组通过固定 GitHub 提交的完整差异核对了一行替换，并读取旧定义、三处调用及模块的 Linux 条件；没有把这一静态核对当作跨平台运行成功。[固定补丁](https://github.com/LIghtJUNction/ssmcp/commit/bef89f57aea0167b830096d596a2cb39fd86f5cd)
+
+原作者沿原会话于 **11:00:18.362404 UTC** 启动，**11:02:38.850542 UTC** 退出 0，error=null，作者和 rustc 包装器身份均保持。作者先从 5a45be0 快进到已合并的 S401，两者树相同，再形成 bef89f5。工作树、索引和子模块干净，版本仍为 0.10.25。推送记录中的凭据存储 D-Bus 告警保留为非致命现象；普通 push 与随后远端引用读取实际退出 0，作者分支为 bef89f5。
+
+| 本阶段记录 | 实际范围 |
+|---|---|
+| `rustfmt --check --edition 2024 --config skip_children=true src/client/interface/history.rs` | 退出 0，空输出；只做格式检查 |
+| `git diff --check` | 退出 0，空输出 |
+| 106 条 post_commit_git_checks | 原回执里的 Git 静态检查记录，全部退出 0；**不是 106 项测试** |
+| Cargo、编译、产品、Rust 测试、Windows GNU 复查 | 原源码回执明确未执行 |
+| 新增测试定义 | 0 |
+
+Cargo manifest、锁文件、gitlink、十一项内部 Git 来源、六份发布配方，以及 host_control、zuse_backend、E2E 脚本均未改。H2-CI 的配方字节因此保持，新源码不要求重新生成一套仅换标签的核验器；未来运行仍须绑定真实的 S、P 和实际发行回执。
+
+SSMCP 连接在本阶段结束后曾短暂不可用，随后已识别同一项目的新连接并恢复协调。报告组没有重载客户端或重新启动作者模型；旧源码回执、Gate16 和 Gate17 失败记录均保留。下面继续列明 E14 已合并改动与 S401 的实际 Gate17 结果。
+
+## E15 原件身份
+
+| 原件 | 字节数 | SHA-256 | 报告组读取 |
+|---|---:|---|---|
+| launch-receipt.json | 1927 | `313efd4feb5a8b618a745d137bf1abb69bdfcac4954c0602ae8307deaeeaed51` | 全文 |
+| author-exit.json | 2087 | `6574e51b585bde69b991681d2939b3deb7f16912a0eb8b30b7d2550993950fa1` | 全文 |
+| source-changes-receipt.json | 42150 | `db2be1c75eced427b99b655bc6c7d920308d812ac68acf8c3fe1bf6fbfd3c79a` | 全文哈希；修订、变更、保留项、scope、push 与远端读取等选定字段，未逐条审计全部静态命令输出 |
+| author-own-fixes.full.diff | 685 | `9aa345f0dc47c047f6b59a51c42905a35b351066a708a3c473e6906278bda81c` | 身份由原回执记录；实际完整补丁另从 GitHub 固定 commit 读取 |
+
+## 一次性重启恢复：已配置，尚未执行
+
+原用户需求记录于 **11:00:48.686 UTC**，要求在重启后打开 ztty、进入项目目录并恢复 SSMCP 会话。源码协调者报告于 **11:10:48.341282 UTC** 完成配置及非启动型 `--check`，退出 0。报告组另行读取现有文件，没有再次运行脚本、模拟打开窗口或重启系统。
+
+入口位于 `~/.config/autostart/ssmcp-resume-once.desktop`，恢复资料位于 `~/.local/state/work-maintainer/ssmcp-resume-once-20261121/`。原入口调用 `restore.py --autostart`；脚本使用现有的 `ztty-launch` 和已安装的 `ssmcp`，进入 SSMCP 项目目录后启动终端中的连接。没有安装产品、重载客户端或自动启动模型。
+
+脚本比较当前 boot ID 与配置中的 armed boot ID：相同时跳过，只有下一次不同 boot 的图形登录才尝试启动；还要求项目目录、两个可执行文件和 DISPLAY 可用。非阻塞 flock 防止同时启动；已有 completed 标记则直接返回。读取时 armed boot 与当前 boot 相同，completed、恢复日志、终端启动日志和锁文件均不存在，因此本次入口仍未消费。
+
+**completed 标记只表示启动了子进程并观察它存活一秒。** 它并不证明窗口已呈现、SSMCP 已连接，或旧 UI 会话已经选中；记录中 `connection_confirmed=false`。脚本只在桌面入口内容仍与保存版本相同时删除该入口，随后等待终端子进程退出。
+
+当前准备的是恢复项目连接与同目录上下文。已安装 CLI 没有被配置为按原 UI history ID 自动选择旧会话；旧会话仍可通过 `/resume` 选择。保存的 `continuation.json` 是接续工作的检查点资料，脚本不会自动把它作为模型请求执行，也不会重放旧请求。当前连接已恢复，不能反推它由这份新脚本启动。
+
+| 恢复文件 | 字节数 | SHA-256 | 报告组读取范围 |
+|---|---:|---|---|
+| ssmcp-resume-once.desktop | 395 | `07c79a14595a9283b75277c723b5f30f40a688dea5171ea25ef92cb0dda0d6f9` | 全文；与 config 保存入口一致 |
+| restore.py | 3210 | `17338cd335ff5183fddc4b77399fab74c5f9cc2dd1f225d7cfbc920d80c64af9` | 全文静态读取，未执行 |
+| config.json | 849 | `deee5596a0f7c7b49957214d82e99d92ff7cdc1bff1329dc6fe8dc492dfda621` | 全文哈希及路径可用性、boot、入口一致性等选定字段 |
+| continuation.json | 3289 | `b788e2e1458df579ff7284bdbc7fb1968574a98167e358a1bc0b02bd052c7c19` | 全文哈希与顶层键，未逐项审阅全部检查点内容 |
+
+恢复目录权限为 0700，配置、检查点和桌面入口为 0600。这里记录的是实际准备状态，下一次重启与图形登录的执行结果仍须另行确认，不作为 Gate18 的附加启动条件。
+
+## E14 已合并改动及其作用
 
 | 改动 | 解决的问题 | 本轮证据与边界 |
 |---|---|---|
@@ -45,7 +103,7 @@ Linux 两个 job 的上传数量仍须为 **2／1**，原下载通配符、严�
 
 E13 的 [e3d8f00](https://github.com/LIghtJUNction/ssmcp/commit/e3d8f00f559da097627988407ea6b14ec00e92f6) 在权限包装构造时使用 `Box::pin`，保留控制许可、租约、取消和完成后的复验路径。构造时机发生变化，`Box::pin` 也不能独自证明没有栈上临时值。原 25 秒产品期限与测试断言未放宽。主分支浏览器包装改动与此修复现在处于同一树；Gate17 的通过结果证明这些具体回归在本次配置下成功运行，没有隔离出各项改动的独立贡献。[E13 历史事实](source-E13-completed-stack-fix-public-facts.json)
 
-## 源码、提交和两次窄检查
+## E14 源码、提交和两次窄检查
 
 原作者沿原会话于 **10:26:57 UTC** 开始、**10:35:30 UTC** 正常退出。两次普通推送分别到达 3b76417 与 5a45be0，均退出 0。四个作者提交如下，不能把提交数量误写为推送次数。
 
@@ -93,7 +151,7 @@ private 库父进程汇总报告 **53.99 秒**，与外层阶段耗时分别记�
 - `computer::zuse_backend::tests::num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup`
 - `computer::zuse_backend::tests::num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed`
 
-Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15` 的 `resume_test_history` 未使用；`-D warnings` 将 dead_code 升为错误。日志还出现 qrcodegen manifest warning，它没有被误列为这次已记录的唯一编译错误。没有降低警告规则或跳过阶段。报告组已将原失败交给原源码协调者；截至本快照尚未读取后继修复的实际启动或结果。
+Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15` 的 `resume_test_history` 未使用；`-D warnings` 将 dead_code 升为错误。日志还出现 qrcodegen manifest warning，它没有被误列为这次已记录的唯一编译错误。没有降低警告规则或跳过阶段。在 Gate17 的历史失败快照中，尚未读取后继修复的启动或结果；当前 E15 源码阶段已经完成，Windows GNU 复查仍待执行。
 
 外层启动回执确认源码锁，内层 launch 确认 target 排他锁。结束回执显示九项固定输入前后相同，验收工作树干净并仍为 S401；内外层退出码均为 1。外层记录源码锁保持到子进程返回，这一字段本身不等于“所有后代均已独立证明回收”。
 
@@ -103,8 +161,10 @@ Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15
 
 | 范围 | 当前状态 |
 |---|---|
-| 作者窄检查 | 5a45be0 上第二次通过；第一次锁忙记录保留 |
-| 完整 Gate17 | S401 上 7 通过、1 失败、27 未运行 |
+| E15 作者阶段 | bef89f5 一行修复，格式／Git 检查通过；没有运行编译或测试 |
+| E14 作者窄检查 | 5a45be0 上第二次通过；第一次锁忙记录保留 |
+| 新主分支 Gate18 | b8d94f5 上准备中；本快照尚未观察实际启动 |
+| 历史 Gate17 | S401 上 7 通过、1 失败、27 未运行 |
 | 原栈溢出与两个 Num Lock 回归 | S401 的 private 库阶段实际通过 |
 | 同源码运行、UI、多 UID、P1 | 未执行 |
 | `ssmcp --version --all` 实际命令 | 未执行 |
@@ -155,7 +215,7 @@ Gate16 的原栈溢出仍保存于 [失败事实文件](gate-S647-r16-failure-pu
 | Gate17 内层 exit.json | 4860 | `8d8ce512bd4147fd62cda8cb4f90e0fa7eb60e2b165f53355d0b791451629e92` | 全文 |
 | Gate17 外层 exit.json | 1172 | `f1b48df6b888522ba57dd5332a08a8a6528dc0bb98b3c85abfc4bb365e40ad5f` | 全文 |
 
-下一步沿原作者流程修复实际 Windows 检查问题，保留原警告规则和阶段合同，然后对新的实际合并源码重新执行完整检查。报告组继续只读收集证据并同步 GitHub 与 Google 文档，不并行启动产品构建或测试。
+下一步由原源码协调者在实际合并提交 b8d94f5 上绑定并执行原 35 阶段完整检查，使用新源码的真实结果决定后续运行与 UI 验收。报告组继续只读核对原件并同步 GitHub 与 Google 文档，不并行启动产品构建或测试，也不把 S401 的成绩转记给后继提交。
 
 ---
 
