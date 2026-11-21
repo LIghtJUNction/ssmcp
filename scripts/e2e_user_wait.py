@@ -414,6 +414,9 @@ class UserWait(InputHistory):
         front.until(lambda shot: shot["size"] == [24, 48], "the narrow wait terminal")
         self.draft(front, "/wait")
         front.send(ENTER)
+        # /wait appends an Activity event whose timing tail can hide its first rows.
+        # Shift+Tab focuses content; Down reveals the selected latest event.
+        front.send(b"\x1b[Z\x1b[B")
         # Narrow rows may wrap the precise ID and its status across lines.
         # Ignore screen spacing, while requiring both the same ID and outcome.
         timeout_detail = "#" + receipt["wait_id"] + "·本轮等待超时"
