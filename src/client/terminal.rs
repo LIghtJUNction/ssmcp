@@ -234,6 +234,14 @@ impl Session {
             }
         }
     }
+
+    pub(crate) fn resume_history(&self) {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .chat_resume();
+    }
 }
 
 impl Drop for Session {

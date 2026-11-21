@@ -55,7 +55,17 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{ffi::OsString, io, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
+use std::{
+    ffi::OsString,
+    io,
+    path::PathBuf,
+    process::ExitStatus,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -71,6 +81,7 @@ Usage: ssmcp [username@server] [options]
 Start
   ssmcp                         Reuse your last authorized account
   ssmcp local                   Run a local MCP session on Linux
+  ssmcp resume [options]        Open this workspace's saved conversation picker
   ssmcp alice@relay.example     Connect and sign in when needed
   ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
@@ -105,6 +116,7 @@ const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
+       ssmcp resume [options]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
@@ -270,6 +282,10 @@ Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
+Use `ssmcp resume` to start the foreground client at this workspace's saved
+conversation picker (the same as /resume). Select a conversation and press Enter.
+Only saved text is restored: models, credentials, terminals and queued requests
+are not resumed or replayed. An empty history exits without connecting.
 "#;
 
 // A single reader owns every partial frame after Ready, including while a native
@@ -426,6 +442,7 @@ struct Options {
     allow: Vec<String>,
     context_roots: Vec<PathBuf>,
     chat: chat_io::Settings,
+    resume_history: AtomicBool,
     list_tools: bool,
     daemon: bool,
     session_control: bool,
@@ -520,6 +537,10 @@ impl Options {
         new_connection: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter().peekable();
+        let resume_history = new_connection && args.peek().is_some_and(|arg| arg == "resume");
+        if resume_history {
+            args.next();
+        }
         let mut local_mode = args.peek().is_some_and(|arg| arg == "local");
         if local_mode {
             args.next();
@@ -826,6 +847,14 @@ impl Options {
             }
         }
         let chat = chat.finish()?;
+        if resume_history
+            && (daemon
+                || list_tools
+                || chat.input != chat_io::Input::Terminal
+                || log_format == Some(render::LogFormat::Jsonl))
+        {
+            return Err("ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output".into());
+        }
         if list_tools && !chat.arguments().is_empty() {
             return Err("--list-tools cannot configure chat input or an agent".into());
         }
@@ -1006,6 +1035,7 @@ impl Options {
             allow,
             context_roots,
             chat,
+            resume_history: AtomicBool::new(resume_history),
             list_tools,
             daemon,
             session_control,
@@ -1403,6 +1433,9 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse_new(connection)? else {
         return Ok(());
     };
+    if options.resume_history.load(Ordering::Relaxed) {
+        return Err("ssmcp resume opens a foreground history picker and cannot create a background session".into());
+    }
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
@@ -1716,6 +1749,16 @@ pub async fn run() -> crate::Result<()> {
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
     }
+    if options.resume_history.load(Ordering::Relaxed) {
+        if interface::history::sessions()?.is_empty() {
+            println!("No saved conversations in this workspace. Start ssmcp to begin a conversation.");
+            return Ok(());
+        }
+        use std::io::IsTerminal;
+        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+            return Err("ssmcp resume requires an interactive terminal to choose a saved conversation; run it from a terminal in this workspace".into());
+        }
+    }
     if options.is_local() {
         if service.is_some() {
             return Err("local mode requires a foreground session".into());
@@ -1769,6 +1812,14 @@ pub async fn run() -> crate::Result<()> {
         ui.color = false;
         ui.log_format = render::LogFormat::Jsonl;
         ui.show_raw_json = false;
+    }
+    if options.resume_history.load(Ordering::Relaxed) {
+        if !ui.dashboard || ui.log_format == render::LogFormat::Jsonl {
+            return Err("ssmcp resume requires the interactive dashboard; enable ui.dashboard and use pretty log output".into());
+        }
+        // Open the requested picker even when the saved layout is audit or logs.
+        // This startup choice does not write the user's appearance configuration.
+        ui.layout = ui::Layout::Chat;
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
@@ -2584,6 +2635,17 @@ async fn connect_inner(
     } else {
         None
     };
+    if options.resume_history.load(Ordering::Relaxed) {
+        let Some(display) = display_session.as_ref() else {
+            let _ = ssh.kill().await;
+            return Err(Box::new(relay::PermanentFailure(
+                "ssmcp resume could not open the interactive history picker; use a supported terminal with the dashboard enabled".into(),
+            )));
+        };
+        if options.resume_history.swap(false, Ordering::Relaxed) {
+            display.resume_history();
+        }
+    }
     if options.chat.input == chat_io::Input::Terminal
         && options.chat.agent != chat_io::Agent::NextCaller
         && display_session.is_none()
@@ -3128,6 +3190,97 @@ pub fn report_error(error: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resume_command_preserves_connection_flags_without_persisting_picker_state() {
+        let options = Options::parse_new(
+            [
+                "resume",
+                "--server",
+                "https://relay.example",
+                "--name",
+                "history-client",
+                "--session-control",
+                "--no-watchdog",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(options.resume_history.load(Ordering::Relaxed));
+        assert!(options.destination.is_none());
+        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
+        assert_eq!(options.name.as_deref(), Some("history-client"));
+        assert_eq!(options.chat.input, chat_io::Input::Terminal);
+        assert!(!options.watchdog);
+        let spec = options.session_spec().unwrap();
+        assert!(!spec.args.iter().any(|arg| arg == "resume"));
+        let saved = Options::parse_saved(&spec).unwrap().unwrap();
+        assert!(!saved.resume_history.load(Ordering::Relaxed));
+        assert!(saved.session_control);
+        assert_eq!(saved.server, options.server);
+    }
+
+    #[test]
+    fn resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument() {
+        let title = Options::parse_new(
+            ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!title.resume_history.load(Ordering::Relaxed));
+        assert_eq!(title.title.as_deref(), Some("resume"));
+        for leading_resume in [false, true] {
+            let mut args = vec![
+                "--server",
+                "https://relay.example",
+                "--load-harness",
+                "codex",
+                "--",
+                "resume",
+            ];
+            if leading_resume {
+                args.insert(0, "resume");
+            }
+            let options = Options::parse_new(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                options.resume_history.load(Ordering::Relaxed),
+                leading_resume
+            );
+            assert_eq!(
+                options.harness.unwrap().arguments,
+                vec![OsString::from("resume")]
+            );
+        }
+    }
+
+    #[test]
+    fn resume_rejects_noninteractive_modes_and_help_does_not_start_a_session() {
+        for flags in [
+            vec!["--daemon"],
+            vec!["--list-tools"],
+            vec!["--input", "none"],
+            vec!["--input", "pipe"],
+            vec!["--raw"],
+            vec!["--log-format", "jsonl"],
+        ] {
+            let mut args = vec!["resume", "--server", "https://relay.example"];
+            args.extend(flags);
+            let error = Options::parse_new(args.into_iter().map(OsString::from))
+                .err()
+                .unwrap();
+            assert!(error.contains("foreground interactive dashboard"), "{error}");
+        }
+        for flag in ["--help", "--help-full"] {
+            assert!(
+                Options::parse_new(["resume", flag].map(OsString::from))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     #[test]
     fn watchdog_keeps_retrying_transient_transport_errors() {
         let disconnected = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
