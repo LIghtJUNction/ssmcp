@@ -29,6 +29,28 @@ python3 ./verify_published_manual_main.py "$FINAL_S" "$RELEASE_RUN_ID" \
 
 The checkout must be an existing Git working-tree root containing S, P and four submodule commit/tree objects. The report directory may exist or have only its final component created; its parent must exist. Do not use python -O or PYTHONOPTIMIZE. Only the original attempt, run_attempt=1, is supported; reruns, partial reruns and preflight/build-only runs fail. P is labelled as independently read run/attempt API head_sha, not as an observed github.workflow_sha context value.
 
+## Native execution record format
+
+The native receipt input is a selected-field projection of independently observed tool results. Preserve the complete original exec.run/exec.read observations privately, including byte cursors and base64 stream data. The projection records actual fields from those observations; it is distinct from the raw HTTP response stored inside the dispatch capture.
+
+For the observed exec.read shape, use the following correspondence:
+
+| Receipt field | Actual observed source |
+|---|---|
+| id | snapshot.id, after checking equality with top-level job_id |
+| exit_code | Top-level exit_code, checked against snapshot.exit_code |
+| running | Top-level running from the final observation |
+| stdout, stderr | Complete stream bytes from cursor zero, in cursor order, decoded as UTF-8 |
+| stdout_cursor | The actual cumulative stdout cursor from the final observation |
+| stdout_eof, stderr_eof | The actual final stream EOF values |
+| error | snapshot.error from the same job observation |
+
+Retain the actual stdout_truncated and stderr_truncated values as additional projection fields. Every chunk must belong to the same job. Join base64-decoded stream bytes in cursor order before decoding the complete UTF-8 stream; retain exact newlines. The final stdout cursor must equal the byte length of the complete stdout. If a field or a complete stream is unavailable, acquisition remains incomplete.
+
+The adapter accepts additional fields, so original observations may accompany this projection for review. The independent reviewer still supplies the expected job ID, exact capture path and both file hashes from the real tool observations. A valid projection has a successful completed job and complete, untruncated streams; these values must never be filled in from an expected outcome.
+
+[Independent entry and identity review](independent-static-review-public.json) records the bounded static findings for the unchanged code. Its candidate label U refers to the product-commit role called S in this README; final bindings remain null until actual acceptance and publication.
+
 ## Implemented checks
 
 The original requirements remain: **19 exact job names, 18 successes and deployment skipped; 16 exact Release assets; four gitlinks; the complete regular source-file set and bytes under src; official crates.io checksum and package identity; and separate development and normalized registry manifests, locks and dependency graphs**. The eleven inherited non-entry, non-API functions remain AST-identical. The API reader now explicitly pins github.com. All source and ancestry reads use Git's no-replace-objects option.

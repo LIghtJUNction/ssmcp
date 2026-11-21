@@ -22,8 +22,8 @@
       "sha256": "0cc931a8c956ec3276fe09dce72644b231787f032898741484fa137a76edfd47"
     },
     "README.md": {
-      "bytes": 10732,
-      "sha256": "86ddad0d88624c2723380ea7cd33bea635c31846cb332f22f933a6ef2402ed8e"
+      "bytes": 12832,
+      "sha256": "55cba1317f187528f501462728b1232d315135b8f3f170af17ed66238630f0d9"
     },
     "static-preparation.json": {
       "bytes": 2652,
@@ -32,6 +32,10 @@
     "dispatch-capture.schema.json": {
       "bytes": 4833,
       "sha256": "8b1777c6168584ba418a88e3776801f1e12b9a40e803925a0d4ef9661b951274"
+    },
+    "independent-static-review-public.json": {
+      "bytes": 6211,
+      "sha256": "787041476c513b0947dad9c4461541f24ec8e073cb321ea7097082de08bbb1d3"
     }
   },
   "baseline": {
@@ -92,5 +96,10 @@
     "Ordinary reviewed CI chain, not malicious-builder attestation"
   ],
   "public_bundle_note": "Three active source files and complete diff are byte-identical to the frozen preparation; documentation and metadata omit private recovery identities.",
-  "private_preparation_manifest_sha256": "c9d833a44352f27b9f509a590aa7853c5003c45817ad7c00312e2ad3632fef00"
+  "private_preparation_manifest_sha256": "c9d833a44352f27b9f509a590aa7853c5003c45817ad7c00312e2ad3632fef00",
+  "public_supplement": {
+    "recorded_at_utc": "2026-11-21T03:27:17.227585+00:00",
+    "scope": "Independent static review and documentation of actual native receipt field projection; active source files and diff unchanged.",
+    "original_review_sha256": "b984df1a8ada6d18b3948e2409df22f99bf160228f172132a67c67502c68d287"
+  }
 }
