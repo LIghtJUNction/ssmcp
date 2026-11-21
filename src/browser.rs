@@ -683,14 +683,6 @@ impl Browser {
         if name == "ssmcp.browser.act" {
             // The batch owns its progress and abort report.
             permit.scope(operation).await
-        } else if matches!(
-            name,
-            "ssmcp.browser.click"
-                | "ssmcp.browser.fill"
-                | "ssmcp.browser.key"
-                | "ssmcp.browser.scroll"
-        ) {
-            permit.serialized().await?.run(operation).await
         } else {
             permit.run(operation).await
         }
@@ -1051,6 +1043,20 @@ impl Browser {
             .ok_or_else(|| "browser is not connected; use browser.launch or browser.connect".into())
     }
 
+    async fn input_page(
+        &self,
+        session: &Session,
+        target: &str,
+    ) -> Result<(OwnedMutexGuard<Page>, Permit), String> {
+        let permit = Permit::current().ok_or("missing computer-use permit")?;
+        // A batch holds the page across its waits. Take the same locks in
+        // the same order for single actions, using the admitted generation.
+        let page = self.page(session, target).await?;
+        let permit = permit.serialized().await?;
+        self.ensure_session(session)?;
+        Ok((page, permit))
+    }
+
     async fn connected(
         &self,
         session: &Arc<Session>,
@@ -1112,71 +1118,77 @@ impl Browser {
                 {
                     return Err("invalid mouse button or click_count".into());
                 }
-                let mut page = self.page(session, &args.target_id).await?;
-                page.cdp.prepare_input().await?;
-                let point = ref_action(&mut page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
-                let x = point["x"].as_f64().ok_or("element has no x coordinate")?;
-                let y = point["y"].as_f64().ok_or("element has no y coordinate")?;
-                let button_code = match args.button.as_str() {
-                    "left" => 1,
-                    "right" => 2,
-                    _ => 4,
-                };
-                page.cdp
-                    .call(
-                        "Input.dispatchMouseEvent",
-                        json!({"type":"mouseMoved","x":x,"y":y}),
-                    )
-                    .await?;
-                page.cdp.input_pair("Input.dispatchMouseEvent",
-                    json!({"type":"mousePressed","x":x,"y":y,"button":args.button,"buttons":button_code,"clickCount":args.click_count}),
-                    json!({"type":"mouseReleased","x":x,"y":y,"button":args.button,"buttons":0,"clickCount":args.click_count})
-                ).await?;
-                json!({"target_id":args.target_id,"ref":args.element_ref,"clicked":true})
+                let (mut page, permit) = self.input_page(session, &args.target_id).await?;
+                permit.scope(async {
+                    page.cdp.prepare_input().await?;
+                    let point = ref_action(&mut page, &args.element_ref, CLICK_SCRIPT, vec![]).await?;
+                    let x = point["x"].as_f64().ok_or("element has no x coordinate")?;
+                    let y = point["y"].as_f64().ok_or("element has no y coordinate")?;
+                    let button_code = match args.button.as_str() {
+                        "left" => 1,
+                        "right" => 2,
+                        _ => 4,
+                    };
+                    page.cdp
+                        .call(
+                            "Input.dispatchMouseEvent",
+                            json!({"type":"mouseMoved","x":x,"y":y}),
+                        )
+                        .await?;
+                    page.cdp.input_pair("Input.dispatchMouseEvent",
+                        json!({"type":"mousePressed","x":x,"y":y,"button":args.button,"buttons":button_code,"clickCount":args.click_count}),
+                        json!({"type":"mouseReleased","x":x,"y":y,"button":args.button,"buttons":0,"clickCount":args.click_count})
+                    ).await?;
+                    Ok::<_, String>(json!({"target_id":args.target_id,"ref":args.element_ref,"clicked":true}))
+                }).await?
             }
             "ssmcp.browser.fill" => {
                 let args: Fill = parse(args)?;
                 if args.text.len() > 32768 {
                     return Err("fill text exceeds 32768 UTF-8 bytes".into());
                 }
-                let mut page = self.page(session, &args.target_id).await?;
-                page.cdp.prepare_input().await?;
-                let prepared = ref_action(
-                    &mut page,
-                    &args.element_ref,
-                    FILL_SCRIPT,
-                    vec![json!(args.text)],
-                )
-                .await?;
-                if prepared["insert_text"] == true {
-                    page.cdp
-                        .call("Input.insertText", json!({"text":args.text}))
-                        .await?;
-                }
-                json!({"target_id":args.target_id,"ref":args.element_ref,"filled":true})
+                let (mut page, permit) = self.input_page(session, &args.target_id).await?;
+                permit.scope(async {
+                    page.cdp.prepare_input().await?;
+                    let prepared = ref_action(
+                        &mut page,
+                        &args.element_ref,
+                        FILL_SCRIPT,
+                        vec![json!(args.text)],
+                    )
+                    .await?;
+                    if prepared["insert_text"] == true {
+                        page.cdp
+                            .call("Input.insertText", json!({"text":args.text}))
+                            .await?;
+                    }
+                    Ok::<_, String>(json!({"target_id":args.target_id,"ref":args.element_ref,"filled":true}))
+                }).await?
             }
             "ssmcp.browser.key" => {
                 let args: Key = parse(args)?;
                 let (code, key, text) = key_spec(&args.key)?;
                 let modifiers = modifier_bits(&args.modifiers)?;
-                let page = self.page(session, &args.target_id).await?;
-                page.cdp.prepare_input().await?;
-                let mut down = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,
-                    "nativeVirtualKeyCode":code,"modifiers":modifiers});
-                if modifiers & (1 | 2 | 4) == 0
-                    && let Some(text) = text
-                {
-                    down["text"] = json!(text);
-                }
-                page.cdp
-                    .input_pair(
-                        "Input.dispatchKeyEvent",
-                        down,
-                        json!({"type":"keyUp","key":key,"windowsVirtualKeyCode":code,
-                        "nativeVirtualKeyCode":code,"modifiers":modifiers}),
-                    )
-                    .await?;
-                json!({"target_id":args.target_id,"key":args.key,"pressed":true})
+                let (page, permit) = self.input_page(session, &args.target_id).await?;
+                permit.scope(async {
+                    page.cdp.prepare_input().await?;
+                    let mut down = json!({"type":"keyDown","key":key,"windowsVirtualKeyCode":code,
+                        "nativeVirtualKeyCode":code,"modifiers":modifiers});
+                    if modifiers & (1 | 2 | 4) == 0
+                        && let Some(text) = text
+                    {
+                        down["text"] = json!(text);
+                    }
+                    page.cdp
+                        .input_pair(
+                            "Input.dispatchKeyEvent",
+                            down,
+                            json!({"type":"keyUp","key":key,"windowsVirtualKeyCode":code,
+                            "nativeVirtualKeyCode":code,"modifiers":modifiers}),
+                        )
+                        .await?;
+                    Ok::<_, String>(json!({"target_id":args.target_id,"key":args.key,"pressed":true}))
+                }).await?
             }
             "ssmcp.browser.scroll" => {
                 let args: Scroll = parse(args)?;
@@ -1185,22 +1197,26 @@ impl Browser {
                 {
                     return Err("scroll delta exceeds 100000 CSS pixels".into());
                 }
-                let page = self.page(session, &args.target_id).await?;
-                page.cdp.prepare_input().await?;
-                let size = page
-                    .cdp
-                    .value("({width:innerWidth,height:innerHeight})")
-                    .await?;
-                page.cdp
-                    .call(
-                        "Input.dispatchMouseEvent",
-                        json!({"type":"mouseWheel",
+                let (page, permit) = self.input_page(session, &args.target_id).await?;
+                permit
+                    .scope(async {
+                        page.cdp.prepare_input().await?;
+                        let size = page
+                            .cdp
+                            .value("({width:innerWidth,height:innerHeight})")
+                            .await?;
+                        page.cdp
+                            .call(
+                                "Input.dispatchMouseEvent",
+                                json!({"type":"mouseWheel",
                     "x":size["width"].as_f64().unwrap_or(800.0)/2.0,
                     "y":size["height"].as_f64().unwrap_or(600.0)/2.0,
                     "deltaX":args.delta_x,"deltaY":args.delta_y}),
-                    )
-                    .await?;
-                json!({"target_id":args.target_id,"scrolled":true})
+                            )
+                            .await?;
+                        Ok::<_, String>(json!({"target_id":args.target_id,"scrolled":true}))
+                    })
+                    .await?
             }
             "ssmcp.browser.wait" => {
                 let args: WaitArgs = parse(args)?;
@@ -1237,6 +1253,7 @@ impl Browser {
                                 .ok_or("missing computer-use permit")?
                                 .serialized()
                                 .await?;
+                            self.ensure_session(session)?;
                             input.scope(actions::run(&mut page, action)).await?
                         };
                         completed.push(json!({"index":index,"type":action.kind(),"result":value}));
@@ -2550,6 +2567,70 @@ mod tests {
         assert!(error.contains("timed out after 20 ms"));
         assert!(started.elapsed() < Duration::from_secs(1));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_page_wait_batch_then_queued_key_both_finish_in_order() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (cdp, mut socket) = test_cdp().await;
+            let browser = test_browser(vec![("a", cdp)]).await;
+            let (observed, waiting) = tokio::sync::oneshot::channel();
+            let (ready, release) = tokio::sync::oneshot::channel();
+            let peer = tokio::spawn(async move {
+                let wait = test_request(&mut socket).await;
+                assert_eq!(wait["method"], "Runtime.evaluate");
+                assert!(
+                    wait["params"]["expression"]
+                        .as_str()
+                        .unwrap()
+                        .contains("ready")
+                );
+                observed.send(()).unwrap();
+                release.await.unwrap();
+                test_reply(&mut socket, &wait, json!({"result":{"value":true}})).await;
+                for key in ["a", "b"] {
+                    let focus = test_request(&mut socket).await;
+                    assert_eq!(focus["method"], "Emulation.setFocusEmulationEnabled");
+                    test_reply(&mut socket, &focus, json!({})).await;
+                    for event in ["keyDown", "keyUp"] {
+                        let input = test_request(&mut socket).await;
+                        assert_eq!(input["method"], "Input.dispatchKeyEvent");
+                        assert_eq!(input["params"]["type"], event);
+                        assert_eq!(input["params"]["key"], key);
+                        test_reply(&mut socket, &input, json!({})).await;
+                    }
+                }
+            });
+            let batch = tokio::spawn({
+                let browser = browser.clone();
+                async move {
+                    browser
+                        .perform(
+                            "ssmcp.browser.act",
+                            json!({
+                                "target_id":"a","snapshot":false,"actions":[
+                                    {"type":"wait","text":"ready"},{"type":"key","key":"a"}
+                                ]
+                            }),
+                        )
+                        .await
+                }
+            });
+            waiting.await.unwrap();
+            let single = browser.perform("ssmcp.browser.key", json!({"target_id":"a","key":"b"}));
+            tokio::pin!(single);
+            assert!(poll_once(single.as_mut()).await.is_pending());
+            ready.send(()).unwrap();
+            let (batch, single) = tokio::join!(batch, single);
+            assert_eq!(
+                batch.unwrap().unwrap()["structuredContent"]["completed_count"],
+                2
+            );
+            assert_eq!(single.unwrap()["structuredContent"]["pressed"], true);
+            peer.await.unwrap();
+        })
+        .await
+        .expect("same-page batch and queued key did not finish");
     }
 
     #[tokio::test]
