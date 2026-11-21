@@ -94,6 +94,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   cleanup                      Inspect and clean registered workspace files
+  tools [status|check|update]    Inspect or update this client's tool repository
   sessions · attach · service  Saved and background sessions
   computer                     Zuse CLI version and installation
   setup · ui · 007             Setup, appearance and recovery
@@ -129,6 +130,7 @@ Usage: ssmcp username@server [options]
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
        ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
+       ssmcp tools [status|check|update]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
@@ -1768,6 +1770,9 @@ pub async fn run() -> crate::Result<()> {
             println!("{output}");
             return Ok(());
         }
+    }
+    if args.first().is_some_and(|arg| arg == "tools") {
+        return crate::tool_repository::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
