@@ -336,24 +336,42 @@ impl State {
             self.conversation.native_lookup = Some(pending);
             return;
         };
-        let resolved = result
-            .map_err(|error| {
-                format!(
-                    "Native recipient lookup failed · {} · draft retained",
-                    panel::safe_text(&error)
-                )
-            })
-            .and_then(|recipients| {
-                let entry =
-                    picker_entry(recipients.iter().map(|entry| json!(entry)), &pending.query)
-                        .ok_or(NO_MATCH)?;
-                self.chat_open_native_picker(field(&entry, "id"))
-            });
+        let lookup_failure = |error: String| {
+            format!(
+                "Native recipient lookup failed · {} · draft retained",
+                panel::safe_text(&error)
+            )
+        };
+        let resolved = result.map_err(lookup_failure).and_then(|recipients| {
+            if let Some(entry) =
+                picker_entry(recipients.iter().map(|entry| json!(entry)), &pending.query)
+            {
+                self.chat_open_native_picker(field(&entry, "id"))?;
+                return Ok(None);
+            }
+            #[cfg(test)]
+            let follow_up = if let Some(connection) = &mut self.conversation.native_connection {
+                connection.confirm_directory_miss(&pending.directory)
+            } else {
+                transport::confirm_directory_miss(&pending.directory)
+            };
+            #[cfg(not(test))]
+            let follow_up = transport::confirm_directory_miss(&pending.directory);
+            match follow_up.map_err(lookup_failure)? {
+                Some(directory) => Ok(Some(directory)),
+                None => Err(NO_MATCH.into()),
+            }
+        });
         match resolved {
-            Ok(()) if pending.clear_command => {
+            Ok(Some(directory)) => {
+                pending.directory = directory;
+                self.conversation.native_lookup = Some(pending);
+                self.notice = Some(LOOKUP_PENDING.into());
+            }
+            Ok(None) if pending.clear_command => {
                 self.conversation.composer.take_text();
             }
-            Ok(()) => {}
+            Ok(None) => {}
             Err(error) => self.notice = Some(error),
         }
         self.dirty = true;
@@ -879,16 +897,34 @@ mod tests {
         state.conversation.composer.left();
         let original = state.chat_saved_draft();
 
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
+        assert!(matches!(old_list.command, Command::List {}));
+        let sampled_before_query = Reply {
+            recipients: vec![other.clone()],
+            ..Default::default()
+        };
         state.chat_native_picker(&own.id).unwrap();
-        let request = fixture_transport(&mut state).next_request().unwrap();
-        assert!(matches!(request.command, Command::List {}));
+        assert!(fixture_transport(&mut state).next_request().is_none());
         state.chat_updates();
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(state.chat_saved_draft(), original);
         assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
 
-        fixture_transport(&mut state).reply(
-            request.id,
+        fixture_transport(&mut state).reply(old_list.id, Ok(sampled_before_query));
+        state.chat_updates();
+        assert_eq!(state.conversation.view, View::Activity);
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+        let connection = fixture_transport(&mut state);
+        let fresh_list = connection.next_request().unwrap();
+        assert!(fresh_list.id > old_list.id);
+        assert!(matches!(fresh_list.command, Command::List {}));
+        assert!(connection.next_request().is_none());
+
+        connection.reply(
+            fresh_list.id,
             Ok(Reply {
                 recipients: vec![other.clone(), own.clone()],
                 ..Default::default()
@@ -949,6 +985,44 @@ mod tests {
     }
 
     #[test]
+    fn coalesced_miss_joins_a_query_after_list_and_finishes_on_its_empty_reply() {
+        let mut state = cold_state();
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
+        let command = format!("/message {}", recipient("1").id);
+        state.conversation.composer.set_text(&command);
+        state.conversation.composer.left();
+        let original = state.chat_saved_draft();
+        state.chat_submit();
+
+        let connection = fixture_transport(&mut state);
+        assert!(connection.next_request().is_none());
+        connection.reply(old_list.id, Ok(Reply::default()));
+        // A background refresh can start after the old reply but before the
+        // terminal consumes it. It already satisfies the query's freshness.
+        connection.quiet_refresh();
+        let fresh_list = connection.next_request().unwrap();
+        assert!(fresh_list.id > old_list.id);
+        assert!(matches!(fresh_list.command, Command::List {}));
+        state.chat_updates();
+        assert_eq!(state.notice.as_deref(), Some(LOOKUP_PENDING));
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.conversation.view, View::Activity);
+
+        let connection = fixture_transport(&mut state);
+        assert!(connection.next_request().is_none());
+        connection.reply(fresh_list.id, Ok(Reply::default()));
+        state.chat_updates();
+        state.chat_updates();
+        assert_eq!(state.notice.as_deref(), Some(NO_MATCH));
+        assert!(state.conversation.native_lookup.is_none());
+        assert_eq!(state.chat_saved_draft(), original);
+        assert_eq!(state.conversation.view, View::Activity);
+        assert!(fixture_transport(&mut state).next_request().is_none());
+    }
+
+    #[test]
     fn queued_lookup_reply_cannot_override_escape_navigation_or_a_newer_draft() {
         let actions: [fn(&mut State); 4] = [
             |state| {
@@ -973,9 +1047,15 @@ mod tests {
         for change in actions {
             let mut state = cold_state();
             let own = recipient("1");
+            let connection = fixture_transport(&mut state);
+            connection.quiet_refresh();
+            let old = connection.next_request().unwrap();
             state.chat_native_picker(&own.id).unwrap();
+            fixture_transport(&mut state).reply(old.id, Ok(Reply::default()));
+            state.chat_updates();
             let connection = fixture_transport(&mut state);
             let list = connection.next_request().unwrap();
+            assert!(list.id > old.id);
             connection.reply(
                 list.id,
                 Ok(Reply {
@@ -991,6 +1071,7 @@ mod tests {
             assert_eq!(state.chat_saved_draft(), expected);
             assert!(state.conversation.native_lookup.is_none());
             assert!(state.conversation.native_recipient.is_none());
+            assert!(fixture_transport(&mut state).next_request().is_none());
         }
     }
 
@@ -999,8 +1080,15 @@ mod tests {
         let mut state = cold_state();
         let old = recipient("1");
         let new = recipient("2");
+        let connection = fixture_transport(&mut state);
+        connection.quiet_refresh();
+        let old_list = connection.next_request().unwrap();
         state.chat_native_picker(&old.id).unwrap();
+        fixture_transport(&mut state).reply(old_list.id, Ok(Reply::default()));
+        state.chat_updates();
+
         let list = fixture_transport(&mut state).next_request().unwrap();
+        assert!(list.id > old_list.id);
         let command = format!("/message {}", new.id);
         state.conversation.composer.set_text(&command);
         state.chat_submit();

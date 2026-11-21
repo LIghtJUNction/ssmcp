@@ -35,6 +35,7 @@ struct Pending {
 
 pub(crate) struct DirectoryLookup {
     connection: u64,
+    confirm_miss_after: Option<u64>,
     completion: oneshot::Receiver<DirectoryResult>,
 }
 #[derive(Clone, Serialize)]
@@ -148,7 +149,29 @@ impl Manager {
     }
 
     fn lookup_directory(&mut self) -> Result<DirectoryLookup, String> {
+        let before_query = self.next_id;
         let id = self.refresh_with_visibility(false)?;
+        Ok(self.wait_for_directory(id, (id <= before_query).then_some(before_query)))
+    }
+
+    fn confirm_directory_miss(
+        &mut self,
+        lookup: &DirectoryLookup,
+    ) -> Result<Option<DirectoryLookup>, String> {
+        let Some(before_query) = lookup.confirm_miss_after else {
+            return Ok(None);
+        };
+        self.check_directory_connection(lookup)?;
+        // The old List has completed. Reuse any List already started since
+        // the query, or start one without overlapping another refresh.
+        let id = self.refresh_with_visibility(false)?;
+        if id <= before_query {
+            return Err("Native recipient directory refresh predates the current lookup".into());
+        }
+        Ok(Some(self.wait_for_directory(id, None)))
+    }
+
+    fn wait_for_directory(&mut self, id: u64, confirm_miss_after: Option<u64>) -> DirectoryLookup {
         let (sender, completion) = oneshot::channel();
         // The terminal has one active lookup. A newer query can wait on the
         // same List, including an already queued quiet refresh.
@@ -156,18 +179,26 @@ impl Manager {
             .get_mut(&id)
             .expect("pending List")
             .directory_waiter = Some(sender);
-        Ok(DirectoryLookup {
+        DirectoryLookup {
             connection: self.group_connection,
+            confirm_miss_after,
             completion,
-        })
+        }
+    }
+
+    fn check_directory_connection(&self, lookup: &DirectoryLookup) -> Result<(), String> {
+        if !self.available() || lookup.connection != self.group_connection {
+            return Err("Native messaging connection closed".into());
+        }
+        Ok(())
     }
 
     fn directory_result(
         &self,
         lookup: &mut DirectoryLookup,
     ) -> Option<Result<Vec<Recipient>, String>> {
-        if !self.available() || lookup.connection != self.group_connection {
-            return Some(Err("Native messaging connection closed".into()));
+        if let Err(error) = self.check_directory_connection(lookup) {
+            return Some(Err(error));
         }
         match lookup.completion.try_recv() {
             Ok(result) => Some(result),
@@ -505,6 +536,11 @@ pub(crate) fn refresh() -> Result<(), String> {
 }
 pub(crate) fn lookup_directory() -> Result<DirectoryLookup, String> {
     state().lookup_directory()
+}
+pub(crate) fn confirm_directory_miss(
+    lookup: &DirectoryLookup,
+) -> Result<Option<DirectoryLookup>, String> {
+    state().confirm_directory_miss(lookup)
 }
 pub(crate) fn directory_result(
     lookup: &mut DirectoryLookup,

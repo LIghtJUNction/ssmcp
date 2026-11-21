@@ -29,6 +29,17 @@ impl Connection {
         self.manager.lookup_directory()
     }
 
+    pub(in crate::client) fn confirm_directory_miss(
+        &mut self,
+        lookup: &DirectoryLookup,
+    ) -> Result<Option<DirectoryLookup>, String> {
+        self.manager.confirm_directory_miss(lookup)
+    }
+
+    pub(in crate::client) fn quiet_refresh(&mut self) {
+        self.manager.refresh_with_visibility(true).unwrap();
+    }
+
     pub(in crate::client) fn directory_result(
         &self,
         lookup: &mut DirectoryLookup,
