@@ -442,7 +442,7 @@ class Harness:
         directory = self.directory / f"{label}-bin"
         directory.mkdir(mode=0o700)
         (directory / "client.toml").touch(exist_ok=True)
-        for name in ("stty", "tty", "sleep", "head", "tr"):
+        for name in ("stty", "tty", "sleep", "head", "tr", "git"):
             executable = shutil.which(name)
             if not executable:
                 raise RuntimeError(f"test requires system {name}")
