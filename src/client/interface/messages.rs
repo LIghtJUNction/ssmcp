@@ -46,8 +46,9 @@ struct Request {
     owner: Option<super::history::HistoryOwner>,
 }
 fn parse(arguments: Value) -> Result<Request, String> {
-    let request: Request = serde_json::from_value(arguments)
-        .map_err(|_| "message requires text and accepts kind, idempotency_key and boolean finish_task")?;
+    let request: Request = serde_json::from_value(arguments).map_err(
+        |_| "message requires text and accepts kind, idempotency_key and boolean finish_task",
+    )?;
     // Keep the existing Markdown/terminal-control and 16 KiB input boundary.
     super::questions::parse_message(json!({"text":request.text})).map(|_| ())?;
     if let Some(key) = &request.idempotency_key
@@ -169,7 +170,9 @@ fn response(receipt: &Receipt, duplicate: bool) -> Value {
     if receipt.finish_task {
         value["finish_task"] = json!(true);
         value["may_finish"] = json!(false);
-        value["completion_instruction"] = json!("This message ACK is not permission to end the task. Only the final outer user_wait receipt with status decided and may_finish true grants permission. Otherwise keep the task active and, in a new tool call, await ui.wait(client_id, {intent:'finish'}); use its actual pending finish_request_id when supplied. Do not replace that blocking wait with a timer, background sleep, polling loop, or a final answer.");
+        value["completion_instruction"] = json!(
+            "This message ACK is not permission to end the task. Only the final outer user_wait receipt with status decided and may_finish true grants permission. Otherwise keep the task active and, in a new tool call, await ui.wait(client_id, {intent:'finish'}); use its actual pending finish_request_id when supplied. Do not replace that blocking wait with a timer, background sleep, polling loop, or a final answer."
+        );
     }
     value
 }
@@ -307,37 +310,61 @@ mod tests {
     fn finish_task_is_explicit_boolean_and_part_of_the_message_identity() {
         let ordinary = parse(json!({"text":"Result"})).unwrap();
         assert!(!ordinary.finish_task);
-        assert!(!parse(json!({"text":"Result","finish_task":false})).unwrap().finish_task);
+        assert!(
+            !parse(json!({"text":"Result","finish_task":false}))
+                .unwrap()
+                .finish_task
+        );
         let finish = parse(json!({"text":"Result","finish_task":true})).unwrap();
         assert!(finish.finish_task);
         for flag in [Value::Null, json!("true"), json!(1), json!({})] {
             assert!(parse(json!({"text":"Result","finish_task":flag})).is_err());
         }
         let schema = tool();
-        assert_eq!(schema["inputSchema"]["properties"]["finish_task"]["type"], "boolean");
-        assert_eq!(schema["inputSchema"]["properties"]["finish_task"]["default"], false);
+        assert_eq!(
+            schema["inputSchema"]["properties"]["finish_task"]["type"],
+            "boolean"
+        );
+        assert_eq!(
+            schema["inputSchema"]["properties"]["finish_task"]["default"],
+            false
+        );
 
         let mut cache = Cache::default();
         let plain = request("Result", "answer", "same-result");
         cache.remember(&plain, receipt(1), None);
         let finish = parse(json!({
             "text":"Result","kind":"answer","idempotency_key":"same-result","finish_task":true
-        })).unwrap();
-        assert!(cache.previous(&finish, None).unwrap_err().contains("finish_task"));
+        }))
+        .unwrap();
+        assert!(
+            cache
+                .previous(&finish, None)
+                .unwrap_err()
+                .contains("finish_task")
+        );
         assert_eq!(cache.previous(&plain, None).unwrap(), Some(receipt(1)));
 
         let mut waiting = receipt(2);
         waiting.finish_task = true;
         let mut finish_cache = Cache::default();
         finish_cache.remember(&finish, waiting.clone(), None);
-        assert_eq!(finish_cache.previous(&finish, None).unwrap(), Some(waiting.clone()));
+        assert_eq!(
+            finish_cache.previous(&finish, None).unwrap(),
+            Some(waiting.clone())
+        );
         assert!(finish_cache.previous(&plain, None).is_err());
         let ack = response(&waiting, false);
         assert_eq!(ack["accepted"], true);
         assert_eq!(ack["finish_task"], true);
         assert_eq!(ack["may_finish"], false);
         assert!(ack["finish_request_id"].is_null());
-        assert!(ack["completion_instruction"].as_str().unwrap().contains("await ui.wait"));
+        assert!(
+            ack["completion_instruction"]
+                .as_str()
+                .unwrap()
+                .contains("await ui.wait")
+        );
         let plain_ack = response(&receipt(1), false);
         assert!(plain_ack.get("completion_instruction").is_none());
         assert!(plain_ack.get("may_finish").is_none());

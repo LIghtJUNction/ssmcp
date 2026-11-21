@@ -274,7 +274,10 @@ fn history_key_keeps_same_name_threads_and_the_composition_separate() {
         state.conversation.content_focus = true;
         state.conversation.detail = false;
         let frame = screen_contents(&state.chat_frame(Instant::now()));
-        assert!(frame.contains("h / right-click · read-only history"), "{frame}");
+        assert!(
+            frame.contains("h / right-click · read-only history"),
+            "{frame}"
+        );
         state.chat_character('h');
         assert_eq!(state.conversation.view, View::History);
         let snapshot = state.conversation.snapshot();

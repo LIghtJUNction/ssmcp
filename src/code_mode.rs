@@ -2178,20 +2178,31 @@ mod tests {
             output["result"]["filter"]["arguments"],
             json!({"text":"cargo","level":"commands"})
         );
-        assert_eq!(output["result"]["plain"]["arguments"], json!({"text":"ordinary text"}));
-        assert_eq!(output["result"]["ordinary"]["arguments"],
-            json!({"text":"ordinary text","finish_task":false}));
+        assert_eq!(
+            output["result"]["plain"]["arguments"],
+            json!({"text":"ordinary text"})
+        );
+        assert_eq!(
+            output["result"]["ordinary"]["arguments"],
+            json!({"text":"ordinary text","finish_task":false})
+        );
         assert_eq!(output["result"]["finish"]["name"], "ssmcp.ui.message");
-        assert_eq!(output["result"]["finish"]["arguments"],
-            json!({"text":"result","kind":"answer","finish_task":true,"idempotency_key":"result-1"}));
+        assert_eq!(
+            output["result"]["finish"]["arguments"],
+            json!({"text":"result","kind":"answer","finish_task":true,"idempotency_key":"result-1"})
+        );
         for entry in ["message", "direct"] {
             assert_eq!(output["result"][entry]["name"], "ssmcp.ui.message");
-            assert_eq!(output["result"][entry]["arguments"],
-                json!({"text":"result","finish_task":true}));
+            assert_eq!(
+                output["result"][entry]["arguments"],
+                json!({"text":"result","finish_task":true})
+            );
         }
         assert_eq!(output["result"]["panel"]["name"], "ssmcp.ui.present");
-        assert_eq!(output["result"]["panel"]["arguments"],
-            json!({"blocks":[{"type":"text","text":"ordinary panel"}]}));
+        assert_eq!(
+            output["result"]["panel"]["arguments"],
+            json!({"blocks":[{"type":"text","text":"ordinary panel"}]})
+        );
         assert_eq!(output["result"]["frozen"], true);
     }
 

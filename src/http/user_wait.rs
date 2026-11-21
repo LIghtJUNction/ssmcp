@@ -83,8 +83,19 @@ pub(super) async fn wait_observed(
     controller: Option<Controller>,
     admitted: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Value, String> {
-    coordinate_wait(broker, user, token, client_id,
-        WaitRequest { arguments, message: None }, controller, admitted).await
+    coordinate_wait(
+        broker,
+        user,
+        token,
+        client_id,
+        WaitRequest {
+            arguments,
+            message: None,
+        },
+        controller,
+        admitted,
+    )
+    .await
 }
 
 /// The public message flag follows the same coordinator as ui.wait. Register
@@ -107,20 +118,37 @@ pub(super) async fn message(
         notify: true,
         finish_request_id: None,
     };
-    let run = code_mode::AUDIT_RUN.try_with(Clone::clone)
+    let run = code_mode::AUDIT_RUN
+        .try_with(Clone::clone)
         .map_err(|_| "finish message requires a code_mode run")?;
-    let result = coordinate_wait(broker.clone(), user.clone(), token.clone(), client_id.clone(),
-        WaitRequest { arguments, message: Some(message) }, controller, None).await?;
+    let result = coordinate_wait(
+        broker.clone(),
+        user.clone(),
+        token.clone(),
+        client_id.clone(),
+        WaitRequest {
+            arguments,
+            message: Some(message),
+        },
+        controller,
+        None,
+    )
+    .await?;
     // Cleanup may itself await a native reply. Recheck after every coordinator
     // return, including deadline/busy/early-input paths, before exposing the ACK.
-    let recipient = run.wait_recipient(&client_id)
+    let recipient = run
+        .wait_recipient(&client_id)
         .ok_or("finish message wait state disappeared before delivery")?;
     let authority = match recipient.connection.upgrade() {
         Some(session) => authorized(&broker, &user, &token, &client_id, &session, &recipient).await,
         None => Err(Outcome::Disconnected),
     };
     if let Err(outcome) = authority {
-        run.finish_wait_state(&client_id, outcome, "authorization_changed_before_message_delivery");
+        run.finish_wait_state(
+            &client_id,
+            outcome,
+            "authorization_changed_before_message_delivery",
+        );
         return Ok(wait_reply(&run, &client_id, Some(&result)));
     }
     Ok(result)
@@ -133,9 +161,13 @@ struct WaitRequest {
 
 fn wait_reply(run: &code_mode::AuditRun, client_id: &str, message: Option<&Value>) -> Value {
     let receipt = run.user_wait_receipt(client_id);
-    let Some(message) = message else { return receipt };
-    let inaccessible = matches!(receipt["status"].as_str(),
-        Some("authorization_revoked" | "binding_invalid" | "disconnected"));
+    let Some(message) = message else {
+        return receipt;
+    };
+    let inaccessible = matches!(
+        receipt["status"].as_str(),
+        Some("authorization_revoked" | "binding_invalid" | "disconnected")
+    );
     let mut result = if !inaccessible && message.is_object() {
         message.clone()
     } else {
@@ -209,7 +241,9 @@ async fn coordinate_wait(
             run.finish_wait_state(&client_id, Outcome::Unavailable, "message_ack_unavailable");
             format!("message delivery could not be confirmed: {error}; it may already have been saved. Keep the task active and use a new blocking ui.wait with intent finish; do not resend blindly.")
         })?;
-        if let Err(outcome) = authorized(&broker, &user, &token, &client_id, &session, &recipient).await {
+        if let Err(outcome) =
+            authorized(&broker, &user, &token, &client_id, &session, &recipient).await
+        {
             run.finish_wait_state(&client_id, outcome, "authorization_changed_after_message");
             // As with every native answer, do not disclose its content after
             // revocation. The outer wait receipt still retains the no-approval
@@ -219,9 +253,13 @@ async fn coordinate_wait(
         run.capture_context(&client_id, &result);
         run.capture_question_answers(&session, recipient.agent_id(), &result);
         code_mode::question_answers::strip_native_metadata(&mut result);
-        let accepted = result.get("isError").is_none_or(|error| error == &Value::Bool(false))
+        let accepted = result
+            .get("isError")
+            .is_none_or(|error| error == &Value::Bool(false))
             && result["structuredContent"]["accepted"] == true
-            && result["structuredContent"]["message_id"].as_str().is_some_and(|id| !id.is_empty());
+            && result["structuredContent"]["message_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty());
         message_response = Some(result);
         if !accepted {
             run.finish_wait_state(&client_id, Outcome::Unavailable, "message_not_accepted");
@@ -291,7 +329,11 @@ async fn coordinate_wait(
         }),
     };
     let native = session.call_with_bound_authorization(
-        operation, controller.clone(), &authorization, recipient.binding.clone());
+        operation,
+        controller.clone(),
+        &authorization,
+        recipient.binding.clone(),
+    );
     tokio::pin!(native);
     let deadline = Instant::now() + Duration::from_millis(arguments.timeout_ms);
     // Messages/disconnect/ACL changes wake via watch. A sleeping heartbeat only
@@ -670,17 +712,30 @@ mod tests {
         }
 
         async fn bound_run(&self) -> AuditRun {
-            let authorization = self.broker.authenticate(&self.user, &self.token).await.unwrap();
+            let authorization = self
+                .broker
+                .authenticate(&self.user, &self.token)
+                .await
+                .unwrap();
             let owner = crate::bridge::owner(&self.user, &authorization).unwrap();
-            let member = self.session.collaboration.dispatch(
-                &owner, "join", json!({"name":"same displayed agent"}),
-            ).await.unwrap();
+            let member = self
+                .session
+                .collaboration
+                .dispatch(&owner, "join", json!({"name":"same displayed agent"}))
+                .await
+                .unwrap();
             let run = AuditRun::new(
-                "return await say(client,{text:'fixture result',finish_task:true});", None,
-            ).unwrap();
-            run.bind(self.session.client_id(), &owner,
-                member["agent_id"].as_str().unwrap(), member["token"].as_str().unwrap(),
-            ).unwrap();
+                "return await say(client,{text:'fixture result',finish_task:true});",
+                None,
+            )
+            .unwrap();
+            run.bind(
+                self.session.client_id(),
+                &owner,
+                member["agent_id"].as_str().unwrap(),
+                member["token"].as_str().unwrap(),
+            )
+            .unwrap();
             run
         }
 
@@ -695,7 +750,10 @@ mod tests {
         async fn delivered(&self, run: AuditRun) -> Value {
             let report = self.report(run);
             let eligible = eligible_user_response(&report).await.unwrap();
-            append(commit_user_response(&report, original(), eligible), &report.run)
+            append(
+                commit_user_response(&report, original(), eligible),
+                &report.run,
+            )
         }
 
         async fn next_call(&mut self) -> (u64, Value) {
@@ -715,7 +773,8 @@ mod tests {
                         ..
                     } => {
                         if name == "ssmcp.client.capabilities" {
-                            self.reply(id, json!({"structuredContent":{"thread_scope":1}})).await;
+                            self.reply(id, json!({"structuredContent":{"thread_scope":1}}))
+                                .await;
                             continue;
                         }
                         assert!(matches!(
@@ -1001,11 +1060,22 @@ mod tests {
         fixture.close().await;
     }
 
-
     fn native_decision(wait_id: &Value, request_id: &str, outcome: &str) -> Value {
         let (status, choice, actor, revision, consumed) = match outcome {
-            "yes" => ("completed", json!("yes"), json!({"origin":"human"}), json!(1), true),
-            "no" => ("denied", json!("no"), json!({"origin":"human"}), json!(1), false),
+            "yes" => (
+                "completed",
+                json!("yes"),
+                json!({"origin":"human"}),
+                json!(1),
+                true,
+            ),
+            "no" => (
+                "denied",
+                json!("no"),
+                json!({"origin":"human"}),
+                json!(1),
+                false,
+            ),
             "cancelled" => ("cancelled", Value::Null, Value::Null, Value::Null, false),
             "timed_out" => ("pending", Value::Null, Value::Null, Value::Null, false),
             _ => unreachable!(),
@@ -1027,20 +1097,30 @@ mod tests {
             let run = fixture.bound_run().await;
             let task = fixture.start_finish_message(&run);
             let (send, arguments) = fixture.next_call().await;
-            assert_eq!(arguments, json!({
-                "kind":"answer","text":"fixture result","finish_task":true
-            }));
+            assert_eq!(
+                arguments,
+                json!({
+                    "kind":"answer","text":"fixture result","finish_task":true
+                })
+            );
             assert!(!task.is_finished());
             // Even an ACK carrying a forged permission cannot grant ending.
-            fixture.reply(send, json!({"isError":false,"structuredContent":{
-                "accepted":true,"message_id":"native_result","may_finish":true
-            }})).await;
+            fixture
+                .reply(
+                    send,
+                    json!({"isError":false,"structuredContent":{
+                        "accepted":true,"message_id":"native_result","may_finish":true
+                    }}),
+                )
+                .await;
             let (wait, arguments) = fixture.next_call().await;
             assert_eq!(arguments["op"], "wait");
             assert_eq!(arguments["intent"], "finish");
             assert_eq!(arguments["timeout_ms"], 20_000);
-            assert_eq!(arguments["recipient"],
-                run.binding(fixture.session.client_id()).unwrap().agent_id);
+            assert_eq!(
+                arguments["recipient"],
+                run.binding(fixture.session.client_id()).unwrap().agent_id
+            );
             assert!(!task.is_finished());
             let wait_id = arguments["wait_id"].clone();
             let response = match outcome {
@@ -1061,7 +1141,11 @@ mod tests {
             assert_eq!(data["finish_wait"]["may_finish"], false);
             let outer = fixture.delivered(run.clone()).await;
             let receipt = &outer["structuredContent"]["user_wait"][0];
-            assert_eq!(receipt["may_finish"], outcome == "yes", "{outcome}: {outer}");
+            assert_eq!(
+                receipt["may_finish"],
+                outcome == "yes",
+                "{outcome}: {outer}"
+            );
             if outcome == "yes" {
                 assert_eq!(receipt["status"], "decided");
                 assert_eq!(receipt["finish_decision"]["consumed"], true);
@@ -1069,43 +1153,68 @@ mod tests {
             } else {
                 assert_eq!(receipt["task_active"], true);
                 assert_eq!(receipt["next_wait"]["new_tool_call"], true);
-                assert!(receipt["completion_instruction"].as_str().unwrap()
-                    .contains("actually await"));
+                assert!(
+                    receipt["completion_instruction"]
+                        .as_str()
+                        .unwrap()
+                        .contains("actually await")
+                );
                 if outcome == "no" {
                     assert_eq!(receipt["finish_decision"]["choice"], "no");
-                    assert!(receipt["completion_instruction"].as_str().unwrap()
-                        .contains("explicitly declined"));
+                    assert!(
+                        receipt["completion_instruction"]
+                            .as_str()
+                            .unwrap()
+                            .contains("explicitly declined")
+                    );
                 }
                 if outcome != "timed_out" {
-                    assert!(receipt["next_wait"]["arguments"]
-                        .get("finish_request_id").is_none());
+                    assert!(
+                        receipt["next_wait"]["arguments"]
+                            .get("finish_request_id")
+                            .is_none()
+                    );
                 }
             }
             if outcome == "timed_out" {
-                assert_eq!(receipt["next_wait"]["arguments"]["finish_request_id"],
-                    "question_fixture");
+                assert_eq!(
+                    receipt["next_wait"]["arguments"]["finish_request_id"],
+                    "question_fixture"
+                );
                 // A new outer call resumes the real request without resending
                 // the message; the old run cannot admit another wait.
                 let binding = run.binding(fixture.session.client_id()).unwrap();
                 let resumed = AuditRun::new("return await ui.wait(client,args);", None).unwrap();
-                resumed.bind(fixture.session.client_id(), &binding.owner,
-                    &binding.agent_id, &binding.token).unwrap();
+                resumed
+                    .bind(
+                        fixture.session.client_id(),
+                        &binding.owner,
+                        &binding.agent_id,
+                        &binding.token,
+                    )
+                    .unwrap();
                 let task = tokio::spawn(fixture.host(resumed.clone())(HostRequest::WaitUser {
                     client_id: fixture.session.client_id().into(),
-                    arguments: serde_json::from_value(
-                        receipt["next_wait"]["arguments"].clone()).unwrap(),
+                    arguments: serde_json::from_value(receipt["next_wait"]["arguments"].clone())
+                        .unwrap(),
                 }));
                 let (call, next) = fixture.next_call().await;
                 assert_eq!(next["op"], "wait");
                 assert_eq!(next["finish_request_id"], "question_fixture");
                 assert_ne!(next["wait_id"], wait_id);
                 assert!(!task.is_finished());
-                fixture.reply(call, native_decision(
-                    &next["wait_id"], "question_fixture", "yes")).await;
+                fixture
+                    .reply(
+                        call,
+                        native_decision(&next["wait_id"], "question_fixture", "yes"),
+                    )
+                    .await;
                 assert_eq!(task.await.unwrap().unwrap()["may_finish"], false);
                 let final_response = fixture.delivered(resumed).await;
-                assert_eq!(final_response["structuredContent"]["user_wait"][0]["may_finish"],
-                    true);
+                assert_eq!(
+                    final_response["structuredContent"]["user_wait"][0]["may_finish"],
+                    true
+                );
             }
         }
         fixture.close().await;
@@ -1117,21 +1226,36 @@ mod tests {
         let run = fixture.bound_run().await;
         let task = fixture.start_finish_message(&run);
         let (send, _) = fixture.next_call().await;
-        fixture.reply(send, json!({"structuredContent":{
-            "accepted":true,"message_id":"before_new_input"
-        }})).await;
+        fixture
+            .reply(
+                send,
+                json!({"structuredContent":{
+                    "accepted":true,"message_id":"before_new_input"
+                }}),
+            )
+            .await;
         let (wait, arguments) = fixture.next_call().await;
         let wait_id = arguments["wait_id"].clone();
         fixture.publish("continue-working").await;
         let (finish, finish_arguments) = fixture.next_call().await;
         assert_eq!(finish_arguments["op"], "finish");
         assert_eq!(finish_arguments["outcome"], "ready");
-        fixture.reply(finish, json!({"structuredContent":{
-            "wait_id":wait_id,"status":"ready"
-        }})).await;
-        fixture.reply(wait, json!({"structuredContent":{
-            "wait_id":wait_id,"status":"ready"
-        }})).await;
+        fixture
+            .reply(
+                finish,
+                json!({"structuredContent":{
+                    "wait_id":wait_id,"status":"ready"
+                }}),
+            )
+            .await;
+        fixture
+            .reply(
+                wait,
+                json!({"structuredContent":{
+                    "wait_id":wait_id,"status":"ready"
+                }}),
+            )
+            .await;
         let inner = task.await.unwrap().unwrap();
         assert_eq!(inner["structuredContent"]["message_id"], "before_new_input");
         assert_eq!(inner["structuredContent"]["may_finish"], false);
@@ -1142,9 +1266,15 @@ mod tests {
         assert_eq!(receipt["may_finish"], false);
         assert_eq!(receipt["task_active"], true);
         assert_eq!(receipt["continue_wait"], false);
-        assert!(receipt["next_wait"]["arguments"].get("finish_request_id").is_none());
-        assert_eq!(outer["structuredContent"]["user_messages"][0]["text"],
-            "local input continue-working");
+        assert!(
+            receipt["next_wait"]["arguments"]
+                .get("finish_request_id")
+                .is_none()
+        );
+        assert_eq!(
+            outer["structuredContent"]["user_messages"][0]["text"],
+            "local input continue-working"
+        );
         assert_eq!(fixture.state(), SteeringState::Delivered);
         fixture.close().await;
     }
@@ -1156,34 +1286,78 @@ mod tests {
         let b = fixture.bound_run().await;
         let task_a = fixture.start_finish_message(&a);
         let (send_a, _) = fixture.next_call().await;
-        fixture.reply(send_a, json!({"structuredContent":{
-            "accepted":true,"message_id":"message_a"
-        }})).await;
+        fixture
+            .reply(
+                send_a,
+                json!({"structuredContent":{
+                    "accepted":true,"message_id":"message_a"
+                }}),
+            )
+            .await;
         let (wait_a, args_a) = fixture.next_call().await;
         let task_b = fixture.start_finish_message(&b);
         let (send_b, _) = fixture.next_call().await;
-        fixture.reply(send_b, json!({"structuredContent":{
-            "accepted":true,"message_id":"message_b"
-        }})).await;
+        fixture
+            .reply(
+                send_b,
+                json!({"structuredContent":{
+                    "accepted":true,"message_id":"message_b"
+                }}),
+            )
+            .await;
         let (wait_b, args_b) = fixture.next_call().await;
-        assert_eq!(args_a["recipient"], a.binding(fixture.session.client_id()).unwrap().agent_id);
-        assert_eq!(args_b["recipient"], b.binding(fixture.session.client_id()).unwrap().agent_id);
+        assert_eq!(
+            args_a["recipient"],
+            a.binding(fixture.session.client_id()).unwrap().agent_id
+        );
+        assert_eq!(
+            args_b["recipient"],
+            b.binding(fixture.session.client_id()).unwrap().agent_id
+        );
         assert_ne!(args_a["recipient"], args_b["recipient"]);
         assert_ne!(args_a["wait_id"], args_b["wait_id"]);
         let duplicate = fixture.start_finish_message(&a).await.unwrap().unwrap_err();
-        assert!(duplicate.contains("one user wait per client"), "{duplicate}");
+        assert!(
+            duplicate.contains("one user wait per client"),
+            "{duplicate}"
+        );
         assert!(!task_a.is_finished());
         assert!(!task_b.is_finished());
-        fixture.reply(wait_b, native_decision(&args_b["wait_id"], "request_b", "yes")).await;
-        assert_eq!(task_b.await.unwrap().unwrap()["structuredContent"]["message_id"], "message_b");
+        fixture
+            .reply(
+                wait_b,
+                native_decision(&args_b["wait_id"], "request_b", "yes"),
+            )
+            .await;
+        assert_eq!(
+            task_b.await.unwrap().unwrap()["structuredContent"]["message_id"],
+            "message_b"
+        );
         let result_b = fixture.delivered(b).await;
-        assert_eq!(result_b["structuredContent"]["user_wait"][0]["may_finish"], true);
+        assert_eq!(
+            result_b["structuredContent"]["user_wait"][0]["may_finish"],
+            true
+        );
         assert!(!task_a.is_finished());
-        fixture.reply(wait_a, native_decision(&args_a["wait_id"], "request_a", "no")).await;
-        assert_eq!(task_a.await.unwrap().unwrap()["structuredContent"]["message_id"], "message_a");
+        fixture
+            .reply(
+                wait_a,
+                native_decision(&args_a["wait_id"], "request_a", "no"),
+            )
+            .await;
+        assert_eq!(
+            task_a.await.unwrap().unwrap()["structuredContent"]["message_id"],
+            "message_a"
+        );
         let result_a = fixture.delivered(a).await;
-        assert_eq!(result_a["structuredContent"]["user_wait"][0]["may_finish"], false);
-        assert_eq!(result_a["structuredContent"]["user_wait"][0]["finish_request_id"], "request_a");
+        assert_eq!(
+            result_a["structuredContent"]["user_wait"][0]["may_finish"],
+            false
+        );
+        assert_eq!(
+            result_a["structuredContent"]["user_wait"][0]["finish_request_id"],
+            "request_a"
+        );
         fixture.close().await;
     }
 
@@ -1205,24 +1379,54 @@ mod tests {
         // The coordinator already authorized cleanup and is awaiting its reply.
         // Losing membership here must redact the earlier ACK on every return.
         let binding = run.binding(fixture.session.client_id()).unwrap();
-        fixture.session.collaboration.dispatch(&binding.owner, "leave",
-            json!({"agent_id":binding.agent_id,"token":binding.token})).await.unwrap();
-        fixture.reply(finish, json!({"structuredContent":{
-            "wait_id":wait_id,"status":"ready"
-        }})).await;
-        fixture.reply(wait, json!({"structuredContent":{
-            "wait_id":wait_id,"status":"ready"
-        }})).await;
+        fixture
+            .session
+            .collaboration
+            .dispatch(
+                &binding.owner,
+                "leave",
+                json!({"agent_id":binding.agent_id,"token":binding.token}),
+            )
+            .await
+            .unwrap();
+        fixture
+            .reply(
+                finish,
+                json!({"structuredContent":{
+                    "wait_id":wait_id,"status":"ready"
+                }}),
+            )
+            .await;
+        fixture
+            .reply(
+                wait,
+                json!({"structuredContent":{
+                    "wait_id":wait_id,"status":"ready"
+                }}),
+            )
+            .await;
         let inner = task.await.unwrap().unwrap();
         assert_eq!(inner["isError"], true);
         assert_eq!(inner["structuredContent"]["may_finish"], false);
-        assert_eq!(inner["structuredContent"]["finish_wait"]["status"], "binding_invalid");
-        assert_eq!(inner["structuredContent"]["message_delivery"], "may_have_been_saved");
+        assert_eq!(
+            inner["structuredContent"]["finish_wait"]["status"],
+            "binding_invalid"
+        );
+        assert_eq!(
+            inner["structuredContent"]["message_delivery"],
+            "may_have_been_saved"
+        );
         assert!(!inner.to_string().contains("private_ack"));
         assert!(!inner.to_string().contains("never return after leave"));
         let outer = fixture.delivered(run).await;
-        assert_eq!(outer["structuredContent"]["user_wait"][0]["may_finish"], false);
-        assert_eq!(outer["structuredContent"]["user_wait"][0]["status"], "binding_invalid");
+        assert_eq!(
+            outer["structuredContent"]["user_wait"][0]["may_finish"],
+            false
+        );
+        assert_eq!(
+            outer["structuredContent"]["user_wait"][0]["status"],
+            "binding_invalid"
+        );
         assert_eq!(fixture.state(), SteeringState::Queued);
         fixture.close().await;
     }
@@ -1231,11 +1435,21 @@ mod tests {
     async fn finish_message_without_verified_thread_is_rejected_before_publication() {
         let mut fixture = Fixture::new().await;
         let run = AuditRun::new("return await say(client,args);", None).unwrap();
-        let error = fixture.start_finish_message(&run).await.unwrap().unwrap_err();
+        let error = fixture
+            .start_finish_message(&run)
+            .await
+            .unwrap()
+            .unwrap_err();
         assert!(error.contains("verified collab thread binding"), "{error}");
         assert!(run.wait_recipient(fixture.session.client_id()).is_none());
-        assert!(tokio::time::timeout(Duration::from_millis(50),
-            wire::read_frame(fixture.reader.as_mut().unwrap())).await.is_err());
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                wire::read_frame(fixture.reader.as_mut().unwrap())
+            )
+            .await
+            .is_err()
+        );
         fixture.close().await;
     }
 

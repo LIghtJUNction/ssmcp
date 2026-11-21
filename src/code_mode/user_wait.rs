@@ -124,8 +124,12 @@ pub(super) struct State {
 
 impl Record {
     fn receipt(&self) -> Value {
-        let may_finish = self.intent == Intent::Finish && self.outcome == Outcome::Decided
-            && self.finish_decision.as_ref().is_some_and(FinishReceipt::human_permission);
+        let may_finish = self.intent == Intent::Finish
+            && self.outcome == Outcome::Decided
+            && self
+                .finish_decision
+                .as_ref()
+                .is_some_and(FinishReceipt::human_permission);
         let mut receipt = json!({"schema_version":1,"client_id":self.client_id,"wait_id":self.wait_id,
             "recipient":self.recipient.agent_id().unwrap_or("next"),"intent":self.intent,
             "status":self.outcome,"reason":self.reason,"notification":self.notification,
@@ -134,17 +138,26 @@ impl Record {
             "may_finish":may_finish});
         if self.intent == Intent::Finish && !may_finish {
             let input = matches!(self.outcome, Outcome::Ready | Outcome::Received);
-            let authority = matches!(self.outcome, Outcome::AuthorizationRevoked
-                | Outcome::BindingInvalid | Outcome::Disconnected);
-            let denied = self.finish_decision.as_ref()
+            let authority = matches!(
+                self.outcome,
+                Outcome::AuthorizationRevoked | Outcome::BindingInvalid | Outcome::Disconnected
+            );
+            let denied = self
+                .finish_decision
+                .as_ref()
                 .is_some_and(|decision| decision.status == FinishStatus::Denied);
             let mut arguments = json!({"intent":"finish","timeout_ms":DEFAULT_TIMEOUT_MS});
             // Terminal decisions return immediately when read again. Only a
             // still-live Pending/Approved request can be resumed as a wait.
-            if !authority && !input
+            if !authority
+                && !input
                 && !matches!(self.outcome, Outcome::Cancelled | Outcome::Superseded)
-                && let Some(decision) = self.finish_decision.as_ref().filter(|decision|
-                    matches!(decision.status, FinishStatus::Pending | FinishStatus::Approved))
+                && let Some(decision) = self.finish_decision.as_ref().filter(|decision| {
+                    matches!(
+                        decision.status,
+                        FinishStatus::Pending | FinishStatus::Approved
+                    )
+                })
             {
                 arguments["finish_request_id"] = json!(decision.request_id);
             }
@@ -163,7 +176,9 @@ impl Record {
             receipt["continue_wait"] = json!(!input);
             receipt["next_wait"] = json!({"helper":"ui.wait","client_id":self.client_id,
                 "arguments":arguments,"new_tool_call":true});
-            receipt["completion_instruction"] = json!(format!("{context} Unless the final outer receipt grants may_finish:true, do not end the task. In a new outer tool call, actually await the indicated ui.wait after handling any new request. Do not use a timer, background sleep, repeated status reads, or a same-code_mode loop instead. Only a later explicit Human Yes consumed for this exact thread can authorize ending."));
+            receipt["completion_instruction"] = json!(format!(
+                "{context} Unless the final outer receipt grants may_finish:true, do not end the task. In a new outer tool call, actually await the indicated ui.wait after handling any new request. Do not use a timer, background sleep, repeated status reads, or a same-code_mode loop instead. Only a later explicit Human Yes consumed for this exact thread can authorize ending."
+            ));
         }
         receipt
     }
@@ -487,11 +502,13 @@ impl AuditRun {
             // needs only the decision facts and actionable next wait: copying
             // eight full instructions/decision payloads twice would exceed the
             // existing reserved envelope. Ordinary wait text stays unchanged.
-            let text_receipts: Vec<_> = receipts.iter().map(|receipt| {
-                if receipt["intent"] != "finish" {
-                    return receipt.clone();
-                }
-                json!({"client_id":receipt["client_id"],"wait_id":receipt["wait_id"],
+            let text_receipts: Vec<_> = receipts
+                .iter()
+                .map(|receipt| {
+                    if receipt["intent"] != "finish" {
+                        return receipt.clone();
+                    }
+                    json!({"client_id":receipt["client_id"],"wait_id":receipt["wait_id"],
                     "recipient":receipt["recipient"],"intent":receipt["intent"],
                     "status":receipt["status"],"may_finish":receipt["may_finish"],
                     "finish_request_id":receipt["finish_request_id"],
@@ -501,7 +518,8 @@ impl AuditRun {
                     "revision":receipt["finish_decision"]["revision"],
                     "consumed":receipt["finish_decision"]["consumed"],
                     "next_wait":receipt.get("next_wait")})
-            }).collect();
+                })
+                .collect();
             fields.insert("user_wait".into(), json!(receipts));
             content.push(json!({"type":"text","text":format!("USER WAIT\n{}\nOnly status received with matching user_messages confirms message delivery. End only when this outer receipt has status decided and may_finish true with a consumed Human Yes for the exact thread. Otherwise keep the task active: handle new input or explicit No, then actually await next_wait in a new outer tool call. Reuse only the pending request ID supplied in next_wait, never a terminal decision ID. Timeout, cancellation, reading a decision, timers, background sleep, polling, same-run loops and final answers do not substitute for the blocking wait. Full evidence and completion_instruction are in structuredContent.user_wait.", json!(text_receipts))}));
         }
@@ -653,10 +671,13 @@ mod tests {
                 assert!(!addition.to_string().contains("CONTINUATION REMINDER"));
                 assert_eq!(
                     fields["user_wait"][0]["continue_wait"],
-                    outcome == Outcome::TimedOut || (intent == Intent::Finish && outcome == Outcome::Cancelled)
+                    outcome == Outcome::TimedOut
+                        || (intent == Intent::Finish && outcome == Outcome::Cancelled)
                 );
                 assert_eq!(
-                    fields["user_wait"][0].get("completion_instruction").is_some(),
+                    fields["user_wait"][0]
+                        .get("completion_instruction")
+                        .is_some(),
                     intent == Intent::Finish
                 );
             }
@@ -743,7 +764,14 @@ mod tests {
     }
     #[test]
     fn finish_continuation_only_reuses_a_live_request_and_never_a_terminal_decision() {
-        for status in ["pending", "approved", "denied", "cancelled", "invalidated", "completed"] {
+        for status in [
+            "pending",
+            "approved",
+            "denied",
+            "cancelled",
+            "invalidated",
+            "completed",
+        ] {
             let run = finish_run();
             let mut decision = consumed_human_decision();
             decision["finish_decision"]["status"] = json!(status);
@@ -765,9 +793,16 @@ mod tests {
             assert_eq!(receipt["next_wait"]["new_tool_call"], true);
             assert_eq!(receipt["next_wait"]["arguments"]["intent"], "finish");
             assert_eq!(receipt["next_wait"]["arguments"]["timeout_ms"], 20_000);
-            assert_eq!(receipt["next_wait"]["arguments"]["finish_request_id"] == "question_exact",
-                matches!(status, "pending" | "approved"));
-            assert!(receipt["completion_instruction"].as_str().unwrap().contains("new outer tool call"));
+            assert_eq!(
+                receipt["next_wait"]["arguments"]["finish_request_id"] == "question_exact",
+                matches!(status, "pending" | "approved")
+            );
+            assert!(
+                receipt["completion_instruction"]
+                    .as_str()
+                    .unwrap()
+                    .contains("new outer tool call")
+            );
         }
 
         let run = finish_run();
@@ -781,8 +816,17 @@ mod tests {
         let receipt = run.user_wait_receipt("room");
         assert_eq!(receipt["status"], "decided");
         assert_eq!(receipt["may_finish"], false);
-        assert!(receipt["next_wait"]["arguments"].get("finish_request_id").is_none());
-        assert!(receipt["completion_instruction"].as_str().unwrap().contains("explicitly declined"));
+        assert!(
+            receipt["next_wait"]["arguments"]
+                .get("finish_request_id")
+                .is_none()
+        );
+        assert!(
+            receipt["completion_instruction"]
+                .as_str()
+                .unwrap()
+                .contains("explicitly declined")
+        );
 
         let run = finish_run();
         assert!(run.capture_finish_wait("room", &consumed_human_decision()));
@@ -813,26 +857,47 @@ mod tests {
                 agent_id: "a".repeat(128),
                 token: "synthetic-token".into(),
             });
-            run.begin_user_wait(&client, recipient, Intent::Finish).unwrap();
+            run.begin_user_wait(&client, recipient, Intent::Finish)
+                .unwrap();
             run.begin_finish_wait(&client, Some(request_id.clone()), "episode".into());
-            assert!(run.capture_finish_wait(&client, &json!({
-                "finish_request_id":request_id,"finish_decision":decision
-            })));
-            run.wait_notification(&client, &json!({"notification":{
-                "status":"unavailable","reason":"r".repeat(64),"deduplicated":false
-            }}));
+            assert!(run.capture_finish_wait(
+                &client,
+                &json!({
+                    "finish_request_id":request_id,"finish_decision":decision
+                })
+            ));
+            run.wait_notification(
+                &client,
+                &json!({"notification":{
+                    "status":"unavailable","reason":"r".repeat(64),"deduplicated":false
+                }}),
+            );
             run.finish_wait_state(&client, Outcome::TimedOut, "wait_finished_without_delivery");
         }
         let addition = run.user_wait_addition();
-        assert_eq!(addition["structuredContent"]["user_wait"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            addition["structuredContent"]["user_wait"]
+                .as_array()
+                .unwrap()
+                .len(),
+            8
+        );
         let bytes = serde_json::to_vec(&addition).unwrap().len();
-        assert!(bytes <= ENVELOPE_RESERVE_BYTES, "{bytes} exceeds {ENVELOPE_RESERVE_BYTES}");
+        assert!(
+            bytes <= ENVELOPE_RESERVE_BYTES,
+            "{bytes} exceeds {ENVELOPE_RESERVE_BYTES}"
+        );
         assert_eq!(run.user_wait_reserve_bytes(), ENVELOPE_RESERVE_BYTES);
-        for receipt in addition["structuredContent"]["user_wait"].as_array().unwrap() {
-            assert_eq!(receipt["next_wait"]["arguments"]["finish_request_id"], request_id);
+        for receipt in addition["structuredContent"]["user_wait"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(
+                receipt["next_wait"]["arguments"]["finish_request_id"],
+                request_id
+            );
             assert_eq!(receipt["finish_decision"], decision);
             assert_eq!(receipt["may_finish"], false);
         }
     }
-
 }
