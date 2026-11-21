@@ -218,11 +218,24 @@ impl Server {
                         Ok(response)
                     }
                     Operation::CallTool { name, arguments }
+                        if name == "ssmcp.client.capabilities" =>
+                    {
+                        assert_eq!(arguments, json!({}));
+                        // This bounded wire fixture predates editable tool sources.
+                        // Negotiate the real legacy contract without advertising a
+                        // resource bundle that this fixture does not implement.
+                        Ok(ssmcp::backend::result(json!({
+                            "schema":"ssmcp.client.capabilities.v1",
+                            "client_version":"0.10.25",
+                            "thread_scope":1,
+                            "tool":name,"arguments":arguments
+                        })))
+                    }
+                    Operation::CallTool { name, arguments }
                         if matches!(
                             name.as_str(),
                             "ssmcp.ui.get"
                                 | "ssmcp.ui.queue"
-                                | "ssmcp.client.capabilities"
                                 | "ssmcp.resources.list"
                                 | "ssmcp.resources.templates"
                                 | "ssmcp.resources.read"
@@ -750,10 +763,40 @@ async fn local_composer_delivers_at_response_boundary_and_exact_targets_require_
         )
         .await
         .unwrap();
-    let result = server
+    let passive = server
         .call(
             "code_mode",
             json!({"code":"return 42;","agent":{"client_id":target,"id":agent_id,"token":token}}),
+        )
+        .await;
+    assert_eq!(passive["result"], 42);
+    assert!(
+        passive.get("user_messages").is_none(),
+        "request identity alone must not claim the directed requirement"
+    );
+    let snapshot = server
+        .steer(1, wire::SteeringCommand::Snapshot {})
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == "input")
+            .expect("directed requirement disappeared")
+            .state,
+        wire::SteeringState::Queued
+    );
+    let result = server
+        .call(
+            "code_mode",
+            json!({
+                "code":format!(
+                    "await call({}, 'fixture.echo', {{value:'explicit-input'}}); return 42;",
+                    json!(target)
+                ),
+                "agent":{"client_id":target,"id":agent_id,"token":token}
+            }),
         )
         .await;
     assert_eq!(result["result"], 42);

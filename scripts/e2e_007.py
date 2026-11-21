@@ -202,6 +202,7 @@ class Fixture:
         shutil.copy2(binary, self.snapshot)
         shutil.copy2(binary, self.installed)
         self.state = relay.State()
+        self.state.rejected = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
         self.server.state = self.state
