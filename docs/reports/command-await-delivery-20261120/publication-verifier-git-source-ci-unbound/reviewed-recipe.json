@@ -1,0 +1,58 @@
+{
+  "schema": "ssmcp-h2-ci-reviewed-recipe-v1",
+  "recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
+  "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
+  "files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 15351,
+      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
+    },
+    {
+      "path": ".github/workflows/deploy-server.yml",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    {
+      "path": "scripts/release.py",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    {
+      "path": "scripts/install.sh",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    }
+  ],
+  "candidate_sha": null,
+  "workflow_sha": null,
+  "run_id": null,
+  "execution_performed": false,
+  "previous_recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+  "previous_static_helper_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+  "independent_ci_candidate_step": {
+    "yaml_step": 19,
+    "expected_api_step": 20,
+    "name": "Preserve the Linux candidate client",
+    "standalone_workflow_name": "CI",
+    "caller_workflow_name": "Release",
+    "release_linux_jobs_expected_conclusion": "skipped",
+    "expected_release_linux_uploads": {
+      "ubuntu-24.04": 2,
+      "ubuntu-24.04-arm": 1
+    },
+    "auxiliary_artifact_name": "ssmcp-linux-x86_64-candidate",
+    "auxiliary_artifact_downloaded_or_used_as_release_evidence": false
+  },
+  "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context"
+}
