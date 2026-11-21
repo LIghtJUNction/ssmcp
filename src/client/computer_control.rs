@@ -1,5 +1,6 @@
 //! Local Zuse CLI lifecycle commands, using the same manager as the native tools.
 use std::ffi::OsString;
+use std::io::{self, Write};
 
 use serde_json::{Value, json};
 
@@ -18,8 +19,21 @@ SSMCP does not embed those controls or provide an action proxy.
 An omitted VERSION selects the latest stable release. Downloading does not install
 or execute it. Installation does not overwrite an external Zuse executable or change PATH.
 Use the returned installation path directly, or configure your own PATH explicitly.
---json returns the complete native MCP result.
+--json writes one complete native MCP result to stdout. Operation failures
+include isError: true and exit nonzero. Syntax and initialization errors
+exit nonzero and write a diagnostic to stderr.
 ";
+
+#[derive(Debug)]
+pub(super) struct ReportedOperationError(String);
+
+impl std::fmt::Display for ReportedOperationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ReportedOperationError {}
 
 #[derive(Debug, PartialEq)]
 enum Request {
@@ -77,7 +91,21 @@ pub(crate) async fn dispatch(args: &[OsString]) -> crate::Result<bool> {
             json,
         } => {
             let computer = crate::computer::Computer::new(std::env::current_dir()?)?;
-            let result = computer.perform(name, arguments).await?;
+            let result = match computer
+                .perform_with_child_diagnostics(name, arguments, !json)
+                .await
+            {
+                Ok(result) => result,
+                Err(message) if json => {
+                    let diagnostic = json!({"type":"stderr","text": message});
+                    let safe = super::render::diagnostic_text(&diagnostic)
+                        .unwrap_or_else(|| "Zuse operation failed".into());
+                    let result = crate::backend::error_result(&safe);
+                    writeln!(io::stdout().lock(), "{}", serde_json::to_string(&result)?)?;
+                    return Err(ReportedOperationError(safe).into());
+                }
+                Err(message) => return Err(message.into()),
+            };
             if json {
                 println!("{}", serde_json::to_string(&result)?);
             } else {

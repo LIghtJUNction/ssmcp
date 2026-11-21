@@ -3126,6 +3126,13 @@ pub fn report_error(error: &str) {
     render::status("ssmcp", "Error", error);
 }
 
+/// Report a CLI failure unless its diagnostic was already written as a tool result.
+pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
+    if !error.is::<computer_control::ReportedOperationError>() {
+        report_error(&error.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
