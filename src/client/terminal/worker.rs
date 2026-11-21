@@ -225,12 +225,16 @@ mod tests {
         for split in 0..=bytes.len() {
             let mut state = state(20, 80, false);
             state.conversation.composer.set_text("preserved draft @file $skill");
-            let before = state.conversation.snapshot();
+            let mut before = state.conversation.snapshot();
+            // This global queue belongs to other concurrent tests as well.
+            before.as_object_mut().unwrap().remove("pending_questions");
             let now = Instant::now();
             assert!(state.keyboard(&bytes[..split], now, false).is_empty());
             assert!(state.keyboard(&bytes[split..], now, false).is_empty());
             assert!(state.keyboard(&[], now + Duration::from_millis(100), true).is_empty());
-            assert_eq!(state.conversation.snapshot(), before);
+            let mut after = state.conversation.snapshot();
+            after.as_object_mut().unwrap().remove("pending_questions");
+            assert_eq!(after, before);
             assert!(state.actions.is_empty());
             assert!(!state.selection);
             assert!(!state.help);
