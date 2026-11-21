@@ -233,7 +233,7 @@ async fn bounded(client: &reqwest::Client, url: &str, limit: usize) -> Result<Ve
 pub(super) async fn download(requested: Option<&str>) -> Result<(Release, Vec<u8>), String> {
     let requested = requested.map(version).transpose()?;
     let target = target()?;
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::builder()
         .user_agent(concat!("ssmcp/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
         .connect_timeout(Duration::from_secs(10))
