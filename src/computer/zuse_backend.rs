@@ -1029,6 +1029,7 @@ fn button_name(button: Button) -> &'static str {
 struct Cancellation {
     cancelled: StdMutex<bool>,
     changed: Condvar,
+    submission: StdMutex<()>,
     host_ticket: OnceLock<host_control::WorkerTicket>,
     observation: OnceLock<zuse::observation::Cancellation>,
 }
@@ -1056,17 +1057,19 @@ impl Cancellation {
         }
     }
     fn submit<T>(&self, operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-        let cancelled = self
-            .cancelled
+        // Serialize native submissions without blocking EOF from publishing
+        // cancellation. An admitted call still owns its result and cleanup.
+        let _submission = self
+            .submission
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if *cancelled {
-            return Err(CANCELLED.into());
-        }
-        // Cancellation and native submission share this lock. Once cancel()
-        // returns, no later frame can pass this boundary, including an endpoint.
+        self.check()?;
         if let Some(ticket) = self.host_ticket.get() {
-            ticket.submit(operation)
+            ticket.submit(|| {
+                // Cancellation may have arrived while waiting for the ticket lock.
+                self.check()?;
+                operation()
+            })
         } else {
             operation()
         }
@@ -2415,6 +2418,51 @@ mod tests {
         let waiting = std::thread::spawn(move || worker.delay(Duration::from_secs(5)));
         cancellation.cancel();
         assert_eq!(waiting.join().unwrap().unwrap_err(), CANCELLED);
+    }
+
+    #[test]
+    fn cancellation_returns_while_native_submit_is_blocked_and_preserves_its_error() {
+        const NATIVE_ERROR: &str = "native write failed; release unconfirmed";
+        let cancellation = Cancellation::default();
+        let timeout = Duration::from_secs(5);
+        std::thread::scope(|threads| {
+            let cancellation = &cancellation;
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let submitted = threads.spawn(move || {
+                cancellation.submit(|| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Err::<(), _>(NATIVE_ERROR.to_owned())
+                })
+            });
+            let entered = entered_rx.recv_timeout(timeout);
+            let (cancelled_tx, cancelled_rx) = mpsc::channel();
+            let cancelling = threads.spawn(move || {
+                cancellation.cancel();
+                cancelled_tx.send(()).unwrap();
+            });
+            let cancelled = cancelled_rx.recv_timeout(timeout);
+            let still_running = !submitted.is_finished();
+
+            // Drain both threads before asserting, even if cancellation timed out.
+            let released = release_tx.send(());
+            let outcome = submitted.join();
+            let cancel_outcome = cancelling.join();
+            assert_eq!(entered, Ok(()));
+            assert_eq!(cancelled, Ok(()), "cancel() waited for native input");
+            assert!(
+                still_running,
+                "the native submission returned before release"
+            );
+            released.unwrap();
+            cancel_outcome.unwrap();
+            assert_eq!(outcome.unwrap(), Err(NATIVE_ERROR.to_owned()));
+            assert_eq!(
+                cancellation.submit::<()>(|| panic!("native input after cancellation")),
+                Err(CANCELLED.to_owned())
+            );
+        });
     }
 
     #[test]
