@@ -192,7 +192,7 @@ Use `return await ui.wait(clientId,{intent:"need_user",timeout_ms:20000})` when 
 Before ending, bind the existing asking participant and request a real local Human No/Yes decision:
 
 ```js
-await collab.bind(clientId, {agent_id: participant.id, token: participant.token});
+await collab.bind(clientId, {agent_id: participant.agent_id, token: participant.token});
 return await ui.wait(clientId, {
   intent: "finish",
   reason: "The work is ready. May this conversation end now?",

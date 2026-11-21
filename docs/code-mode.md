@@ -228,7 +228,7 @@ Bind an existing participant with its real ID and private token, then request th
 
 ```js
 await collab.bind(clientId, {
-  agent_id: participant.id,
+  agent_id: participant.agent_id,
   token: participant.token,
 });
 return await ui.wait(clientId, {
@@ -264,7 +264,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`，最终回复不再需要结束许可。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
+公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
 
 `ssmcp.ui.ask` 立即返回，终端 Shift+Up 打开真实用户的问题队列。已验证提问线程通过 `question_answers` 接收答案；历史 `human/agent` 来源保留，agent 代答入口已关闭。未绑定线程只提供手动读取，显式 `ssmcp.ui.questions` 不消费答案。[问题队列](../src/client/interface/questions.rs) · [交付规则](finish-and-questions.md#异步问题与答案)
 

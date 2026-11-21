@@ -29,7 +29,7 @@ return await ui.wait(client.id, {
 
 ```javascript
 await collab.bind(client.id, {
-  agent_id: participant.id,
+  agent_id: participant.agent_id,
   token: participant.token,
 });
 return await ui.wait(client.id, {
