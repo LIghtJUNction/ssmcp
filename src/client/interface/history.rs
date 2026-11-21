@@ -204,7 +204,7 @@ enum Entry {
 struct Active {
     metadata: SessionMetadata,
     // A lifetime lease prevents another client from editing or evicting this session.
-    _lease: File,
+    _lease: HistoryLock,
 }
 
 struct History {
@@ -386,13 +386,13 @@ impl History {
         })
     }
 
-    fn lease(&self, id: &str) -> Result<File, String> {
+    fn lease(&self, id: &str) -> Result<HistoryLock, String> {
         let lease = self
             .directory
             .open(&format!("{id}.lease"), true, true, false)?;
         crate::platform::lock_file(&lease, true)
             .map_err(|_| "conversation is open in another client; choose a different history")?;
-        Ok(lease)
+        Ok(HistoryLock { _file: lease })
     }
 
     fn load(&self, id: &str) -> Result<Conversation, String> {
@@ -1108,7 +1108,7 @@ impl Drop for HistoryLock {
     fn drop(&mut self) {
         // flock is owned by the open file description. A concurrent fork can
         // retain a duplicate until exec, so closing only our fd can leave a
-        // completed transaction locked. Explicitly release our own lock first.
+        // finished transaction or released conversation locked.
         #[cfg(unix)]
         while let Err(error) = self._file.unlock() {
             if error.kind() != io::ErrorKind::Interrupted {
@@ -1954,9 +1954,22 @@ mod tests {
         let saved = parent.current().unwrap().unwrap();
         let mut replacement = temp.history();
         assert!(replacement.resume(&saved.metadata.id).is_err());
+        // A concurrently forked child can retain a copy until exec.
+        #[cfg(unix)]
+        let inherited = parent
+            .active
+            .as_ref()
+            .unwrap()
+            ._lease
+            ._file
+            .try_clone()
+            .unwrap();
         parent.release_current();
         assert!(parent.current().unwrap().is_none());
         assert_eq!(replacement.resume(&saved.metadata.id).unwrap(), saved);
+        #[cfg(unix)]
+        drop(inherited);
+        assert!(parent.resume(&saved.metadata.id).is_err());
         assert_eq!(replacement.current().unwrap().unwrap(), saved);
         replacement.record("user", "Continue after reload").unwrap();
         let continued = replacement.current().unwrap().unwrap();
