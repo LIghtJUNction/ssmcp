@@ -2,7 +2,8 @@
 
 pub(crate) const MAX_WORKERS: usize = 128;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     pub(crate) count: usize,
     pub(crate) factor: f64,
@@ -28,13 +29,15 @@ impl Config {
 /// The effective total allocation budget, after parent cgroup/container caps.
 /// This is not the fluctuating MemAvailable reading, nor an assertion that
 /// memory outside the pool is unused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Capacity {
     pub(crate) cpu_micros_per_second: u64,
     pub(crate) memory_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Allocation {
     pub(crate) cpu_micros_per_second: u64,
     pub(crate) memory_bytes: u64,
