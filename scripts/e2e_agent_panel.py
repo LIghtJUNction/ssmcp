@@ -4,7 +4,7 @@
 Build ssmcp, ssmcpd and examples/vt_snapshot, then run:
   python3 scripts/e2e_agent_panel.py --bin-dir target/debug --out /tmp/agent-panel
 
-Reuses the composer fixture's isolated SSH/OAuth connection and real terminal
+Reuses the composer fixture's isolated account/OAuth connection and real terminal
 decoder. The two members are test identities; no model or live session is used.
 Snapshots and PNGs come from the production compositor, using the existing
 render_ui_snapshot.py renderer (Pillow and a monospace font are required).
@@ -26,14 +26,17 @@ from e2e_client_ui import column, empty_composer_ready
 from e2e_dashboard import sha256, text
 
 
-CALLER = {"name": "ChatGPT", "model": "Fixture model"}
+CALLER = {"name": "ChatGPT", "model": "Model A"}
 OBSERVER = {"name": "Panel observer", "model": "Fixture observer"}
 
 
 def list_rows(snapshot):
-    # At these widths the agent list occupies at most the first 40 cells.
-    # Exclude the header/composer and the separate details/sidebar columns.
-    return [row[:40] for row in snapshot["rows"][1:-5]]
+    # Match the production Sessions list width, excluding the details/sidebar.
+    # Verified account attribution precedes the caller's display name.
+    columns = snapshot["size"][1]
+    divider = snapshot["rows"][0].find("│")
+    width = divider if divider >= 0 else min(2 * columns // 5, 40) if columns >= 76 else columns
+    return [row[:width] for row in snapshot["rows"][1:-5]]
 
 
 def selected_name(snapshot, name):
@@ -117,6 +120,159 @@ class AgentPanel(Composer):
         self.check(state["target"] == member["agent_id"],
                    "keyboard selection targets the exact member ID despite equal display names")
 
+
+    def click_sidebar(self, front, label, *, occurrence=0, expected=1, button=0):
+        def hits(shot):
+            cells = shot["cells"]
+            divider = next((i for i, cell in enumerate(cells[0])
+                            if cell["text"] == "│"), None)
+            if divider is None:
+                return []
+            found = []
+            for y, row in enumerate(cells[:-1]):
+                for x in range(divider + 1, len(row) - len(label) + 1):
+                    if "".join(cell["text"] for cell in row[x:x + len(label)]) == label:
+                        found.append((x, y))
+            return found
+        shot = front.until(lambda shot: len(hits(shot)) == expected,
+                           "visible sidebar rows for " + label, cells=True)
+        x, y = hits(shot)[occurrence]
+        sequence = f"\x1b[<{button};{x + 1};{y + 1}"
+        front.send((sequence + "M" + sequence + "m").encode())
+
+    def marker(self, text, member=None):
+        call = "return await call(%s, 'ssmcp.ui.message', %s);" % (
+            json.dumps(self.client_id), json.dumps({"text": text, "kind": "progress"}))
+        if member is not None:
+            call = "await collab.bind(%s, %s); %s" % (
+                json.dumps(self.client_id), json.dumps({
+                    "agent_id": member["agent_id"], "token": member["token"]}), call)
+        result = self.response(call)
+        native = result["structuredContent"]["result"]
+        receipt = native.get("structuredContent", {})
+        self.check(not native.get("isError") and receipt.get("accepted") is True
+                   and receipt.get("history_saved") is True and receipt.get("shown") is True,
+                   "owned thread marker is saved to the current conversation")
+        return receipt["message_id"]
+
+    def thread_page(self, member=None, *, main=False):
+        arguments = {"action": "thread", "client_id": self.client_id, "limit": 64}
+        if member is not None:
+            arguments["agent_id"] = member["agent_id"]
+        elif main:
+            arguments["main"] = True
+        return self.observe("ssmcp.ui.history", arguments)
+
+    def leave_thread_history(self, front):
+        front.send(ESC)
+        front.until(lambda shot: column(shot) == ("sessions", 1, 8),
+                    "history returns to Sessions")
+        front.send(ESC)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+                    and not shot["hide_cursor"], "Sessions returns to the same composer")
+
+    def member_history_actions(self, front, members, composition):
+        # Exercise the site's default sidebar=false layout first.
+        front.send(b"\x1bOR")
+        front.until(lambda shot: "│" not in shot["rows"][0],
+                    "the member sidebar is explicitly hidden")
+        self.check(self.ui("/config")["sidebar"] is False,
+                   "keyboard history works without the optional sidebar")
+        queue_before = self.queue()["queue"]
+        first, second = members
+        markers = ("AGENT_PANEL_A_ONLY", "AGENT_PANEL_B_ONLY", "AGENT_PANEL_MAIN_ONLY")
+        self.marker(markers[0], first)
+        self.marker(markers[1], second)
+        self.marker(markers[2])
+        current = [item["id"] for item in self.observe(
+            "ssmcp.ui.history", {"action": "list"})["sessions"] if item["current"]]
+        self.check(len(current) == 1, "both same-name members share one current conversation owner")
+
+        for member, own, other in ((first, markers[0], markers[1]),
+                                   (second, markers[1], markers[0])):
+            page = self.thread_page(member)
+            serialized = json.dumps(page["events"], ensure_ascii=False)
+            self.check(page["scope"]["agent_id"] == member["agent_id"]
+                       and page["scope"]["client_id"] == self.client_id
+                       and page["scope"]["provenance"] == "authenticated_call_scope"
+                       and page["scope"]["includes_unattributed"] is False
+                       and own in serialized and other not in serialized
+                       and markers[2] not in serialized
+                       and all(event["source"]["agent_id"] == member["agent_id"]
+                               for event in page["events"]),
+                       "same-name thread history contains only its authenticated marker")
+            self.agents(front)
+            self.highlight_recipient(front, member)
+            front.send(b"h")
+            state = self.wait_conversation(front, lambda state:
+                state["view"] == "history" and state["thread_history"] is not None
+                and state["thread_history"]["scope"] == page["scope"],
+                "h opens the exact selected member history")
+            shown = front.until(lambda shot: own in text(shot), "the selected thread marker is visible")
+            self.check(other not in text(shown) and markers[2] not in text(shown)
+                       and state["thread_history"]["read_only"] is True
+                       and {key: state[key] for key in composition} == composition,
+                       "the history frame excludes the other member and keeps the composition")
+            if member is second:
+                self.marker("AGENT_PANEL_A_LATE", first)
+                late = self.thread_page(first)
+                state = self.wait_conversation(front, lambda state:
+                    state["thread_history"] is not None
+                    and state["thread_history"]["scope"] == page["scope"]
+                    and state["thread_history"]["next_cursor"] >= late["next_cursor"],
+                    "the B history has scanned past the late A event")
+                shown = front.snapshot()
+                self.check("AGENT_PANEL_A_LATE" not in text(shown)
+                           and {key: state[key] for key in composition} == composition,
+                           "a late A reply never appears in B's already open history")
+            self.leave_thread_history(front)
+
+        self.agents(front)
+        self.highlight_recipient(front, first)
+        front.send(b"h")
+        front.until(lambda shot: "AGENT_PANEL_A_LATE" in text(shot),
+                    "returning to A reveals its late reply")
+        self.leave_thread_history(front)
+        aggregate = self.thread_page()
+        main = self.thread_page(main=True)
+        self.check(all(marker in json.dumps(aggregate["events"]) for marker in
+                       (*markers, "AGENT_PANEL_A_LATE"))
+                   and markers[2] in json.dumps(main["events"])
+                   and markers[0] not in json.dumps(main["events"])
+                   and markers[1] not in json.dumps(main["events"]),
+                   "the process overview retains both members and main remains a separate scope")
+        returned = self.ui("/display/conversation")
+        owner_after = [item["id"] for item in self.observe(
+            "ssmcp.ui.history", {"action": "list"})["sessions"] if item["current"]]
+        self.check(returned["view"] == "activity" and returned["thread_history"] is None
+                   and {key: returned[key] for key in composition} == composition
+                   and owner_after == current and self.queue()["queue"] == queue_before,
+                   "history navigation preserves owner, draft, recipients, group and queue")
+
+        front.send(b"\x1bOR")
+        roster = self.queue()["agents"]
+        chosen = next(member for member in members if member["agent_id"] == roster[0]["agent_id"])
+        page = self.thread_page(chosen)
+        self.click_sidebar(front, "Builder", expected=2)
+        picked = self.wait_conversation(front, lambda state:
+            state["view"] == "agents" and state["selected_agent"] == "member:" + chosen["agent_id"],
+            "sidebar highlights the exact painted member")
+        self.check({key: picked[key] for key in composition} == composition
+                   and self.queue()["queue"] == queue_before,
+                   "sidebar left-click selects a row without sending or changing recipients")
+        front.send(ESC)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "return to sidebar overview")
+        self.click_sidebar(front, "Builder", expected=2, button=2)
+        opened = self.wait_conversation(front, lambda state:
+            state["view"] == "history" and state["thread_history"] is not None
+            and state["thread_history"]["scope"] == page["scope"],
+            "sidebar right-click opens the exact member without prior selection")
+        self.check(opened["thread_history"]["read_only"] is True
+                   and {key: opened[key] for key in composition} == composition
+                   and self.queue()["queue"] == queue_before,
+                   "sidebar history keeps the original composition and never sends")
+        self.leave_thread_history(front)
+
     def run(self):
         self.prepare()
         self.workspace = self.directory / "workspace"
@@ -162,10 +318,12 @@ class AgentPanel(Composer):
             front, lambda state: state["draft"]["text"] == draft and state["draft"]["cursor"] == 0,
             "the Unicode draft did not retain its cursor at the beginning",
         )
-        composition = {key: original[key] for key in ("draft", "target", "editing")}
+        composition = {key: original[key] for key in
+                       ("draft", "target", "editing", "native_recipient", "group_selected")}
+        self.member_history_actions(front, members, composition)
         self.agents(front)
         shown = self.select_name(front, CALLER["name"])
-        self.check(sum("Builder" in row for row in list_rows(shown)) == 2,
+        self.check(sum("Builder" in row and "↳" not in row for row in list_rows(shown)) == 2,
                    "two same-name members retain separate visible roster entries")
         self.check(all("…" + member["agent_id"][-8:] in "\n".join(list_rows(shown))
                        for member in members),
@@ -195,6 +353,19 @@ class AgentPanel(Composer):
         self.check(details["draft"] == composition["draft"],
                    "audit details preserve the existing Unicode draft and cursor")
         self.save_shot("call-details", front)
+        expected_run = self.ui("/display/audit/selected/run_id")
+        front.send(ESC)
+        front.until(lambda shot: selected_name(shot, CALLER["name"]), "back to the selected caller")
+        front.send(ESC)
+        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "the caller sidebar")
+        self.click_sidebar(front, CALLER["model"], button=2)
+        front.until(lambda shot: "Observed call ·" in text(shot)
+                    and "terminal.status" in text(shot), "sidebar opens the drawn call audit")
+        reopened = self.ui("/display/conversation")
+        self.check(self.ui("/display/audit/detail") is True
+                   and self.ui("/display/audit/selected/run_id") == expected_run
+                   and {key: reopened[key] for key in composition} == composition,
+                   "observed sidebar history opens the exact run without changing the recipient")
         front.send(ESC)
         front.until(lambda shot: selected_name(shot, CALLER["name"]),
                     "Escape returning to the same caller row")
@@ -205,10 +376,10 @@ class AgentPanel(Composer):
         self.check(sum(CALLER["name"] in row for row in list_rows(shown)) == 1,
                    "narrow terminals retain one selected caller row")
         self.save_shot("narrow", front)
-        self.work(controller={"name": CALLER["name"], "model": "Other model"})
+        self.work(controller={"name": CALLER["name"], "model": "Model B"})
         shown = front.until(
             lambda shot: CALLER["model"] in "\n".join(list_rows(shot))
-            and "Other model" in "\n".join(list_rows(shot)),
+            and "Model B" in "\n".join(list_rows(shot)),
             "distinct models remaining identifiable in the narrow caller list",
         )
         self.check(sum(CALLER["name"] in row for row in list_rows(shown)) == 2,
@@ -263,8 +434,8 @@ def main():
     started = time.monotonic()
     report = {
         "status": "failed", "platform": platform.system(),
-        "transport": "isolated SSH/OAuth + owned PTY + independent vt100 decoder",
-        "scope": "caller grouping, stable navigation, same-name members and exact delivery; no models",
+        "transport": "isolated account/OAuth + owned PTY + independent vt100 decoder",
+        "scope": "caller grouping, keyboard/sidebar thread history, same-name isolation and exact delivery; no models",
         "binaries": {name: sha256(path) for name, path in (
             ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"),
             ("vt_snapshot", decoder),
@@ -301,3 +472,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
