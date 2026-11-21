@@ -8,6 +8,8 @@
 
 回归测试使用独立文件句柄实际持锁，检查观察与撤销超时后状态保持原值、显式切换继续等待，以及放锁后提交新状态。原有四线程共十六次切换的并发用例继续检查更新序列。Windows ARM 的平台结果以本版正式发布检查为准。[存储回归测试](../src/computer/host_control/storage.rs) · [并发切换测试](../src/computer/host_control/tests.rs)
 
+私有桌面的分配锁在持有对象释放时显式解锁，避免进程启动期间继承的文件句柄延长锁占用。回归测试保留一个复制句柄，检查持有对象释放后独立句柄能立即取得锁；原有权限、链接和文件替换检查继续执行。[桌面分配锁](../src/computer/isolated/display.rs) · [分配锁测试](../src/computer/isolated/display/tests.rs)
+
 账号端到端验收清单包含保留的 `ssmcp.ui.reply`，并继续精确核对工具名称集合、数量、重复项和参数 schema。这个接口负责接收方提交实际线程结果，与已退役的结束审批接口分别处理。[账号验收](../scripts/e2e.py) · [线程结果回传](client-accounts.md) · [正常回复与用户问题](finish-and-questions.md)
 
 macOS 的历史、目标、用户问题、计时与更新测试先解析临时目录的真实路径，再建立私有测试目录，适配系统临时目录的路径映射。测试继续执行原有的私有路径、会话归属与授权检查。[历史目录检查](../src/client/interface/history.rs) · [目标测试](../src/client/terminal/conversation/goals/tests.rs) · [计时测试](../src/runtime/time/tests.rs)
