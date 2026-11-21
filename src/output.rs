@@ -1747,7 +1747,10 @@ mod tests {
         assert_eq!(refused.directory, fixture.path);
         assert_eq!(refused.operation, "initialize retention for");
         assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
-        assert!(error.contains("open output cleanup lock:"), "{error}");
+        assert!(
+            error.to_string().contains("open output cleanup lock:"),
+            "{error}"
+        );
         assert_eq!(std::fs::read_link(&path).unwrap(), target);
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched lock target");
     }

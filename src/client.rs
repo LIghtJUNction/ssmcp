@@ -48,6 +48,7 @@ mod trust;
 pub(crate) mod ui;
 mod ui_command;
 mod update;
+mod version;
 #[cfg(target_os = "linux")]
 mod zero;
 
@@ -98,6 +99,7 @@ Options
   --agent NAME  Chat recipient (next-caller by default)
   --load-harness NAME  Preload one native protocol
   --list-harnesses     List supported harness providers
+  --version [--all]    Show the version or the locked dependency tree
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -117,6 +119,7 @@ Usage: ssmcp username@server [options]
        ssmcp config path
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
        ssmcp setup [--server URL] [--no-browser]
@@ -609,6 +612,7 @@ impl Options {
                     print!("{HELP_FULL}");
                     return Ok(None);
                 }
+                Some("--all") => return Err("--all requires a top-level --version request".into()),
                 Some("-V" | "--version") => {
                     println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
                     return Ok(None);
@@ -1588,8 +1592,13 @@ async fn retry_legacy_self_account(
 }
 
 pub async fn run() -> crate::Result<()> {
+    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(request) = version::request(&args)? {
+        print!("{}", version::render(request)?);
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__local-relay")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__local-relay")) {
         let code = match local::relay().await {
             Ok(()) => 0,
             Err(error) => {
@@ -1601,8 +1610,8 @@ pub async fn run() -> crate::Result<()> {
         // reader when the host closes first. It owns no tool processes.
         std::process::exit(code);
     }
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__tty-view")) {
-        let args: Vec<_> = std::env::args_os().skip(2).collect();
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__tty-view")) {
+        let args = &args[1..];
         if args.len() != 2 {
             return Err("terminal viewer requires endpoint directory and slot".into());
         }
@@ -1612,7 +1621,7 @@ pub async fn run() -> crate::Result<()> {
             .ok_or("invalid observer slot")?;
         return crate::observer::viewer(std::path::Path::new(&args[0]), slot).await;
     }
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__relay")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__relay")) {
         let code = match relay::run().await {
             Ok(()) => 0,
             Err(error) => {
@@ -1625,10 +1634,9 @@ pub async fn run() -> crate::Result<()> {
         std::process::exit(code);
     }
     #[cfg(target_os = "linux")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("__rsync-transport")) {
+    if args.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("__rsync-transport")) {
         return crate::rsync::transport_main().await;
     }
-    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if agent::dispatch(&args)? {
         return Ok(());
     }

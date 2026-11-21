@@ -13,6 +13,8 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 
 四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/cb63a9a0aa163214c6062664cd62fefb357be5a8/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/cf02c1d9db575b92b36297dfe1fde72de9ee51e4/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/317c52f101f112c6af671a629d8406305a168e4a/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml)
 
+`ssmcp --version --all` 可离线查看构建所用 Cargo.lock 中从 ssmcp 可达的依赖树。`--version` 仍只输出应用版本。树包含锁定的构建、开发与各目标依赖，实际链接的代码随目标和 features 而变。
+
 ## 每轮迭代与发行前同步
 
 1. 按仓库辨别 Project Z 包。读取实际使用的默认分支 manifest，记录 URL、默认 ref、完整提交、树和 UTC 查询时间。
