@@ -125,7 +125,9 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 ## 依赖版本树与统一控制开关
 
-用户要求的 `ssmcp --version --all` 依赖版本树，以及“移除 foreground/background 区别，统一为 Computer use On/Off”已纳入 E9。此时尚无 E9 完成源码或运行验收结果。原协调方报告，07:49:51 UTC 的启动前锁校验中止了首次启动尝试，E9 作者模型尚未启动、没有执行 Cargo；这是执行准备阶段的检查问题，没有记成产品或测试失败。协调方正在核对实际文件描述符和内核锁记录，旧失败记录保留。
+用户要求的 `ssmcp --version --all` 依赖版本树，以及“移除 foreground/background 区别，统一为 Computer use On/Off”已纳入 E9。原作者已于 **07:58:56 UTC** 实际开始 E9，起点为 f6ca9d0；目前尚无该阶段完成源码或检查结果。原启动回执已完整读取，阶段允许的窄检查是发布策略脚本与 `cargo check --tests --locked --offline --jobs 1`，即使后续完成也不会代替最终整套验收。[实际启动与执行边界](source-E9-launch-public-facts.json)
+
+此前 07:49:51 UTC 的首次启动尝试在锁校验阶段中止，没有启动作者模型或执行 Cargo。后续核对实际文件描述符、fdinfo 与内核锁记录后才启动 E9，旧失败记录继续保留，没有被记成产品或测试失败。
 
 已确认的控制范围是 SSMCP 内的 Computer、CDP Browser、Omarchy 与启用时的 Playwright 控制或变更路径。Off 要阻止新的控制动作，并取消尚未执行的旧操作；再次 On 不能复活旧 generation 的 ticket。只读观察与自有资源清理保留，默认 isolated 目标保持原规则。已经送达的点击或导航不能承诺回滚。
 

@@ -1,0 +1,59 @@
+{
+  "schema": "ssmcp-source-E9-launch-public-facts-v1",
+  "status": "same original author actually started; source/check completion pending",
+  "started_utc": "2026-11-21T07:58:56.031244+00:00",
+  "source_start": "f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b",
+  "source_tree": "4852c9a5c2d928e46ae4b291a4d27e5229998a18",
+  "branch": "work/local-startup-zuse-20261121",
+  "operation": "unified-computer-use-offline-version-tree-and-canonical-git-refresh",
+  "launch_receipt": {
+    "bytes": 2056,
+    "sha256": "02c5aba0f3386ba8a60f73ecc525a5f528b7b79aa73b75ab3f8bbfc28cec52ea",
+    "entire_receipt_read": true
+  },
+  "source_lock_proof": {
+    "held_descriptor_recorded": true,
+    "fdinfo_lock_and_global_kernel_record_agree": true,
+    "stat_device_and_kernel_device_distinguished": true,
+    "private_machine_identifiers_omitted": true
+  },
+  "allowed_narrow_author_checks": [
+    "scripts/test_release.py",
+    "cargo check --tests --locked --offline --jobs 1"
+  ],
+  "allowed_checks_executed_at_launch": false,
+  "final_acceptance_allowed": false,
+  "accepted_scope": [
+    "ssmcp --version --all for the binary's actual locked dependency source",
+    "Unified Computer use On/Off in the confirmed SSMCP control paths",
+    "Refresh canonical default Git sources and the actual dependency lock"
+  ],
+  "earlier_attempt": {
+    "status": "source-lock preflight stopped before the author started",
+    "model_started": false,
+    "cargo_executed": false,
+    "original_failure_preserved": true,
+    "product_or_test_failure": false
+  },
+  "observed_process": {
+    "reported_by_original_coordinator": "active/running at launch observation",
+    "sampled_independently_by_this_extractor": false
+  },
+  "reader_receipt": {
+    "exit_code": 0,
+    "running": false,
+    "stdout_eof": true,
+    "stderr_eof": true,
+    "error": null
+  },
+  "not_yet_established": {
+    "completed_source_commit": null,
+    "successful_narrow_checks": null,
+    "full_build_gate": null,
+    "runtime": null,
+    "ui": null,
+    "p1": null,
+    "release": null
+  },
+  "observer_boundary": "This observer only read the existing launch receipt. It did not start or resume a native model, run Cargo, execute a product, write a target directory, dispatch a workflow, install or reload a service."
+}
