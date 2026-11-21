@@ -93,6 +93,7 @@ Manage
   config · whoami · logout      Account and server settings
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
+  cleanup                      Inspect and clean registered workspace files
   sessions · attach · service  Saved and background sessions
   computer                     Zuse CLI version and installation
   setup · ui · 007             Setup, appearance and recovery
@@ -127,6 +128,7 @@ Usage: ssmcp username@server [options]
        ssmcp config path
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
@@ -1751,6 +1753,22 @@ pub async fn run() -> crate::Result<()> {
     if agent::dispatch(&args)? {
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "cleanup") {
+        let arguments = args
+            .iter()
+            .map(|arg| {
+                arg.to_str()
+                    .map(str::to_owned)
+                    .ok_or("cleanup arguments must be valid UTF-8")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(output) =
+            crate::managed_files::command::run(&arguments, std::path::Path::new("."))?
+        {
+            println!("{output}");
+            return Ok(());
+        }
+    }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
     }
@@ -3039,6 +3057,15 @@ async fn connect_inner(
     let mut intentionally_stopped = false;
     let mut service_updates = tokio::time::interval(Duration::from_secs(1));
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Only connected sessions schedule cleanup. Constructors, discovery commands
+    // and the private worker child never initialize or scan a workspace here.
+    let cleanup_period = Duration::from_secs(5 * 60);
+    let mut cleanup_updates = tokio::time::interval_at(
+        tokio::time::Instant::now() + cleanup_period,
+        cleanup_period,
+    );
+    cleanup_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut managed_cleanup = backend.start_managed_file_cleanup("startup");
     backend.start_workers();
     let mut result: crate::Result<()> = 'connected: loop {
         tokio::select! {
@@ -3108,6 +3135,15 @@ async fn connect_inner(
                     }
                 },
                 None => {},
+            },
+            _ = cleanup_updates.tick() => {
+                // A slow scan never overlaps the next one or blocks relay calls.
+                if managed_cleanup.is_finished() {
+                    if let Err(error) = (&mut managed_cleanup).await {
+                        render::status("cleanup", "Warning", &format!("Managed-file cleanup task failed: {error}"));
+                    }
+                    managed_cleanup = backend.start_managed_file_cleanup("periodic");
+                }
             },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
@@ -3303,6 +3339,13 @@ async fn connect_inner(
         intentionally_stopped = true;
         reload_requested = false;
         result = Ok(());
+    }
+    if let Err(error) = managed_cleanup.await {
+        render::status(
+            "cleanup",
+            "Warning",
+            &format!("Managed-file cleanup task failed: {error}"),
+        );
     }
     git_status.shutdown().await;
     if matches!(&transport, Transport::Account { .. })

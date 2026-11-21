@@ -376,6 +376,51 @@ impl Runtime {
     pub fn enable_default_skill_sources(&self) -> Result<(), String> {
         self.files.enable_default_skill_sources()
     }
+    /// Schedule one cleanup scan for a live client session. The client retains
+    /// and joins this handle, so reconnect/reload cannot leave detached scans.
+    pub(crate) fn start_managed_file_cleanup(
+        &self,
+        trigger: &'static str,
+    ) -> tokio::task::JoinHandle<()> {
+        let root = self.tool_root.clone();
+        let audit = self.audit.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::managed_files::cleanup(&root, false, trigger)
+            })
+            .await;
+            let warning = match result {
+                Ok(Ok(summary)) => {
+                    let warning = if !summary.errors.is_empty() || summary.scan_truncated {
+                        Some(format!(
+                            "Managed-file {trigger} cleanup kept unresolved files ({} errors, scan_truncated={}); inspect ssmcp cleanup --list",
+                            summary.errors.len(),
+                            summary.scan_truncated,
+                        ))
+                    } else {
+                        None
+                    };
+                    audit.push(json!({
+                        "type": "ssmcp.files.cleanup",
+                        "trigger": trigger,
+                        "summary": summary,
+                    }));
+                    warning
+                }
+                Ok(Err(error)) => Some(format!("Managed-file {trigger} cleanup failed: {error}")),
+                Err(error) => Some(format!("Managed-file {trigger} cleanup task failed: {error}")),
+            };
+            if let Some(warning) = warning {
+                audit.push(json!({
+                    "type": "ssmcp.files.cleanup_warning",
+                    "trigger": trigger,
+                    "message": warning,
+                }));
+                crate::client::render::status("cleanup", "Warning", &warning);
+            }
+        })
+    }
+
     /// Install an optional in-process call hook. The default is None.
     /// Each call keeps one snapshot; replacement affects subsequent calls.
     pub fn set_tool_call_hook(&self, hook: Option<Arc<dyn hooks::ToolCallHook>>) {
