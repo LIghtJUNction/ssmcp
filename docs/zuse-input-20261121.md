@@ -1,4 +1,6 @@
-# Zuse input and local-watch integration
+# Historical Zuse input and local-watch integration
+
+> This is a historical implementation record from before the standalone Zuse CLI migration. The SSMCP desktop/browser actions, Computer Use switch and internal worker described below have been removed. Their examples and validation results do not describe the current implementation or establish results for the current candidate. Use [Zuse CLI lifecycle](computer-use.md) and [desktop/browser workflows](browser-desktop.md) for current instructions. The original record is preserved below.
 
 This iteration keeps desktop input behind SSMCP's local Computer Use control
 switch. It adds complete timed pointer paths, explicit keyboard-state operations,
