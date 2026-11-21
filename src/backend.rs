@@ -19,6 +19,86 @@ use crate::{
     wire::{MAX_READ, MAX_WAIT_MS, MAX_WRITE},
 };
 use serde_json::{Value, json};
+use std::{process::Stdio, time::Duration};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Run a bounded, literal helper for local facilities such as clipboard and notifications.
+/// This is not a registered computer action or an embedded desktop backend.
+pub(crate) async fn run_helper(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    limit: usize,
+    deadline: Duration,
+) -> Result<Vec<u8>, String> {
+    let executable = crate::program::executable(program)?;
+    let mut command = tokio::process::Command::new(executable);
+    command
+        .args(args)
+        .current_dir(root)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut process = process::Managed::spawn(&mut command).map_err(|e| format!("{program}: {e}"))?;
+    let mut stdout = process
+        .child
+        .stdout
+        .take()
+        .ok_or("helper stdout unavailable")?
+        .take((limit + 1) as u64);
+    let mut stderr = process
+        .child
+        .stderr
+        .take()
+        .ok_or("helper stderr unavailable")?
+        .take(8193);
+    let mut stdin = process.child.stdin.take();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let outcome = tokio::time::timeout(deadline, async {
+        let writer = async {
+            if let (Some(mut stdin), Some(input)) = (stdin.take(), input) {
+                stdin.write_all(input).await.map_err(|e| e.to_string())?;
+                stdin.shutdown().await.map_err(|e| e.to_string())?;
+            }
+            Ok::<(), String>(())
+        };
+        let (a, b, c, status) = tokio::join!(
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err),
+            writer,
+            process.wait()
+        );
+        a.map_err(|e| e.to_string())?;
+        b.map_err(|e| e.to_string())?;
+        c?;
+        let status = status.map_err(|e| e.to_string())?;
+        if out.len() > limit || err.len() > 8192 {
+            return Err(format!("{program} exceeded its bounded output limit"));
+        }
+        if !status.success() {
+            return Err(format!(
+                "{program} failed ({status}): {}",
+                String::from_utf8_lossy(&err)
+                    .trim()
+                    .chars()
+                    .take(1024)
+                    .collect::<String>()
+            ));
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|_| format!("{program} timed out after {} seconds", deadline.as_secs()))
+    .and_then(|r| r);
+    process.shutdown().await;
+    outcome
+}
 
 /// Convert a shell capability into a validated private wire operation.
 pub(crate) fn terminal_operation(name: &str, arguments: Value) -> Result<Operation, String> {
@@ -105,6 +185,71 @@ pub fn result(value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn helpers_preserve_exit_errors_and_deadlines() {
+        let args = vec![
+            "-c".into(),
+            "import sys;sys.stderr.write('native failure');sys.exit(7)".into(),
+        ];
+        let err = run_helper(
+            &std::env::temp_dir(),
+            "python3",
+            &args,
+            None,
+            1024,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("native failure"));
+        let args = vec!["-c".into(), "import time;time.sleep(10)".into()];
+        let err = run_helper(
+            &std::env::temp_dir(),
+            "python3",
+            &args,
+            None,
+            1024,
+            Duration::from_millis(30),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("timed out"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn helper_input_is_literal_and_output_limit_is_enforced() {
+        let args = vec![
+            "-c".into(),
+            "import sys;sys.stdout.buffer.write(sys.stdin.buffer.read())".into(),
+        ];
+        let input = b"$(not-a-command) ' \n --file=/etc/passwd";
+        assert_eq!(
+            run_helper(
+                &std::env::temp_dir(),
+                "python3",
+                &args,
+                Some(input),
+                1024,
+                Duration::from_secs(2)
+            )
+            .await
+            .unwrap(),
+            input
+        );
+        let err = run_helper(
+            &std::env::temp_dir(),
+            "python3",
+            &args,
+            Some(&[b'a'; 100]),
+            16,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("bounded output"));
+    }
+
     #[test]
     fn discovery_attempt_metadata_does_not_repeat_a_stable_provider_status() {
         let previous = json!({"provider":"codex","status":"ready","tools":1342,
