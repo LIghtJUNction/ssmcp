@@ -2110,6 +2110,10 @@ pub async fn run() -> crate::Result<()> {
     }
 }
 
+fn worker_monitor_closed() -> crate::Error {
+    Box::new(relay::PermanentFailure("worker monitor closed; stopping its owned execution slots".into()))
+}
+
 pub(crate) fn watchdog_retries(
     enabled: bool,
     error: Option<&(dyn std::error::Error + Send + Sync + 'static)>,
@@ -3032,7 +3036,7 @@ async fn connect_inner(
             _ = ui_updates.tick(), if display_session.is_some() => {
                 if options.worker.is_some() && local_input.as_ref().is_none_or(input::Input::is_finished) {
                     intentionally_stopped = true;
-                    break Err("worker monitor closed; stopping its owned execution slots".into());
+                    break Err(worker_monitor_closed());
                 }
                 if terminal::exit_requested() {
                     intentionally_stopped = true;
@@ -3399,6 +3403,8 @@ mod tests {
 
     #[test]
     fn watchdog_keeps_retrying_transient_transport_errors() {
+        let closed_monitor = worker_monitor_closed();
+        assert!(!watchdog_retries(true, Some(closed_monitor.as_ref())));
         let disconnected = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
         assert!(watchdog_retries(true, Some(&disconnected)));
         assert!(!watchdog_retries(false, Some(&disconnected)));
