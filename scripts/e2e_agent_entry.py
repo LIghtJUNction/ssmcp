@@ -160,7 +160,7 @@ def run(binary, repository, output):
             before = {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
             listed, _ = cli(["--list-harnesses", "--json"], env=bad_context)
             assert {p["name"] for p in json.loads(listed)["providers"]} == {
-                "codex", "claude", "pi", "opencode", "playwright", "ssmcp"}
+                "codex", "claude", "pi", "opencode", "ssmcp"}
             assert not log.exists()
             assert before == {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
             checks.append("agent_list_needs_no_login_config_probe_or_state_write")

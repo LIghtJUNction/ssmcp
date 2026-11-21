@@ -335,7 +335,7 @@ class Unified(SessionFeatures):
             self.check(status == 200 and [t["name"] for t in result["result"]["tools"]] == ["list", "code_mode", "collab", "await", "messages"],
                        f"public MCP exposes exactly list/code_mode/collab/await/messages (modern={modern})")
         harness_names = {"codex", "claude", "pi", "opencode"}
-        provider_names = harness_names | {"playwright", "ssmcp"}
+        provider_names = harness_names | {"ssmcp"}
         discovery = self.call("ssmcp.harnesses.list")
         rows = discovery["harnesses"]
         providers = {row["provider"]: row for row in rows}
