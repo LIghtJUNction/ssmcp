@@ -90,7 +90,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
-  computer on|off|status        Shared foreground computer switch
+  computer on|off|status        Shared Computer Use switch
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -270,8 +270,8 @@ or disable the dashboard when attaching to a saved session.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
-Use /computer on or /computer off in chat to set the foreground switch shared by
-all ssmcp sessions on this machine and OS user. Background control stays enabled.
+Use /computer on or /computer off to control SSMCP computer, browser and desktop
+mutations for this OS user. The switch does not restrict native shell programs.
 Super+Alt+C toggles the switch with a desktop binding or enhanced keyboard input.
 The local CLI `ssmcp computer toggle` is the desktop shortcut command.
 Background logs use JSONL without terminal colors; foreground display options

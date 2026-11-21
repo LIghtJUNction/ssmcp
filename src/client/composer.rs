@@ -73,7 +73,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/computer",
-        description: "电脑控制：开启、关闭或查看当前桌面的键鼠控制状态",
+        description: "电脑控制：开启、关闭或查看 Computer Use 状态",
     },
     SlashCommand {
         name: "/command",

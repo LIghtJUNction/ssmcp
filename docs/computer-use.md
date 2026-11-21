@@ -39,24 +39,20 @@ Linux 上首次调用 `computer.app_launch(id, {command: [...]})` 会先校验 a
 
 私有桌面目前需要 Linux 和 Xvfb 及返回的 helpers。Windows/macOS 默认状态明确报告不支持私有桌面，不自动切换到宿主。只有单次调用明确传入 `desktop: "host"`，才选择下表对应的宿主适配器；该参数不会改变后续默认选择。浏览器页面控制和 Omarchy 是独立接口，桌面显示隔离也不改变应用的本机文件与进程权限。[schema 与只读标记](../src/computer.rs)
 
-## 前台控制使用本机共享的 on/off 开关
+## Computer Use 开关
 
-前台控制会操作用户当前的桌面和焦点；后台控制使用本连接拥有的私有桌面。前台开关由**同一台机器、同一操作系统用户**下的 ssmcp 会话共享，不随工作目录、账号连接或聊天历史分开。
+同一台机器上，同一操作系统用户的 SSMCP 会话共用一个持久开关。首次创建时为 On，明确设为 Off 后，重连和重启保持 Off。
 
 | 目的 | 聊天命令 | 本机 CLI |
 | --- | --- | --- |
-| 开启前台控制 | `/computer on` | `ssmcp computer on` |
-| 关闭前台控制 | `/computer off` | `ssmcp computer off` |
-| 查看状态 | `/computer status` | `ssmcp computer status` |
+| 开启电脑控制 | `/computer on` | `ssmcp computer on` |
+| 关闭电脑控制 | `/computer off` | `ssmcp computer off` |
+| 查看状态 | `/computer status` | `ssmcp computer status --json` |
 | 切换状态 | **Super + Alt + C** | `ssmcp computer toggle` |
 
-首次创建共享状态时，前台默认 on，后台默认 on。用户明确设置 off 后，重新连接和重启都保持 off，直到再次开启；不再使用 15 秒或 60 秒时窗。普通输入、重新连接或关闭单个客户端不会关闭其他会话共享的开关。每个聊天界面持续显示前台 on/off 和后台 on，空闲会话也会刷新状态。`/computer stop` 保留为 off 的兼容别名。CLI 加 `--json` 可读取结构化状态。
+Off 拒绝 SSMCP 发出的私有或宿主桌面输入、桌面和应用启动、CDP 浏览器变更、Omarchy 变更和 Playwright 控制。状态、窗口、截图、已连接 CDP 页面的只读观察，以及停止自有私有桌面或断开自有浏览器连接仍可用。`desktop: "host"` 仅用于选目标，默认仍为私有桌面。
 
-后台模式始终可用，不依赖前台开关，也没有交接时限。“后台 on”表示允许走后台控制路径，不表示已经创建 Xvfb 或启动应用；实际可用平台、helpers 和生命周期仍按上面的私有桌面规则检查。
-
-原生调用仍需明确传入 `desktop: "host"` 才能选择前台桌面。聚焦、移动、点击、拖拽、按键、文本输入和滚动会读取共享开关；远端工具参数不能把 off 改成 on。未指定 desktop 的调用继续使用私有桌面。
-
-关闭开关先发布新的状态版本，让排队及运行中的旧请求失效。即使随后再次开启，旧请求也不会恢复。运行中的输入在检测到关闭后取消，并执行按键、按钮释放清理；同一用户的其他进程要等清理结束才能取得输入锁。读取失败、状态损坏或不安全的状态文件均按 off 处理，并报告原因。[共享状态与 ticket](../src/computer/host_control.rs) · [输入分派与清理](../src/computer.rs)
+Off 会撤销旧代请求，随后开启也不会恢复它们。正在执行的受管请求进入取消和释放清理。已送达的动作可能已完成；CDP 批次保留已确认步骤，Playwright 会停止 SSMCP 启动的 driver 并报告未知或部分执行。附着的用户浏览器保留。[`computer_use` 状态与代际](../src/computer/host_control.rs) · [浏览器行为](browser-desktop.md)
 
 ### Super + Alt + C
 
@@ -66,7 +62,7 @@ Linux 上首次调用 `computer.app_launch(id, {command: [...]})` 会先校验 a
 
 ```lua
 hl.bind("SUPER + ALT + C", hl.dsp.exec_cmd("ssmcp computer toggle"), {
-    description = "ssmcp foreground computer use",
+    description = "ssmcp Computer Use",
     bypass = true,
     submap_universal = true,
 })
@@ -74,7 +70,7 @@ hl.bind("SUPER + ALT + C", hl.dsp.exec_cmd("ssmcp computer toggle"), {
 
 该绑定只在按下时切换一次，消费按键以避免终端再次切换，允许在应用请求禁用快捷键时使用，但不启用锁屏快捷键。完整配置片段见 [ssmcp-computer.lua](../packaging/ssmcp-computer.lua)。其他桌面可把同一 CLI 命令绑定到相同组合键；不支持增强键盘协议的终端需要桌面绑定或显式聊天命令。
 
-共享开关约束的是 ssmcp 原生前台输入。浏览器 CDP、Omarchy、外部 harness 与 shell 命令仍使用各自的能力和权限。操作系统自身的桌面权限要求继续生效。
+开关约束 SSMCP 代理的接口。普通 `exec`、终端、手动操作和独立的 zuse CLI 继续使用当前系统用户权限。同一用户下的程序也可运行本机切换命令。若需要阻止这些程序访问桌面，需由操作系统身份或独立隔离控制访问。
 
 ## 运行条件与平台范围
 
@@ -240,7 +236,7 @@ Hyprland、Windows 和 macOS 的聚焦实现只发送一次焦点请求，随后
 
 已有 CDP 端点可用 `browser.connect` 显式附着；`discover` 本身不会连接、启动或重启浏览器。页面操作按标签页串行，不同标签页可并发读取；同一页面的导航、快照、点击与填表仍按依赖顺序等待。快照能回答的问题优先返回有界文本和元素引用，只有需要视觉判断时再请求截图。
 
-需要独立测试会话时，`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认显示窗口；`headless:true` 适合后台验证。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
+需要独立测试会话时，`browser.launch` 使用独立临时 profile 和本机随机调试端口，默认无界面；`headless:false` 可显式查看窗口。`executable` 可指定系统浏览器路径，启动保留 Chromium 沙箱。它直接使用 [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)。
 
 ```javascript
 const id = "CLIENT_ID_FROM_LIST";

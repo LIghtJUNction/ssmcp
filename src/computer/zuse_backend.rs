@@ -191,6 +191,7 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
             },
         );
     }
+    super::host_control::Permit::check_current()?;
     let mut process = Managed::spawn(&mut command)
         .map_err(|error| format!("could not start zuse library worker: {error}"))?;
     let worker = Worker {

@@ -6,12 +6,12 @@ use super::interface::computer::{self, Command};
 const HELP: &str = "\
 Usage: ssmcp computer [on|off|toggle|status] [--json]
 
-允许或禁止 AI 控制当前桌面的鼠标和键盘。
+统一管理 SSMCP 的电脑、浏览器和系统界面操作。
 这台电脑上同一系统用户的 ssmcp 会话共用开关，直到你再次更改。
-独立桌面与浏览器工具仍可使用。
+关闭后仍可观察状态和手动操作。Shell 与独立程序仍使用原有系统权限。
 
-  on       开启当前桌面的键鼠控制
-  off      关闭当前桌面的键鼠控制
+  on       开启 Computer Use
+  off      关闭 Computer Use
   toggle   切换电脑控制开关
   status   查看当前开关状态（默认）
 

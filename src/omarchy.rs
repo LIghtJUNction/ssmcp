@@ -1,6 +1,9 @@
 //! Omarchy desktop integration through bounded, noninteractive system commands.
 //! Arguments are validated values; no user text is evaluated as a shell command.
-use crate::backend::{process::Managed, result};
+use crate::{
+    backend::{process::Managed, result},
+    computer::host_control::{HostControl, Permit},
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{
@@ -8,7 +11,10 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{io::AsyncReadExt, sync::Mutex};
@@ -30,6 +36,7 @@ pub struct Omarchy {
     closed: AtomicBool,
     serial: Mutex<()>,
     observed_apps: Mutex<BTreeSet<String>>,
+    control: Arc<HostControl>,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +125,12 @@ struct App {
 }
 
 impl Omarchy {
+    #[cfg(test)]
     pub fn new(root: PathBuf) -> Result<Self, String> {
+        Self::with_control(root, Arc::new(HostControl::default()))
+    }
+
+    pub(crate) fn with_control(root: PathBuf, control: Arc<HostControl>) -> Result<Self, String> {
         let root = root.canonicalize().map_err(|e| e.to_string())?;
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -174,6 +186,7 @@ impl Omarchy {
             closed: AtomicBool::new(false),
             serial: Mutex::new(()),
             observed_apps: Mutex::new(BTreeSet::new()),
+            control,
         })
     }
 
@@ -339,16 +352,46 @@ impl Omarchy {
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        let name = name
+            .strip_prefix("ssmcp.omarchy.")
+            .ok_or("not an Omarchy tool")?;
+        let operation = self.perform_inner(name, args);
+        if matches!(
+            name,
+            "status"
+                | "themes"
+                | "backgrounds"
+                | "fonts"
+                | "audio"
+                | "brightness"
+                | "toggles"
+                | "workspaces"
+                | "apps"
+                | "battery"
+                | "network"
+        ) {
+            operation.await
+        } else {
+            self.control
+                .permit()?
+                .serialized()
+                .await?
+                .run(operation)
+                .await
+        }
+    }
+
+    async fn perform_inner(&self, name: &str, args: Value) -> Result<Value, String> {
         let _guard = self.serial.lock().await;
         if self.closed.load(Ordering::SeqCst) {
             return Err("Omarchy control is closed".into());
         }
-        let name = name
-            .strip_prefix("ssmcp.omarchy.")
-            .ok_or("not an Omarchy tool")?;
+        Permit::check_current()?;
         if name == "status" {
             parse::<Empty>(args)?;
-            return finish(self.status().await);
+            let mut status = self.status().await;
+            status["computer_use"] = self.control.status();
+            return finish(status);
         }
         if !self.installed() {
             return Err("Omarchy system primitives require a Linux Omarchy installation; use omarchy.status for diagnostics".into());
@@ -520,6 +563,7 @@ impl Omarchy {
         if program == "omarchy-theme-set" {
             command.env("OMARCHY_THEME_WAIT", "1");
         }
+        Permit::check_current()?;
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start {program}: {e}"))?;
         let stdout = process
@@ -1790,6 +1834,47 @@ mod tests {
                 .contains("latest")
         );
     }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn off_stops_omarchy_before_dispatch_but_allows_observation() {
+        let f = Fixture::new();
+        f.helper(
+            "hyprctl",
+            r#"test "$1" = '-j' || { : > unexpected-mutation; exit 88; }
+printf '{"id":2,"name":"2","monitor":"TEST","windows":0}\n'"#,
+        );
+        f.instance.control.set_local(false).unwrap();
+        let status = f
+            .instance
+            .perform("ssmcp.omarchy.status", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            status["structuredContent"]["computer_use"]["enabled"],
+            false
+        );
+        for suffix in [
+            "workspace_switch",
+            "background_set",
+            "theme_set",
+            "window_action",
+            "menu",
+            "app_launch",
+        ] {
+            assert_eq!(
+                f.instance
+                    .perform(
+                        &format!("ssmcp.omarchy.{suffix}"),
+                        json!({"workspace_id":2})
+                    )
+                    .await
+                    .unwrap_err(),
+                crate::computer::host_control::LOCKED
+            );
+        }
+        assert!(!f.directory.join("unexpected-mutation").exists());
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn workspace_already_active_never_dispatches() {

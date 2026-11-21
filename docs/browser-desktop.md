@@ -1,8 +1,15 @@
-# Background browser control and private desktops
+# Browser control and private desktops
 
 Browser automation defaults to page-scoped input and background tabs. Native
 desktop input uses an explicitly selected surface: an owned private desktop, or
 the operator's desktop when the caller passes `desktop: "host"`.
+
+Computer Use must be On to launch, attach, navigate or change a page through
+SSMCP. Off permits metadata and read-only CDP observations on an existing
+session, and disconnect. It cancels queued input and stops an SSMCP-owned
+Playwright driver when its generation is revoked. Actions already received by
+the browser can have effects. Attached browsers remain running. The same
+switch applies to both private and host desktops. [Computer Use](computer-use.md)
 
 ## Configure an existing browser
 
@@ -29,9 +36,9 @@ background = true
 `SSMCP_PLAYWRIGHT_MCP` takes precedence over the saved executable. An invalid
 explicit override produces a diagnostic. The native provider checks the actual
 CLI's `--help` output for background support before starting it; unsupported
-versions do not silently switch to foreground control. `--foreground` is an
-explicit setup choice for operators who want extension-controlled windows to
-activate.
+versions report the missing presentation option. The legacy flags
+`--background` and `--foreground` choose browser presentation and use the same
+Computer Use switch.
 
 The Playwright MCP Bridge extension must be enabled and its native connection
 request approved. A successful CLI probe does not mean a browser is already
@@ -69,8 +76,7 @@ const ready = await api.ssmcp.browser.wait_for({
 Direct CDP input targets the browser page rather than moving the system cursor.
 For explicit click, fill, key and scroll operations, the adapter enables CDP
 focus emulation on that target so background pages receive trusted input and
-can render. This does not activate the browser tab or window. Emulation lasts
-for the target connection and is reset on disconnect, close or shutdown;
+can render. This does not activate the browser tab or window. SSMCP owns this emulation on its CDP target session and restores it on revocation or disconnect;
 read-only connections do not enable it. Since emulation can change the page's
 reported visibility, tests also check the actual browser window title and an
 independent window's keyboard focus and pointer position.
@@ -81,7 +87,7 @@ names from `aria-labelledby`, `aria-label`, labels and image alternatives.
 The direct snapshot's main-document limitation remains; use the native
 Playwright provider for workflows that need its broader locator support.
 
-The `[browser].background` setting controls Playwright extension behavior.
+The legacy `[browser].background` setting and saved `focus_policy` choose Playwright presentation.
 Direct CDP `browser.open` has its own per-call `background` argument,
 defaulting to true.
 
