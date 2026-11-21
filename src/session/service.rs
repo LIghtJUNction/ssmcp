@@ -915,7 +915,7 @@ mod tests {
     async fn create_rejects_foreground_chat_modes_before_saving_or_spawning() {
         let directory = Directory::new();
         let mut supervisor = Supervisor::new(directory.0.clone(), "a".repeat(32));
-        let mut cases = vec![vec!["--agent", "codex"]];
+        let mut cases = vec![vec!["--input", "terminal", "--agent", "codex"]];
         if cfg!(unix) {
             cases.extend([vec!["--input", "pipe"], vec!["--input", "mcp-stdio"]]);
         }
