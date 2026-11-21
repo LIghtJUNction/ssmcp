@@ -1,0 +1,550 @@
+{
+  "schema_version": 1,
+  "kind": "ssmcp-gate18-progress-through-33-stages",
+  "observed_utc": "2026-11-21T11:28:04Z",
+  "source": {
+    "commit": "b8d94f5e12788ed19d1b74eecdcc068ea9fc0078",
+    "tree": "1391701c52db5066e7a25bbe3a32c1d5a82c47d5"
+  },
+  "run_id": "3084787068b4155c51b6e440b6b66202",
+  "owned_started_utc": "2026-11-21T11:18:15.727562+00:00",
+  "driver_started_utc": "2026-11-21T11:18:16.104Z",
+  "status": "running",
+  "full_gate_passed": false,
+  "contract": {
+    "integration_targets": 20,
+    "mandatory_ignored_tests": 14,
+    "rust_stages": 26,
+    "stages": 35,
+    "host_library_tests": 6
+  },
+  "source_lock_acquired": true,
+  "target_lock_acquired_by_outer_controller": false,
+  "target_lock_acquired_by_bound_launcher": true,
+  "nine_initial_hashes_match_prepared_inputs": true,
+  "inputs_before": {
+    "cargo_config": "d664480527bc29872d5c9e9ce844c8a3f1f8cc55d224f9a1867bdee7f0da9bf3",
+    "cargo_lock": "0c0cf864ecacc0cf02b03b6251086f595ef8ce476ce49d613b8d40e1c1bda992",
+    "dependency_auditor": "eed621aa874c9accf6f06284f1b7e4c2631f5a99780027450c1102b203b30c1e",
+    "driver": "b8ca8da3b47ebe2d314a24dba28a968c7b81904cf82e9b2b679802b377cd2164",
+    "git_heads": "955de3e50c5e120f14bd156b887bd7c763a9d7f3479e07370adb5195003cc605",
+    "owner_agreement": "2e2769b8fb0e18e317134a2a45bbd7ccd36da0f4006a4568150cdb61026b8299",
+    "reviewed_baseline": "56d6e26709ee72f53a2a59dad17d5d23182b51d7000af3a5759c974493738c6b",
+    "workspace_wrapper": "f416c3a75f62e0d2b99b0da099e6b61ef12a17000afb500b70b4a0eb583914f0",
+    "wrapper": "8b61096a9869fc6e790c963715efded612b17583cee90c830aadda2da8917a43"
+  },
+  "completed_stages": [
+    {
+      "name": "release-policy",
+      "exit_code": 0,
+      "seconds": 11.34,
+      "test_results": null
+    },
+    {
+      "name": "deployment-policy",
+      "exit_code": 0,
+      "seconds": 0.46,
+      "test_results": null
+    },
+    {
+      "name": "fmt",
+      "exit_code": 0,
+      "seconds": 4.7,
+      "test_results": null
+    },
+    {
+      "name": "library-compile",
+      "exit_code": 0,
+      "seconds": 141.06,
+      "test_results": null
+    },
+    {
+      "name": "library-private",
+      "exit_code": 0,
+      "seconds": 44.56,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 6,
+          "ignored": 26,
+          "measured": 0,
+          "passed": 2101,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "library-host",
+      "exit_code": 0,
+      "seconds": 0.02,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2127,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0,
+      "seconds": 88.84,
+      "test_results": null
+    },
+    {
+      "name": "windows-gnu-clippy",
+      "exit_code": 0,
+      "seconds": 53.22,
+      "test_results": null
+    },
+    {
+      "name": "integration-compile",
+      "exit_code": 0,
+      "seconds": 84.04,
+      "test_results": null
+    },
+    {
+      "name": "integration-allow_account",
+      "exit_code": 0,
+      "seconds": 0.1,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-cc_backend",
+      "exit_code": 0,
+      "seconds": 1.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-client_resources",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-client_server_config",
+      "exit_code": 0,
+      "seconds": 0.43,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-codex_backend",
+      "exit_code": 0,
+      "seconds": 20.81,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 2,
+          "measured": 0,
+          "passed": 14,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-collaboration",
+      "exit_code": 0,
+      "seconds": 0.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-connection_context",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_helpers",
+      "exit_code": 0,
+      "seconds": 0.01,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 2,
+          "measured": 0,
+          "passed": 0,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_runtime",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-oauth_security",
+      "exit_code": 0,
+      "seconds": 1.15,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 11,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-pi_backend",
+      "exit_code": 0,
+      "seconds": 0.28,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 9,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-release_client",
+      "exit_code": 0,
+      "seconds": 0.08,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-resources",
+      "exit_code": 0,
+      "seconds": 0.26,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-rsync",
+      "exit_code": 0,
+      "seconds": 0.18,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-server_runtime",
+      "exit_code": 0,
+      "seconds": 0.03,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-terminals",
+      "exit_code": 0,
+      "seconds": 0.73,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-two_tools",
+      "exit_code": 0,
+      "seconds": 0.07,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 7,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-workspace_bridge",
+      "exit_code": 0,
+      "seconds": 0.01,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 3,
+          "measured": 0,
+          "passed": 0,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-zuse_worker_entry",
+      "exit_code": 0,
+      "seconds": 0.26,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "library-code-mode-ignored",
+      "exit_code": 0,
+      "seconds": 0.33,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2131,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-two_tools-ignored",
+      "exit_code": 0,
+      "seconds": 2.18,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 2,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 7,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-workspace_bridge-ignored",
+      "exit_code": 0,
+      "seconds": 2.89,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "result": "ok"
+        }
+      ]
+    },
+    {
+      "name": "integration-context_helpers-ignored",
+      "exit_code": 0,
+      "seconds": 0.25,
+      "test_results": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "result": "ok"
+        }
+      ]
+    }
+  ],
+  "completed_stage_count": 33,
+  "other_stages_without_completed_results": 2,
+  "preparation": {
+    "file": "binding-manifest.json",
+    "bytes": 16561,
+    "sha256": "77e74decb68b32c562403909cfebeb1279b2f0e49b15f9397d57c03a32fa543a",
+    "prepared_utc": "2026-11-21T11:17:56.811189+00:00",
+    "execution_started": false,
+    "source_lock_acquired": false,
+    "target_lock_acquired": false,
+    "new_gate_run_id": null,
+    "observations_refetched_by_helper": false,
+    "stale_outcomes_copied": false,
+    "meaning": "Preparation fields remain the original pre-launch snapshot; later launches separately establish actual start."
+  },
+  "evidence": {
+    "owned_launch": {
+      "file": "launch.json",
+      "bytes": 1006,
+      "sha256": "4f3fc26174ae5e0de0b1dfc30f9d0b79630040fdd32ff428216ee319b27eac20",
+      "read_scope": "entire original"
+    },
+    "gate_launch": {
+      "file": "launch.json",
+      "bytes": 3636,
+      "sha256": "ab5a314e1b2df311e28a3bc2250e2ca97773160edac18f975afc0a6c2186ad9e",
+      "read_scope": "entire original"
+    },
+    "live_result": {
+      "file": "candidate-gates.json",
+      "bytes": 1244873,
+      "sha256": "d35b62b0d664186f067cfcc9af2168fb490d60429c3ada1e86ad9c2e4ccbe95a",
+      "read_scope": "Whole mutable snapshot hashed; source, run identity, status, times and all 33 completed-stage results read."
+    }
+  },
+  "scope": {
+    "downstream_consumers": "not_run",
+    "two_native_ignored_supplements": "not_run",
+    "H2": "static_unbound_unexecuted",
+    "release_dispatch": "not_performed",
+    "root_heavy_or_queued_work": 0
+  },
+  "previous_blocker": {
+    "gate17_source": "401581267005e64f1ccf99e1590df285a9d7c158",
+    "gate17_stage": "windows-gnu-clippy",
+    "gate17_exit_code": 101,
+    "gate18_stage": "windows-gnu-clippy",
+    "gate18_exit_code": 0,
+    "gate18_seconds": 53.22,
+    "warning_policy_unchanged": true,
+    "native_Windows_runtime_test": false
+  },
+  "library": {
+    "private": {
+      "passed": 2101,
+      "failed": 0,
+      "ignored": 26,
+      "filtered": 6
+    },
+    "host": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 2127
+    },
+    "parent_summaries_read_from_actual_gate": true,
+    "individual_regression_lines_read_for_gate18": false
+  },
+  "launcher_exit_present": false,
+  "owned_exit_present": false,
+  "integration": {
+    "ordinary_partitions": 19,
+    "ordinary_passed": 101,
+    "explicit_worker_entry_passed": 1,
+    "mandatory_ignored_stages": 4,
+    "mandatory_ignored_passed": 14,
+    "mandatory_library_ignored_passed": 2,
+    "mandatory_integration_ignored_passed": 12,
+    "other_ignored_tests_not_claimed_executed": true
+  }
+}

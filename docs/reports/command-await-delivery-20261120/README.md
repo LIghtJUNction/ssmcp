@@ -1,12 +1,37 @@
-# SSMCP 0.10.25：平台修复已合并，完整检查与一次性恢复待实测
+# SSMCP 0.10.25：Windows GNU 检查已通过，Gate18 继续运行
 
-**记录截止：2026-11-21 11:15:57 UTC。** E15 的平台边界修复已通过 [PR #169](https://github.com/LIghtJUNction/ssmcp/pull/169) 正常合并。实际主分支提交为 **`b8d94f5e12788ed19d1b74eecdcc068ea9fc0078`**，tree 为 **`1391701c52db5066e7a25bbe3a32c1d5a82c47d5`**。报告组分别读取 main、固定合并提交与 PR：真实父提交为 S401 与作者 `bef89f57aea0167b830096d596a2cb39fd86f5cd`，合并树与已审阅作者树一致。[E15 源码及实际合并事实](source-E15-history-cfg-public-facts.json)
+**记录截止：2026-11-21 11:28:04 UTC。** 原 35 阶段完整检查正在实际提交 **`b8d94f5e12788ed19d1b74eecdcc068ea9fc0078`**、tree **`1391701c52db5066e7a25bbe3a32c1d5a82c47d5`** 上运行，**前 33 个阶段均通过**。此前失败的 Windows GNU Clippy 已退出 **0**，耗时 **53.22 秒**，原 `-D warnings` 规则保持。这是针对新源码的实际验证；整套 Gate18 尚未完成。[Gate18 进展原件摘要](gate-Sb8d-r18-progress-public-facts.json)
 
-PR merged_at 为 **11:12:59 UTC**，Git commit 时间为 **11:12:58 UTC**，按原字段分别记录。E15 只修改一个文件的一行平台条件，普通推送一次；格式和 Git 差异检查通过，作者阶段没有执行 Cargo 编译或测试。新主分支的 Gate18 正在准备，**本快照尚未读取实际绑定或启动记录**，不能把 Windows GNU 问题记成已经运行验证通过。
+本轮 private 库 **2101** 项、host **6** 项也已通过，结果来自新源码的原始 Gate 汇总。报告组此时尚未逐行读取本轮四个指定回归的日志，因此不将旧 Gate17 的逐行记录写成本轮的新读回。Windows GNU 的成功属于交叉编译静态检查，原生 Windows 运行不在这条证据范围内。
 
-前一源码 S401 的 Gate17 保持 **7 阶段通过、1 阶段失败、27 阶段未运行**：private 库 **2101** 项、host **6** 项，以及原栈溢出、小栈和两个 Num Lock 回归均有实际成功记录；Windows GNU Clippy 因辅助函数未使用退出 101。结果继续绑定 S401，未转移给新提交。[Gate17 原结果](gate-S401-r17-failure-public-facts.json)
+E15 平台修复通过 [PR #169](https://github.com/LIghtJUNction/ssmcp/pull/169) 于 **11:12:59 UTC** 正常合并；Git commit 时间为 11:12:58。真实父提交为 S401 与作者 `bef89f57aea0167b830096d596a2cb39fd86f5cd`，合并树与作者树一致。作者阶段只做格式和 Git 检查；之后的 Gate18 才提供本段新增的编译与测试结果。[E15 源码、作者范围与合并事实](source-E15-history-cfg-public-facts.json)
 
-按用户在终端中提出的一次性重启恢复要求，恢复入口、脚本、配置和检查点已经落地。报告组只读核对了文件身份、入口内容、脚本逻辑及未消费状态；它等待**下一次重启后的桌面登录**，没有实际打开窗口或确认连接的执行结果。[恢复配置事实与边界](reboot-once-prepared-public-facts.json)
+原 Gate16 的栈溢出及 S401 Gate17 的 Windows 失败保留为历史结果，均不覆盖或迁移。一次性重启恢复入口也已配置；其最近独立读取状态为 **11:15 UTC 尚未消费**，下一次重启后的图形登录与连接恢复仍待实测。[Gate17 失败](gate-S401-r17-failure-public-facts.json) · [恢复配置事实](reboot-once-prepared-public-facts.json)
+
+## Gate18 的已完成阶段
+
+下表列出此前阻塞点所在的前八阶段；其后的集成编译、19 个普通集成分区、独立 worker 入口和四个 mandatory ignored 阶段也已通过，总计 33 阶段。
+
+| 阶段 | 退出码 | 原阶段耗时 | 实际结果 |
+|---|---:|---:|---|
+| release-policy | 0 | 11.34 秒 | 通过 |
+| deployment-policy | 0 | 0.46 秒 | 通过 |
+| fmt | 0 | 4.70 秒 | 通过 |
+| library-compile | 0 | 141.06 秒 | 通过 |
+| library-private | 0 | 44.56 秒 | 2101 passed、0 failed、26 ignored、6 filtered |
+| library-host | 0 | 0.02 秒 | 6 passed、0 failed、0 ignored、2127 filtered |
+| clippy | 0 | 88.84 秒 | 本机目标通过 |
+| windows-gnu-clippy | 0 | 53.22 秒 | 原平台 helper 错误在本轮检查中解除 |
+
+后续阶段实际记录：integration-compile 退出 0、84.04 秒；19 个普通集成分区合计 **101 passed**，独立 zuse worker 入口 **1 passed**；原定四个 ignored 阶段合计 **14 passed**，其中库 2 项、集成 12 项。它们来自本轮各分区的原始汇总，不包含未运行的其他 ignored 定义。
+
+最后 **2 个阶段尚无完成结果**，这不等于它们全部未启动。原结果状态仍为 `running`，内层与外层结束回执当时均不存在；未启动下游运行、UI、多 UID、P1、两项补充 native ignored 或正式发布核验。
+
+外层于 **11:18:15.727562 UTC** 启动，取得源码锁；内层实际取得 target 排他锁，九项启动输入哈希与准备清单一致。run_id 为 `3084787068b4155c51b6e440b6b66202`。原合同保持 **35 阶段、26 个 Rust 阶段、20 个 integration targets、14 个必跑 ignored 测试、6 个 host 库测试**。
+
+报告组完整读取了两个原始 launch：owned launch 为 **1006 字节**、SHA-256 `4f3fc26174ae5e0de0b1dfc30f9d0b79630040fdd32ff428216ee319b27eac20`；内层 launch 为 **3636 字节**、SHA-256 `ab5a314e1b2df311e28a3bc2250e2ca97773160edac18f975afc0a6c2186ad9e`。11:28 的可变结果快照为 **1244873 字节**、SHA-256 `d35b62b0d664186f067cfcc9af2168fb490d60429c3ada1e86ad9c2e4ccbe95a`，报告读取了 33 个阶段的实际退出码、耗时和测试汇总。
+
+准备清单是 **11:17:56 UTC** 的独立快照，保留其尚未启动的 false/null 字段；后来的 launch 才证明实际执行。helper 没有重新获取上游默认分支观察，不将既有观察时点写成当前最新。报告组及三个直接协作者已针对本次真实源码与新启动环境重新确认资源窗口，原历史确认没有冒充新确认。
 
 ## E15：使定义与调用者的平台范围一致
 
@@ -45,7 +70,7 @@ SSMCP 连接在本阶段结束后曾短暂不可用，随后已识别同一项�
 
 ## 一次性重启恢复：已配置，尚未执行
 
-原用户需求记录于 **11:00:48.686 UTC**，要求在重启后打开 ztty、进入项目目录并恢复 SSMCP 会话。源码协调者报告于 **11:10:48.341282 UTC** 完成配置及非启动型 `--check`，退出 0。报告组另行读取现有文件，没有再次运行脚本、模拟打开窗口或重启系统。
+原用户需求记录于 **11:00:48.686 UTC**，要求在重启后打开 ztty、进入项目目录并恢复 SSMCP 会话。源码协调者报告于 **11:10:48.341282 UTC** 完成配置及非启动型 `--check`，退出 0。报告组于 11:15 UTC 另行读取现有文件，没有再次运行脚本、模拟打开窗口或重启系统。
 
 入口位于 `~/.config/autostart/ssmcp-resume-once.desktop`，恢复资料位于 `~/.local/state/work-maintainer/ssmcp-resume-once-20261121/`。原入口调用 `restore.py --autostart`；脚本使用现有的 `ztty-launch` 和已安装的 `ssmcp`，进入 SSMCP 项目目录后启动终端中的连接。没有安装产品、重载客户端或自动启动模型。
 
@@ -151,7 +176,7 @@ private 库父进程汇总报告 **53.99 秒**，与外层阶段耗时分别记�
 - `computer::zuse_backend::tests::num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup`
 - `computer::zuse_backend::tests::num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed`
 
-Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15` 的 `resume_test_history` 未使用；`-D warnings` 将 dead_code 升为错误。日志还出现 qrcodegen manifest warning，它没有被误列为这次已记录的唯一编译错误。没有降低警告规则或跳过阶段。在 Gate17 的历史失败快照中，尚未读取后继修复的启动或结果；当前 E15 源码阶段已经完成，Windows GNU 复查仍待执行。
+Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15` 的 `resume_test_history` 未使用；`-D warnings` 将 dead_code 升为错误。日志还出现 qrcodegen manifest warning，它没有被误列为这次已记录的唯一编译错误。没有降低警告规则或跳过阶段。在 Gate17 的历史失败快照中，尚未读取后继修复的启动或结果；后继 E15 现已合并，本文上方单独记录了新源码在 Gate18 中的 Windows GNU 检查通过。
 
 外层启动回执确认源码锁，内层 launch 确认 target 排他锁。结束回执显示九项固定输入前后相同，验收工作树干净并仍为 S401；内外层退出码均为 1。外层记录源码锁保持到子进程返回，这一字段本身不等于“所有后代均已独立证明回收”。
 
@@ -163,7 +188,7 @@ Windows GNU 目标的原致命错误为 `src/client/interface/history.rs:1077:15
 |---|---|
 | E15 作者阶段 | bef89f5 一行修复，格式／Git 检查通过；没有运行编译或测试 |
 | E14 作者窄检查 | 5a45be0 上第二次通过；第一次锁忙记录保留 |
-| 新主分支 Gate18 | b8d94f5 上准备中；本快照尚未观察实际启动 |
+| 新源码 Gate18 | b8d94f5 上运行中，前 33 阶段通过，最后 2 阶段尚无完成结果 |
 | 历史 Gate17 | S401 上 7 通过、1 失败、27 未运行 |
 | 原栈溢出与两个 Num Lock 回归 | S401 的 private 库阶段实际通过 |
 | 同源码运行、UI、多 UID、P1 | 未执行 |
@@ -215,7 +240,7 @@ Gate16 的原栈溢出仍保存于 [失败事实文件](gate-S647-r16-failure-pu
 | Gate17 内层 exit.json | 4860 | `8d8ce512bd4147fd62cda8cb4f90e0fa7eb60e2b165f53355d0b791451629e92` | 全文 |
 | Gate17 外层 exit.json | 1172 | `f1b48df6b888522ba57dd5332a08a8a6528dc0bb98b3c85abfc4bb365e40ad5f` | 全文 |
 
-下一步由原源码协调者在实际合并提交 b8d94f5 上绑定并执行原 35 阶段完整检查，使用新源码的真实结果决定后续运行与 UI 验收。报告组继续只读核对原件并同步 GitHub 与 Google 文档，不并行启动产品构建或测试，也不把 S401 的成绩转记给后继提交。
+下一步由原检查控制器完成本次 35 阶段检查并核对终态、清理与二进制身份；后续运行和 UI 验收继续绑定同一源码及核实后的二进制。报告组继续只读核对原件并同步 GitHub 与 Google 文档，不并行启动产品构建或测试，也不把 S401 的成绩转记给后继提交。
 
 ---
 
