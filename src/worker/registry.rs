@@ -449,18 +449,17 @@ fn validate(state: &State) -> Result<(), String> {
             if unit.name != format!("ssmcp-worker-{key}-{slot}.scope") {
                 return Err("invalid owned worker unit".into());
             }
-            if let Some(group) = &unit.group {
-                if !group.starts_with("/sys/fs/cgroup")
+            if let Some(group) = &unit.group
+                && (!group.starts_with("/sys/fs/cgroup")
                     || group.file_name().and_then(|n| n.to_str()) != Some(&unit.name)
                     || group.components().any(|part| {
                         !matches!(
                             part,
                             std::path::Component::RootDir | std::path::Component::Normal(_)
                         )
-                    })
-                {
-                    return Err("invalid owned worker cgroup".into());
-                }
+                    }))
+            {
+                return Err("invalid owned worker cgroup".into());
             }
         }
     }

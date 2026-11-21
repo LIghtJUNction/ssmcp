@@ -527,17 +527,15 @@ fn trim<T>(state: &mut State<T>) {
                 .tasks
                 .get(&id)
                 .is_some_and(|task| task.view.status.terminal())
+            && let Some(task) = state.tasks.remove(&id)
+            && task.view.status == TaskStatus::Unknown
         {
-            if let Some(task) = state.tasks.remove(&id)
-                && task.view.status == TaskStatus::Unknown
-            {
-                if state.unknown_keys.len() < MAX_UNKNOWN_KEYS {
-                    state.unknown_keys.insert((task.actor, task.key));
-                } else {
-                    // A bounded guard may refuse new work, but must never
-                    // forget uncertain execution and silently replay its key.
-                    state.unknown_guard_full = true;
-                }
+            if state.unknown_keys.len() < MAX_UNKNOWN_KEYS {
+                state.unknown_keys.insert((task.actor, task.key));
+            } else {
+                // A bounded guard may refuse new work, but must never
+                // forget uncertain execution and silently replay its key.
+                state.unknown_guard_full = true;
             }
         }
     }

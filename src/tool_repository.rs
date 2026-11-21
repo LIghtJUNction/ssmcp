@@ -289,7 +289,10 @@ fn read_file(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn entry(path: &Path) -> Result<(PathBuf, Option<(PathBuf, Vec<u8>)>), String> {
+type ToolManifestSnapshot = (PathBuf, Vec<u8>);
+type ToolEntry = (PathBuf, Option<ToolManifestSnapshot>);
+
+fn entry(path: &Path) -> Result<ToolEntry, String> {
     if path.is_file() {
         return Ok((path.to_owned(), None));
     }

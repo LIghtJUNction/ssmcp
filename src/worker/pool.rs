@@ -201,7 +201,7 @@ impl Pool {
                     Some(registry) => registry
                         .snapshot(&self.generation)
                         .await
-                        .map_or_else(|error| json!({"error":error}), |value| value),
+                        .unwrap_or_else(|error| json!({"error":error})),
                     None => json!({"scope":"current_os_user","admitted":false}),
                 };
                 Ok(json!({"worker":self.queue.snapshot(),"resources":resources,
