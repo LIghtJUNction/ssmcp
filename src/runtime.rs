@@ -332,6 +332,7 @@ impl Runtime {
         registry.replace(Provider::Plugins, plugins::Plugins::tools())?;
         registry.replace(Provider::Output, OutputStore::tools())?;
         registry.replace(Provider::Reload, vec![crate::client::reload::tool()])?;
+        registry.replace(Provider::ManagedFiles, crate::managed_files::tools())?;
         if sessions.is_some() {
             registry.replace(
                 Provider::Sessions,
@@ -826,6 +827,16 @@ impl Runtime {
                     None => Err("session management was not granted with --session-control".into()),
                 },
                 Provider::Audit => self.audit.read(arguments).await.map(backend::result),
+                Provider::ManagedFiles => {
+                    let root = self.tool_root.clone();
+                    let name = tool.native_name.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::managed_files::perform(&root, &name, arguments)
+                    })
+                    .await
+                    .map_err(|error| format!("managed-file operation failed: {error}"))?
+                    .map(backend::result)
+                }
                 #[cfg(target_os = "linux")]
                 Provider::Worker => {
                     let pool = self

@@ -19,6 +19,7 @@ pub enum Provider {
     Harnesses,
     Plugins,
     Workspace,
+    ManagedFiles,
     Context,
     Rsync,
     Output,
@@ -54,6 +55,7 @@ impl Provider {
             Self::Harnesses => "harnesses",
             Self::Plugins => "plugins",
             Self::Workspace => "workspace",
+            Self::ManagedFiles => "managed_files",
             Self::Context => "context",
             Self::Rsync => "rsync",
             Self::Output => "output",
@@ -393,6 +395,13 @@ fn prepare(
                     })
             }
             Provider::Workspace => id.starts_with("ssmcp.fs.") || id.starts_with("ssmcp.net."),
+            Provider::ManagedFiles => matches!(
+                id.as_str(),
+                "ssmcp.files.list"
+                    | "ssmcp.files.cleanup"
+                    | "ssmcp.files.config"
+                    | "ssmcp.files.configure"
+            ),
             Provider::Context => ["ssmcp.skills.", "ssmcp.agents.", "ssmcp.context."]
                 .iter()
                 .any(|p| id.starts_with(p)),
