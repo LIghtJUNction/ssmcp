@@ -1,7 +1,9 @@
+import { officialSources } from '../src/tool_repository/fixture.mjs';
 // Exercise the real code_mode worker through its JSON transport; no model or
 // external service is invoked. Run: node --test scripts/test_client_capabilities.mjs
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const worker = process.env.SSMCP_CODE_MODE_SCRIPT
   ?? fileURLToPath(new URL('../src/code_mode.js', import.meta.url));
 
-function run(code, reply) {
+function run(code, reply, sources = officialSources()) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [worker], { stdio: ['pipe', 'pipe', 'pipe'] });
     const frames = [], requests = [];
@@ -40,7 +42,7 @@ function run(code, reply) {
       else resolve({frames, requests, exitCode, signal, stderr});
     });
     child.stdin.write(JSON.stringify({
-      type:'run', code, clients:[{id:'one', type:'shell', name:'search-fixture'}],
+      tool_sources: sources, type:'run', code, clients:[{id:'one', type:'shell', name:'search-fixture'}],
     }) + '\n');
   });
 }
@@ -51,6 +53,51 @@ const failure = (record, pattern) => {
   assert.equal(record.exitCode, 1, record.stderr);
   assert.match(error(record), pattern);
 };
+
+const localSource = code => ({
+  name:'local', code, sha256:createHash('sha256').update(code).digest('hex'),
+});
+
+test('registered source overrides use previous exports and the same real host bridge', async () => {
+  const sources = [...officialSources(), localSource(
+    "core => ({ui:Object.freeze({...core.previous.ui,local:()=>'edited locally'})})")];
+  const record = await run(
+    "return [ui.local(), await ui.message('one',{text:'unchanged bridge',finish_task:true})];",
+    request => {
+      assert.equal(request.name,'ssmcp.ui.message');
+      assert.deepEqual(request.arguments,{text:'unchanged bridge',finish_task:true});
+      return {ok:true,value:{structuredContent:{accepted:true,message_id:'actual-message'}}};
+    }, sources);
+  success(record);
+  assert.deepEqual(value(record),['edited locally',{accepted:true,message_id:'actual-message'}]);
+  assert.equal(record.requests.length,1);
+});
+
+test('tool sources cannot replace protected core permissions or output primitives', async () => {
+  for (const name of ['call','clients','image','print','console']) {
+    const record = await run("return 'must not start';",()=>assert.fail('no native call'),
+      [localSource('core => ({' + name + ':null})')]);
+    failure(record,/invalid or protected tool export/);
+    assert.equal(record.requests.length,0);
+  }
+});
+
+test('changed source hashes and absent source bundles fail before user code', async () => {
+  const changed = {...localSource('core => ({value:1})'),code:'core => ({value:2})'};
+  for (const sources of [[changed],[]]) {
+    const record = await run("return call('one','must.not.start',{});",
+      ()=>assert.fail('no native call'),sources);
+    failure(record,/tool-source/);
+    assert.equal(record.requests.length,0);
+  }
+});
+
+test('tool factories cannot start native operations during source preparation', async () => {
+  const record = await run("return 'must not start';",()=>assert.fail('no native call'),
+    [localSource("core => core.call('one','must.not.start',{})")]);
+  failure(record,/synchronous export object|without starting native operations/);
+  assert.equal(record.requests.length,0);
+});
 
 test('dynamic native API calls a future client primitive without relay provider changes', async () => {
   const record = await run(

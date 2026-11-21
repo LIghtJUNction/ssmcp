@@ -1,3 +1,4 @@
+import { officialSources } from '../src/tool_repository/fixture.mjs';
 // Protocol tests for the real code_mode worker. No desktop, network or model is used.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -49,7 +50,7 @@ function run(code, reply) {
       else resolve({ frames, requests, exitCode, signal, stderr });
     });
     child.stdin.write(JSON.stringify({
-      type: 'run', code, clients: [{ id: 'one', type: 'shell', name: 'fixture' }],
+      tool_sources: officialSources(), type: 'run', code, clients: [{ id: 'one', type: 'shell', name: 'fixture' }],
     }) + '\n');
   });
 }

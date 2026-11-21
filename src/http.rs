@@ -34,6 +34,7 @@ mod question_delivery_tests;
 mod relay_composer_fixture;
 mod session_io;
 mod tool_summaries;
+mod tool_sources;
 mod user_wait;
 
 pub fn router(broker: Arc<Broker>) -> Router {
@@ -494,6 +495,8 @@ struct ListArguments {
 #[serde(deny_unknown_fields)]
 struct CodeArguments {
     code: String,
+    #[serde(default)]
+    tool_client_id: Option<String>,
     #[serde(default = "default_timeout")]
     timeout_ms: u64,
     #[serde(default)]
@@ -783,7 +786,7 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
         "code_mode" => {
             let mut arguments: CodeArguments = serde_json::from_value(arguments).map_err(|_| {
                 Fault::params(
-                    "code_mode requires code and accepts timeout_ms, controller {name, model}, and agent {client_id,id,token}",
+                    "code_mode requires code and accepts timeout_ms, tool_client_id, controller {name, model}, and agent {client_id,id,token}",
                 )
             })?;
             arguments.openai_context =
@@ -984,6 +987,13 @@ async fn execute(
     access_token: String,
     arguments: CodeArguments,
 ) -> Result<Value, String> {
+    if !(1..=MAX_TIMEOUT_MS).contains(&arguments.timeout_ms) {
+        return Err(format!("timeout_ms must be 1..={MAX_TIMEOUT_MS}"));
+    }
+    if arguments.code.trim().is_empty() || arguments.code.len() > MAX_CODE_BYTES {
+        return Err(format!("code must contain 1..={MAX_CODE_BYTES} UTF-8 bytes"));
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(arguments.timeout_ms);
     let sessions = broker.clients(&user, &authorization).await?;
     let clients = json!(
         sessions
@@ -996,7 +1006,7 @@ async fn execute(
         .unwrap_or_default();
     let controller = arguments.controller_context.clone();
     let mut audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
-    audit_run.openai_context = arguments.openai_context;
+    audit_run.openai_context = arguments.openai_context.clone();
     if let Some(agent) = &arguments.agent {
         let session = broker
             .client(&user, &authorization, &agent.client_id)
@@ -1008,6 +1018,9 @@ async fn execute(
         audit_run.record_connection(&session)?;
         audit_run.bind(&agent.client_id, &owner, &agent.id, &agent.token)?;
     }
+    let sources = tokio::time::timeout_at(deadline,
+        tool_sources::load(&broker, &user, &access_token, &audit_run, &arguments, &sessions))
+        .await.map_err(|_| "code_mode timed out while loading selected tool sources; no user code was started")??;
     let mut audit_report = CodeRunReport {
         broker: broker.clone(),
         user: user.clone(),
@@ -1017,21 +1030,38 @@ async fn execute(
     };
     let runner = broker.code_mode_runner.clone();
     let host = code_host(
-        broker,
-        user,
-        access_token,
+        broker.clone(),
+        user.clone(),
+        access_token.clone(),
         audit_run.clone(),
         controller,
         request_id,
     );
-    let result =
-        code_mode::execute_with_runner(arguments.code, arguments.timeout_ms, clients, host, runner)
-            .await;
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis();
+    let mut result = if remaining == 0 {
+        Err("code_mode deadline expired during tool-source preparation".into())
+    } else {
+        code_mode::execute_with_runner(arguments.code, remaining as u64, clients, host, runner,
+            sources.bundle.clone()).await
+    };
+    let source_authority = sources.verify(&broker, &user, &access_token).await;
+    if let Err(error) = &source_authority {
+        result = Err(error.clone());
+    }
     audit_report.finish(&result).await;
     let response =
         append_context_memories(crate::code_mode::tool_result(result), &audit_report.run);
     let response = finish_user_response(&audit_report, response).await;
-    Ok(user_wait::append(response, &audit_report.run))
+    // Final delivery can await summary/question probes. Recheck after those
+    // awaits and before exposing any program result, private source identity,
+    // or finish permission. An inaccessible source never leaves an old grant.
+    if let Err(error) = sources.verify(&broker, &user, &access_token).await {
+        return Ok(crate::code_mode::tool_result(Err(error)));
+    }
+    if let Err(error) = source_authority {
+        return Ok(crate::code_mode::tool_result(Err(error)));
+    }
+    Ok(user_wait::append(sources.append(response), &audit_report.run))
 }
 
 /// Direct server tools share response delivery without starting a JS runner.
@@ -1905,9 +1935,10 @@ pub(crate) fn tool_definitions() -> Value {
         },
         {
             "name":"code_mode",
-            "description":"Run JavaScript for clients selected from list. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args), exec.run(id,{command:[...],cwd,wait_ms}), or exec.parallel(id,commands,{concurrency:4}) for independent commands. Batch known independent checks in one request, keep dependent actions ordered, and return compact per-item results with job IDs, exit codes, errors and output completeness. Read additional output by returned cursor or artifact ID. Use exec.start for long work. Native permissions and approvals apply.\n\nFor chat-enabled clients, send user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. Controller names are display attribution, not authentication.\n\nFor chat-enabled clients, when input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}). Timeout reports that no input arrived during this wait. Only outer user_wait.received with matching user_messages confirms delivery. say(id,{text:'Result',kind:'answer',finish_task:true}) sends and then enters the verified-thread Human approval wait; ui.message and direct ssmcp.ui.message accept the same optional boolean, default false. Only the final outer user_wait status decided with may_finish:true authorizes ending. If it is missing, keep the task active, process any new user input, and actually await the returned next_wait in a new outer tool call. Native ACK, No, reads, timeout, cancellation and lost authority are not permission; do not substitute a timer, background sleep or a same-run loop.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
+            "description":"Run JavaScript for clients selected from list. Tool helper sources come from the authorized tool_client_id client and its ssmcprc.toml; inspect outer tool_sources for the actual Git commit, dirty state and content hashes. Edit and validate local overrides in that client workspace for independent tool iteration. Source read failures require fixing or upgrading that client, without a silent embedded-helper fallback. Discover schemas with tools.search(id,{query,name_prefix,include_schemas:true}), then use call(id,name,args), exec.run(id,{command:[...],cwd,wait_ms}), or exec.parallel(id,commands,{concurrency:4}) for independent commands. Batch known independent checks in one request, keep dependent actions ordered, and return compact per-item results with job IDs, exit codes, errors and output completeness. Read additional output by returned cursor or artifact ID. Use exec.start for long work. Native permissions and approvals apply.\n\nFor chat-enabled clients, send user-facing progress with say(id,{text,kind:'progress'}) and final replies with kind:'answer'. ui.present renders structured content; ui.history reads conversation history. Check user_messages / USER REQUIREMENTS on each response; context_memories / SESSION CONTEXT is historical reference. Controller names are display attribution, not authentication.\n\nFor chat-enabled clients, when input is needed, return await ui.wait(id,{timeout_ms:20000,intent:'need_user'}). Timeout reports that no input arrived during this wait. Only outer user_wait.received with matching user_messages confirms delivery. say(id,{text:'Result',kind:'answer',finish_task:true}) sends and then enters the verified-thread Human approval wait; ui.message and direct ssmcp.ui.message accept the same optional boolean, default false. Only the final outer user_wait status decided with may_finish:true authorizes ending. If it is missing, keep the task active, process any new user input, and actually await the returned next_wait in a new outer tool call. Native ACK, No, reads, timeout, cancellation and lost authority are not permission; do not substitute a timer, background sleep or a same-run loop.\n\nUse print/console for diagnostics, image(nativeResult) for real MCP images, and return JSON. Inspect errors, job state and output completeness. Timeout ends orchestration; native work may continue. Full helper signatures, exec job compatibility, browser routing and @reference handling: resources.read('ssmcp://guide'). Limits: ssmcp://limits. No direct host filesystem or network access.",
             "inputSchema":{"type":"object","properties":{
                 "code":{"type":"string","minLength":1,"maxLength":MAX_CODE_BYTES},
+                "tool_client_id":{"type":"string","minLength":1,"maxLength":64,"description":"Authorized client whose ssmcprc.toml and editable Git tool sources apply. Defaults to the verified agent client, or the sole authorized client. Multiple clients without selection use an explicit read-only official seed; no local overrides are guessed."},
                 "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"default":DEFAULT_TIMEOUT_MS},
                 "agent":{"type":"object","description":"Optional authenticated collaboration member for this run. Alternatively call collab.bind(clientId,{agent_id,token}) first in JavaScript. Enables exact-agent user messages; controller names never select recipients.","properties":{"client_id":{"type":"string","minLength":1,"maxLength":64},"id":{"type":"string","minLength":1,"maxLength":64},"token":{"type":"string","minLength":64,"maxLength":64}},"required":["client_id","id","token"],"additionalProperties":false},
                 "controller":{

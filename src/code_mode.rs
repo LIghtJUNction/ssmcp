@@ -825,12 +825,17 @@ pub(crate) async fn execute_with_runner(
     clients: Value,
     host: Host,
     local_runner: Option<PathBuf>,
+    sources: crate::tool_repository::Bundle,
 ) -> Result<Value, String> {
-    let Some(runner) = local_runner else {
-        return execute(code, timeout_ms, clients, host).await;
-    };
-    let command = prepare_command(move || sandbox_command_with_runner(Some(runner))).await?;
-    execute_process(command, code, timeout_ms, clients, host).await
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let command = tokio::time::timeout_at(deadline,
+        prepare_command(move || sandbox_command_with_runner(local_runner)))
+        .await.map_err(|_| "code_mode timed out during runtime preparation".to_owned())??;
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis();
+    if remaining == 0 {
+        return Err("code_mode timed out during runtime preparation".into());
+    }
+    execute_process_sources(command, code, remaining as u64, clients, host, sources).await
 }
 
 const RUNTIME_CHECK_CODE: &str =
@@ -882,12 +887,25 @@ async fn prepare_command(
 }
 
 async fn execute_process(
-    mut command: Command,
+    command: Command,
     code: String,
     timeout_ms: u64,
     clients: Value,
     host: Host,
 ) -> Result<Value, String> {
+    let sources = crate::tool_repository::official_seed().await?;
+    execute_process_sources(command, code, timeout_ms, clients, host, sources).await
+}
+
+async fn execute_process_sources(
+    mut command: Command,
+    code: String,
+    timeout_ms: u64,
+    clients: Value,
+    host: Host,
+    sources: crate::tool_repository::Bundle,
+) -> Result<Value, String> {
+    let sources = sources.validate()?;
     if code.trim().is_empty() || code.len() > MAX_CODE_BYTES {
         return Err(format!(
             "code must contain 1..={MAX_CODE_BYTES} UTF-8 bytes"
@@ -936,7 +954,7 @@ async fn execute_process(
     let mut logs = Vec::new();
     let mut images = Vec::new();
     let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
-        send_frame(&mut worker.stdin, &json!({"type":"run", "code":code, "clients":clients})).await?;
+        send_frame(&mut worker.stdin, &json!({"type":"run", "code":code, "clients":clients, "tool_sources":sources.sources})).await?;
         bridge(&mut worker.stdout, &mut worker.stdin, host, &mut logs, &mut images).await
     }).await.unwrap_or_else(|_| Err("code_mode timed out; an already submitted native operation may continue and its outcome may be unknown. Inspect the client before retrying a mutating call.".into()));
     // Managed also terminates the owned process tree when this future is cancelled.
