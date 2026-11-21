@@ -8,11 +8,12 @@ pub(crate) use history::tests::{enqueue_for_test, with_test_queue};
 mod human_finish_tests;
 mod requests;
 mod workflow;
+pub(super) use workflow::{FinishWait, prepare_finish, cancel_finish};
 pub(crate) use delivery::attach as attach_answers;
 #[cfg(test)]
 pub(crate) use requests::{AgentActor, FinishDecision, FinishView};
 pub(crate) use requests::{
-    AnswerDelivery, DecisionActor, FinishChoice, FinishStatus, QuestionKind, QuestionView,
+    AnswerDelivery, DecisionActor, FinishChoice, FinishReceipt, FinishStatus, QuestionKind, QuestionView,
 };
 use requests::{RequestScope, Routing};
 use serde::{Deserialize, Serialize};

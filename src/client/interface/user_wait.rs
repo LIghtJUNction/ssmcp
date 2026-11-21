@@ -1,6 +1,7 @@
 //! Local presentation and cancellation for authenticated server-owned waits.
 //! This module never reads, reserves, or delivers the ordinary user queue.
 use crate::client::notification::{Notifier, Report};
+use super::questions::{self, FinishReceipt, FinishWait};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -24,6 +25,8 @@ pub(crate) enum Intent {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Ready,
+    #[serde(skip_deserializing)]
+    Decided,
     TimedOut,
     Cancelled,
     Disconnected,
@@ -39,6 +42,7 @@ pub(crate) struct Entry {
     pub intent: Intent,
     pub recipient: String,
     pub reason: Option<String>,
+    pub finish_request_id: Option<String>,
     pub remaining_ms: u64,
     pub notification_requested: bool,
     pub notification: Option<Report>,
@@ -58,6 +62,10 @@ pub(crate) struct Completion {
     pub status: Outcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification: Option<Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_decision: Option<FinishReceipt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +75,10 @@ struct Finish {
     status: Option<Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notification: Option<Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_decision: Option<FinishReceipt>,
 }
 
 struct Spec {
@@ -75,6 +87,7 @@ struct Spec {
     intent: Intent,
     recipient: String,
     reason: Option<String>,
+    finish_request_id: Option<String>,
     timeout_ms: u64,
     notify: bool,
 }
@@ -89,6 +102,12 @@ impl Spec {
         }
         if !valid_id(&self.recipient) {
             return Err("recipient must be next or an exact visible ASCII agent identifier".into());
+        }
+        if (self.intent == Intent::NeedUser && self.finish_request_id.is_some())
+            || self.finish_request_id.as_deref().is_some_and(|id| !valid_id(id))
+            || (self.intent == Intent::Finish && self.recipient == "next")
+        {
+            return Err("finish waits require an authenticated thread; only finish accepts a request ID".into());
         }
         if !(1000..=25000).contains(&self.timeout_ms) {
             return Err("user wait timeout_ms must be between 1000 and 25000".into());
@@ -129,6 +148,7 @@ struct Active {
     entry: Entry,
     deadline: Instant,
     reply: watch::Sender<Option<Completion>>,
+    finish_decision: Option<FinishReceipt>,
 }
 
 #[derive(Default)]
@@ -153,6 +173,8 @@ impl State {
             wait_id: pending.key.id,
             status: outcome,
             notification: pending.entry.notification,
+            finish_request_id: pending.entry.finish_request_id,
+            finish_decision: pending.finish_decision,
         };
         let _ = pending.reply.send_replace(Some(result.clone()));
         self.completed.push_back(result);
@@ -247,12 +269,14 @@ impl Hub {
                     key: key.clone(),
                     deadline,
                     reply,
+                    finish_decision: None,
                     entry: Entry {
                         wait_id: key.id.clone(),
                         episode_id: spec.episode_id.clone(),
                         intent: spec.intent,
                         recipient: spec.recipient.clone(),
                         reason: spec.reason.clone(),
+                        finish_request_id: spec.finish_request_id.clone(),
                         remaining_ms: spec.timeout_ms,
                         notification_requested: spec.notify,
                         notification: None,
@@ -301,6 +325,8 @@ impl Hub {
             .find(|value| value.wait_id == id);
         let status = completed.map(|value| value.status);
         let notification = completed.and_then(|value| value.notification);
+        let finish_request_id = completed.and_then(|value| value.finish_request_id.clone());
+        let finish_decision = completed.and_then(|value| value.finish_decision.clone());
         drop(state);
         if expired || finished {
             changed();
@@ -310,7 +336,19 @@ impl Hub {
             finished,
             status,
             notification,
+            finish_request_id,
+            finish_decision,
         })
+    }
+
+    fn decision(&self, key: &Key, receipt: FinishReceipt) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = state.active.get_mut(&key.id)
+            && active.key.generation == key.generation
+        {
+            active.entry.finish_request_id = Some(receipt.request_id.clone());
+            active.finish_decision = Some(receipt);
+        }
     }
 
     fn notification(&self, key: &Key, report: Report) {
@@ -381,7 +419,22 @@ impl Hub {
                 return Ok(json!({"wait_id":spec.wait_id,"status":"disconnected"}));
             }
         };
-        let title = "ssmcp 正在等待你回复";
+        // Creation and guard registration are synchronous inside this one native
+        // wait. There is no separate preparation RPC whose reply can be lost
+        // before cancellation learns which Human request it owns.
+        let mut finish = if spec.intent == Intent::Finish {
+            let receipt = questions::prepare_finish(
+                spec.reason.as_deref(),
+                spec.finish_request_id.as_deref(),
+                &spec.recipient,
+            )?;
+            let finish = FinishWait::begin(&receipt.request_id, &spec.recipient)?;
+            self.decision(&registration.key, receipt);
+            Some(finish)
+        } else {
+            None
+        };
+        let title = if finish.is_some() { "ssmcp 等待你决定是否结束" } else { "ssmcp 正在等待你回复" };
         let recipient = if spec.recipient == "next" {
             "Next caller"
         } else {
@@ -398,15 +451,49 @@ impl Hub {
         let mut notified = !spec.notify;
         loop {
             let complete = receiver.borrow().clone();
-            if let Some(result) = complete {
+            if let Some(mut result) = complete {
+                if result.status != Outcome::Decided
+                    && let Some(finish) = &mut finish
+                {
+                    result.finish_decision = finish.end(result.status == Outcome::TimedOut).ok();
+                }
                 return serde_json::to_value(result)
                     .map_err(|_| "cannot encode user wait result".into());
             }
+            if Instant::now() >= deadline {
+                self.finish_key(&registration.key, Outcome::TimedOut);
+                continue;
+            }
+            if let Some(finish) = &mut finish {
+                match finish.poll(deadline) {
+                    Ok(Some(receipt)) => {
+                        self.decision(&registration.key, receipt);
+                        self.finish_key(&registration.key, Outcome::Decided);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        self.finish_key(&registration.key, Outcome::BindingInvalid);
+                        continue;
+                    }
+                }
+            }
+            let has_finish = finish.is_some();
             tokio::select! {
                 biased;
                 result = receiver.changed() => {
                     if result.is_err() {
                         return Err("user wait channel ended before a local result".into());
+                    }
+                },
+                result = async {
+                    match &mut finish {
+                        Some(finish) => finish.changed().await,
+                        None => std::future::pending::<Result<(), String>>().await,
+                    }
+                }, if has_finish => {
+                    if result.is_err() {
+                        self.finish_key(&registration.key, Outcome::Disconnected);
                     }
                 },
                 _ = tokio::time::sleep_until(deadline.into()) => {
@@ -440,6 +527,8 @@ enum Request {
         intent: Intent,
         recipient: String,
         reason: Option<String>,
+        #[serde(default)]
+        finish_request_id: Option<String>,
         timeout_ms: u64,
         #[serde(default = "yes")]
         notify: bool,
@@ -447,6 +536,8 @@ enum Request {
     Finish {
         wait_id: String,
         outcome: Outcome,
+        #[serde(default)]
+        finish_request_id: Option<String>,
     },
     Status {},
 }
@@ -477,6 +568,7 @@ pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
             intent,
             recipient,
             reason,
+            finish_request_id,
             timeout_ms,
             notify,
         } => {
@@ -487,23 +579,31 @@ pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
                     intent,
                     recipient,
                     reason,
+                    finish_request_id,
                     timeout_ms,
                     notify,
                 })
                 .await
         }
-        Request::Finish { wait_id, outcome } => {
-            serde_json::to_value(global().finish(&wait_id, outcome)?)
-                .map_err(|_| "cannot encode user wait completion".into())
+        Request::Finish { wait_id, outcome, finish_request_id } => {
+            let mut result = global().finish(&wait_id, outcome)?;
+            if let Some(id) = result.finish_request_id.clone().or(finish_request_id) {
+                result.finish_request_id = Some(id.clone());
+                if outcome != Outcome::TimedOut {
+                    result.finish_decision = Some(questions::cancel_finish(&id, "wait_cancelled")?);
+                }
+            }
+            serde_json::to_value(result).map_err(|_| "cannot encode user wait completion".into())
         }
         Request::Status {} => Ok(json!({"schema_version":1,"state":snapshot()})),
     }
 }
 
 pub(crate) fn tool() -> Value {
-    json!({"name":"ssmcp.ui.wait","description":"Client presentation and local cancellation for the authenticated server ui.wait helper. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. status is observational. This is independent of the force-send listener and invokes no model.",
+    json!({"name":"ssmcp.ui.wait","description":"Internal client presentation and local cancellation for the authenticated server ui.wait helper. A finish wait synchronously creates or resumes a real verified-thread Human Yes/No request and consumes an exact Human Yes once. Text, reads, timeout and cancellation never grant completion permission. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. status is observational. This is independent of the force-send listener and invokes no model.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
             "op":{"enum":["wait","finish","status"]},"wait_id":{"type":"string","minLength":1,"maxLength":128},
+            "finish_request_id":{"type":["string","null"],"minLength":1,"maxLength":128},
             "episode_id":{"type":"string","pattern":"^[A-Fa-f0-9]{64}$"},"intent":{"enum":["need_user","finish"]},
             "recipient":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},
             "reason":{"anyOf":[{"type":"string","maxLength":512},{"type":"null"}]},
@@ -529,6 +629,7 @@ mod tests {
             intent: Intent::NeedUser,
             recipient: "next".into(),
             reason: None,
+            finish_request_id: None,
             timeout_ms: 25_000,
             notify: false,
         }

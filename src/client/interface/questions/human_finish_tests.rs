@@ -423,3 +423,65 @@ fn an_unbound_next_caller_cannot_create_or_consume_a_finish_request() {
     assert_eq!(snapshot(&queue), before);
     assert_eq!(queue.consume_finish(&requester).unwrap(), id);
 }
+
+#[test]
+fn finish_wait_exact_request_revision_and_scope_are_consumed_once() {
+    let mut queue = queue();
+    let requester = scope("42", "requester");
+    let id = finish(&mut queue, requester.clone());
+    let pending = FinishReceipt::from_view(queue.finish_view_for(&requester, &id).unwrap(), false).unwrap();
+    assert_eq!(pending.request_id, id);
+    assert_eq!(pending.status, FinishStatus::Pending);
+    assert_eq!(pending.actor, None);
+    assert!(!pending.human_permission());
+    let approved = queue.decide_finish_for(&id, FinishChoice::Yes, Some("Reviewed"), None).unwrap();
+    let revision = approved.answer_revision;
+    let before = snapshot(&queue);
+    for (caller, request_id, expected_revision) in [
+        (scope("42", "other-thread"), id.as_str(), revision),
+        (requester.clone(), "question_unknown", revision),
+        (requester.clone(), id.as_str(), revision + 1),
+        (requester.clone(), id.as_str(), 0),
+    ] {
+        assert!(queue.consume_finish_revision(&caller, request_id, expected_revision).is_err());
+        assert_eq!(snapshot(&queue), before);
+    }
+    let observed = FinishReceipt::from_view(queue.finish_view_for(&requester, &id).unwrap(), false).unwrap();
+    assert_eq!(observed.choice, Some(FinishChoice::Yes));
+    assert_eq!(observed.actor, Some(DecisionActor::Human));
+    assert!(!observed.human_permission(), "reading Human Yes does not consume permission");
+    let consumed = queue.consume_finish_revision(&requester, &id, revision).unwrap();
+    let receipt = FinishReceipt::from_view(consumed, true).unwrap();
+    assert_eq!(receipt.revision, Some(revision));
+    assert!(receipt.human_permission());
+    assert!(queue.consume_finish_revision(&requester, &id, revision).is_err());
+    let reread = FinishReceipt::from_view(queue.finish_view_for(&requester, &id).unwrap(), false).unwrap();
+    assert_eq!(reread.status, FinishStatus::Completed);
+    assert!(!reread.human_permission(), "resuming or reading a completed request cannot replay Yes");
+}
+
+#[test]
+fn finish_wait_cancellation_preserves_the_real_actor_and_invalidates_permission() {
+    for choice in [None, Some(FinishChoice::Yes), Some(FinishChoice::No)] {
+        let mut queue = queue();
+        let requester = scope("42", "requester");
+        let id = finish(&mut queue, requester.clone());
+        if let Some(choice) = choice {
+            queue.decide_finish_for(&id, choice, None, None).unwrap();
+        }
+        let before = snapshot(&queue);
+        assert!(queue.cancel_finish_for(&scope("42", "other-thread"), &id, "wait_cancelled").is_err());
+        assert_eq!(snapshot(&queue), before);
+        let cancelled = queue.cancel_finish_for(&requester, &id, "wait_cancelled").unwrap();
+        let receipt = FinishReceipt::from_view(cancelled, false).unwrap();
+        assert!(!receipt.human_permission());
+        assert_eq!(receipt.actor, choice.map(|_| DecisionActor::Human));
+        assert_eq!(receipt.choice, choice);
+        assert!(queue.consume_finish_revision(&requester, &id, receipt.revision.unwrap_or(0)).is_err());
+        assert_eq!(receipt.status, if choice == Some(FinishChoice::No) {
+            FinishStatus::Denied
+        } else {
+            FinishStatus::Cancelled
+        });
+    }
+}

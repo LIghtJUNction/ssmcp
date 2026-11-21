@@ -1,7 +1,7 @@
 //! Transport-independent user-message wait coordinator. The MCP host may run
 //! locally; no remote URL, OS notification helper, or model is selected here.
 use super::*;
-use crate::code_mode::user_wait::{Arguments, Outcome, Recipient};
+use crate::code_mode::user_wait::{Arguments, Intent, Outcome, Recipient};
 use tokio::time::{Instant, MissedTickBehavior};
 
 pub(super) async fn authorized(
@@ -101,6 +101,9 @@ pub(super) async fn wait_observed(
     authorized(&broker, &user, &token, &client_id, &session, &recipient)
         .await
         .map_err(|_| "the user wait recipient no longer has access")?;
+    if arguments.intent == Intent::Finish && recipient.binding.is_none() {
+        return Err("finish requires a verified collab thread binding; bind the asking agent before waiting for an end decision".into());
+    }
     let wait_id = run.begin_user_wait(&client_id, recipient.clone(), arguments.intent)?;
     if let Some(admitted) = admitted {
         admitted.store(true, std::sync::atomic::Ordering::Release);
@@ -114,12 +117,35 @@ pub(super) async fn wait_observed(
     };
     // watch retains a change that happens before changed() is first polled.
     let mut changed = session.steering.subscribe();
+    let episode_id = session.steering.episode(&client_id, &recipient.owner, recipient.agent_id());
+    if arguments.intent == Intent::Finish {
+        run.begin_finish_wait(&client_id, arguments.finish_request_id.clone(), episode_id.clone());
+    }
     match session
         .steering
         .reserve(&client_id, &run.context.run_id, recipient.agent_id())
     {
         Ok(Some(reservation)) => {
             run.reserve_user_wait(&client_id, reservation);
+            if let Some(finish_request_id) = run.finish_request_id(&client_id) {
+                // Existing text is delivered through the ordinary reservation;
+                // it can never stand in for a Human decision. Invalidate an
+                // explicitly resumed request without creating a new one.
+                let close = session.call_with_authorization(
+                    Operation::CallTool {
+                        name: "ssmcp.ui.wait".into(),
+                        arguments: json!({"op":"finish","wait_id":wait_id,"outcome":"ready",
+                            "finish_request_id":finish_request_id}),
+                    },
+                    controller.clone(),
+                    &authorization,
+                );
+                if let Ok(result) = tokio::time::timeout(Duration::from_secs(1), close).await
+                    && let Some(data) = native_data(&result, &wait_id)
+                {
+                    run.capture_finish_wait(&client_id, &data);
+                }
+            }
             return Ok(run.user_wait_receipt(&client_id));
         }
         Err(_) => {
@@ -128,15 +154,13 @@ pub(super) async fn wait_observed(
         }
         Ok(None) => {}
     }
-    let episode_id = session
-        .steering
-        .episode(&client_id, &recipient.owner, recipient.agent_id());
     let operation = Operation::CallTool {
         name: "ssmcp.ui.wait".into(),
         arguments: json!({
             "op":"wait","wait_id":wait_id,"episode_id":episode_id,
             "recipient":recipient.agent_id().unwrap_or("next"),"intent":arguments.intent,
-            "reason":arguments.reason,"timeout_ms":arguments.timeout_ms,"notify":arguments.notify
+            "reason":arguments.reason,"timeout_ms":arguments.timeout_ms,"notify":arguments.notify,
+            "finish_request_id":run.finish_request_id(&client_id)
         }),
     };
     let native = session.call_with_authorization(operation, controller.clone(), &authorization);
@@ -157,7 +181,12 @@ pub(super) async fn wait_observed(
                 }
                 let Some(data) = native_data(&result, &wait_id) else { break Outcome::Unavailable };
                 run.wait_notification(&client_id, &data);
+                let decision = arguments.intent == Intent::Finish
+                    && run.capture_finish_wait(&client_id, &data);
                 break match data["status"].as_str() {
+                    Some("decided") if decision && run.finish_decision_ready(&client_id) => {
+                        Outcome::DecisionReady
+                    }
                     Some("cancelled") => Outcome::Cancelled,
                     Some("timed_out") => Outcome::TimedOut,
                     Some("busy") => Outcome::Busy,
@@ -199,7 +228,7 @@ pub(super) async fn wait_observed(
             Ok(None) => {}
         }
     };
-    if outcome != Outcome::Ready {
+    if !matches!(outcome, Outcome::Ready | Outcome::DecisionReady) {
         run.finish_wait_state(&client_id, outcome, "wait_finished_without_delivery");
     }
     // Closing this UI is best effort, not a delivery acknowledgement. Keep
@@ -212,7 +241,8 @@ pub(super) async fn wait_observed(
         let finish = session.call_with_authorization(
             Operation::CallTool {
                 name: "ssmcp.ui.wait".into(),
-                arguments: json!({"op":"finish","wait_id":wait_id,"outcome":outcome}),
+                arguments: json!({"op":"finish","wait_id":wait_id,"outcome":outcome,
+                    "finish_request_id":run.finish_request_id(&client_id)}),
             },
             controller,
             &current,
@@ -229,6 +259,9 @@ pub(super) async fn wait_observed(
             .and_then(|result| native_data(result, &wait_id));
         if let Some(data) = &data {
             run.wait_notification(&client_id, data);
+            if arguments.intent == Intent::Finish {
+                run.capture_finish_wait(&client_id, data);
+            }
         }
         if outcome == Outcome::Ready {
             let status = data.as_ref().and_then(|data| data["status"].as_str());
@@ -257,7 +290,8 @@ pub(super) async fn cancel_native(
     broker: &Broker,
     user: &str,
     token: &str,
-    waits: Vec<(String, String)>,
+    run: &code_mode::AuditRun,
+    waits: Vec<(String, String, Option<String>)>,
 ) {
     if waits.is_empty() {
         return;
@@ -265,23 +299,32 @@ pub(super) async fn cancel_native(
     // One deadline bounds the entire best-effort cleanup, not N deadlines for
     // N clients. Queue reservations were synchronously released before this.
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
-        for (client_id, wait_id) in waits {
+        for (client_id, wait_id, finish_request_id) in waits {
             let Some(authorization) = broker.authenticate(user, token).await else {
                 break;
             };
             let Ok(session) = broker.client(user, &authorization, &client_id).await else {
                 continue;
             };
-            let _ = session
-                .call_with_authorization(
-                    Operation::CallTool {
-                        name: "ssmcp.ui.wait".into(),
-                        arguments: json!({"op":"finish","wait_id":wait_id,"outcome":"cancelled"}),
-                    },
-                    None,
-                    &authorization,
-                )
-                .await;
+            let Some(recipient) = run.wait_recipient(&client_id) else { continue };
+            if recipient.connection.upgrade().is_none_or(|original| !Arc::ptr_eq(&original, &session))
+                || authorized(broker, user, token, &client_id, &session, &recipient).await.is_err()
+            {
+                continue;
+            }
+            let cleanup = session.call_with_bound_authorization(
+                Operation::CallTool {
+                    name: "ssmcp.ui.wait".into(),
+                    arguments: json!({"op":"finish","wait_id":wait_id,"outcome":"cancelled",
+                        "finish_request_id":finish_request_id}),
+                },
+                None,
+                &authorization,
+                recipient.binding,
+            );
+            // Cleanup retains the original verified thread's CodeContext;
+            // neither controller text nor a later connection can select it.
+            let _ = code_mode::AUDIT_RUN.scope(run.clone(), cleanup).await;
         }
     })
     .await;
@@ -760,7 +803,7 @@ mod tests {
         fixture.close().await;
     }
 
-    async fn identity_report(bound: bool) -> (CodeRunReport, Arc<Session>) {
+    async fn identity_report(bound: bool, finish: bool) -> (CodeRunReport, Arc<Session>) {
         let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
         let identity = Identity {
             provider: "github".into(),
@@ -789,20 +832,22 @@ mod tests {
             )
             .unwrap();
         }
-        session
-            .steering
-            .command(
-                session.client_id(),
-                vec![],
-                SteeringCommand::Publish {
-                    command_id: "publish".into(),
-                    message_id: "request".into(),
-                    expected_revision: 0,
-                    text: "retained request".into(),
-                    target: "next".into(),
-                },
-            )
-            .unwrap();
+        if !finish {
+            session
+                .steering
+                .command(
+                    session.client_id(),
+                    vec![],
+                    SteeringCommand::Publish {
+                        command_id: "publish".into(),
+                        message_id: "request".into(),
+                        expected_revision: 0,
+                        text: "retained request".into(),
+                        target: "next".into(),
+                    },
+                )
+                .unwrap();
+        }
         let recipient = Recipient {
             owner,
             binding: run.binding(session.client_id()),
@@ -811,21 +856,36 @@ mod tests {
         run.begin_user_wait(
             session.client_id(),
             recipient.clone(),
-            crate::code_mode::user_wait::Intent::NeedUser,
+            if finish { Intent::Finish } else { Intent::NeedUser },
         )
         .unwrap();
-        run.reserve_user_wait(
-            session.client_id(),
-            session
-                .steering
-                .reserve(
-                    session.client_id(),
-                    &run.context.run_id,
-                    recipient.agent_id(),
-                )
-                .unwrap()
-                .unwrap(),
-        );
+        if finish {
+            let episode = session.steering.episode(
+                session.client_id(), &recipient.owner, recipient.agent_id(),
+            );
+            run.begin_finish_wait(session.client_id(), Some("question_exact".into()), episode);
+            assert!(run.capture_finish_wait(session.client_id(), &json!({
+                "finish_request_id":"question_exact","finish_decision":{
+                    "request_id":"question_exact","status":"completed","choice":"yes",
+                    "actor":{"origin":"human"},"revision":1,"consumed":true,
+                    "invalidation_reason":null
+                }
+            })));
+            assert!(run.finish_decision_ready(session.client_id()));
+        } else {
+            run.reserve_user_wait(
+                session.client_id(),
+                session
+                    .steering
+                    .reserve(
+                        session.client_id(),
+                        &run.context.run_id,
+                        recipient.agent_id(),
+                    )
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
         (
             CodeRunReport {
                 broker,
@@ -842,7 +902,7 @@ mod tests {
     async fn user_wait_final_decision_rechecks_revocation_ban_and_agent_after_eligible_collection()
     {
         for failure in ["oauth", "ban", "agent"] {
-            let (report, session) = identity_report(failure == "agent").await;
+            let (report, session) = identity_report(failure == "agent", false).await;
             let eligible = eligible_user_response(&report).await.unwrap();
             assert_eq!(eligible.len(), 1);
             // This mutation is deliberately after every async eligibility
@@ -902,4 +962,51 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn finish_wait_final_receipt_rechecks_auth_thread_and_new_input() {
+        for failure in ["none", "oauth", "ban", "agent", "input"] {
+            let (report, session) = identity_report(true, true).await;
+            let eligible = eligible_user_response(&report).await.unwrap();
+            assert_eq!(eligible.len(), 1);
+            assert_eq!(report.run.user_wait_receipt(session.client_id())["may_finish"], false);
+            match failure {
+                "oauth" => report.broker.oauth.revoke_subject("42").unwrap(),
+                "ban" => { report.broker.user_policies.set("42", true, None); }
+                "agent" => {
+                    let binding = report.run.wait_recipient(session.client_id()).unwrap().binding.unwrap();
+                    session.collaboration.dispatch(&binding.owner, "leave",
+                        json!({"agent_id":binding.agent_id,"token":binding.token})).await.unwrap();
+                }
+                "input" => {
+                    session.steering.command(session.client_id(), vec![], SteeringCommand::Publish {
+                        command_id:"after-decision".into(), message_id:"new-input".into(),
+                        expected_revision:0, text:"Keep working on this request.".into(),
+                        target:"next".into(),
+                    }).unwrap();
+                }
+                "none" => {}
+                _ => unreachable!(),
+            }
+            let response = append(commit_user_response(&report, original(), eligible), &report.run);
+            let receipt = &response["structuredContent"]["user_wait"][0];
+            assert_eq!(receipt["may_finish"], failure == "none");
+            assert_eq!(receipt["finish_request_id"], "question_exact");
+            assert_eq!(receipt["status"], match failure {
+                "none" => "decided",
+                "input" => "superseded",
+                "agent" => "binding_invalid",
+                _ => "authorization_revoked",
+            });
+            assert!(response["structuredContent"].get("user_messages").is_none());
+            let queued = session.steering.command(session.client_id(), vec![], SteeringCommand::Snapshot {}).unwrap();
+            if failure == "input" {
+                assert_eq!(queued.messages.len(), 1);
+                assert_eq!(queued.messages[0].state, SteeringState::Queued);
+                assert_eq!(queued.messages[0].text, "Keep working on this request.");
+            } else {
+                assert!(queued.messages.is_empty());
+            }
+        }
+    }
+
 }
