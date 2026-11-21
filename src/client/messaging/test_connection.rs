@@ -25,6 +25,17 @@ impl Connection {
         self.manager.snapshot()
     }
 
+    pub(in crate::client) fn lookup_directory(&mut self) -> Result<DirectoryLookup, String> {
+        self.manager.lookup_directory()
+    }
+
+    pub(in crate::client) fn directory_result(
+        &self,
+        lookup: &mut DirectoryLookup,
+    ) -> Option<Result<Vec<Recipient>, String>> {
+        self.manager.directory_result(lookup)
+    }
+
     pub(in crate::client) fn next_request(&mut self) -> Option<Request> {
         self.requests.try_recv().ok()
     }

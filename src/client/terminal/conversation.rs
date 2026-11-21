@@ -130,6 +130,7 @@ pub(super) struct Conversation {
     native_last: Option<Value>,
     native_refreshed: bool,
     native_picker: bool,
+    native_lookup: Option<messaging::PendingPicker>,
     #[cfg(test)]
     native_fixture: Option<Value>,
     #[cfg(test)]
@@ -321,6 +322,7 @@ impl State {
     }
 
     fn chat_recipient_changed(&mut self, group: bool) {
+        self.chat_cancel_native_lookup();
         self.conversation.send_to_group = group;
         self.conversation.recipient_revision = self.conversation.recipient_revision.wrapping_add(1);
     }
@@ -491,6 +493,7 @@ impl State {
         }
         self.chat_poll_native();
         if self.preview {
+            self.chat_poll_native_lookup();
             return;
         }
         self.chat_poll_input();
@@ -574,6 +577,7 @@ impl State {
         if let Some(message) = failed_notice {
             self.notice = Some(message);
         }
+        self.chat_poll_native_lookup();
         self.chat_persist_draft();
     }
 
@@ -1017,6 +1021,7 @@ impl State {
     }
 
     fn chat_submit(&mut self) {
+        self.chat_cancel_native_lookup();
         // Exit and logout remain local while editing a queued request or awaiting acknowledgement.
         let text = self.conversation.composer.text().to_owned();
         if matches!(
@@ -1097,8 +1102,12 @@ impl State {
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
             match self.chat_command(&text) {
                 Ok(true) => {
-                    if !matches!(text.split_whitespace().next(), Some("/reload" | "/restart"))
-                        && !groups::retains_draft(&text)
+                    if let Some(lookup) = &mut self.conversation.native_lookup {
+                        lookup.clear_command = true;
+                    } else if !matches!(
+                        text.split_whitespace().next(),
+                        Some("/reload" | "/restart")
+                    ) && !groups::retains_draft(&text)
                     {
                         self.conversation.composer.take_text();
                     }
@@ -1501,6 +1510,7 @@ impl State {
     }
 
     fn chat_key(&mut self, key: Key) {
+        self.chat_cancel_native_lookup();
         if matches!(key, Key::ComputerToggle) {
             self.sleep_key(key);
             self.computer_toggle();
@@ -1981,6 +1991,7 @@ impl State {
     }
 
     fn chat_character(&mut self, character: char) {
+        self.chat_cancel_native_lookup();
         self.chat_disarm_exit();
         // Ordinary edits do not read the suggestion menu. Refresh once after
         // the input batch, and before the controls that consume suggestions.
@@ -2465,6 +2476,7 @@ impl State {
             return;
         }
         if output == b"\x1b[200~" && self.conversation.paste.is_none() {
+            self.chat_cancel_native_lookup();
             self.conversation.paste = Some(Vec::new());
             self.conversation.paste_overflow = false;
             return;
@@ -2529,6 +2541,11 @@ impl State {
     }
 
     pub(super) fn chat_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        // Already-arrived input must win over a ready picker result, including
+        // an Escape prefix whose decoding will finish on a subsequent flush.
+        if !bytes.is_empty() {
+            self.chat_cancel_native_lookup();
+        }
         // Run before accepting the next input, including a real Ctrl-C after a
         // truncated image, and discard only the unfinished paste, never the draft.
         if self.keyboard.image_paste_expired(now) {

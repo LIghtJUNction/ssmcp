@@ -12,10 +12,11 @@ use std::{
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, oneshot::error::TryRecvError};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_secs(3);
+const DIRECTORY_TIMEOUT: &str = "Native recipient directory refresh timed out";
 const UNSUPPORTED: &str = "当前连接不支持原生消息；请升级并连接已认证的 SSMCP 客户端和服务器";
 static STATE: OnceLock<Mutex<Manager>> = OnceLock::new();
 
@@ -23,10 +24,18 @@ pub(super) struct Request {
     pub id: u64,
     pub command: Command,
 }
+type DirectoryResult = Result<Vec<Recipient>, String>;
+
 struct Pending {
     command: Command,
     deadline: Instant,
     quiet: bool,
+    directory_waiter: Option<oneshot::Sender<DirectoryResult>>,
+}
+
+pub(crate) struct DirectoryLookup {
+    connection: u64,
+    completion: oneshot::Receiver<DirectoryResult>,
 }
 #[derive(Clone, Serialize)]
 struct Outgoing {
@@ -87,9 +96,9 @@ impl Manager {
         receiver
     }
     fn request(&mut self, command: Command) -> Result<(), String> {
-        self.request_with_visibility(command, false)
+        self.request_with_visibility(command, false).map(|_| ())
     }
-    fn request_with_visibility(&mut self, command: Command, quiet: bool) -> Result<(), String> {
+    fn request_with_visibility(&mut self, command: Command, quiet: bool) -> Result<u64, String> {
         if !self.available() {
             return Err(UNSUPPORTED.into());
         }
@@ -116,25 +125,55 @@ impl Manager {
                 command,
                 deadline: Instant::now() + TIMEOUT,
                 quiet,
+                directory_waiter: None,
             },
         );
         if !quiet {
             self.changed();
         }
-        Ok(())
+        Ok(id)
     }
     fn refresh(&mut self) -> Result<(), String> {
-        self.refresh_with_visibility(false)
+        self.refresh_with_visibility(false).map(|_| ())
     }
-    fn refresh_with_visibility(&mut self, quiet: bool) -> Result<(), String> {
-        if self
+    fn refresh_with_visibility(&mut self, quiet: bool) -> Result<u64, String> {
+        if let Some((&id, _)) = self
             .pending
-            .values()
-            .any(|pending| matches!(pending.command, Command::List {}))
+            .iter()
+            .find(|(_, pending)| matches!(pending.command, Command::List {}))
         {
-            return Ok(());
+            return Ok(id);
         }
         self.request_with_visibility(Command::List {}, quiet)
+    }
+
+    fn lookup_directory(&mut self) -> Result<DirectoryLookup, String> {
+        let id = self.refresh_with_visibility(false)?;
+        let (sender, completion) = oneshot::channel();
+        // The terminal has one active lookup. A newer query can wait on the
+        // same List, including an already queued quiet refresh.
+        self.pending
+            .get_mut(&id)
+            .expect("pending List")
+            .directory_waiter = Some(sender);
+        Ok(DirectoryLookup {
+            connection: self.group_connection,
+            completion,
+        })
+    }
+
+    fn directory_result(
+        &self,
+        lookup: &mut DirectoryLookup,
+    ) -> Option<Result<Vec<Recipient>, String>> {
+        if !self.available() || lookup.connection != self.group_connection {
+            return Some(Err("Native messaging connection closed".into()));
+        }
+        match lookup.completion.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed) => Some(Err("Native recipient lookup cancelled".into())),
+        }
     }
     fn send_to_account(
         &mut self,
@@ -314,10 +353,32 @@ impl Manager {
         if !pending.quiet {
             self.changed();
         }
-        let result = result.and_then(|result| {
-            result.validate()?;
-            Ok(result)
-        });
+        let result = if pending
+            .directory_waiter
+            .as_ref()
+            .is_some_and(|sender| !sender.is_closed())
+            && pending.deadline <= Instant::now()
+        {
+            Err(DIRECTORY_TIMEOUT.into())
+        } else {
+            result.and_then(|result| {
+                result.validate()?;
+                Ok(result)
+            })
+        };
+        let notify_lookup = pending
+            .directory_waiter
+            .filter(|sender| !sender.is_closed())
+            .is_some_and(|sender| {
+                sender
+                    .send(
+                        result
+                            .as_ref()
+                            .map(|reply| reply.recipients.clone())
+                            .map_err(Clone::clone),
+                    )
+                    .is_ok()
+            });
         match result {
             Ok(result) => {
                 if let Command::Send {
@@ -344,7 +405,7 @@ impl Manager {
                     changed |= self.update_receipt(receipt);
                 }
                 self.error = None;
-                if pending.quiet && changed {
+                if pending.quiet && (changed || notify_lookup) {
                     self.changed();
                 }
             }
@@ -363,6 +424,9 @@ impl Manager {
             .collect();
         for id in expired {
             if let Some(pending) = self.pending.remove(&id) {
+                if let Some(sender) = pending.directory_waiter {
+                    let _ = sender.send(Err(DIRECTORY_TIMEOUT.into()));
+                }
                 self.failure(
                     &pending.command,
                     "原生消息回执超时，结果未确认；刷新回执或使用原请求编号重试",
@@ -438,6 +502,14 @@ pub(crate) fn watch_recipients(visible: bool) {
 }
 pub(crate) fn refresh() -> Result<(), String> {
     state().refresh()
+}
+pub(crate) fn lookup_directory() -> Result<DirectoryLookup, String> {
+    state().lookup_directory()
+}
+pub(crate) fn directory_result(
+    lookup: &mut DirectoryLookup,
+) -> Option<Result<Vec<Recipient>, String>> {
+    state().directory_result(lookup)
 }
 pub(crate) fn send(
     recipient_id: &str,

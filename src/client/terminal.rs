@@ -627,6 +627,9 @@ pub(crate) fn physical_resize(rows: u16, cols: u16) -> (u16, u16) {
 pub(crate) fn apply_ui(ui: &Ui) -> Option<(u16, u16)> {
     let shared = shared()?;
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if state.ui.layout != ui.layout {
+        state.chat_cancel_native_lookup();
+    }
     state.ui = ui.clone();
     state.conversation.history_width = 0;
     state.ui.color &= std::env::var_os("NO_COLOR").is_none();
@@ -777,6 +780,7 @@ pub(crate) fn browse(action: &str) -> Result<(), String> {
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     let page = isize::try_from(state.geometry.log_rows.saturating_sub(1).max(1)).unwrap_or(1);
     if state.ui.layout == Layout::Chat {
+        state.chat_cancel_native_lookup();
         if action.starts_with("audit.") {
             state.conversation.view = conversation::View::Audit;
             state.conversation.content_focus = true;

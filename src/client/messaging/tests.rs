@@ -178,6 +178,101 @@ fn timeout_and_late_reply_do_not_discard_or_silently_resend_text() {
     assert!(receiver.try_recv().is_err());
 }
 #[test]
+fn lookup_waits_for_the_coalesced_quiet_list_even_when_the_directory_is_unchanged() {
+    let mut manager = Manager::default();
+    let mut requests = manager.connect(true);
+    let initial = requests.try_recv().unwrap();
+    manager.reply(initial.id, Ok(Reply::default()));
+    manager.watch_recipients = true;
+    manager.next_poll = Some(Instant::now());
+    manager.poll();
+    let list = requests.try_recv().unwrap();
+    assert!(matches!(list.command, Command::List {}));
+    assert_eq!(manager.snapshot()["pending"], false);
+
+    let mut lookup = manager.lookup_directory().unwrap();
+    assert!(requests.try_recv().is_err());
+    manager.request(Command::Inbox {}).unwrap();
+    let inbox = requests.try_recv().unwrap();
+    manager.reply(inbox.id, Ok(Reply::default()));
+    assert!(manager.directory_result(&mut lookup).is_none());
+
+    let revision = manager.revision;
+    manager.reply(list.id, Ok(Reply::default()));
+    assert_eq!(manager.directory_result(&mut lookup), Some(Ok(vec![])));
+    assert!(
+        manager.revision > revision,
+        "the waiting picker must redraw"
+    );
+    assert!(requests.try_recv().is_err());
+}
+
+#[test]
+fn lookup_rejects_invalid_and_timed_out_replies_and_does_not_cross_connections() {
+    let (mut manager, mut requests, one, _) = ready();
+    let mut invalid = manager.lookup_directory().unwrap();
+    let request = requests.try_recv().unwrap();
+    let mut bad = one.clone();
+    bad.client_id.clear();
+    manager.reply(
+        request.id,
+        Ok(Reply {
+            recipients: vec![bad],
+            ..Default::default()
+        }),
+    );
+    assert!(
+        manager
+            .directory_result(&mut invalid)
+            .unwrap()
+            .unwrap_err()
+            .contains("descriptor")
+    );
+
+    for sweep in [false, true] {
+        let mut timed_out = manager.lookup_directory().unwrap();
+        let request = requests.try_recv().unwrap();
+        manager.pending.get_mut(&request.id).unwrap().deadline = Instant::now();
+        if sweep {
+            manager.poll();
+        }
+        manager.reply(request.id, Ok(Reply::default()));
+        assert_eq!(
+            manager.directory_result(&mut timed_out),
+            Some(Err(DIRECTORY_TIMEOUT.into()))
+        );
+        assert_eq!(
+            manager.recipients.len(),
+            2,
+            "a late List cannot replace the directory"
+        );
+    }
+
+    let mut old = manager.lookup_directory().unwrap();
+    let request = requests.try_recv().unwrap();
+    manager.reply(
+        request.id,
+        Ok(Reply {
+            recipients: vec![one],
+            ..Default::default()
+        }),
+    );
+    let mut replacement = manager.connect(true);
+    assert!(
+        manager
+            .directory_result(&mut old)
+            .unwrap()
+            .unwrap_err()
+            .contains("connection closed")
+    );
+    assert!(matches!(
+        replacement.try_recv().unwrap().command,
+        Command::List {}
+    ));
+    assert!(replacement.try_recv().is_err());
+}
+
+#[test]
 fn reconnect_clears_stale_recipients_without_replaying_unconfirmed_send() {
     let (mut manager, mut receiver, one, _) = ready();
     manager.send(&one.id, "do not replay", "reconnect").unwrap();
