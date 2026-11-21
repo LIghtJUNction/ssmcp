@@ -590,10 +590,31 @@ def native_only_and_cached_failure(harness):
     rejected = directory / "reject-provider.py"
     rejected.write_text("import sys\nprint('fixture: deliberate initialization failure', file=sys.stderr)\nraise SystemExit(91)\n")
     installed = [("codex", FIXTURES / "codex_rpc.py", ())]
-    installed.extend((kind, rejected, ()) for kind in ("cc", "pi", "opencode", "playwright"))
+    installed.extend((kind, rejected, ()) for kind in ("cc", "pi", "opencode"))
+    # Retired programs are traps, not supported harness fixtures. Record every
+    # invocation before rejecting it, including an accidental --version probe.
+    fixture_bin = (harness.directory / f"{label}-bin").resolve()
+    invocation_log = fixture_bin / "external-invocations.jsonl"
+    retired = (directory / "playwright-mcp").resolve()
+    retired.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "record = {'provider': 'playwright', 'argv': sys.argv[1:], 'pid': os.getpid()}\n"
+        f"fd = os.open({str(invocation_log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)\n"
+        "try:\n"
+        "    os.write(fd, (json.dumps(record, separators=(',', ':')) + '\\n').encode())\n"
+        "finally:\n"
+        "    os.close(fd)\n"
+        "print('fixture: retired Playwright must never be probed or started', file=sys.stderr)\n"
+        "raise SystemExit(91)\n"
+    )
+    retired.chmod(0o700)
     client, credentials = harness.start_client(
         label, name="native-lazy-fixture", cwd=directory, harnesses=installed,
-        extra_env={"SSMCP_PLAYWRIGHT_MCP": str(harness.directory / f"{label}-bin" / "playwright-mcp")},
+        extra_env={
+            "PATH": os.pathsep.join((str(directory.resolve()), str(fixture_bin))),
+            "SSMCP_PLAYWRIGHT_MCP": str(retired),
+        },
     )
     harness.client = client
     harness.client_id = credentials["client_id"]
@@ -614,6 +635,7 @@ def native_only_and_cached_failure(harness):
     harness.check(result["exit_code"] == 0 and result["stdout"] == "native-only",
                   "native-only: exec starts and completes without an external provider")
     full_call(harness, "ssmcp.harnesses.load", {"provider": "unknown"}, expect_error=True)
+    full_call(harness, "ssmcp.harnesses.load", {"provider": "playwright"}, expect_error=True)
     native_defaults(harness, label, "native-only after catalog/capabilities/exec/fs")
     harness.check(harness.external_invocations(label) == [],
                   "native-only: installed optional programs receive zero argv after native I/O and invalid loading")
@@ -686,6 +708,8 @@ def native_only_and_cached_failure(harness):
     owned_pids = [harness.call("terminal.status")["pid"], diagnostics["pid"]]
     harness.stop(client)
     wait_for(lambda: all(not process_running(pid) for pid in owned_pids), description="lazy fixture cleanup")
+    harness.check(not any(row["provider"] == "playwright" for row in harness.external_invocations(label)),
+                  "lazy isolation: retired Playwright receives no argv through loading, observation and cleanup")
     harness.secret = ""
     return {"mode": "native-only-and-cached-failure", "tools": len(current), "catalog_pages": pages,
             "checks": len(harness.checks) - before, "duration_seconds": round(time.monotonic() - started, 3)}
