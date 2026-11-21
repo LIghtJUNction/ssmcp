@@ -34,7 +34,7 @@ CDP 批次保留已确认步骤。Omarchy 的自有任务会等待进程清理�
 
 ## 依赖和版本
 
-内部跨仓库依赖直接跟踪各仓库的规范 Git 来源，实际提交由 Cargo.lock 记录。本版刷新了 zharness、zplugin、zcall 与 zmcpio 对应的五条锁记录，并同步 zharness、zplugin 的 gitlink。zuse 仍为 0.3.0，提交为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。[依赖来源和核对方法](dependencies.md)
+内部跨仓库依赖直接跟踪各仓库的规范 Git 来源，实际提交由 Cargo.lock 记录。本版刷新了 zharness、zplugin、zcall 与 zmcpio 对应的五条锁记录，并同步 zharness、zplugin 的 gitlink。zuse 仍为 0.3.0，提交为 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`。[依赖来源和核对方法](dependencies.md)
 
 `ssmcp --version` 保持单行输出。`ssmcp --version --all` 离线显示构建期 Cargo.lock 中从 ssmcp 可达的依赖树，包含构建、开发和各锁定目标的依赖。实际链接的代码随平台和 features 而变。
 
