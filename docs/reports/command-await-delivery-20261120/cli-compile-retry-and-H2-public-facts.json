@@ -1,0 +1,394 @@
+{
+  "schema": "ssmcp-cli-compile-retry-and-publication-preparation-v1",
+  "snapshot_utc": "2026-11-21 16:25:27 UTC",
+  "source": {
+    "latest_integrated_commit": "1358f84dff866970926f8b1c5c54ec0ba64e28cc",
+    "tree": "a266c0616f5f526dbabc386c21e131a2dbad26e7",
+    "fixed_diff_independently_read": true,
+    "final_validated_candidate": false,
+    "latest_integrated_commit_is_interim_under_superseded_scope": true
+  },
+  "scope": {
+    "desktop_and_browser_actions": "Standalone Zuse CLI",
+    "computer_tools": [
+      "version",
+      "download",
+      "install",
+      "uninstall"
+    ],
+    "legacy_manual_switches": "Latest user instruction removes compatibility entry points; interim f971/b0a4 preservation is historical and superseded.",
+    "wait_UI": "Red symbol/text and remaining mm:ss for active user waits",
+    "finish": "Exact authenticated Human decision required by the new finish-wait protocol; no timeout/ordinary input/cancellation as approval",
+    "live_machine_actions_by_report_group": 0,
+    "latest_user_scope": "Remove SSMCP browser/computer-use execution and compatibility entry points; keep standalone Zuse version/download/install/uninstall management."
+  },
+  "lock": {
+    "source_for_resolution": "2042d3f695c4c11dafbcfdfe854b96f9837c1088",
+    "cargo_lock": {
+      "bytes": 67037,
+      "sha256": "8e402d85437b8ef529096cad53c14159b9cf1f329844675bf860c4b7bc774f7b"
+    },
+    "receipt": {
+      "file": "cli-lock-resolution-20261121-v2/receipt.json",
+      "bytes": 11869,
+      "sha256": "2c834356e387745c39ae00327a534b32823b31356f805ebacbd98efe6849a181"
+    },
+    "exit_code": 0,
+    "nonrunning": true,
+    "both_eof": true,
+    "evidence": "Original source owner report relayed by original acceptance coordinator",
+    "root_original_read": false,
+    "internal_repositories": "Owner reports 7 internal repositories aligned with their HEAD at16:03; zharness5f9 lock-only change without API change",
+    "next": "Commit generated lock and gitlinks, fmt and actual compilation",
+    "Rust_PASS": false
+  },
+  "compilation": {
+    "first": {
+      "source": "c56c040af31f1fa0e65a82773ced2eaf63d06ad8",
+      "tree": "e992fb8463bffe3f811e478120f3ab6f2ed08e04",
+      "phase": "first_real_library_build_failed",
+      "owner_reported": true,
+      "root_original_read": false,
+      "locked_fetch_exit": 0,
+      "fmt_check_exit": 0,
+      "native_wrapper_exit": 1,
+      "library_build_exit": 101,
+      "receipt": {
+        "file": "cli-validation-20261121-v1/library-build.json",
+        "bytes": 10342,
+        "sha256": "a5836d7fd9e2f6dc0fb284370131831739f984691ba4b5e8be23b7899de5d73b"
+      },
+      "diagnostics": [
+        {
+          "code": "E0599",
+          "file": "src/client/interface/harness.rs",
+          "line": 41,
+          "reason": "Stale previous.cancel_host_input() call remains after embedded executor retirement",
+          "owner_fix": "Remove obsolete wiring; do not restore executor"
+        },
+        {
+          "code": "E0616",
+          "file": "src/client/terminal/sleep.rs",
+          "line": 490,
+          "reason": "Test accesses private Conversation.wait_fixture",
+          "owner_fix": "Minimal test visibility correction"
+        }
+      ],
+      "test_binary_or_product_run": false,
+      "retry": "Original source owner will use a new attempt directory after fixes, retaining failed evidence and shared target.",
+      "python_prior": {
+        "release_safeguards": {
+          "passed": 106,
+          "exit": 0,
+          "exact_source_not_in_this_message": true
+        },
+        "installers": {
+          "exit": 2,
+          "reason": "Required target argument missing; product validation not entered",
+          "pass": false,
+          "product_failure": false
+        }
+      }
+    },
+    "retry": {
+      "source": "1358f84dff866970926f8b1c5c54ec0ba64e28cc",
+      "attempt": "cli-validation-20261121-v2",
+      "owner_reported_phase": "running library compile",
+      "locked_fetch_exit": 0,
+      "fmt_check_exit": 0,
+      "library_compile_exit": null,
+      "product_or_test_PASS": false,
+      "fix_commits": [
+        "371d3e090bd939ed3501c58858e2421e9367f031",
+        "1358f84dff866970926f8b1c5c54ec0ba64e28cc"
+      ],
+      "fix_diff_actual_read": "Removed obsolete host-input cleanup call; widened wait_fixture only under cfg(test) to parent module."
+    }
+  },
+  "earlier_node": {
+    "scripts": [
+      {
+        "exit_code": 0,
+        "script": "scripts/test_cua_facade.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_client_capabilities.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_execution_helpers.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_rtk_helpers.mjs"
+      },
+      {
+        "exit_code": 0,
+        "script": "scripts/test_tools_search.mjs"
+      }
+    ],
+    "all_listed_exit_codes_zero": true,
+    "source_git_status_after": "",
+    "case_total_not_inferred": true,
+    "receipt": {
+      "file": "cli-node-preflight-20261121-v1/receipt.json",
+      "bytes": 18139,
+      "sha256": "40d4b54638d82c7bd35f50b7426fab26893b3d6dde809e0a8d8cf14171d6c2ce",
+      "report_owner_read_original": false
+    },
+    "evidence": "Source owner completion report; original acceptance coordinator independently rehashed/read the receipt and confirmed source/tree and five exit codes.",
+    "report_owner_original_read": false,
+    "acceptance_coordinator_original_read": true,
+    "no_Cargo_or_product_acceptance_implied": true
+  },
+  "cleanup": {
+    "source_of_native_results": "Original source owner report; native cleanup originals not independently read by report owner.",
+    "cache_batches": [
+      {
+        "count": 65,
+        "allocated_path_bytes": 96792784896,
+        "disk_free_before": 393849294848,
+        "disk_free_after": 436946583552,
+        "completed_utc": "2026-11-21T15:43:19.823790+00:00",
+        "receipt": {
+          "file": "ssmcp-release21-recovery-20261121/cli-cache-cleanup-20261121-v3.jsonl",
+          "bytes": 32134,
+          "sha256": "72b405f77dee2d0d655fff7613e8a1e4abed7c8614549eca79ada9eecf495c0b",
+          "report_owner_read_original": false
+        }
+      },
+      {
+        "count": 7,
+        "allocated_path_bytes": 30651887616,
+        "disk_free_before": 438227677184,
+        "disk_free_after": 461121187840,
+        "completed_utc": "2026-11-21T15:49:28.712194+00:00",
+        "receipt": {
+          "file": "ssmcp-release21-recovery-20261121/cli-cache-cleanup-20261121-v4-main.jsonl",
+          "bytes": 3313,
+          "sha256": "eb7d331495c85dbdadf6bde5d01bf24e1b71a3227f41d6de5d679006c63dec26",
+          "report_owner_read_original": false
+        }
+      }
+    ],
+    "totals": {
+      "allocated_path_bytes": 127444672512,
+      "allocated_path_gib": 118.69210052490234,
+      "last_disk_free_bytes": 461121187840,
+      "last_disk_free_gib": 429.4525718688965,
+      "first_to_last_free_difference_bytes": 67271892992,
+      "first_to_last_free_difference_gib": 62.651832580566406,
+      "not_attributed_as_net_cleanup_release": true
+    },
+    "cache_directories_removed": 72,
+    "shared_target_untouched_as_reported": true,
+    "source_worktrees_removed_as_reported": 0,
+    "branches": {
+      "remote_deleted_as_reported": [
+        "chore/zuse-metadata-20261121",
+        "feat/conversation-goal-20261120",
+        "feat/iteration-integration-20261121",
+        "fix/allow-recovery-main-20261120",
+        "fix/ci-integrated-ui-20261120",
+        "fix/finish-observer-history-20261120",
+        "fix/release-0.10.23-20261120",
+        "fix/release-portability-20261120",
+        "fix/tool-summary-delivery-p2-20261120",
+        "fix/zuse-input-20261121",
+        "integrate/native-plugins-20261119",
+        "lightdot/zuse-0.3.0-motion"
+      ],
+      "local_deleted_as_reported": [
+        "fix/zuse-input-20261121",
+        "work/release21-paste-ci-20261121"
+      ],
+      "receipt": {
+        "file": "ssmcp-release21-recovery-20261121/cli-history-branch-deletion-20261121-v1.jsonl",
+        "bytes": 3529,
+        "sha256": "a5688333cbcb8b01276c8a68744edd9c367aa351076e69ee268a603c7b38c11e",
+        "report_owner_read_original": false
+      },
+      "actual_remote_readback": {
+        "snapshot_utc": "2026-11-21 15:57:36 UTC",
+        "branch_count": 50,
+        "complete_single_page": true,
+        "reported_deleted": [
+          "chore/zuse-metadata-20261121",
+          "feat/conversation-goal-20261120",
+          "feat/iteration-integration-20261121",
+          "fix/allow-recovery-main-20261120",
+          "fix/ci-integrated-ui-20261120",
+          "fix/finish-observer-history-20261120",
+          "fix/release-0.10.23-20261120",
+          "fix/release-portability-20261120",
+          "fix/tool-summary-delivery-p2-20261120",
+          "fix/zuse-input-20261121",
+          "integrate/native-plugins-20261119",
+          "lightdot/zuse-0.3.0-motion"
+        ],
+        "deleted_names_still_present": [],
+        "active_branches": [
+          {
+            "name": "docs/command-await-delivery-20261120",
+            "sha": "c40f35c962ed1e8464e39ea62222c299ba1cc71f"
+          },
+          {
+            "name": "main",
+            "sha": "02aa4dcd18786062ef44be6c76422dff054fbfed"
+          },
+          {
+            "name": "work/zuse-cli-only-20261121",
+            "sha": "671442b08b7d4f107ee1e18955d049f0dcfcf5ee"
+          }
+        ],
+        "root_independently_read": true
+      }
+    },
+    "stale_worktree_record_prune_not_added_to_cache_or_source_worktree_counts": true
+  },
+  "H2": {
+    "recipe_source_only": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+    "recipe_files": {
+      ".github/workflows/release.yml": {
+        "bytes": 22724,
+        "sha256": "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c",
+        "git_blob_sha": "d3e6e93c46f0fc3a37e1785233d9eadb64ca3d82"
+      },
+      ".github/workflows/ci.yml": {
+        "bytes": 14994,
+        "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172",
+        "git_blob_sha": "14629b92b94ed22deba31850185187abd93444ef"
+      },
+      ".github/workflows/deploy-server.yml": {
+        "bytes": 4499,
+        "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c",
+        "git_blob_sha": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca"
+      },
+      "scripts/release.py": {
+        "bytes": 65003,
+        "sha256": "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e",
+        "git_blob_sha": "a386389f20c380e51d61fc59a270635a42c91fba"
+      },
+      "scripts/install.sh": {
+        "bytes": 6783,
+        "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906",
+        "git_blob_sha": "7620b1d29b87173492ea9d8b74d846f8d9c3c185"
+      },
+      "scripts/install.ps1": {
+        "bytes": 12928,
+        "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051",
+        "git_blob_sha": "7c2cc8cd0ad5d16cc34215a2f4a36ffd3005c621"
+      }
+    },
+    "source_tree": "38cf85469fc3b2f92efc61009652baa1bf669274",
+    "full_recursive_tree_entries": 1303,
+    "tree_truncated": false,
+    "gitlinks": [
+      {
+        "path": "crates/zharness",
+        "mode": "160000",
+        "type": "commit",
+        "sha": "5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
+      },
+      {
+        "path": "crates/zplugin",
+        "mode": "160000",
+        "type": "commit",
+        "sha": "592a1be623b81a775026c470e6f0efe91fcf78f3"
+      },
+      {
+        "path": "crates/ztuio",
+        "mode": "160000",
+        "type": "commit",
+        "sha": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+      }
+    ],
+    "candidate_sha": null,
+    "workflow_sha": null,
+    "run_id": null,
+    "dispatch_receipt": null,
+    "changes": "Three gitlinks; Build upload step8/occurrence0/total1; retired Build browser diagnostic mappings removed; Linux candidate step20 and finalize uploads10/11 unchanged.",
+    "preserved": {
+      "jobs": 19,
+      "successful_jobs": 17,
+      "skipped_jobs": 2,
+      "public_assets": 16,
+      "required_release_artifacts": 8,
+      "manifest_artifact_records": 8,
+      "raw_dispatch_binding": true,
+      "source_ancestor_of_workflow": true,
+      "independent_recipe_pins": true,
+      "outer_ZIP_and_member_bytes": true
+    },
+    "static_review": "Independent static review ready; zero blocking findings, syntax-only AST parsing, exact bounded logic diff and unchanged function signatures.",
+    "modules_imported": false,
+    "helper_executed": false,
+    "tests_run": false,
+    "files": [
+      {
+        "name": "README.md",
+        "bytes": 7261,
+        "sha256": "0fec5fccfff541fcd5de943e5d3f89bbe73dba583bd4208d3849b1cf79c96478"
+      },
+      {
+        "name": "changes-from-H2-CI.patch",
+        "bytes": 19261,
+        "sha256": "8ab892192e2f757c12caf23d067d658ddafc4c3ca6e43cd478898c846852bed6"
+      },
+      {
+        "name": "dispatch_receipt_adapter.py",
+        "bytes": 14758,
+        "sha256": "e1b062220a5337b495a62ac7f0bf1db748b32727054e2bb27173c019c1c933d4"
+      },
+      {
+        "name": "manual_main_provenance.py",
+        "bytes": 43709,
+        "sha256": "804f1cbc6171fded4559bfffda9b414cf8654d5ed05540b72209de8e98cab17b"
+      },
+      {
+        "name": "preparation-identity.json",
+        "bytes": 3565,
+        "sha256": "67c93b46577cac81a646b5acd7b9b4b49aac9f6bc2d531e3c4a41a60ab99773e"
+      },
+      {
+        "name": "reviewed-recipe.json",
+        "bytes": 2855,
+        "sha256": "d04690aa2e7c03db5eafd4f58e47a57dae51f536793920965fcf4c76289c841d"
+      },
+      {
+        "name": "static-review.json",
+        "bytes": 1637,
+        "sha256": "29ba157806b4e5ae8b8e7188f5985b3513afad369a2dde7797b70906a3909668"
+      },
+      {
+        "name": "verify_published_manual_main.py",
+        "bytes": 48819,
+        "sha256": "a6b754024e2028b8d4ba6997faa2c71fc7f86b552582d58b461af808dbb39261"
+      }
+    ],
+    "static_blockers": 0
+  },
+  "publication": {
+    "ssmcp_latest": {
+      "tag": "v0.10.20",
+      "url": "https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20",
+      "read_utc": "2026-11-21 16:23:46 UTC"
+    },
+    "new_release_receipt": false
+  },
+  "historical_results": {
+    "source": "02aa4dcd18786062ef44be6c76422dff054fbfed",
+    "Gate20": "35/35 stages passed on the old source",
+    "N20": "One pass on old source",
+    "inherited_by_migration": false
+  },
+  "report_group_execution": {
+    "native": 0,
+    "Cargo": 0,
+    "product": 0,
+    "product_source_write": 0,
+    "H2_execution": 0,
+    "release_dispatch": 0
+  }
+}

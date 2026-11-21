@@ -1,40 +1,44 @@
-# SSMCP 当前迭代：首批轻量检查通过，清理完成，迁移继续集成
+# SSMCP 当前迭代：CLI 已整合，修复首轮编译问题后重试
 
-**更新于 2026-11-21 16:06:25 UTC。** 本记录依据固定 `031fc6e` 的首批检查、原执行方的清理回执，以及报告组独立读取的 GitHub 状态。**新候选尚未冻结，也尚无本轮迁移的完整 Rust、产品验收或发布通过回执。** [阶段事实与回执文件身份](cli-first-checks-cleanup-progress-public-facts.json)
+**更新于 2026-11-21 16:25:27 UTC。** 新架构、等待提示与结束决策功能已整合到开发分支；首轮编译的两处错误已修正并进入重试。**最新用户要求进一步移除中间兼容入口，源码正在继续收口。****目前没有本轮迁移的完整 Rust、产品验收或发布通过回执。** [阶段事实](cli-compile-retry-and-H2-public-facts.json)
 
-## 最新范围
+## 本轮交付范围
 
-桌面与浏览器主操作继续直接使用 **Zuse CLI**；SSMCP 的 computer 工具仅保留版本查询、下载、安装、卸载。红色等待提示、符号与剩余时间显示，以及结束前绑定具体请求的 Human 决策流程继续集成。
+- 桌面和浏览器主操作直接使用 **Zuse CLI**；SSMCP computer 工具保留版本查询、下载、安装、卸载。
+- 等待用户输入时显示**红色提示、符号和剩余 mm:ss 倒计时**。
+- 准备结束本轮前进入**明确的 Human 决策等待**，绑定具体请求与调用方；普通输入、超时和取消均不充当结束许可。
+- **按最新要求移除兼容入口。** 先前 f971／b0a4 恢复的本地 `/computer` 与 on/off/toggle/status 开关只是中间实现，已被新范围覆盖；源码负责人正在移除。默认 `Super + Alt + C` 继续退役。本报告组没有操作正在直播的机器。
 
-最新用户反馈要求：**仅移除默认 `Super + Alt + C` 快捷键，保留现有显式控制开关，不动正在直播的机器。** 最终源码需按这一范围对齐；先前分支中撤掉显式开关的做法不作为最终已确认范围。
+上述行为已有固定源码静态核对，运行结果仍按实际候选逐阶段记录。
 
-## 首批真实检查及当前编译状态
+## 实际编译及修复
 
-原执行方回报，以下五个现有 Node 脚本在固定 [`031fc6e`](https://github.com/LIghtJUNction/ssmcp/commit/031fc6ed108d0642793b60f099992574b62a5de4) 上均以 **0 退出**：
+负责人报告，首轮固定 [`c56c040`](https://github.com/LIghtJUNction/ssmcp/commit/c56c040af31f1fa0e65a82773ced2eaf63d06ad8) 的锁定依赖获取、格式检查均以 0 退出；库编译以 **101** 退出，未进入测试二进制或产品运行。
 
-- `test_cua_facade.mjs`
-- `test_client_capabilities.mjs`
-- `test_execution_helpers.mjs`
-- `test_rtk_helpers.mjs`
-- `test_tools_search.mjs`
+| 实际诊断 | 已提交修复 |
+|---|---|
+| `E0599`：harness 绑定仍调用已退役的 `cancel_host_input()` | [`371d3e0`](https://github.com/LIghtJUNction/ssmcp/commit/371d3e090bd939ed3501c58858e2421e9367f031) 删除旧接线，不恢复执行器 |
+| `E0616`：sleep 测试访问私有 `wait_fixture` | [`1358f84`](https://github.com/LIghtJUNction/ssmcp/commit/1358f84dff866970926f8b1c5c54ec0ba64e28cc) 仅在 `cfg(test)` 下允许父模块访问 |
 
-原验收协调方随后只读复核了回执的哈希、源码／树身份和这五个退出码。报告组没有重新运行检查，也没有把五个脚本等同于五个测试用例或完整验收。
+报告组已独立读取这两份固定修改。第二轮使用 `1358f84`、独立的 v2 证据目录，保留 v1 失败证据并复用共享构建缓存；该回报为 fetch／fmt 已通过、库编译运行中。它仍带有随后被要求移除的兼容层，不能作为最终范围的通过证据。
 
-最后收到的 Cargo 准入回执是 **共享编译所有权锁等待后阻塞，Cargo 尚未执行**。原负责人正在与占用方协调交接。这是启动条件受阻，不能记为 Rust 测试失败，也不能记为编译通过。
+此前共享编译锁阻塞已解除，`Cargo.lock` 已真实生成并在 [`35ff6e4`](https://github.com/LIghtJUNction/ssmcp/commit/35ff6e4eb8b463aeb090230e9557fb08fb22b458) 提交。早先的 blocked-v1 回执仅作为历史阶段保留。
 
-## 清理结果
+## 发布核验适配
 
-原执行方的两批回执记录删除 **65＋7＝72 个已确认闲置的标准构建缓存子目录**。路径 `du` 累计为 **127,444,672,512 字节，约 118.7 GiB**；最后一份回执于 **15:49:28 UTC** 记录磁盘可用空间 **461,121,187,840 字节，约 429.5 GiB**。路径累计占用不等于净释放量；并发文件变化及统计口径应分开看待。原负责人报告共享 target 与源码 worktree 均保留。
+已根据固定 `35ff6e4` 准备并独立静态复核[新的 H2 静态副本](publication-verifier-git-source-zuse-cli-unbound/README.md)。本次只适配实际配方变化：三个 gitlink、Build 的唯一主上传改为 step 8，以及退役的 Windows 浏览器引导检查。Linux 辅助客户端仍要求在 Release 中跳过，finalize 两项证明上传保持。
 
-另有 **12 个远端已合并分支、2 个本地分支**的删除回执。报告组于 **15:57:36 UTC** 独立读取完整 GitHub 分支列表，确认所报的 12 个远端名称均已不在列表中，当前为 **50 个分支**；`main`、源码迁移工作分支和当前报告分支仍存在。本地分支与缓存清理结果保留执行方回执归属。
+19 个 job、17 成功／2 跳过的预期合同，16 个公开文件和 8 份必要发布证明附件，以及源码、原始请求、run、artifact 和文件字节的对应关系均保留。六份配方已读取并核对文件身份；这不是新的发布执行结果。**新旧 H2 均未由本报告组 import 或执行，最终 S／P／run／dispatch 绑定仍为空。**
 
-## 接下来完成什么
+## 已完成的前序工作
 
-源码静态审查已核对 Windows ZIP、PATH 入口及退役快捷键的对应修正；截至固定 [`c7eebfd`](https://github.com/LIghtJUNction/ssmcp/commit/c7eebfd25fa4b1a3e83ebc5a7cd07eab1bd0cc39)，已读取 finish 取消前的调用方检查、完成回执及代次绑定修正，先前遗漏的 Rust 结构字段也已补齐；这些是源码层面的核对。仍需收口最新显式开关范围、剩余集成问题、最终锁文件与源码身份，再据实际实现开展必要验证。
+五个 Node 脚本已在固定 `031fc6e` 上以 0 退出，且原验收协调方独立读取了回执；这些结果不转移给后续提交。清理回执记录 72 个闲置缓存子目录，路径 `du` 累计约 118.7 GiB，最后对应磁盘可用约 429.5 GiB；该累计值不是净释放量。12 个远端历史分支的缺席已由本报告组独立核实。详见[首批检查与清理记录](current-iteration-CLI-first-checks-cleanup.md)。
 
-报告组 **15:59:39 UTC** 读取 GitHub `releases/latest`，SSMCP 返回的是 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)；本轮迁移尚未取得新版本发布回执。另已独立确认 Zuse 的 GitHub 正式发行包更新到 [v0.4.2](https://github.com/LIghtJUNction/zuse/releases/tag/v0.4.2)，但本报告没有先前 SIGABRT／EPERM 反馈已解决的实机证据。
+较早的 Python 发布保障脚本由负责人报告 106 项通过；该消息未给出完整源码绑定，故不计为最新候选的验收。安装器检查当时因缺少必填 target 参数以 2 退出，未进入产品验证；需在新 archive 就绪后按正确参数完成。
 
-旧 `02aa4dc` 的 [Gate20 通过记录](current-iteration-Gate20-passed.md)及 N20 里程碑保持原来源，不转移给新源码。旧 H2、内置控制权限和 EOF 附录保留历史归属；最终发布验证需按实际新配方与三个已观察到的库 gitlink 重新对齐。
+## 尚待完成
+
+继续取得修复后的真实编译与必要产品验证回执，再固定最终候选并完成已授权的新版本发布。报告组于 2026-11-21 16:23:46 UTC 读取 GitHub latest，返回 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)，本轮尚无新发布回执。旧 `02aa4dc` 的 Gate20／N20 及旧 H2、权限、EOF 附录均保持历史归属。
 
 ---
 

@@ -1,0 +1,294 @@
+--- H2-CI/verify_published_manual_main.py
++++ H2-CLI/verify_published_manual_main.py
+@@ -1,4 +1,4 @@
+-"""Verify the v0.10.25 manual-main Git-source publication with crate deferral.
++"""Verify the v0.10.25 CLI-lifecycle manual-main Git-source publication with crate deferral.
+ 
+ UNBOUND preparation: final S, workflow P, run and original dispatch evidence have
+ not been selected. Missing or unsupported evidence fails closed. This program
+@@ -38,18 +38,17 @@
+     return hashlib.sha256(data).hexdigest()
+ 
+ 
+-# Source receipt policy is unchanged; the fixed recipe includes the reviewed E14 CI condition.
++# Source receipt policy is unchanged; the reviewed CLI recipe has three gitlinks.
+ RELEASE_CONTRACT = "git-source-v1"
+ RELEASE_VERSION = "0.10.25"
+ CRATE_PUBLICATION = {
+     "status": "deferred",
+     "reason": "Independent registry dependencies and the external package require separate verification.",
+ }
+-PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness",
+-                    "ztuio": "ztuio", "zuse": "zuse-computer"}
++PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio"}
+ PROJECT_Z_PATCHES = {"zplugin", "zguard", "zcall", "zconv", "zmcpio", "zclap", "z64", "zsys"}
+ PROJECT_Z_REPOS = {name: name for name in PROJECT_Z_PATCHES | {"zharness", "ztuio"}}
+-PROJECT_Z_REPOS.update({"zuse-computer": "zuse", "zplugin-macros": "zplugin"})
++PROJECT_Z_REPOS["zplugin-macros"] = "zplugin"
+ 
+ 
+ def require(condition, message):
+@@ -59,14 +58,14 @@
+ 
+ # This is the reviewed recipe source, not a selected release candidate or main SHA.
+ # Updating any pin requires a new source review; never learn pins from the run.
+-RECIPE_SOURCE_COMMIT = "5a45be0401caf7fcd462fa1783c157e7f4c77019"
++RECIPE_SOURCE_COMMIT = "35ff6e4eb8b463aeb090230e9557fb08fb22b458"
+ REVIEWED_RECIPE = {
+-    ".github/workflows/release.yml": (24312, "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"),
+-    ".github/workflows/ci.yml": (15351, "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"),
++    ".github/workflows/release.yml": (22724, "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c"),
++    ".github/workflows/ci.yml": (14994, "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172"),
+     ".github/workflows/deploy-server.yml": (4499, "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"),
+-    "scripts/release.py": (65061, "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"),
++    "scripts/release.py": (65003, "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e"),
+     "scripts/install.sh": (6783, "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"),
+-    "scripts/install.ps1": (29653, "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"),
++    "scripts/install.ps1": (12928, "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"),
+ }
+ DISPATCH_API_VERSION = "2026-03-10"
+ 
+@@ -337,9 +336,9 @@
+ 
+ 
+ def verify_source_gitlinks(checkout, candidate, modules):
+-    """Match four recorded gitlinks to S and read their immutable commit trees."""
+-    require(isinstance(modules, list) and len(modules) == 4,
+-            "Git-source publication requires four recorded submodules")
++    """Match three recorded gitlinks to S and read their immutable commit trees."""
++    require(isinstance(modules, list) and len(modules) == 3,
++            "Git-source publication requires three recorded submodules")
+     recorded = {}
+     for row in modules:
+         require(isinstance(row, dict) and set(row) == {"path", "commit", "tree"},
+@@ -364,8 +363,8 @@
+             relative_manifest(path)
+             require(kind == b"commit" and path not in pins, "invalid source gitlink")
+             pins[path] = commit.decode("ascii")
+-    require(len(pins) == 4 and {path: row["commit"] for path, row in recorded.items()} == pins,
+-            "manifest submodules differ from the candidate's four gitlinks")
++    require(len(pins) == 3 and {path: row["commit"] for path, row in recorded.items()} == pins,
++            "manifest submodules differ from the candidate's three gitlinks")
+     for path, row in recorded.items():
+         module = checkout / path
+         require(module.is_dir() and not module.is_symlink()
+@@ -794,7 +793,7 @@
+             "platform build artifact. Outer ZIP digests are checked separately from member hashes. "
+             "Installer bytes equal the immutable S scripts. The verified-source artifact is "
+             "matched to the schema-2 manifest, candidate commit/tree, Cargo.toml, Cargo.lock, "
+-            "four gitlinks and dependency graph. Direct Project Z declarations use canonical "
++            "three gitlinks and dependency graph. Direct Project Z declarations use canonical "
+             "Git URLs with no version/rev/tag/branch/path selector; locked versions and "
+             "gitlink-backed package manifests are independently cross-checked. Graph identities "
+             "and edges are checked against S's lock; feature/kind selection and Git trees without "
+--- H2-CI/manual_main_provenance.py
++++ H2-CLI/manual_main_provenance.py
+@@ -262,7 +262,7 @@
+     if name == "validate":
+         return 0, 0, PYTHON
+     if name.startswith("Build "):
+-        return (3 if "windows" in name else 1), 0, RUST
++        return 1, 0, RUST
+     if name.startswith("Verify installed server "):
+         return 0, 1, DOWNLOAD
+     if name == "finalize":
+@@ -310,7 +310,7 @@
+          and re.fullmatch(r"[0-9a-f]{40}", candidate),
+          "only the reviewed 0.10.25 Git-source candidate is supported")
+     return {"tag": "v" + version, "version": version, "sha": candidate,
+-            "submodule_count": 4, "prerelease": "false", "publish": "true",
++            "submodule_count": 3, "prerelease": "false", "publish": "true",
+             "create_tag": "false", "build_only": "false",
+             "release_contract": RELEASE_CONTRACT, "crate_publication": "deferred"}
+ 
+@@ -559,7 +559,7 @@
+     need(isinstance(toolchain, dict) and set(toolchain) == {"cargo", "rustc"}
+          and all(isinstance(toolchain[key], str) and toolchain[key] for key in toolchain),
+          "manifest toolchain identity is incomplete")
+-    need(isinstance(manifest["submodules"], list) and len(manifest["submodules"]) == 4
++    need(isinstance(manifest["submodules"], list) and len(manifest["submodules"]) == 3
+          and isinstance(manifest["dependency_graph"], dict)
+          and manifest["dependency_graph"].get("cargo_lock_sha256") == manifest["cargo_lock_sha256"],
+          "manifest source graph does not bind its development lock and gitlinks")
+@@ -670,7 +670,7 @@
+     artifact_snapshot["encoding"] = "canonical JSON of decoded API records, not HTTP wire bytes"
+     expected_names = {"ssmcp-" + target for target in TARGETS}
+     # The pinned workflows also upload terminal-preview, unified-acceptance-*,
+-    # native-client-* and windows-*-browser/bootstrap diagnostics. Those remain
++    # native-client-* diagnostics. Those remain
+     # outside the release namespace; eight is not the total run artifact count.
+     need(all(isinstance(a.get("name"), str) for a in all_artifacts),
+          "artifact API contains an invalid name")
+@@ -685,15 +685,8 @@
+         name = "ssmcp-" + target
+         log = logs["Build " + target]
+         packages[name] = package_output(log, target)
+-        count = 3 if "windows" in target else 1
+-        uploaded[name] = upload_output(log, number=12, name=name, occurrence=count - 1,
+-                                       total=count, artifact=artifacts[name], run=run)
+-        if "windows" in target:
+-            for number, step_name, occurrence in (
+-                (10, "Retain real Windows browser dependency evidence", 0),
+-                (11, "Retain Windows browser bootstrap evidence", 1)):
+-                step = log.step(number, step_name)
+-                log.timed(log.lines[log.positions(UPLOAD)[occurrence]], step)
++        uploaded[name] = upload_output(log, number=8, name=name, occurrence=0,
++                                       total=1, artifact=artifacts[name], run=run)
+     uploaded[SOURCE_ARTIFACT] = upload_output(
+         logs["finalize"], number=10, name=SOURCE_ARTIFACT, occurrence=0, total=2,
+         artifact=artifacts[SOURCE_ARTIFACT], run=run,
+--- H2-CI/reviewed-recipe.json
++++ H2-CLI/reviewed-recipe.json
+@@ -1,17 +1,17 @@
+ {
+-  "schema": "ssmcp-h2-ci-reviewed-recipe-v1",
+-  "recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
++  "schema": "ssmcp-h2-cli-reviewed-recipe-v1",
++  "recipe_source_commit": "35ff6e4eb8b463aeb090230e9557fb08fb22b458",
+   "scope": "0.10.25 manual-main git-source-v1; deferred crate publication; no deployment",
+   "files": [
+     {
+       "path": ".github/workflows/release.yml",
+-      "bytes": 24312,
+-      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
++      "bytes": 22724,
++      "sha256": "ba51af5f000826fcf31455591af2de5de2256cdaa5846e51eaeeb0e5241dbe8c"
+     },
+     {
+       "path": ".github/workflows/ci.yml",
+-      "bytes": 15351,
+-      "sha256": "d60f0b21ce4c16440d3dd39c1fb3d53fb21de3bb889a30c4ed4f8ae7822f9317"
++      "bytes": 14994,
++      "sha256": "e7c753ca1a058b43f798cb1f31bc2b8980a09b3bc72cdb1996ef6eaadb5a7172"
+     },
+     {
+       "path": ".github/workflows/deploy-server.yml",
+@@ -20,8 +20,8 @@
+     },
+     {
+       "path": "scripts/release.py",
+-      "bytes": 65061,
+-      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
++      "bytes": 65003,
++      "sha256": "3d0361e548bf78f0a7e4657e7ccab870c9698fe3b8d91c9ab72c62b9375b976e"
+     },
+     {
+       "path": "scripts/install.sh",
+@@ -30,16 +30,16 @@
+     },
+     {
+       "path": "scripts/install.ps1",
+-      "bytes": 29653,
+-      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
++      "bytes": 12928,
++      "sha256": "e2c0607275d6b04315e4ddce85d01280dcc56b2bb2710be0849fbaeee626d051"
+     }
+   ],
+   "candidate_sha": null,
+   "workflow_sha": null,
+   "run_id": null,
+   "execution_performed": false,
+-  "previous_recipe_source_commit": "879ba17fc3ba4bad6a26a85494b79e29acf1938a",
+-  "previous_static_helper_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
++  "previous_recipe_source_commit": "5a45be0401caf7fcd462fa1783c157e7f4c77019",
++  "previous_static_helper_commit": "6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d",
+   "independent_ci_candidate_step": {
+     "yaml_step": 19,
+     "expected_api_step": 20,
+@@ -54,5 +54,37 @@
+     "auxiliary_artifact_name": "ssmcp-linux-x86_64-candidate",
+     "auxiliary_artifact_downloaded_or_used_as_release_evidence": false
+   },
+-  "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context"
++  "official_context_source": "https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context",
++  "CLI_migration": {
++    "source_tree": "38cf85469fc3b2f92efc61009652baa1bf669274",
++    "gitlink_count": 3,
++    "observed_gitlinks": [
++      {
++        "path": "crates/zharness",
++        "commit": "5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
++      },
++      {
++        "path": "crates/zplugin",
++        "commit": "592a1be623b81a775026c470e6f0efe91fcf78f3"
++      },
++      {
++        "path": "crates/ztuio",
++        "commit": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
++      }
++    ],
++    "release_build_upload": {
++      "step": 8,
++      "occurrence": 0,
++      "total": 1
++    },
++    "retired_release_build_diagnostic_steps": [
++      10,
++      11
++    ],
++    "finalize_upload_steps_retained": [
++      10,
++      11
++    ],
++    "final_candidate_not_selected": true
++  }
+ }
+--- H2-CI/README.md
++++ H2-CLI/README.md
+@@ -1,18 +1,25 @@
+-# H2：适配独立 CI 上传条件的静态后继
++# H2：适配独立 Zuse CLI 迁移的静态后继
+ 
+-本目录是 **0.10.25 / manual-main / git-source-v1** 发行核验器的静态准备版本。它以固定源码 `5a45be0401caf7fcd462fa1783c157e7f4c77019` 的六份配方为依据，专门处理本轮 GitHub 二进制发行与 crate 延期的组合。
++本目录是 **0.10.25 / manual-main / git-source-v1** 发行核验器的静态准备版本。已审配方来自固定源码 35ff6e4eb8b463aeb090230e9557fb08fb22b458，只适用于 GitHub 二进制发行与 crate 延期的组合。
+ 
+-**它尚未执行，也尚未绑定最终产品提交 S、main 工作流提交 P、tag、运行编号或原始 dispatch 回执。** AST 语法解析和源码审阅不能替代真实发布核验。本目录不会触发发布、创建标签、安装程序或部署服务器。
++**它尚未执行，也尚未绑定最终产品提交 S、main 工作流提交 P、tag、运行编号或原始 dispatch 回执。** 这里的配方来源不是已选定的最终候选。静态语法与源码审阅不能代替真实发布核验；本目录不会触发发布、创建标签、安装程序或部署服务器。
+ 
+-## 本次只同步真实 CI 差异
++## 与旧配方对应的必要变化
+ 
+-[原 H2 固定版本](https://github.com/LIghtJUNction/ssmcp/tree/2e8e58ac1a7047900feac8501878b80e64f4bd52/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-unbound)继续保留。此次观察点是作者提交 5a45be0，尚未把它选作最终产品 S 或实际工作流 P，也没有转移任何源码阶段或旧版本的运行成绩。
++[前一份 H2 CI 固定版本](https://github.com/LIghtJUNction/ssmcp/tree/6f6bb09bace5b54c82f47f7eb0ae245f17d5ff2d/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-ci-unbound)保留原样。以下变化来自已退役的内置电脑／浏览器执行器及新的 CLI 安装管理；它们不转移任何旧候选的运行成绩。
+ 
+-新的 CI 配方增加了调试客户端保留步骤，并以 `github.workflow == 'CI'` 限定为独立 CI 的手动运行。Release 调用该可复用流程时，github context 关联调用方 `Release`，因此两个 Linux job 的这个辅助步骤都应跳过。[固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/5a45be0401caf7fcd462fa1783c157e7f4c77019/.github/workflows/ci.yml) · [官方调用方规则](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context)
++| 旧规则 | 当前固定配方 | 保留的约束 |
++|---|---|---|
++| 四个 gitlink，直接依赖包含 zuse-computer | 三个 gitlink：zharness、zplugin、ztuio；直接 Project Z 分类与 release.py 一致 | receipt 路径和 commit 集合必须等于最终 S 的真实递归 Git tree，每个子模块 tree 继续核对 |
++| Build 主上传位于 step 12；Windows 共三次上传 | 全部平台主上传为 step 8，唯一上传 occurrence 0、total 1 | 对应 action、job、时间窗口、artifact ID 与字节全部核对 |
++| Windows browser/bootstrap 诊断 step 10/11 | 仅删除这两项已退役的 Build 检查 | finalize 自身 step 10/11 的 verified-source 与 finalized-release-assets 上传仍保留 |
++| 六份旧配方大小与摘要 | 四份已变、两份逐字节未变；全部重新固定于已审源码 | 最终 S 是 P 的祖先，且六份配方在 S/P 均等于独立固定字节 |
+ 
+-后继版本更新 CI 的固定字节摘要，并在两个 Linux job 的实际 API 记录中要求 step 20 名为 `Preserve the Linux candidate client`、结果为 `skipped`。缺失、改名或实际执行都会拒绝。原 Ubuntu x86／ARM 上传数量仍为 2／1；八件必要发布 artifacts、六个平台 archive、16 个公开文件、19 个 job 以及 `ssmcp-` 发布集合均保持原校验。这个辅助 debug client 不会被下载或代替正式产物。
++[固定 Release](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/.github/workflows/release.yml) · [固定 CI](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/.github/workflows/ci.yml) · [固定 release.py](https://github.com/LIghtJUNction/ssmcp/blob/35ff6e4eb8b463aeb090230e9557fb08fb22b458/scripts/release.py)
+ 
+-源码对比只涉及主模块的配方常量和 provenance 的上述步骤检查；原 dispatch 解析器逐字节不变。三个模块已做 AST 解析及接口核对，没有 import 或执行。条件与步骤位置已经按固定源码审阅，实际 Actions 日志兼容性仍须由首次真实运行证明。
++独立 CI 调试客户端的既有规则继续保留：Preserve the Linux candidate client 仍是 API step 20；Release 调用两个 Linux job 时必须为 skipped。Linux x86／ARM 实际上传计数保持 2／1。它不参与正式发布证据。十九个 job、十六个公开文件、八份必要发布 artifact 及 Windows CRLF sidecar 核验均保留。
++
++原 dispatch 解析器逐字节不变。三个模块只做 AST 语法解析和静态审阅，没有 import 或执行；实际 Actions 日志兼容性仍须在真实发布时确认。
+ 
+ ## 适用范围
+ 
+@@ -25,10 +32,10 @@
+ | 作业 | 19 个预期 job；17 个成功，`publish_crates` 与 `deploy_server` 跳过 |
+ | 公开附件 | 六个平台的 archive、六份 sidecar、两个安装器、SHA256SUMS、release-manifest.json，共 16 个 |
+ | 发布证据附件 | 六份构建 artifact、`verified-source`、`finalized-release-assets`，共八份必要附件；无关 CI 测试证据可另外存在 |
+-| 源码证据 | 提交、tree、manifest、Cargo.lock、四个 gitlink、Git 依赖图与工具链记录相互核对 |
++| 源码证据 | 提交、tree、manifest、Cargo.lock、三个 gitlink、Git 依赖图与工具链记录相互核对 |
+ | 完成条件 | 原始请求、实际 run/attempt、初始 checkout、具体 step、artifact ID、外层 ZIP 与内部文件、公开下载字节全部对应 |
+ 
+-本核验器不支持 `legacy-tag-v1`、build-only 或 registry 发布模式。独立 registry 发布仍由产品发布脚本的另一条严格路径处理；本次通过也不会证明 crates.io 可安装、服务器已部署或用户机器已升级。
++本核验器不支持 `legacy-tag-v1`、build-only 或 registry 发布模式。独立 registry 发布仍由产品发布脚本的另一条严格路径处理；将来核验通过也不证明 crates.io 可安装、服务器已部署或用户机器已升级。
+ 
+ ## 文件对应关系
+ 
+@@ -37,7 +44,7 @@
+ - `dispatch_receipt_adapter.py`：只解析原始请求捕获与独立原生执行回执；保持旧版本字节不变。
+ - `reviewed-recipe.json`：实际已审阅源码及六份配方的大小和 SHA256。
+ - `preparation-identity.json`：模块、变更文件及静态审阅范围；所有未来运行绑定保持空值。
+-- `changes-from-H2.patch`：与原 H2 的两个模块、说明和配方差异；身份与静态核对结果另列。
++- `changes-from-H2-CI.patch`：与前一份 H2 CI 的两个模块、说明和配方差异；身份与静态核对结果另列。
+ 
+ [原 H 保留在固定提交 2257fb1](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound)。本静态后继保留原 H2 和原 H，没有改写任何历史执行成绩。
+ 
