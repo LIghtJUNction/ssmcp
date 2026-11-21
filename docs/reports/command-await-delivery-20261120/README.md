@@ -2,7 +2,15 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-21 01:01 UTC）
+## 当前状态（截至 2026-11-21 01:33 UTC）
+
+0.10.25 准备提交 P [`f4e6ff04`](https://github.com/LIghtJUNction/ssmcp/commit/f4e6ff043eef6686a9013750ffcb8ab66926b9d4) 已公开，tree 为 `d6546dd46464ac1cbb1c3aabc0493638a44649f7`，唯一父提交为 B；[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍开放、draft、未合并。主审于 01:25:44 UTC 核对了完整六文件差异、PR 与实际 Cargo 版本。deferred 列表已加入 0.10.25，未延后对照改为 0.10.26；现有 `DeploymentPolicyTests` 的 11 项测试已执行通过，unittest 计时 2.587 秒。
+
+P 仍是准备提交，尚非最终冻结。主审于 01:27:48 UTC 实读的源码冻结工作树仍为 B；正常推送与策略测试回执已核对，但产品构建、运行验收、最终 P1 和正式发布没有因此通过。InputLease 附录只界定固定源码行为及平台解锁约束，未证明实际 Linux FD 持有者或 Windows 泄锁。完整来源、执行范围与时间历史见[本次记录](release-input-lock-review-0122.json)，旧性能数据及编译状态更正保持原归属。
+
+01:33:27 UTC 已独立核对后续公开修复来源 [`d4c4b9c6`](https://github.com/LIghtJUNction/ssmcp/commit/d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb)及其完整十提交链，其中已有 Unix InputLease 显式释放修复和描述符副本回归。源码负责人将由同一作者正常合入准备分支；本检查点尚无最终合流提交或冻结结论，也没有引用该独立修复线的运行成绩。
+
+## 历史状态（截至 2026-11-21 01:01 UTC）
 
 B 的最终绑定执行与发布已暂停，正在协调版本意图和既有验证任务的占用。根据源码作者与协调者的只读观测，另一条既有发布链正在本机验证 0.10.24，并持有共享构建目标锁；主审尚未独立读取该进程细节，因此此项保留转述限定。本组没有启动或排队新的重任务。原生会话进度已提出本功能链顺延 0.10.25 的计划，但最终版本与后续冻结源码尚未确认。
 
@@ -711,3 +719,39 @@ B 构建、运行验收、最终 P1 与正式发布均未完成。执行安排�
 源码作者与协调者随后报告，另一条既有发布链已在本机进行 0.10.24 验证并持有共享构建目标锁；原计划共享窗口内的计算任务自身尚未启动。主审尚未独立读取该进程细节，本报告不把转述升级为独立进程核验。源码作者已明确暂停 B 的最终绑定执行和发布，先协调既有验证任务的所有者与版本意图；B 的验收流程未启动，也没有排队新的重任务。
 
 B 的公开提交、普通推送、0.10.24 冻结回执及既有静态审阅仍作为历史事实保留。后续最终源码版本需要重新确认，尚无替代版本的确定选择；本次未改写源码、历史性能结果或任何发布成绩。
+
+
+## 2026-11-21 01:30 发布输入与 InputLease 审阅
+
+### 0.10.25 准备提交与发布策略验证
+
+公开观察按时间保留：01:22:51 UTC 的工作分支回读仍为 B；01:25:44 UTC 已核对到 [P](https://github.com/LIghtJUNction/ssmcp/commit/f4e6ff043eef6686a9013750ffcb8ab66926b9d4)。P 仅改六个文件，23 行新增、5 行删除，涉及自身版本、部署延后策略及发布文档；没有改 `src` 或 gitlink。其[发布说明](https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/docs/release-notes-0.10.25.md)明确列出最终整合、构建运行、发布安装结果待确认。代码保持相同的范围可以复用静态审阅，任何运行成绩均不迁移到 P。
+
+固定 B 的[发布策略](https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/.github/workflows/release.yml#L75-L122)默认 `requested=True`，只有 `workflow_dispatch` 会读取 `deploy_server` 输入；部署输出条件为 `publish == "true" and requested and deferred is None`，延后列表止于 0.10.24。因此，仅把版本升为未列出的 25 并不能继续保证跳过部署；这是固定配置的条件推导，不是已经发生部署。P 已在[源码](https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/.github/workflows/release.yml#L104-L118)加入 0.10.25，并在[原测试](https://github.com/LIghtJUNction/ssmcp/blob/f4e6ff043eef6686a9013750ffcb8ab66926b9d4/scripts/test_release.py#L120-L140)加入对应枚举，将未延后对照改为 0.10.26；原 rc 对照和其他断言保留。
+
+主审已完整读取发布策略回执和原 stderr：只运行现有 `DeploymentPolicyTests`，11 条逐项通过，unittest 计时 **2.587 秒**，外层步骤计时 **2.778227721020812 秒**、退出 0；这不是整个 `test_release.py` 测试集的运行结论。回执记录 P 的源码身份与四个输入文件前后一致，没有运行 Cargo 或产品二进制，没有获取共享 target 锁，也没有触发 CI、发布或部署。原正常推送回执时间为 01:23:37.381104 UTC，记载退出 0、无 force、远端由 B 推进到 P；源码冻结工作树保持 B。回执及 stdout/stderr 的完整字节数和 SHA256 见[事实记录](release-input-lock-review-0122.json)。原作者整体进程退出状态未被本报告提升为主审原件复核结论。
+
+### InputLease：测试含义与尚未确定的归因
+
+作者报告了最后 `is_some` 断言失败，主审尚未读取该次原失败日志。固定 B 的 [`try_input`](https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/computer/host_control/storage.rs#L218-L228)只打开 `input.lock` 并尝试非阻塞平台锁，不检查 enabled、ticket 或 state.json；若失败位置确为所报断言，则 `None` 只界定输入锁 busy，不能推导成 off 后本来就应返回 None，也不是 state 的两秒等待路径。[原测试](https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/computer/host_control/tests.rs#L185-L220)把 lease 保留到 operation 结束、内部 guard 销毁之后：此时先断言 None，再 `drop(lease)`，最后断言 Some。该顺序与测试目的相符，最后 Some 断言应保留。
+
+B 的 InputLease 只含 `File` 和 `Arc<Store>`，没有自定义 Clone、Drop 或显式 unlock。[Linux flock 文档](https://man7.org/linux/man-pages/man2/flock.2.html)说明锁属于打开文件记录：fork/dup 的描述符副本共享锁，任一副本显式解锁即可释放，否则需要所有副本关闭。[fork 文档](https://man7.org/linux/man-pages/man2/fork.2.html)确认描述符继承；[O_CLOEXEC](https://man7.org/linux/man-pages/man2/open.2.html)作用于 exec，不能排除 fork 到 exec 之间的持有窗口。这说明继承副本是一条可能路径，尚无该失败实例的 FD 或进程证据，不能称为已证实根因。P 未改相应产品源码，该静态边界保持不变。
+
+### Windows 显式释放必须匹配原加锁区间
+
+固定 B 的 [LockFileEx 调用](https://github.com/LIghtJUNction/ssmcp/blob/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1/src/platform_windows.rs#L267-L297)与 [Rust 1.100.0 的 File::unlock](https://github.com/rust-lang/rust/blob/1.100.0/library/std/src/sys/fs/windows.rs#L486-L499)使用不同的偏移和长度。下表的 MAX 为 `u32::MAX = 4294967295`。
+
+| 调用 | OffsetLow | OffsetHigh | LengthLow | LengthHigh |
+| --- | ---: | ---: | ---: | ---: |
+| B 的 LockFileEx | MAX | 0 | 1 | 0 |
+| Rust File::unlock → UnlockFile | 0 | 0 | MAX | MAX |
+
+微软 [UnlockFile](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-unlockfile) 与 [UnlockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-unlockfileex)文档要求释放区间与已有锁精确匹配，更大区间覆盖那一个字节并不满足条件。Rust 该实现的第一次 UnlockFile 失败会直接返回，第二次调用对 ERROR_NOT_LOCKED 的容忍不能补救第一次范围不匹配。因此，如后续给 InputLease 增加显式释放，不能无条件照搬 File::unlock，必须核对平台加锁与解锁的对应关系。这是实现约束，**不是当前 Windows 已泄锁的证据**；本次没有执行 InputLease 复现或修复验证，也没有把 Linux 的可能路径写成实际故障归因。
+
+### 后续公开修复来源（01:33 UTC）
+
+主审已通过 GitHub 提交对象和完整比较确认：[`d4c4b9c6`](https://github.com/LIghtJUNction/ssmcp/commit/d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb) 的 tree 为 `c64ea74cfb85474f05dd2c8bb3c834c73d10b08e`，在公开 f33 之上有十个提交。其末尾文档提交的父提交是 [`10fdc1c1`](https://github.com/LIghtJUNction/ssmcp/commit/10fdc1c10888c59799bb98908911033bacc3f046)，再前一个为 [`224c2338`](https://github.com/LIghtJUNction/ssmcp/commit/224c2338b3170ebdfe4dde4d4835e5dedb813194)；这两步分别包含实际释锁修复和新回归，不能只读末尾文档差异就遗漏修复。
+
+该来源的 [`storage.rs`](https://github.com/LIghtJUNction/ssmcp/blob/d4c4b9c6fe09a4d7b246ca54a08f5c7b258289fb/src/computer/host_control/storage.rs)新增 Unix 限定的 InputLease Drop：先尝试显式解锁，遇 Interrupted 重试；其他错误结束循环并继续字段析构，不能据此声称异常分支已成功解锁。新增 Unix 回归通过 `try_clone()` 保留描述符副本，要求原 lease 析构后即可取得下一份 lease，并验证随后关闭旧副本不会释放新 lease 的独占锁。源码未把该 Drop 引入 Windows，原取消测试和最终 Some 断言保留。
+
+这里的结论是公开源码及窄范围静态复核。新回归针对共享描述符生命周期，仍不是原失败现场的 FD 取证；本报告未独立核验该来源的运行成绩。该修复尚待与准备提交正常合流，再以新的固定源码完成构建和运行验收。
