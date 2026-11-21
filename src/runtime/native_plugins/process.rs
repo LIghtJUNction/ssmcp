@@ -722,7 +722,7 @@ mod tests {
     async fn on_playwright_lost_reply_revokes_the_driver_without_inventing_results() {
         tokio::time::timeout(Duration::from_secs(10), async {
             const DRIVER: &str = r#"
-import json,os,sys
+import json,sys
 for line in sys.stdin:
  r=json.loads(line)
  method=r.get('method')
@@ -736,7 +736,7 @@ for line in sys.stdin:
    reply={'error':{'code':-32000,'message':'known RPC refusal'}}
   else:
    assert name=='lose_reply'
-   os.close(1)
+   print('!', flush=True)
    # Stay alive on stdin until the owning driver actually shuts down.
    continue
  else:
@@ -796,7 +796,10 @@ for line in sys.stdin:
             assert_eq!(data["status"], "failed");
             assert_eq!(data["outcome"], "unknown_or_partially_executed");
             assert_eq!(data["replay_safe"], false);
-            assert_eq!(data["reason"], "native peer closed its output stream");
+            assert_eq!(
+                data["reason"],
+                "native JSON stream failed: expected value at line 1 column 1"
+            );
             assert!(data.get("completed_count").is_none() && data.get("failed_index").is_none());
             assert!(
                 !backend
@@ -809,7 +812,7 @@ for line in sys.stdin:
             Process::shutdown(&backend).await;
         })
         .await
-        .expect("bounded Playwright EOF fixture");
+        .expect("bounded Playwright invalid JSON fixture");
     }
 
     #[tokio::test]
