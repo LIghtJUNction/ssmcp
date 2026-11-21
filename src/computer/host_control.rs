@@ -159,15 +159,16 @@ impl Permit {
         self.control.cancelled(self.ticket).await;
     }
 
-    pub(crate) async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
-        PERMIT.scope(self.clone(), future).await
+    pub(crate) fn scope<T>(&self, future: impl Future<Output = T>) -> impl Future<Output = T> {
+        // Box before creating the scoped future to keep the operation out of its inline state.
+        PERMIT.scope(self.clone(), Box::pin(future))
     }
 
-    pub(crate) async fn run<T>(
+    pub(crate) fn run<T>(
         &self,
         future: impl Future<Output = Result<T, String>>,
-    ) -> Result<T, String> {
-        self.control.run(self.ticket, self.scope(future)).await
+    ) -> impl Future<Output = Result<T, String>> {
+        self.control.run(self.ticket, self.scope(future))
     }
 
     pub(super) fn ticket(&self) -> Ticket {

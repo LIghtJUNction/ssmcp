@@ -1375,13 +1375,9 @@ fn execute(
                 .map_err(|error| format!("invalid native keyboard state: {error}"))?
         }
         #[cfg(target_os = "linux")]
-        "num_lock" => {
-            let value: NumLock = parse(args)?;
-            validate_num_lock(&value.state)?;
-            let status = cancellation.submit(|| desktop.num_lock(&value.state))?;
-            serde_json::from_str(&status)
-                .map_err(|error| format!("invalid native Num Lock readback: {error}"))?
-        }
+        "num_lock" => execute_num_lock(args, cancellation, cleanup_ok, |state| {
+            desktop.num_lock(state)
+        })?,
         "type" => {
             let value: TypeText = parse(args)?;
             validate_literal_text(backend, &value.text)?;
@@ -1447,6 +1443,24 @@ fn execute(
         _ => return Err("unknown zuse worker operation".into()),
     };
     Ok(json!({"result":result,"backend":backend}))
+}
+
+#[cfg(target_os = "linux")]
+fn execute_num_lock(
+    args: Value,
+    cancellation: &Cancellation,
+    cleanup_ok: &mut bool,
+    operation: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Value, String> {
+    let value: NumLock = parse(args)?;
+    validate_num_lock(&value.state)?;
+    let status = cancellation.submit(|| {
+        // Native errors do not confirm release. A cancelled or rejected
+        // submission never invokes this closure and leaves cleanup unchanged.
+        operation(&value.state).inspect_err(|_| *cleanup_ok = false)
+    })?;
+    serde_json::from_str(&status)
+        .map_err(|error| format!("invalid native Num Lock readback: {error}"))
 }
 
 fn click_watch_receipt(
@@ -1852,6 +1866,62 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn num_lock_uncertain_native_write_marks_worker_cleanup_unconfirmed() {
+        for detail in [
+            "native Num Lock input was incomplete (24/96 bytes); input was not replayed",
+            "write Num Lock to the current keyboard: device disconnected; input was not replayed",
+        ] {
+            let mut cleanup_ok = true;
+            let error = execute_num_lock(
+                json!({"state":"toggle"}),
+                &Cancellation::default(),
+                &mut cleanup_ok,
+                |state| {
+                    assert_eq!(state, "toggle");
+                    Err(detail.into())
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, detail);
+            assert!(
+                !cleanup_ok,
+                "the worker must not acknowledge release: {error}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn num_lock_pre_dispatch_cancellation_and_success_preserve_cleanup() {
+        let cancellation = Cancellation::default();
+        let mut cleanup_ok = true;
+        let status = execute_num_lock(
+            json!({"state":"on"}),
+            &cancellation,
+            &mut cleanup_ok,
+            |state| {
+                assert_eq!(state, "on");
+                Ok(json!({"num_lock":true}).to_string())
+            },
+        )
+        .unwrap();
+        assert_eq!(status, json!({"num_lock":true}));
+        assert!(cleanup_ok);
+
+        cancellation.cancel();
+        let error = execute_num_lock(
+            json!({"state":"toggle"}),
+            &cancellation,
+            &mut cleanup_ok,
+            |_| panic!("a cancelled Num Lock request reached native input"),
+        )
+        .unwrap_err();
+        assert_eq!(error, CANCELLED);
+        assert!(cleanup_ok);
     }
 
     fn click_watch_arguments(endpoint: &str) -> Value {

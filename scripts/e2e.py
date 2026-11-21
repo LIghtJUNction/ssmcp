@@ -98,6 +98,7 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.computer.key",
     "ssmcp.computer.type",
     "ssmcp.computer.scroll",
+    "ssmcp.computer.watch_until_click",
     "ssmcp.omarchy.status",
     "ssmcp.omarchy.themes",
     "ssmcp.omarchy.theme_set",
@@ -120,6 +121,12 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.omarchy.battery",
     "ssmcp.omarchy.network",
 })
+if sys.platform == "linux":
+    BUILTIN_TOOLS |= frozenset({
+        "ssmcp.computer.move_path",
+        "ssmcp.computer.keyboard_state",
+        "ssmcp.computer.num_lock",
+    })
 
 
 def free_port() -> int:
