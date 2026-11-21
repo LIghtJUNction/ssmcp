@@ -180,7 +180,6 @@ mod tests {
             let files = Files::new(&ConstructorContext {
                 root,
                 context_roots: vec![extra],
-                registry: registry.clone(),
                 output: OutputStore::at_for_test(scratch.0.join("output")).unwrap(),
             })
             .unwrap();

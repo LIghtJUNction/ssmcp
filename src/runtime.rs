@@ -303,7 +303,6 @@ impl Runtime {
         let constructor = ConstructorContext {
             root: root.clone(),
             context_roots,
-            registry: registry.clone(),
             output: output.clone(),
         };
         let files = Files::new(&constructor)?;
