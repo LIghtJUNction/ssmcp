@@ -641,24 +641,30 @@ impl Process {
         arguments: Value,
     ) -> Result<Value, String> {
         permit.check()?;
+        let progress = crate::backend::rpc::ControlDispatch::default();
         let native = tokio::select! {
             biased;
-            result = permit.scope(driver.call(name, arguments)) => Some(result),
+            result = permit.scope(progress.scope(driver.call(name, arguments))) => Some(result),
             _ = permit.cancelled() => None,
         };
-        // Preserve completed native replies. A transport failure during
-        // revocation cannot establish what the extension already executed.
-        match native {
+        // Preserve definitive native replies, including native isError and
+        // JSON-RPC errors. Only a write without a reply has an unknown outcome.
+        let cancelled = native.is_none() || permit.check().is_err();
+        let reason = match native {
             Some(Ok(value)) => return Ok(value),
-            Some(Err(error)) if permit.check().is_ok() => return Err(error),
-            _ => {}
+            Some(Err(error)) => error,
+            None => ENDED.into(),
+        };
+        if !progress.unanswered_write() {
+            return Err(reason);
         }
         self.revoke_playwright(driver).await;
-        // The watcher may have removed this route first.
+        // The generation watcher may have removed this route first. The
+        // driver's OnceCell joins the cleanup for this exact owned peer.
         driver.shutdown().await;
         let mut value = result(json!({
-            "status":"cancelled","outcome":"unknown_or_partially_executed",
-            "reason":ENDED,"replay_safe":false
+            "status":if cancelled {"cancelled"} else {"failed"},
+            "outcome":"unknown_or_partially_executed","reason":reason,"replay_safe":false
         }));
         value["isError"] = json!(true);
         Ok(value)
@@ -711,6 +717,100 @@ impl Drop for Process {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn on_playwright_lost_reply_revokes_the_driver_without_inventing_results() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            const DRIVER: &str = r#"
+import json,os,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ method=r.get('method')
+ if method=='initialize':
+  reply={'result':{'protocolVersion':'2025-11-25','capabilities':{'tools':{}}}}
+ elif method=='tools/call':
+  name=r['params']['name']
+  if name=='reported_failure':
+   reply={'result':{'isError':True,'structuredContent':{'native':'kept'}}}
+  elif name=='rpc_failure':
+   reply={'error':{'code':-32000,'message':'known RPC refusal'}}
+  else:
+   assert name=='lose_reply'
+   os.close(1)
+   # Stay alive on stdin until the owning driver actually shuts down.
+   continue
+ else:
+  continue
+ print(json.dumps({'jsonrpc':'2.0','id':r['id'],**reply}),flush=True)
+"#;
+            let backend = Process::start(Path::new("/bin/sh")).await.unwrap();
+            let permit = backend.computer_use.permit().unwrap();
+            let driver = playwright::fixture_peer(DRIVER).await;
+            backend.drivers.lock().unwrap().insert(
+                Provider::Playwright,
+                Driver::Playwright(driver.clone(), permit.clone()),
+            );
+            let refused = backend
+                .control_playwright(
+                    &driver,
+                    permit.clone(),
+                    "ssmcp.playwright.respond",
+                    json!({}),
+                )
+                .await
+                .unwrap_err();
+            assert!(refused.contains("id must identify"));
+            let reported = backend
+                .control_playwright(
+                    &driver,
+                    permit.clone(),
+                    "playwright.reported_failure",
+                    json!({}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                reported,
+                json!({"isError":true,"structuredContent":{"native":"kept"}})
+            );
+            let rpc_error = backend
+                .control_playwright(&driver, permit.clone(), "playwright.rpc_failure", json!({}))
+                .await
+                .unwrap_err();
+            assert!(rpc_error.contains("known RPC refusal"));
+            assert!(
+                backend
+                    .drivers
+                    .lock()
+                    .unwrap()
+                    .contains_key(&Provider::Playwright)
+            );
+
+            let reply = backend
+                .control_playwright(&driver, permit.clone(), "playwright.lose_reply", json!({}))
+                .await
+                .unwrap();
+            assert!(permit.check().is_ok(), "the switch is still On");
+            assert_eq!(reply["isError"], true);
+            let data = &reply["structuredContent"];
+            assert_eq!(data["status"], "failed");
+            assert_eq!(data["outcome"], "unknown_or_partially_executed");
+            assert_eq!(data["replay_safe"], false);
+            assert_eq!(data["reason"], "native peer closed its output stream");
+            assert!(data.get("completed_count").is_none() && data.get("failed_index").is_none());
+            assert!(
+                !backend
+                    .drivers
+                    .lock()
+                    .unwrap()
+                    .contains_key(&Provider::Playwright)
+            );
+            assert!(driver.shutdown_complete_for_test());
+            Process::shutdown(&backend).await;
+        })
+        .await
+        .expect("bounded Playwright EOF fixture");
+    }
 
     #[tokio::test]
     async fn off_revokes_only_the_owned_playwright_driver_and_preserves_uncertain_outcome() {

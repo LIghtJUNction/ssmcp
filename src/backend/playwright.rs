@@ -340,6 +340,11 @@ impl Playwright {
             "browser_control":"not_checked_by_discovery"})
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn shutdown_complete_for_test(&self) -> bool {
+        self.shutdown.get().is_some()
+    }
+
     pub async fn shutdown(&self) {
         self.shutdown.get_or_init(|| self.peer.shutdown()).await;
     }
