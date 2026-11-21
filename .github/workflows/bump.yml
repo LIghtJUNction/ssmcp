@@ -4,22 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       level:
-        description: Increment only the application version; independent library versions stay pinned
+        description: none publishes the current application version; other choices increment from this run's original commit
         required: true
-        default: patch
+        default: none
         type: choice
-        options: [patch, minor, major, custom]
+        options: [none, patch, minor, major, custom]
       custom_version:
-        description: Required for custom, without a leading v; must increase the current version
+        description: Required for custom, without a leading v; must increase the original version
         required: false
         type: string
       dry_run:
-        description: Preview and validate without changing files, committing, tagging or publishing
+        description: Preview and validate without changing source files, commits, refs, tags or publishing
         required: false
         default: false
         type: boolean
       publish:
-        description: After the version commit, create an immutable tag and start the official release
+        description: Prepare an immutable tag and dispatch Release with server deployment disabled
         required: false
         default: true
         type: boolean
@@ -40,45 +40,45 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          # GitHub preserves github.sha across reruns. Never recalculate from a
+          # newer main after the first attempt has already committed a version.
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
-      - name: Bump package and lockfile together
+      - name: Prepare or reuse the version from the original workflow commit
         id: version
         env:
           BUMP_LEVEL: ${{ inputs.level }}
           BUMP_CUSTOM_VERSION: ${{ inputs.custom_version }}
           BUMP_DRY_RUN: ${{ inputs.dry_run }}
+          BUMP_PUBLISH: ${{ inputs.publish }}
         run: |
-          args=("$BUMP_LEVEL")
+          args=(--baseline "$GITHUB_SHA" --level "$BUMP_LEVEL")
           if [ -n "$BUMP_CUSTOM_VERSION" ]; then
             args+=(--custom-version "$BUMP_CUSTOM_VERSION")
           fi
           if [ "$BUMP_DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
-          python3 scripts/release.py bump "${args[@]}"
-      - name: Commit and push the version on main
-        if: inputs.dry_run != true
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore: release $RELEASE_TAG"
-          git push origin HEAD:main
-      - name: Create the requested release tag without moving an existing tag
-        if: inputs.dry_run != true && inputs.publish == true
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: python3 scripts/release.py tag "$RELEASE_TAG" "$(git rev-parse HEAD)"
+          if [ "$BUMP_PUBLISH" != "true" ]; then
+            args+=(--no-publish)
+          fi
+          python3 -B scripts/bump_release.py prepare "${args[@]}" --report "$RUNNER_TEMP/bump-preparation.json"
+      - name: Keep the exact prepared version receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bump-preparation-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bump-preparation.json
+          if-no-files-found: warn
+          retention-days: 30
 
   dispatch_release:
     needs: bump
@@ -89,11 +89,32 @@ jobs:
       contents: read
       actions: write
     steps:
-      - name: Start checks and publishing for the new tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Dispatch Release once and retain the original API response
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.bump.outputs.tag }}
-        # A tag pushed with GITHUB_TOKEN does not start a push workflow.
-        # workflow_dispatch does, and the explicit tag keeps empty-input runs as preflight only.
-        run: gh workflow run release.yml --ref main -f "tag=$RELEASE_TAG"
+          PREPARED_SHA: ${{ needs.bump.outputs.sha }}
+        # A GITHUB_TOKEN tag push does not trigger another workflow. Explicitly
+        # dispatch main with the immutable tag, build_only=false, deploy_server=false.
+        # Reruns never issue another POST, including after an ambiguous response.
+        run: |
+          python3 -B scripts/bump_release.py dispatch \
+            --tag "$RELEASE_TAG" --sha "$PREPARED_SHA" --baseline "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --report-dir "$RUNNER_TEMP/bump-dispatch"
+      - name: Keep the Actions dispatch capture even when delivery is uncertain
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bump-dispatch-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bump-dispatch/
+          if-no-files-found: warn
+          retention-days: 30
