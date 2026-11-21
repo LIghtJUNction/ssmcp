@@ -2462,8 +2462,8 @@ dependencies = [
 
 [[package]]
 name = "zcall"
-version = "0.4.1"
-source = "git+https://github.com/LIghtJUNction/zcall.git#8dd30a922a0aedbe821f610649b1ab26078d1882"
+version = "0.4.2"
+source = "git+https://github.com/LIghtJUNction/zcall.git#aaac54236f7ce0f4e1559c6e3b78d680d9dabf41"
 dependencies = [
  "zconv",
 ]
@@ -2561,7 +2561,7 @@ source = "git+https://github.com/LIghtJUNction/zguard.git#6772b932a65e18f64e1359
 [[package]]
 name = "zharness"
 version = "0.6.0"
-source = "git+https://github.com/LIghtJUNction/zharness.git#5f9a9f58f090326bf2d43f4df2cc90c1bc674c21"
+source = "git+https://github.com/LIghtJUNction/zharness.git#8907262ce6c8494f2849f8e5abd84f7a3da2e405"
 dependencies = [
  "zcall",
  "zguard",
