@@ -461,8 +461,11 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
     let _serial = HISTORY_FIXTURES.lock().await;
     let (root, _backend, runtime) = runtime().await;
     history::with_test_history(root.0.join("image-history"), async {
+        history::record_request("image_fixture_a", "A image request").unwrap();
         let a_call = verified(&runtime, 71, "123", 'a');
         let a = a_call.scope(async { Source::capture() }).await;
+        history::release_current().unwrap();
+        history::record_request("image_fixture_b", "B keeps reading").unwrap();
         let b_call = verified(&runtime, 72, "456", 'b');
         let b = b_call.scope(async { Source::capture() }).await;
         let a_history = a.require_owner().unwrap().display_id();
