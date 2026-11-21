@@ -215,19 +215,7 @@ impl Pool {
                 if prepared.text.len() > 48 * 1024 {
                     return Err("expanded worker input exceeds 48 KiB; no task was admitted".into());
                 }
-                let actor_key = format!(
-                    "{:x}",
-                    Sha256::digest(
-                        format!(
-                            "{}:{}:{}:{}",
-                            actor.provider,
-                            actor.subject,
-                            actor.participant.as_deref().unwrap_or(""),
-                            actor.connection
-                        )
-                        .as_bytes()
-                    )
-                );
+                let actor_key = actor_context_key(&actor)?;
                 let task = self.queue.submit(
                     actor,
                     &request.request_id,
@@ -282,6 +270,18 @@ impl Pool {
     }
 }
 
+fn actor_context_key(actor: &Actor) -> Result<String, String> {
+    // Field boundaries and an absent participant are part of the identity.
+    let encoded = serde_json::to_vec(&(
+        actor.provider.as_str(),
+        actor.subject.as_str(),
+        actor.participant.as_deref(),
+        actor.connection,
+    ))
+    .map_err(|error| format!("cannot encode worker actor identity: {error}"))?;
+    Ok(crate::hex::encode(Sha256::digest(encoded)))
+}
+
 fn actor(source: &Source) -> Result<Actor, String> {
     let call = source
         .call
@@ -313,6 +313,34 @@ fn actor(source: &Source) -> Result<Actor, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actor_context_keys_preserve_field_boundaries_and_optional_participants() {
+        let actor = Actor {
+            provider: "provider:subject".into(),
+            subject: "value".into(),
+            participant: None,
+            connection: 7,
+        };
+        let key = actor_context_key(&actor).unwrap();
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert_eq!(key, actor_context_key(&actor.clone()).unwrap());
+
+        // These two identities collided under colon-separated concatenation.
+        let mut moved_boundary = actor.clone();
+        moved_boundary.provider = "provider".into();
+        moved_boundary.subject = "subject:value".into();
+        assert_ne!(key, actor_context_key(&moved_boundary).unwrap());
+
+        let mut empty_participant = actor.clone();
+        empty_participant.participant = Some(String::new());
+        assert_ne!(key, actor_context_key(&empty_participant).unwrap());
+
+        let mut new_connection = actor;
+        new_connection.connection += 1;
+        assert_ne!(key, actor_context_key(&new_connection).unwrap());
+    }
 
     #[test]
     fn task_arguments_cannot_create_authenticated_identity_or_select_a_slot() {
