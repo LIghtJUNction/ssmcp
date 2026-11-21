@@ -388,8 +388,7 @@ mod tests {
     fn retired_browser_table_stays_inert_and_is_preserved_by_account_changes() {
         let root = directory();
         let path = root.join("config.toml");
-        let legacy =
-            "[browser]\nplaywright_mcp = 'legacy/cli.js'\nbackground = false\n";
+        let legacy = "[browser]\nplaywright_mcp = 'legacy/cli.js'\nbackground = false\n";
         fs::write(
             &path,
             format!("{legacy}[client]\nserver = 'https://relay.example'\n"),
@@ -412,7 +411,6 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
-
 }
 
 #[cfg(test)]

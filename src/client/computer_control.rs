@@ -51,9 +51,7 @@ fn parse(args: &[OsString]) -> Result<Request, String> {
         [] | ["version"] => ("ssmcp.computer.version", json!({})),
         ["download"] => ("ssmcp.computer.download", json!({})),
         ["download", version] => ("ssmcp.computer.download", json!({"version":version})),
-        ["install", download_id] => {
-            ("ssmcp.computer.install", json!({"download_id":download_id}))
-        }
+        ["install", download_id] => ("ssmcp.computer.install", json!({"download_id":download_id})),
         ["uninstall", installation_id] => (
             "ssmcp.computer.uninstall",
             json!({"installation_id":installation_id}),
