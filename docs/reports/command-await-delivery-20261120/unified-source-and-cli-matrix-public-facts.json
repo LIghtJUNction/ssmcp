@@ -1,16 +1,19 @@
 {
   "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
-  "snapshot_utc": "2026-11-21 20:06:57 UTC",
+  "snapshot_utc": "2026-11-21 20:19:27 UTC",
   "source": {
-    "commit": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "tree": "3df927ca150b651d4c2951dcf93757e44f88fdba",
+    "commit": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+    "parents": [
+      "db6f14b5faea8d434f4107877005b7669c1c940e",
+      "add39e18ff92680ff3ac0c3e911407956e20b228"
+    ],
     "branch": "fix/release-0.10.26-20261121",
     "version": "0.10.26",
     "frozen": true,
     "main_at_last_actual_read": "add39e18ff92680ff3ac0c3e911407956e20b228",
-    "previous_candidate": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
-    "commits_since_previous_candidate": 2,
-    "changed_paths_since_previous_candidate": 3
+    "previous_candidate": "db6f14b5faea8d434f4107877005b7669c1c940e",
+    "changed_paths_since_previous_candidate": 2
   },
   "release_notes": {
     "branch": "fix/release-0.10.26-20261121",
@@ -86,6 +89,59 @@
       ],
       "retired_playwright_removed_from_positive_set": true,
       "lazy_state_and_no_external_probe_assertions_retained": true
+    },
+    "zuse_archive_metadata": {
+      "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+      "merge_of_main_commit": "add39e18ff92680ff3ac0c3e911407956e20b228",
+      "actual_trigger": {
+        "source": "db6f14b5faea8d434f4107877005b7669c1c940e",
+        "binary_sha256": "39d41d7a46d1663c7c7ce2ee4f0d66909a3592383a474c75e02629b71df4ad2e",
+        "native_job_suffix": "-2c1",
+        "wrapper_exit_code": 1,
+        "stdout_bytes": 2116,
+        "stderr_bytes": 0,
+        "both_eof": true,
+        "no_truncation": true,
+        "version_before_exit": 0,
+        "download_exit": 0,
+        "install_child_exit": 1,
+        "install_result_is_error": true,
+        "exact_error": "Unexpected member in the Zuse release archive: examples/session_client.py",
+        "receipt": {
+          "relative_path": "cli-validation-20261121-v14/zuse-060-compatibility-observation/receipt.json",
+          "bytes": 5686,
+          "sha256": "9f8355ac9b705f613b608bf3f5b36c9edfe3538c41af30fe75e1ce401617776b"
+        },
+        "official_release": {
+          "version": "v0.6.0",
+          "id": 453909150,
+          "asset_id": 776545206,
+          "asset_bytes": 1399658,
+          "asset_sha256": "6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15"
+        },
+        "receipt_relative_path_verified_from_native_stdout": true
+      },
+      "allowed_metadata": [
+        "flat examples/*.py non-executable ordinary files",
+        "15 exact skills paths"
+      ],
+      "metadata_read_bounded_then_discarded": true,
+      "metadata_not_installed_or_executed": true,
+      "only_unique_target_executable_returned": true,
+      "existing_guards_preserved": [
+        "canonical paths",
+        "regular file types",
+        "no links",
+        "duplicate rejection",
+        "64 MiB bound",
+        "256 members",
+        "ZIP dual view and CRC",
+        "TAR trailing data",
+        "outer release digest",
+        "platform and architecture executable headers"
+      ],
+      "new_regression_tests": 5,
+      "static_review_only": true
     }
   },
   "validation": {
@@ -573,15 +629,17 @@
   },
   "current_release": {
     "planned_tag": "v0.10.26",
-    "candidate_source": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "S": "db6f14b5faea8d434f4107877005b7669c1c940e",
+    "candidate_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "S": "58bf72e381bb07f28f399fd76adb96f105f72dac",
     "P": null,
     "run": null,
     "dispatch": null,
     "complete": false,
     "merge_tag_dispatch_started": false,
     "server_deployment": false,
-    "registry_publication": false
+    "registry_publication": false,
+    "actual_GitHub_release_404_at_utc": "2026-11-21 20:13:05 UTC",
+    "actual_GitHub_tag_404_at_utc": "2026-11-21 20:13:05 UTC"
   },
   "exec_read_live_scope": {
     "implementation_in_source": true,
@@ -597,266 +655,156 @@
     "source_branch_release_note_followup_commits": 1
   },
   "successor_validation": {
-    "schema": "ssmcp.final-source-validation.v1",
-    "source": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "tree": "3df927ca150b651d4c2951dcf93757e44f88fdba",
-    "version": "0.10.26",
-    "build": {
-      "sequence": "V14",
-      "status": "pass",
-      "native_job_suffix": "-297",
-      "exit_code": 0,
-      "stdout_bytes": 4477,
-      "stderr_bytes": 0,
-      "stdout_eof": true,
-      "stderr_eof": true,
-      "stdout_truncated": false,
-      "stderr_truncated": false,
-      "complete": true,
-      "stages": [
-        {
-          "stage": "clean-before",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:35.505953+00:00"
-        },
-        {
-          "stage": "fetch-source",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.024191+00:00"
-        },
-        {
-          "stage": "select-owned-repair-source",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.138796+00:00"
-        },
-        {
-          "stage": "gitlink-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.143466+00:00"
-        },
-        {
-          "stage": "dependency-root-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.148082+00:00"
-        },
-        {
-          "stage": "dependency-origin-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.152763+00:00"
-        },
-        {
-          "stage": "dependency-clean-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.157114+00:00"
-        },
-        {
-          "stage": "dependency-old-head-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.161336+00:00"
-        },
-        {
-          "stage": "dependency-head-zharness",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.165573+00:00"
-        },
-        {
-          "stage": "gitlink-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.169566+00:00"
-        },
-        {
-          "stage": "dependency-root-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.173551+00:00"
-        },
-        {
-          "stage": "dependency-origin-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.177664+00:00"
-        },
-        {
-          "stage": "dependency-clean-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.181553+00:00"
-        },
-        {
-          "stage": "dependency-old-head-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.185410+00:00"
-        },
-        {
-          "stage": "dependency-head-zplugin",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.189361+00:00"
-        },
-        {
-          "stage": "gitlink-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.193337+00:00"
-        },
-        {
-          "stage": "dependency-root-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.195185+00:00"
-        },
-        {
-          "stage": "dependency-origin-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.199147+00:00"
-        },
-        {
-          "stage": "dependency-clean-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.203018+00:00"
-        },
-        {
-          "stage": "dependency-old-head-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.206866+00:00"
-        },
-        {
-          "stage": "dependency-head-ztuio",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.210775+00:00"
-        },
-        {
-          "stage": "clean-after-dependency-sync",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.242849+00:00"
-        },
-        {
-          "stage": "source-head",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.246892+00:00"
-        },
-        {
-          "stage": "source-tree",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.250924+00:00"
-        },
-        {
-          "stage": "source-gitlinks",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.255367+00:00"
-        },
-        {
-          "stage": "toolchain",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:37.320097+00:00"
-        },
-        {
-          "stage": "locked-fetch",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:38.035931+00:00"
-        },
-        {
-          "stage": "format-check",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:45:41.206437+00:00"
-        },
-        {
-          "stage": "library-compile",
-          "exit_code": 0,
-          "ended_utc": "2026-11-21T19:48:01.366053+00:00"
-        }
-      ],
-      "receipt": {
-        "relative_path": "cli-validation-20261121-v14/library-build.json",
-        "bytes": 30760,
-        "sha256": "1fd5cbe29477fbb1d9282c16920b968e86477f27c794a312fbd438fea4112e7f"
+    "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
+    "stage": "v15",
+    "native_job_suffix": "-2c7",
+    "status": "shared Cargo resource wait timeout",
+    "exit_code": 1,
+    "running": false,
+    "stdout_bytes": 2927,
+    "stderr_bytes": 0,
+    "both_eof": true,
+    "no_truncation": true,
+    "error": "TimeoutError('shared Cargo owner lock busy')",
+    "stages": [
+      {
+        "stage": "clean-before",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:22.835106+00:00"
       },
-      "library_artifact": {
-        "relative_path": "cli-validation-20261121-v14/bin/ssmcp-lib-tests",
-        "bytes": 160030096,
-        "sha256": "24645bc7457f907e3e90e8d81a6724e94e88dd63e695265ac194d87928d8ba95",
-        "fresh": false,
-        "test": true
+      {
+        "stage": "fetch-source",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.051656+00:00"
       },
-      "worktree_clean": true
+      {
+        "stage": "select-owned-repair-source",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.083714+00:00"
+      },
+      {
+        "stage": "gitlink-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.087524+00:00"
+      },
+      {
+        "stage": "dependency-root-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.091424+00:00"
+      },
+      {
+        "stage": "dependency-origin-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.093129+00:00"
+      },
+      {
+        "stage": "dependency-clean-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.096876+00:00"
+      },
+      {
+        "stage": "dependency-old-head-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.098478+00:00"
+      },
+      {
+        "stage": "dependency-head-zharness",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.100173+00:00"
+      },
+      {
+        "stage": "gitlink-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.103877+00:00"
+      },
+      {
+        "stage": "dependency-root-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.105570+00:00"
+      },
+      {
+        "stage": "dependency-origin-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.107173+00:00"
+      },
+      {
+        "stage": "dependency-clean-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.110871+00:00"
+      },
+      {
+        "stage": "dependency-old-head-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.114608+00:00"
+      },
+      {
+        "stage": "dependency-head-zplugin",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.119469+00:00"
+      },
+      {
+        "stage": "gitlink-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.123295+00:00"
+      },
+      {
+        "stage": "dependency-root-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.125194+00:00"
+      },
+      {
+        "stage": "dependency-origin-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.127010+00:00"
+      },
+      {
+        "stage": "dependency-clean-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.130785+00:00"
+      },
+      {
+        "stage": "dependency-old-head-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.134517+00:00"
+      },
+      {
+        "stage": "dependency-head-ztuio",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.138168+00:00"
+      },
+      {
+        "stage": "clean-after-dependency-sync",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.154064+00:00"
+      },
+      {
+        "stage": "source-head",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.157960+00:00"
+      },
+      {
+        "stage": "source-tree",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.161746+00:00"
+      },
+      {
+        "stage": "source-gitlinks",
+        "exit_code": 0,
+        "ended_utc": "2026-11-21T20:09:24.165584+00:00"
+      }
+    ],
+    "receipt": {
+      "bytes": 25686,
+      "sha256": "1edc3813bdd768735dc4e891fbc047d2af4134f9c51b3082fa7fa4d723c3bf13",
+      "relative_path": "cli-validation-20261121-v15/library-build.json"
     },
-    "standalone_ci": {
-      "id": 44942653543,
-      "workflow_id": 419318514,
-      "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
-      "attempt": 1,
-      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
-      "dispatch": {
-        "native_job_suffix": "-299",
-        "http_status": 200,
-        "native_exit_code": 0,
-        "stdout_eof": true,
-        "stderr_eof": true,
-        "capture_bytes": 3111,
-        "capture_sha256": "f294f7694b1a2aa83d3acc18f53f3d3de80234b00076856dddb3d9ef06380dee",
-        "evidence_origin": "source coordinator seq625 preserved in continuation"
-      },
-      "status": "completed",
-      "conclusion": "success",
-      "all_six_jobs_success": true,
-      "updated_at": "2026-11-21T20:00:41Z"
-    },
-    "validation_boundary": "Build only; actual same-source CI and CLI results recorded separately. No H2 import or execution by report writer.",
-    "local_test_attempt": {
-      "native_job_suffix": "-2a0",
-      "status": "shared Cargo owner lock wait timed out",
-      "wait_budget_seconds": 180,
-      "tests": [],
-      "exit_code": 1,
-      "both_eof": true,
-      "product_tests_executed": false,
-      "evidence_origin": "source coordinator seq632",
-      "stdout_bytes": 367,
-      "stderr_bytes": 0,
-      "no_truncation": true,
-      "receipt": {
-        "bytes": 289,
-        "sha256": "c5033b1ea5dc155cc193df88ac359e307a8aa87fdb17890f9dfefc464a5d8729"
-      },
-      "independent_original_read_by_acceptance": true
-    },
-    "development_binary_attempt": {
-      "native_job_suffix": "-2b2",
-      "status": "failed after main binaries succeeded",
-      "exit_code": 1,
-      "stdout_bytes": 5654,
-      "stderr_bytes": 0,
-      "both_eof": true,
-      "no_truncation": true,
-      "main_binaries_stage_exit_code": 0,
-      "main_binaries": [
-        {
-          "name": "ssmcp",
-          "bytes": 121396568,
-          "sha256": "39d41d7a46d1663c7c7ce2ee4f0d66909a3592383a474c75e02629b71df4ad2e"
-        },
-        {
-          "name": "ssmcp-frontend",
-          "bytes": 5651824,
-          "sha256": "d05ea9b777d3feb0ba46971b86aed4ac9a43f3694a9b5b0769164df649aeef4c"
-        },
-        {
-          "name": "ssmcpd",
-          "bytes": 59169968,
-          "sha256": "4ce1d2ecbb565a94ff762a3aa141e7bf257110d71157830e1cb8bf08bfb81e6f"
-        }
-      ],
-      "vt_snapshot_stage": {
-        "status": "compile timeout",
-        "budget_seconds": 180,
-        "exit_code": -15,
-        "started_utc": "2026-11-21T20:00:27Z",
-        "ended_utc": "2026-11-21T20:03:27Z",
-        "stderr_bytes": 107,
-        "compiler_diagnostic_reported": false
-      },
-      "receipt": {
-        "bytes": 6952,
-        "sha256": "1660aa56bcd17e905b93f6b0eb873f418641279a94776e011c13d74059a5ef57"
-      },
-      "worktree_clean": true,
-      "evidence_origin": "source coordinator seq645 and independent acceptance seq643",
-      "cli_e2e_executed_by_this_job": false
-    }
+    "library_artifact_present": false,
+    "worktree_clean": true,
+    "wait_budget_seconds": 180,
+    "toolchain_executed": false,
+    "compile_executed": false,
+    "product_tests_executed": false
   },
   "resume_fix": {
     "user_requested": true,
@@ -1144,23 +1092,28 @@
     "H2_code_change_required": false,
     "H2_imported": false,
     "H2_executed": false,
-    "source": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "tree": "3df927ca150b651d4c2951dcf93757e44f88fdba",
+    "source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "tree": "88b0ddb06d4b36e4f86cf0d38154a4431517e954",
     "complete_byte_read_base_source": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
     "current_source_nine_file_git_blob_and_size_identity_equal": true,
     "current_source_gitlinks_equal_to_byte_read_base": true,
     "compare_to_previous_candidate": {
-      "commits": 2,
-      "files": 3,
-      "additions": 48,
-      "deletions": 15,
+      "normal_merge": true,
+      "parents": [
+        "db6f14b5faea8d434f4107877005b7669c1c940e",
+        "add39e18ff92680ff3ac0c3e911407956e20b228"
+      ],
+      "files": 2,
+      "additions": 200,
+      "deletions": 9,
       "files_changed": [
-        "src/client/interface/history.rs",
-        "src/client.rs",
-        "scripts/e2e_unified.py"
+        "src/computer/archive.rs",
+        "src/computer/tests.rs"
       ]
     },
-    "static_review_sha256": "a762f305cafbed2f220b82fa535b364c2de85d4a59b90ed55ff0f675ecb01b4d"
+    "static_review_sha256": "e1e9da0aea9cf22718e404df9700c171e213610ff0914630d96903492be9d9c9",
+    "previous_source": "db6f14b5faea8d434f4107877005b7669c1c940e",
+    "original_cross_platform_fixtures_preserved": true
   },
   "intermediate_builds": [
     {
@@ -1276,6 +1229,270 @@
       "evidence_origin": "source coordinator seq622 preserved in continuation",
       "product_tests_inherited_as_current_source": false,
       "superseded_by": "db6f14b5faea8d434f4107877005b7669c1c940e"
+    },
+    {
+      "schema": "ssmcp.final-source-validation.v1",
+      "source": "db6f14b5faea8d434f4107877005b7669c1c940e",
+      "tree": "3df927ca150b651d4c2951dcf93757e44f88fdba",
+      "version": "0.10.26",
+      "build": {
+        "sequence": "V14",
+        "status": "pass",
+        "native_job_suffix": "-297",
+        "exit_code": 0,
+        "stdout_bytes": 4477,
+        "stderr_bytes": 0,
+        "stdout_eof": true,
+        "stderr_eof": true,
+        "stdout_truncated": false,
+        "stderr_truncated": false,
+        "complete": true,
+        "stages": [
+          {
+            "stage": "clean-before",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:35.505953+00:00"
+          },
+          {
+            "stage": "fetch-source",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.024191+00:00"
+          },
+          {
+            "stage": "select-owned-repair-source",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.138796+00:00"
+          },
+          {
+            "stage": "gitlink-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.143466+00:00"
+          },
+          {
+            "stage": "dependency-root-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.148082+00:00"
+          },
+          {
+            "stage": "dependency-origin-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.152763+00:00"
+          },
+          {
+            "stage": "dependency-clean-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.157114+00:00"
+          },
+          {
+            "stage": "dependency-old-head-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.161336+00:00"
+          },
+          {
+            "stage": "dependency-head-zharness",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.165573+00:00"
+          },
+          {
+            "stage": "gitlink-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.169566+00:00"
+          },
+          {
+            "stage": "dependency-root-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.173551+00:00"
+          },
+          {
+            "stage": "dependency-origin-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.177664+00:00"
+          },
+          {
+            "stage": "dependency-clean-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.181553+00:00"
+          },
+          {
+            "stage": "dependency-old-head-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.185410+00:00"
+          },
+          {
+            "stage": "dependency-head-zplugin",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.189361+00:00"
+          },
+          {
+            "stage": "gitlink-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.193337+00:00"
+          },
+          {
+            "stage": "dependency-root-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.195185+00:00"
+          },
+          {
+            "stage": "dependency-origin-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.199147+00:00"
+          },
+          {
+            "stage": "dependency-clean-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.203018+00:00"
+          },
+          {
+            "stage": "dependency-old-head-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.206866+00:00"
+          },
+          {
+            "stage": "dependency-head-ztuio",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.210775+00:00"
+          },
+          {
+            "stage": "clean-after-dependency-sync",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.242849+00:00"
+          },
+          {
+            "stage": "source-head",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.246892+00:00"
+          },
+          {
+            "stage": "source-tree",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.250924+00:00"
+          },
+          {
+            "stage": "source-gitlinks",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.255367+00:00"
+          },
+          {
+            "stage": "toolchain",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:37.320097+00:00"
+          },
+          {
+            "stage": "locked-fetch",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:38.035931+00:00"
+          },
+          {
+            "stage": "format-check",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:45:41.206437+00:00"
+          },
+          {
+            "stage": "library-compile",
+            "exit_code": 0,
+            "ended_utc": "2026-11-21T19:48:01.366053+00:00"
+          }
+        ],
+        "receipt": {
+          "relative_path": "cli-validation-20261121-v14/library-build.json",
+          "bytes": 30760,
+          "sha256": "1fd5cbe29477fbb1d9282c16920b968e86477f27c794a312fbd438fea4112e7f"
+        },
+        "library_artifact": {
+          "relative_path": "cli-validation-20261121-v14/bin/ssmcp-lib-tests",
+          "bytes": 160030096,
+          "sha256": "24645bc7457f907e3e90e8d81a6724e94e88dd63e695265ac194d87928d8ba95",
+          "fresh": false,
+          "test": true
+        },
+        "worktree_clean": true
+      },
+      "standalone_ci": {
+        "id": 44942653543,
+        "workflow_id": 419318514,
+        "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
+        "attempt": 1,
+        "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
+        "dispatch": {
+          "native_job_suffix": "-299",
+          "http_status": 200,
+          "native_exit_code": 0,
+          "stdout_eof": true,
+          "stderr_eof": true,
+          "capture_bytes": 3111,
+          "capture_sha256": "f294f7694b1a2aa83d3acc18f53f3d3de80234b00076856dddb3d9ef06380dee",
+          "evidence_origin": "source coordinator seq625 preserved in continuation"
+        },
+        "status": "completed",
+        "conclusion": "success",
+        "all_six_jobs_success": true,
+        "updated_at": "2026-11-21T20:00:41Z"
+      },
+      "validation_boundary": "Build only; actual same-source CI and CLI results recorded separately. No H2 import or execution by report writer.",
+      "local_test_attempt": {
+        "native_job_suffix": "-2a0",
+        "status": "shared Cargo owner lock wait timed out",
+        "wait_budget_seconds": 180,
+        "tests": [],
+        "exit_code": 1,
+        "both_eof": true,
+        "product_tests_executed": false,
+        "evidence_origin": "source coordinator seq632",
+        "stdout_bytes": 367,
+        "stderr_bytes": 0,
+        "no_truncation": true,
+        "receipt": {
+          "bytes": 289,
+          "sha256": "c5033b1ea5dc155cc193df88ac359e307a8aa87fdb17890f9dfefc464a5d8729"
+        },
+        "independent_original_read_by_acceptance": true
+      },
+      "development_binary_attempt": {
+        "native_job_suffix": "-2b2",
+        "status": "failed after main binaries succeeded",
+        "exit_code": 1,
+        "stdout_bytes": 5654,
+        "stderr_bytes": 0,
+        "both_eof": true,
+        "no_truncation": true,
+        "main_binaries_stage_exit_code": 0,
+        "main_binaries": [
+          {
+            "name": "ssmcp",
+            "bytes": 121396568,
+            "sha256": "39d41d7a46d1663c7c7ce2ee4f0d66909a3592383a474c75e02629b71df4ad2e"
+          },
+          {
+            "name": "ssmcp-frontend",
+            "bytes": 5651824,
+            "sha256": "d05ea9b777d3feb0ba46971b86aed4ac9a43f3694a9b5b0769164df649aeef4c"
+          },
+          {
+            "name": "ssmcpd",
+            "bytes": 59169968,
+            "sha256": "4ce1d2ecbb565a94ff762a3aa141e7bf257110d71157830e1cb8bf08bfb81e6f"
+          }
+        ],
+        "vt_snapshot_stage": {
+          "status": "compile timeout",
+          "budget_seconds": 180,
+          "exit_code": -15,
+          "started_utc": "2026-11-21T20:00:27Z",
+          "ended_utc": "2026-11-21T20:03:27Z",
+          "stderr_bytes": 107,
+          "compiler_diagnostic_reported": false
+        },
+        "receipt": {
+          "bytes": 6952,
+          "sha256": "1660aa56bcd17e905b93f6b0eb873f418641279a94776e011c13d74059a5ef57"
+        },
+        "worktree_clean": true,
+        "evidence_origin": "source coordinator seq645 and independent acceptance seq643",
+        "cli_e2e_executed_by_this_job": false
+      },
+      "stage": "v14",
+      "superseded_by": "58bf72e381bb07f28f399fd76adb96f105f72dac"
     }
   ],
   "all_CLI_subcommands": {
@@ -1326,7 +1543,7 @@
       "systemd background and watchdog"
     ],
     "remaining_development_supplements": {
-      "native_binary_build_job_suffix": "-2b2",
+      "native_binary_build_job_suffix": "-2c7",
       "profile": "dev",
       "binary_targets": [
         "ssmcp",
@@ -1348,7 +1565,7 @@
         "Zuse lifecycle",
         "update"
       ],
-      "status": "three main binaries built; vt_snapshot compilation timed out; gap runs pending",
+      "status": "V15 resource wait timed out before compilation; next source/build scope waits for Agents issue investigation",
       "original_script_deadlines_and_assertions_retained": true,
       "native_scripts": [
         "account-interactive",
@@ -1364,7 +1581,8 @@
         "007",
         "007-upgrade"
       ]
-    }
+    },
+    "current_source": "58bf72e381bb07f28f399fd76adb96f105f72dac"
   },
   "docs_residue": {
     "status": "post-release patch prepared and independently reviewed; not applied",
@@ -1391,1151 +1609,104 @@
     "contract_unchanged": true
   },
   "standalone_ci_previous": {
-    "run_id": 44941345312,
-    "source": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
-    "attempt": 1,
+    "run_id": 44942653543,
+    "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
     "status": "completed",
-    "conclusion": "failure",
-    "job_results": {
-      "success": 2,
-      "failure": 4
+    "conclusion": "success",
+    "attempt": 1,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
+    "complete_public_evidence": {
+      "commit": "13898e773b2ef01124a4abbb82708bd006111155",
+      "file": "docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json"
+    },
+    "all_six_jobs_success": true,
+    "library_passed_by_platform": {
+      "Linux x64": 1985,
+      "Linux ARM": 1985,
+      "Windows x64": 1301,
+      "Windows ARM": 1302,
+      "macOS Intel": 1423,
+      "macOS ARM": 1423
+    },
+    "actual_CLI_resume_both_Linux_passed": true,
+    "not_relabelled_as_current_source": true
+  },
+  "standalone_ci_current": {
+    "run_id": 44944812920,
+    "head_sha": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "attempt": 1,
+    "status": "in_progress",
+    "conclusion": null,
+    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44944812920",
+    "status_snapshot_utc": "2026-11-21 20:16:58 UTC",
+    "dispatch": {
+      "native_job_suffix": "-2c8",
+      "http_status": 200,
+      "exit_code": 0,
+      "stdout_bytes": 568,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "capture": {
+        "relative_path": "manual-ci-58bf72-20261121/dispatch-capture.json",
+        "bytes": 3111,
+        "sha256": "63f65eb8069bb4cdc281d48bbd2f9feebc0be6af5ffef60365d6e9104c535621"
+      }
     },
     "jobs": [
       {
-        "id": 136959021823,
-        "name": "Linux x64",
-        "library": {
-          "passed": 1983,
-          "failed": 1,
-          "ignored": 13
-        },
-        "failure": "runtime::time::tests::timer_and_late_observation_stay_with_the_original_history_lease",
-        "actual_error": "conversation is open in another client; choose a different history"
-      },
-      {
-        "id": 136959022048,
-        "name": "Windows x64",
-        "library": {
-          "passed": 1300,
-          "failed": 1,
-          "ignored": 4
-        },
-        "failure": "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
-        "actual_error": "pipe and MCP stdio chat input require Unix; use web or MCP HTTP on Windows"
-      },
-      {
-        "id": 136959022052,
-        "name": "Windows ARM",
-        "library": {
-          "passed": 1301,
-          "failed": 1,
-          "ignored": 4
-        },
-        "failure": "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
-        "actual_error": "pipe and MCP stdio chat input require Unix; use web or MCP HTTP on Windows"
-      },
-      {
-        "id": 136959021990,
-        "name": "Linux ARM",
-        "library": {
-          "passed": 1984,
-          "failed": 0,
-          "ignored": 13
-        },
-        "agents_checks_passed": 469,
-        "unified": {
-          "status": "failure",
-          "pass_checks_before_failure": 20,
-          "artifact_id": 14722175948,
-          "exact_failed_assertion": "all optional providers have independent lazy state records",
-          "exact_assertion_source": "source coordinator artifact read; independent GitHub job log did not print assertion"
-        }
-      }
-    ],
-    "superseded_by": 44942653543,
-    "not_a_Release_run": true
-  },
-  "standalone_ci_current": {
-    "run_id": 44942653543,
-    "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
-    "attempt": 1,
-    "status": "completed",
-    "conclusion": "success",
-    "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
-    "status_snapshot_utc": "2026-11-21 20:05:47 UTC",
-    "jobs": [
-      {
-        "id": 136963031474,
-        "name": "linux (ubuntu-24.04-arm)",
-        "status": "completed",
-        "conclusion": "success",
-        "started_at": "2026-11-21T19:45:47Z",
-        "completed_at": "2026-11-21T20:00:40Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Install test dependencies",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Select and identify the installed system Node",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo fmt --all -- --check",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Check release tooling and installer",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Check JavaScript orchestration helpers",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Run cargo clippy --workspace --locked --all-targets -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Verify the independent ztuio source contracts",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Render terminal transcript fixture",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 12,
-            "name": "Save terminal transcript for visual review",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 13,
-            "name": "Run cargo test --workspace --locked",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 14,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 15,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 16,
-            "name": "Exercise system Node.js and bubblewrap",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 17,
-            "name": "Exercise runtime under installed service restrictions",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 18,
-            "name": "Verify output and terminals across Unix users",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 19,
-            "name": "Run cargo build --locked --bins --example vt_snapshot",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 20,
-            "name": "Preserve the Linux candidate client",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 21,
-            "name": "Preserve DCR through a real daemon restart",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 22,
-            "name": "Verify the installed daemon rejects legacy SSH attachment",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 23,
-            "name": "Exercise account WebSocket, OAuth, HTTP and PTY",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 24,
-            "name": "Exercise account login, allow lists, revocation and logout",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 25,
-            "name": "Exercise session title, reload and output artifacts",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 26,
-            "name": "Exercise discovered harness fixtures through account WebSocket and OAuth",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 27,
-            "name": "Exercise unified execution, audit and connection isolation",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Exercise terminal dashboard and Git observer through a real PTY",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Exercise conversation UI and account relay request queues",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 30,
-            "name": "Exercise background sessions and watchdog with real user systemd",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 31,
-            "name": "Save unified acceptance evidence",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 32,
-            "name": "Run cargo build --locked --release",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 33,
-            "name": "Check staged Linux installation",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 66,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 67,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
+        "id": 136969687196,
+        "name": "linux (ubuntu-24.04)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Exercise terminal dashboard and Git observer through a real PTY"
         ]
       },
       {
-        "id": 136963031582,
+        "id": 136969687373,
+        "name": "linux (ubuntu-24.04-arm)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Exercise conversation UI and account relay request queues"
+        ]
+      },
+      {
+        "id": 136969687417,
         "name": "Client (windows-2025)",
         "status": "completed",
         "conclusion": "success",
-        "started_at": "2026-11-21T19:45:44Z",
-        "completed_at": "2026-11-21T19:52:17Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Check and test the zero-dependency TUI primitives",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Run cargo build --locked --bin ssmcp",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Check client startup",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 12,
-            "name": "Save validated native development client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 13,
-            "name": "Parse PowerShell installer",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 14,
-            "name": "Check Unix streaming download bounds",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 27,
-            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
-        ]
+        "active_steps": []
       },
       {
-        "id": 136963031588,
-        "name": "Client (windows-11-arm)",
-        "status": "completed",
-        "conclusion": "success",
-        "started_at": "2026-11-21T19:45:44Z",
-        "completed_at": "2026-11-21T19:52:54Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Check and test the zero-dependency TUI primitives",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Run cargo build --locked --bin ssmcp",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Check client startup",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 12,
-            "name": "Save validated native development client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 13,
-            "name": "Parse PowerShell installer",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 14,
-            "name": "Check Unix streaming download bounds",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 27,
-            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
-        ]
-      },
-      {
-        "id": 136963031602,
-        "name": "Client (macos-15-intel)",
-        "status": "completed",
-        "conclusion": "success",
-        "started_at": "2026-11-21T19:45:46Z",
-        "completed_at": "2026-11-21T19:55:48Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Check and test the zero-dependency TUI primitives",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Run cargo build --locked --bin ssmcp",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Check client startup",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 12,
-            "name": "Save validated native development client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 13,
-            "name": "Parse PowerShell installer",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 14,
-            "name": "Check Unix streaming download bounds",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 27,
-            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
-        ]
-      },
-      {
-        "id": 136963031607,
+        "id": 136969687436,
         "name": "Client (macos-15)",
         "status": "completed",
         "conclusion": "success",
-        "started_at": "2026-11-21T19:45:45Z",
-        "completed_at": "2026-11-21T19:51:13Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Run cargo clippy --locked --lib --bin ssmcp --test release_client -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo test --locked --lib --bin ssmcp --test release_client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Check and test the zero-dependency TUI primitives",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Run cargo build --locked --bin ssmcp",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Check client startup",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 12,
-            "name": "Save validated native development client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 13,
-            "name": "Parse PowerShell installer",
-            "status": "completed",
-            "conclusion": "skipped"
-          },
-          {
-            "number": 14,
-            "name": "Check Unix streaming download bounds",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 27,
-            "name": "Post Run actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
+        "active_steps": []
+      },
+      {
+        "id": 136969687453,
+        "name": "Client (windows-11-arm)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Parse PowerShell installer"
         ]
       },
       {
-        "id": 136963031738,
-        "name": "linux (ubuntu-24.04)",
-        "status": "completed",
-        "conclusion": "success",
-        "started_at": "2026-11-21T19:45:45Z",
-        "completed_at": "2026-11-21T19:59:16Z",
-        "steps": [
-          {
-            "number": 1,
-            "name": "Set up job",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 2,
-            "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 3,
-            "name": "Run dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 4,
-            "name": "Install test dependencies",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 5,
-            "name": "Select and identify the installed system Node",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 6,
-            "name": "Run cargo fmt --all -- --check",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 7,
-            "name": "Check release tooling and installer",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 8,
-            "name": "Check JavaScript orchestration helpers",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 9,
-            "name": "Run cargo clippy --workspace --locked --all-targets -- -D warnings",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 10,
-            "name": "Verify the independent ztuio source contracts",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 11,
-            "name": "Render terminal transcript fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 12,
-            "name": "Save terminal transcript for visual review",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 13,
-            "name": "Run cargo test --workspace --locked",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 14,
-            "name": "Build the explicit native plugin fixture",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 15,
-            "name": "Exercise the native plugin through Runtime",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 16,
-            "name": "Exercise system Node.js and bubblewrap",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 17,
-            "name": "Exercise runtime under installed service restrictions",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 18,
-            "name": "Verify output and terminals across Unix users",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 19,
-            "name": "Run cargo build --locked --bins --example vt_snapshot",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 20,
-            "name": "Preserve the Linux candidate client",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 21,
-            "name": "Preserve DCR through a real daemon restart",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 22,
-            "name": "Verify the installed daemon rejects legacy SSH attachment",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 23,
-            "name": "Exercise account WebSocket, OAuth, HTTP and PTY",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 24,
-            "name": "Exercise account login, allow lists, revocation and logout",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 25,
-            "name": "Exercise session title, reload and output artifacts",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 26,
-            "name": "Exercise discovered harness fixtures through account WebSocket and OAuth",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 27,
-            "name": "Exercise unified execution, audit and connection isolation",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 28,
-            "name": "Exercise terminal dashboard and Git observer through a real PTY",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 29,
-            "name": "Exercise conversation UI and account relay request queues",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 30,
-            "name": "Exercise background sessions and watchdog with real user systemd",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 31,
-            "name": "Save unified acceptance evidence",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 32,
-            "name": "Run cargo build --locked --release",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 33,
-            "name": "Check staged Linux installation",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 66,
-            "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "completed",
-            "conclusion": "success"
-          },
-          {
-            "number": 67,
-            "name": "Complete job",
-            "status": "completed",
-            "conclusion": "success"
-          }
+        "id": 136969687461,
+        "name": "Client (macos-15-intel)",
+        "status": "in_progress",
+        "conclusion": null,
+        "active_steps": [
+          "Run cargo test --locked --lib --bin ssmcp --test release_client"
         ]
       }
     ],
-    "client_log_evidence": {
-      "source": {
-        "repository": "LIghtJUNction/ssmcp",
-        "run_id": 44942653543,
-        "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
-        "head_branch": "fix/release-0.10.26-20261121",
-        "event": "workflow_dispatch",
-        "run_attempt": 1,
-        "html_url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543"
-      },
-      "finalized_at_utc": "2026-11-21 19:57:24 UTC",
-      "targets": [
-        {
-          "platform": "Windows x64",
-          "job_id": 136963031582,
-          "library_passed": 1301,
-          "library_failed": 0,
-          "library_ignored": 4,
-          "ssmcp_bin_tests": 0,
-          "release_client_passed": 5,
-          "native_plugin_separate_passed": 1,
-          "ztuio_contracts_passed": 13,
-          "resume_three_tests_passed": true,
-          "timer_test_passed": true,
-          "unix_descriptor_regressions": "not applicable"
-        },
-        {
-          "platform": "Windows ARM",
-          "job_id": 136963031588,
-          "library_passed": 1302,
-          "library_failed": 0,
-          "library_ignored": 4,
-          "ssmcp_bin_tests": 0,
-          "release_client_passed": 5,
-          "native_plugin_separate_passed": 1,
-          "ztuio_contracts_passed": 13,
-          "resume_three_tests_passed": true,
-          "timer_test_passed": true,
-          "unix_descriptor_regressions": "not applicable"
-        },
-        {
-          "platform": "macOS Intel",
-          "job_id": 136963031602,
-          "library_passed": 1423,
-          "library_failed": 0,
-          "library_ignored": 5,
-          "ssmcp_bin_tests": 0,
-          "release_client_passed": 5,
-          "native_plugin_separate_passed": 1,
-          "ztuio_contracts_passed": 13,
-          "resume_three_tests_passed": true,
-          "timer_test_passed": true,
-          "unix_descriptor_regressions": "both passed"
-        },
-        {
-          "platform": "macOS ARM",
-          "job_id": 136963031607,
-          "library_passed": 1423,
-          "library_failed": 0,
-          "library_ignored": 5,
-          "ssmcp_bin_tests": 0,
-          "release_client_passed": 5,
-          "native_plugin_separate_passed": 1,
-          "ztuio_contracts_passed": 13,
-          "resume_three_tests_passed": true,
-          "timer_test_passed": true,
-          "unix_descriptor_regressions": "both passed"
-        }
-      ],
-      "macos_installer_bounds_tests": 3,
-      "nested_child_counts_not_added": true
-    },
     "not_a_Release_run": true,
-    "updated_at": "2026-11-21T20:00:41Z",
-    "linux_log_evidence": {
-      "finalized_at_utc": "2026-11-21 20:04:14 UTC",
-      "proof_file_bytes": 141985,
-      "proof_file_sha256": "2bad5ed9717935e4f98c1e82ac48632014475492b2a2300a5c9c888a07dddcd3",
-      "platforms": [
-        {
-          "platform": "linux_x64",
-          "job_id": 136963031738,
-          "library": {
-            "passed": 1985,
-            "failed": 0,
-            "ignored": 13
-          },
-          "server_unit": {
-            "passed": 13,
-            "failed": 0,
-            "ignored": 0
-          },
-          "integration_targets": {
-            "targets": 19,
-            "passed": 102,
-            "failed": 0,
-            "ignored": 17
-          },
-          "six_named_regressions_passed": [
-            "client::tests::resume_command_preserves_connection_flags_without_persisting_picker_state",
-            "client::tests::resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument",
-            "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
-            "runtime::time::tests::timer_and_late_observation_stay_with_the_original_history_lease",
-            "client::interface::history::tests::conversation_lease_releases_while_an_inherited_descriptor_stays_open",
-            "client::interface::history::tests::transaction_lock_releases_while_an_inherited_descriptor_stays_open"
-          ],
-          "acceptance": {
-            "agents": 469,
-            "unified": 105,
-            "dashboard": 80,
-            "input_history": 150,
-            "daemon_systemd": 182
-          },
-          "cli_resume": {
-            "actual_argv_confirmed_from_fixed_source": true,
-            "script": "scripts/e2e_input_history.py",
-            "picker_auto_opens": true,
-            "no_queued_request_redelivery": true,
-            "no_native_tool_replay": true,
-            "new_request_appended_once": true
-          },
-          "optimized_release_build": "passed",
-          "staged_installation": {
-            "status": "success",
-            "scope": "temporary CI DESTDIR",
-            "silent_shell_assertions": 4,
-            "evidence": "commands logged under bash -e and successful step; no invented per-assertion PASS output"
-          }
-        },
-        {
-          "platform": "linux_arm",
-          "job_id": 136963031474,
-          "library": {
-            "passed": 1985,
-            "failed": 0,
-            "ignored": 13
-          },
-          "server_unit": {
-            "passed": 13,
-            "failed": 0,
-            "ignored": 0
-          },
-          "integration_targets": {
-            "targets": 19,
-            "passed": 102,
-            "failed": 0,
-            "ignored": 17
-          },
-          "six_named_regressions_passed": [
-            "client::tests::resume_command_preserves_connection_flags_without_persisting_picker_state",
-            "client::tests::resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument",
-            "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
-            "runtime::time::tests::timer_and_late_observation_stay_with_the_original_history_lease",
-            "client::interface::history::tests::conversation_lease_releases_while_an_inherited_descriptor_stays_open",
-            "client::interface::history::tests::transaction_lock_releases_while_an_inherited_descriptor_stays_open"
-          ],
-          "acceptance": {
-            "agents": 469,
-            "unified": 105,
-            "dashboard": 80,
-            "input_history": 150,
-            "daemon_systemd": 182
-          },
-          "cli_resume": {
-            "actual_argv_confirmed_from_fixed_source": true,
-            "script": "scripts/e2e_input_history.py",
-            "picker_auto_opens": true,
-            "no_queued_request_redelivery": true,
-            "no_native_tool_replay": true,
-            "new_request_appended_once": true
-          },
-          "optimized_release_build": "passed",
-          "staged_installation": {
-            "status": "success",
-            "scope": "temporary CI DESTDIR",
-            "silent_shell_assertions": 4,
-            "evidence": "commands logged under bash -e and successful step; no invented per-assertion PASS output"
-          }
-        }
-      ],
-      "exhaustive_cli_matrix_claimed": false,
-      "formal_release_claimed": false
-    }
+    "old_source_success_relabelled": false
   },
   "zuse_current_release_observation": {
     "release_id": 453909150,
@@ -2549,7 +1720,85 @@
     },
     "main_compatibility_commit": "add39e18ff92680ff3ac0c3e911407956e20b228",
     "private_actual_observation_job_suffix": "-2c1",
-    "status": "actual download/install observation pending",
-    "candidate_source_unchanged": true
+    "status": "confirmed installation failure on db6",
+    "candidate_source_unchanged": false,
+    "receipt": {
+      "source": "db6f14b5faea8d434f4107877005b7669c1c940e",
+      "binary_sha256": "39d41d7a46d1663c7c7ce2ee4f0d66909a3592383a474c75e02629b71df4ad2e",
+      "native_job_suffix": "-2c1",
+      "wrapper_exit_code": 1,
+      "stdout_bytes": 2116,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "version_before_exit": 0,
+      "download_exit": 0,
+      "install_child_exit": 1,
+      "install_result_is_error": true,
+      "exact_error": "Unexpected member in the Zuse release archive: examples/session_client.py",
+      "receipt": {
+        "relative_path": "cli-validation-20261121-v14/zuse-060-compatibility-observation/receipt.json",
+        "bytes": 5686,
+        "sha256": "9f8355ac9b705f613b608bf3f5b36c9edfe3538c41af30fe75e1ce401617776b"
+      },
+      "official_release": {
+        "version": "v0.6.0",
+        "id": 453909150,
+        "asset_id": 776545206,
+        "asset_bytes": 1399658,
+        "asset_sha256": "6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15"
+      },
+      "receipt_relative_path_verified_from_native_stdout": true
+    },
+    "fix_merged_in_source": "58bf72e381bb07f28f399fd76adb96f105f72dac",
+    "current_source_lifecycle_result": "pending"
+  },
+  "standalone_ci_history": [
+    {
+      "run_id": 44941345312,
+      "head_sha": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
+      "status": "completed",
+      "conclusion": "failure",
+      "attempt": 1,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44941345312",
+      "complete_public_evidence": {
+        "commit": "cf732f41200abc07e9b04396eddbc2449c97ffef",
+        "file": "docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json"
+      }
+    },
+    {
+      "run_id": 44942653543,
+      "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
+      "status": "completed",
+      "conclusion": "success",
+      "attempt": 1,
+      "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
+      "complete_public_evidence": {
+        "commit": "13898e773b2ef01124a4abbb82708bd006111155",
+        "file": "docs/reports/command-await-delivery-20261120/unified-source-and-cli-matrix-public-facts.json"
+      }
+    }
+  ],
+  "user_reported_agent_ui_issues": {
+    "required_in_current_iteration": true,
+    "reports": [
+      "所有agent的工具调用历史都一摸一样",
+      "目前agents面板感觉是摆设"
+    ],
+    "status": "read-only investigation; no confirmed root cause or fix yet",
+    "investigation_scope": [
+      "actual selected UI surface",
+      "verified member identity through event storage",
+      "member history filtering and selection",
+      "Agents actions, messaging, and refresh"
+    ],
+    "documented_contract": {
+      "member_history": "only retained events attributable to the verified member ID",
+      "unattributed_history": "process view only",
+      "display_name_is_not_identity": true,
+      "audit_run_list_and_global_logs_have_distinct_scope": true
+    },
+    "single_source_writer_coordinated": true,
+    "release_waits_for_scope_resolution": true
   }
 }

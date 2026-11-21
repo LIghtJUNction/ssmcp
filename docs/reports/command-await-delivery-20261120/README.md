@@ -1,8 +1,16 @@
-# SSMCP 当前迭代：六个平台 CI 全部通过，补齐 CLI 验证
+# SSMCP 当前迭代：Zuse 兼容已合流，排查 Agents 历史与面板
 
-**更新于 2026-11-21 20:06:57 UTC。** 当前候选为 [db6f14b](https://github.com/LIghtJUNction/ssmcp/commit/db6f14b5faea8d434f4107877005b7669c1c940e)。[CI 44942653543](https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543) 已于 **20:00:41 UTC** 完成，Linux、Windows、macOS 的 x64／Intel 与 ARM 六个平台全部成功。开发机 V14 库测试程序构建也已通过。**全子命令补充矩阵尚未收齐，v0.10.26 尚未发布。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
+**更新于 2026-11-21 20:19:27 UTC。** 当前候选为 [58bf72e](https://github.com/LIghtJUNction/ssmcp/commit/58bf72e381bb07f28f399fd76adb96f105f72dac)。上一候选 `db6f14b` 的六平台 CI 已全部成功，随后实际验证发现当前官方 Zuse 0.6.0 包可以下载，但安装被新增示例文件阻断。对应兼容修复已正常合流，只增加归档解析和测试两处变化；此前的 `resume`、历史租约与跨平台安装保护均保留。**本轮 v0.10.26 尚未发布。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
 
-本轮继续包含用户要求的“检查，测试所有子命令”。同源 CI 已完成包含真实 CLI `resume` 的会话界面验收；开发机将补充 12 份分组 CLI 脚本、22 次 config／trust／ui 场景，以及空历史恢复和私有安装生命周期。三个主程序已构建，辅助终端解码器编译超时；尚未取得这些补充结果；帮助输出只证明入口解析，不能替代正常功能执行。
+新来源的 [CI 44944812920](https://github.com/LIghtJUNction/ssmcp/actions/runs/44944812920) 继续运行；最近实际状态中 Windows x64 与 macOS ARM 已成功，其余平台仍在验证且未出现失败步骤。开发机 V15 完成源码和依赖身份准备后，等待共享构建资源 180 秒到期，未启动编译或产品测试。用户新增的 Agents 历史与面板问题已纳入本轮，正在收敛修复范围；后续仍需完成 12 份分组 CLI 脚本、22 次配置／信任／界面场景、空历史恢复、真实 Zuse 0.6.0 生命周期、私有更新及 007 会话入口验证。旧源结果均保留原始身份。
+
+## 新增的 Agents 历史与面板问题
+
+用户报告“所有 agent 的工具调用历史都一样”，并反馈 Agents 面板缺少实际作用。本轮正在沿实际界面入口、已认证成员身份、事件写入与保留、选中成员过滤，以及面板选择／消息／刷新这条链核对；尚未确认根因，尚未声称修复完成。
+
+当前文档对成员历史已有明确约定：右键按实际点击行的成员 ID 打开，成员视图只显示能核对该 ID 的事件；旧记录或缺少身份的事件保留在进程视图，不按显示名称分配给成员。[查看线程历史](https://github.com/LIghtJUNction/ssmcp/blob/58bf72e381bb07f28f399fd76adb96f105f72dac/docs/client-accounts.md#查看线程历史)
+
+普通 `Call` 的代表运行审计、全局 `/audit`、全局 Logs 与成员历史具有不同范围。排查会先匹配用户实际看到的入口，再验证不同成员的事件和可用操作，避免仅修改显示名称而遗漏归属问题。[Agent 面板与成员身份](https://github.com/LIghtJUNction/ssmcp/blob/58bf72e381bb07f28f399fd76adb96f105f72dac/docs/client-ui.md#agent-面板与成员身份)
 
 ## 已合入的实际修正
 
@@ -14,13 +22,22 @@
 | Linux 协议夹具 | 三处正向目录统一为五个实际提供者，移除已退役 Playwright；独立调用陷阱、懒加载状态和无外部探测断言保留 |
 | 安装安全测试 | 每个 Store 使用独立测试目标，Windows ARM64 保留原有五项安装／卸载安全测试 |
 | 主线并行修正 | 已正常合入独立进程 TLS 初始化、官方平台映射和 `computer --json` 的错误回执修正 |
+| Zuse 包兼容 | 接受 `examples/` 下单层 `.py` 数据和 15 个精确技能文件路径；仅允许无执行位的普通文件，有界读取后丢弃，仍只安装唯一目标平台可执行文件 |
 | 发布策略 | 根包 0.10.26；继续准备 GitHub 二进制发行，registry 发布和生产服务器部署明确延期 |
 
-从上一候选 `fc650a9` 到当前候选只有两个提交、三个文件，合计 48 行增加、15 行删除。产品行为修改集中于历史锁；另外两处为测试预期修正。原有计时测试、等待时限和断言未放宽。[实际差分](https://github.com/LIghtJUNction/ssmcp/compare/fc650a91bdab60dea96ee7e18c15bec3af9f9b32...db6f14b5faea8d434f4107877005b7669c1c940e)
+历史锁阶段的 `fc650a9 → db6f14b` 包含两个提交、三个文件，合计 48 行增加、15 行删除。产品行为修改集中于历史锁；另外两处为测试预期修正。原有计时测试、等待时限和断言未放宽。[实际差分](https://github.com/LIghtJUNction/ssmcp/compare/fc650a91bdab60dea96ee7e18c15bec3af9f9b32...db6f14b5faea8d434f4107877005b7669c1c940e)
 
 恢复会话的临时聊天布局不落盘；用户仍手动选择历史，不重放请求，也不恢复模型、PTY 或成员凭据。`computer --json` 的操作失败输出一行带 `isError: true` 的脱敏 MCP 结果并非零退出；语法或管理器初始化错误走 stderr。[当前命令说明](https://github.com/LIghtJUNction/ssmcp/blob/db6f14b5faea8d434f4107877005b7669c1c940e/docs/computer-use.md)
 
-## 当前候选的实际验证
+## 当前候选的合流核对与验证状态
+
+`58bf72e` 的有序父提交为 `db6f14b` 和主线 `add39e1`。相对 `db6f14b`，实际只修改 `src/computer/archive.rs` 与 `src/computer/tests.rs`，合计 200 行增加、9 行删除。新增五项回归覆盖两种归档的元数据接受、未知或可执行成员、链接以及不安全路径；当前新 CI 将在六个平台实际执行这些回归。[实际合流差分](https://github.com/LIghtJUNction/ssmcp/compare/db6f14b5faea8d434f4107877005b7669c1c940e...58bf72e381bb07f28f399fd76adb96f105f72dac)
+
+静态读取确认：元数据内容校验后丢弃，不安装、不执行，也不作为指令读取。原有路径、文件类型、符号／硬链接、去重、64 MiB 大小、256 成员上限、ZIP 双视图与 CRC、TAR 尾部、外层 digest 和可执行头校验均保留。合流还保留每个 Store 独立的测试目标、Windows 普通安装安全测试，以及既有 `resume` 和历史锁修复。
+
+此处的静态核对不替代当前来源的 CI 或实际安装结果。V15 任务退出码 1，stdout 2927 字节、stderr 0 字节，均到 EOF 且未截断；唯一错误为等待共享 Cargo 资源超时，库测试程序为空，未到 toolchain、编译或产品测试阶段。回执为 25686 字节，SHA-256 `1edc3813bdd768735dc4e891fbc047d2af4134f9c51b3082fa7fa4d723c3bf13`。执行侧先收敛 Agents 修复范围，再安排后继构建。以下是此前 `db6f14b` 已完成的真实结果。
+
+## db6 基线的实际验证
 
 开发机 V14 于 **19:48:01 UTC** 完成：源码与依赖身份、格式检查、锁定依赖获取和库测试程序构建均通过。原生任务退出码 0，stdout 4477 字节、stderr 0 字节，均到 EOF 且未截断；工作区干净。回执为 **30760 字节**，SHA-256 `1fd5cbe29477fbb1d9282c16920b968e86477f27c794a312fbd438fea4112e7f`。新库测试程序为 **160030096 字节**，SHA-256 `24645bc7457f907e3e90e8d81a6724e94e88dd63e695265ac194d87928d8ba95`。这份本机构建记录与下表的 CI 测试记录分别计量。随后一个本机全库测试任务等待共享资源 180 秒到期，`tests=[]`，没有执行产品测试；因此直接复用同一源码已通过的 CI 库测试，不重复全库运行。
 
@@ -41,11 +58,13 @@
 
 Linux 安装检查在临时 `DESTDIR` 中完成，四项静默 shell 断言验证客户端、服务端、systemd unit 和 code-mode 脚本存在；证据是实际命令、`bash -e` 和成功的步骤状态。界面 compositor 夹具的 58 项检查明确使用示例事件和隔离 PTY，不连接真实服务；其他会话和界面 E2E 的独立范围保留在事实记录中。这些同源结果可复用于命令覆盖矩阵，尚未映射的子命令仍待补齐。
 
-## 本机补充构建与当前 Zuse 兼容性观察
+## db6 本机补充构建与已确认的安装故障
 
 用于补充 CLI 的本机任务已成功构建并保存 `ssmcp`、`ssmcp-frontend` 和 `ssmcpd`。随后 `vt_snapshot` 辅助程序编译达到 180 秒预算，进程退出 -15；其 stderr 只有编译中的提示，没有源码诊断。整个聚合任务因此为失败，不能写成整套构建通过。回执为 **6952 字节**，SHA-256 `1660aa56bcd17e905b93f6b0eb873f418641279a94776e011c13d74059a5ef57`；已有三个主程序可供不依赖该辅助程序的场景使用。
 
-[Zuse v0.6.0](https://github.com/LIghtJUNction/zuse/releases/tag/v0.6.0) 已于 18:54:10 UTC 发布；默认下载安装需要兼容这一当前版本。SSMCP 主线 [add39e1](https://github.com/LIghtJUNction/ssmcp/commit/add39e18ff92680ff3ac0c3e911407956e20b228) 已有针对新包元数据的兼容修改。执行侧正在私有目录中使用已构建的 `db6f14b` 客户端实际验证下载和安装；该结果将决定是否需要吸收此修改。当前尚无这次观察的终态，既有六平台 CI 仍明确绑定 `db6f14b`。
+[Zuse v0.6.0](https://github.com/LIghtJUNction/zuse/releases/tag/v0.6.0) 于 18:54:10 UTC 发布。对其当前官方 Linux x64 资产的私有验证已完整读回：版本查询退出 0，下载退出 0，安装实际子命令退出 1，并返回 `isError: true`，错误为 `Unexpected member in the Zuse release archive: examples/session_client.py`。外层任务也退出 1；stdout 2116 字节、stderr 0 字节，均到 EOF 且未截断。
+
+下载资产为 1399658 字节，SHA-256 `6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15`，与实际 GitHub Release 资产身份一致。观察回执为 **5686 字节**，SHA-256 `9f8355ac9b705f613b608bf3f5b36c9edfe3538c41af30fe75e1ce401617776b`。这一实际失败促成当前窄范围合流；修复后的下载、安装和卸载结果仍待取得。
 
 ## 上一轮 CI 的失败及对应修正
 
@@ -96,7 +115,7 @@ Linux ARM 的具体 provider 断言来自执行协调者读取的原始 artifact
 
 ## 依赖与发布核验
 
-此前已完整读取 `fc650a9` 的六份发布配方；本次实际读取 `db6f14b` 的完整树，确认六份配方、两份 Cargo 文件及发布说明的九个 Git blob 和字节数均未改变。六份发布配方继续匹配[固定 432900 的 H2 包](https://github.com/LIghtJUNction/ssmcp/tree/432900420ef4fbe093ad284cb49e66e1e2892800/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-v26-unbound)。完整递归树共 1299 项、未截断。
+此前已完整读取 `fc650a9` 的六份发布配方；先后实际读取 `db6f14b` 与 `58bf72e` 的完整树，确认六份配方、两份 Cargo 文件及发布说明的九个 Git blob 和字节数均未改变。六份发布配方继续匹配[固定 432900 的 H2 包](https://github.com/LIghtJUNction/ssmcp/tree/432900420ef4fbe093ad284cb49e66e1e2892800/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-v26-unbound)。完整递归树共 1299 项、未截断。
 
 | 身份 | 当前实际值 |
 |---|---|
@@ -124,7 +143,7 @@ H2 会按实际候选读取锁文件、依赖图与 gitlink，无需把新依赖
 
 v0.10.25 的 [Release 运行 44934221685](https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685)仍保留失败终态：12 个 job 成功、3 失败、4 跳过。旧标签未移动，旧运行未重跑，缺失的原生完整返回未拼装补造。上述两次独立 CI 均不是正式 Release 运行。
 
-开发机主工作区上次完成的正常同步仍是 `d4887ae`，用户修改和本地依赖状态保留；当前候选在独立验证工作区推进。最终正常合并后仍需再次同步。当前不能声称用户正在运行的客户端已升级；下一步收齐全子命令矩阵、空历史恢复和私有安装场景，再完成正式发布及公开资产核验。
+开发机主工作区上次完成的正常同步仍是 `d4887ae`，用户修改和本地依赖状态保留；当前候选在独立验证工作区推进。最终正常合并后仍需再次同步。GitHub 于 20:13:05 UTC 的实际读取确认 v0.10.26 标签和 Release 均尚不存在。当前不能声称用户正在运行的客户端已升级；下一步先确定并修复 Agents 历史与面板问题，再收齐最终来源的 CI、全子命令矩阵、空历史恢复和新版 Zuse 安装场景，随后完成正式发布及公开资产核验。
 
 ---
 
