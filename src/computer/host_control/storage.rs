@@ -402,6 +402,31 @@ fn open(directory: &Directory, name: &str, access: Open) -> io::Result<File> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn input_lease_drop_unlocks_while_an_inherited_descriptor_stays_open() {
+        let control = super::super::HostControl::default();
+        let store = control.store().unwrap();
+        let lease = store.try_input().unwrap().unwrap();
+        // A concurrent fork retains the same open file description until exec.
+        // A duplicate makes that lifetime deterministic without a subprocess.
+        let inherited = lease._file.try_clone().unwrap();
+        assert!(store.try_input().unwrap().is_none());
+
+        drop(lease);
+        let next = store
+            .try_input()
+            .unwrap()
+            .expect("the lease must unlock before inherited descriptors close");
+        drop(inherited);
+        assert!(
+            store.try_input().unwrap().is_none(),
+            "closing an old descriptor must not release the next input lease"
+        );
+        drop(next);
+        assert!(store.try_input().unwrap().is_some());
+    }
+
     #[test]
     fn explicit_switch_waits_while_observation_and_revocation_fail_closed() {
         use std::sync::mpsc::{self, TryRecvError};
