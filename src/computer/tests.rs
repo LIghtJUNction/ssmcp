@@ -109,6 +109,8 @@ fn zip_members_version(version: &str, target: &str, entries: &[(&str, &[u8], u32
     for (name, bytes, mode) in entries {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            // Preserve the fixture's POSIX mode even when the writer runs on Windows.
+            .system(zip::System::Unix)
             .unix_permissions(*mode);
         archive
             .start_file(format!("zuse-v{version}-{target}/{name}"), options)
