@@ -560,7 +560,7 @@ class Composer(Dashboard):
         escaped = self.queue()
         self.check(escaped["draft"]["text"] == parked and escaped["draft"]["cursor"] == parked_cursor
                    and escaped["draft_context"]["parked"] is None
-                   and escaped["draft_context"]["target"] is None,
+                   and escaped["draft_context"]["target"] == "next",
                    "Escape restores the parked request, recipient, and UTF-8 cursor")
         self.select_request(front, first["id"])
         front.send(b"r")

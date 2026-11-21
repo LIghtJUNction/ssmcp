@@ -66,7 +66,7 @@ class ReadableCommands(Interactions):
         front.until(lambda shot: "Sessions" in text(shot), "the current Sessions page")
         front.send(ENTER)
         self.wait_state(front, lambda state: state["view"] == "activity"
-                        and state["focus"] == "input" and state["target"] is None
+                        and state["focus"] == "input" and state["target"] == "next"
                         and state["native_recipient"] is None,
                         "Sessions opens the local Next caller conversation")
         return front

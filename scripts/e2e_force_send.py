@@ -363,7 +363,7 @@ class ForceSend(InputHistory):
                         "the Sessions picker did not highlight the local Next caller")
         front.send(ENTER)
         self.wait_state(front, lambda state: state["view"] == "activity"
-                        and state["target"] is None and state["native_recipient"] is None,
+                        and state["target"] == "next" and state["native_recipient"] is None,
                         "the fixture did not explicitly restore Next caller")
         self.listener("read", **lease, wait_ms=0)
 
