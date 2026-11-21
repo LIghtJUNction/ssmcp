@@ -2056,6 +2056,7 @@ struct RegisteredSsh {
     time_observation_supported: bool,
     wait_display_supported: bool,
     openai_context_supported: bool,
+    peer_ports: bool,
     version_notice: Option<crate::wire::versions::Notice>,
 }
 
@@ -2103,6 +2104,7 @@ async fn register_ssh(
     }
     let mut transport_command = command();
     let timing_offer = relay::timing_offer(&transport_command);
+    let peer_offer = relay::peer_ports_offer(&transport_command);
     let openai_context_offer = relay::openai_context_offer(&transport_command);
     let mut ssh = transport_command
         .spawn()
@@ -2184,6 +2186,10 @@ async fn register_ssh(
             }),
             relay::negotiated_timing(timing_offer, &capabilities).0,
             relay::negotiated_timing(timing_offer, &capabilities).1,
+            peer_offer
+                && capabilities
+                    .iter()
+                    .any(|c| c == crate::wire::peer_port::CAPABILITY),
             openai_context_offer
                 && capabilities
                     .iter()
@@ -2223,6 +2229,7 @@ async fn register_ssh(
         version_notice,
         time_observation_supported,
         wait_display_supported,
+        peer_ports,
         openai_context_supported,
         chat_disabled_acknowledged,
     ) = ready;
@@ -2257,6 +2264,7 @@ async fn register_ssh(
         chat_disabled_acknowledged,
         time_observation_supported,
         wait_display_supported,
+        peer_ports,
         openai_context_supported,
         version_notice,
     }))
@@ -2562,9 +2570,11 @@ async fn connect_inner(
         chat_disabled_acknowledged: _,
         time_observation_supported,
         wait_display_supported,
+        peer_ports,
         openai_context_supported,
         version_notice,
     } = registration;
+    let peer_ports = crate::peer_port::PeerPorts::from_env(peer_ports, &client_id)?;
     let (time_observation_supported, wait_display_supported) =
         transport.timing_support((time_observation_supported, wait_display_supported));
     let github_auth = !metadata.allow.is_empty();
@@ -2996,6 +3006,7 @@ async fn connect_inner(
                     if requests.len() >= MAX_INFLIGHT { break Err("server exceeded the in-flight request limit".into()); }
                     let backend = backend.clone();
                     let writer = writer.clone();
+                    let peers = peer_ports.clone();
                     requests.spawn(async move {
                         let _controller = (!matches!(&operation, crate::wire::Operation::ListTools { .. }))
                             .then(|| render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation));
@@ -3003,7 +3014,13 @@ async fn connect_inner(
                         let pending_observation = openai_observation.filter(|observation| {
                             matches!(observation.record(), Ok(false))
                         });
-                        let mut result = call_scope.scope(backend.perform(operation)).await;
+                        let mut result = call_scope.scope(async { match operation {
+                            crate::wire::Operation::PeerPort { command } => {
+                                if !matches!(*command, crate::wire::peer_port::Command::Close { .. }) { backend.validate_peer_ports()?; }
+                                peers.perform(*command).await
+                            }
+                            op => backend.perform(op).await,
+                        }}).await;
                         if let Some(observation) = pending_observation {
                             let _ = observation.record();
                         }
@@ -3062,6 +3079,7 @@ async fn connect_inner(
             _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
+    peer_ports.shutdown().await;
     if let Some(chat) = &chat {
         chat.stop();
     }

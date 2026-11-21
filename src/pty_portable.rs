@@ -402,9 +402,9 @@ impl Terminal {
                 }
                 Ok(result)
             }
-            Operation::ListTools { .. } | Operation::CallTool { .. } => {
-                Err("not a terminal operation".into())
-            }
+            Operation::PeerPort { .. }
+            | Operation::ListTools { .. }
+            | Operation::CallTool { .. } => Err("not a terminal operation".into()),
         }
     }
 

@@ -88,6 +88,13 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if std::env::var_os(crate::peer_port::CONFIG_ENV).is_some() {
+        let offer = parent_offer(&command).expect("built-in relay capability offer");
+        command.env(
+            "SSMCP_RELAY_CAPABILITIES",
+            format!("{offer},{}", crate::wire::peer_port::CAPABILITY),
+        );
+    }
     if let Some(credential) = credential {
         command.env("SSMCP_RELAY_TOKEN", &credential.token);
     }
@@ -125,6 +132,13 @@ fn parent_offer(command: &Command) -> Option<&str> {
         .and_then(|(_, value)| value)
         .and_then(|value| value.to_str())
         .filter(|value| access_capability_header(Some(value)).is_some())
+}
+
+pub(super) fn peer_ports_offer(command: &Command) -> bool {
+    parent_offer(command).is_some_and(|v| {
+        v.split(',')
+            .any(|name| name == crate::wire::peer_port::CAPABILITY)
+    })
 }
 
 pub(super) fn openai_context_offer(command: &Command) -> bool {
@@ -170,6 +184,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
                 | crate::wire::openai::CAPABILITY
+                | crate::wire::peer_port::CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;
