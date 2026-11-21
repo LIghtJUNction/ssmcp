@@ -51,6 +51,19 @@ pub(in crate::computer) struct InputLease {
     store: Arc<Store>,
 }
 
+#[cfg(unix)]
+impl Drop for InputLease {
+    fn drop(&mut self) {
+        // A concurrent fork may retain this open file description until exec.
+        // Release the input lease before closing our own descriptor.
+        while let Err(error) = self._file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 impl InputLease {
     pub(in crate::computer) fn revoke(&self) {
         let _ = self
