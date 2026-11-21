@@ -120,7 +120,7 @@ mod tests {
                 "/resume",
                 "ssmcp --server https://relay.example:8443 --allow yourname@relay.example:8443",
                 "collab.join",
-                r#"desktop: "host""#,
+                "ssmcp computer version --json",
             ] {
                 assert!(html.contains(expected), "missing {expected}");
             }
