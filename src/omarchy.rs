@@ -2,7 +2,7 @@
 //! Arguments are validated values; no user text is evaluated as a shell command.
 use crate::{
     backend::{process::Managed, result},
-    computer::host_control::{HostControl, Permit},
+    computer::host_control::{ENDED, HostControl, Permit},
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -17,13 +17,26 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, sync::Mutex};
+use tokio::{
+    io::AsyncReadExt,
+    sync::{Mutex, OwnedMutexGuard, oneshot},
+};
 
 const OUTPUT_LIMIT: usize = 128 * 1024;
 const RESULT_LIMIT: usize = 24 * 1024;
 const SCAN_LIMIT: usize = 2048;
 const ITEM_LIMIT: usize = 200;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+
+tokio::task_local! {
+    // An owned helper can outlive its caller during cancellation.
+    static MUTATION_SERIAL: Arc<OwnedMutexGuard<()>>;
+}
+
+#[cfg(all(test, target_os = "linux"))]
+tokio::task_local! {
+    static CLEANUP_PROBE: std::sync::Mutex<Option<(oneshot::Sender<u32>, oneshot::Receiver<()>)>>;
+}
 
 pub struct Omarchy {
     root: PathBuf,
@@ -34,7 +47,7 @@ pub struct Omarchy {
     hyprland: bool,
     timeout: Duration,
     closed: AtomicBool,
-    serial: Mutex<()>,
+    serial: Arc<Mutex<()>>,
     observed_apps: Mutex<BTreeSet<String>>,
     control: Arc<HostControl>,
 }
@@ -183,7 +196,7 @@ impl Omarchy {
             hyprland: std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
             timeout: COMMAND_TIMEOUT,
             closed: AtomicBool::new(false),
-            serial: Mutex::new(()),
+            serial: Arc::new(Mutex::new(())),
             observed_apps: Mutex::new(BTreeSet::new()),
             control,
         })
@@ -354,7 +367,6 @@ impl Omarchy {
         let name = name
             .strip_prefix("ssmcp.omarchy.")
             .ok_or("not an Omarchy tool")?;
-        let operation = self.perform_inner(name, args);
         if matches!(
             name,
             "status"
@@ -369,19 +381,22 @@ impl Omarchy {
                 | "battery"
                 | "network"
         ) {
-            operation.await
+            let _serial = self.serial.lock().await;
+            self.perform_locked(name, args).await
         } else {
-            self.control
-                .permit()?
-                .serialized()
-                .await?
-                .run(operation)
+            let permit = self.control.permit()?.serialized().await?;
+            permit
+                .run(async {
+                    let serial = Arc::new(self.serial.clone().lock_owned().await);
+                    MUTATION_SERIAL
+                        .scope(serial, self.perform_locked(name, args))
+                        .await
+                })
                 .await
         }
     }
 
-    async fn perform_inner(&self, name: &str, args: Value) -> Result<Value, String> {
-        let _guard = self.serial.lock().await;
+    async fn perform_locked(&self, name: &str, args: Value) -> Result<Value, String> {
         if self.closed.load(Ordering::SeqCst) {
             return Err("Omarchy control is closed".into());
         }
@@ -562,9 +577,63 @@ impl Omarchy {
         if program == "omarchy-theme-set" {
             command.env("OMARCHY_THEME_WAIT", "1");
         }
+        let mutation = match MUTATION_SERIAL.try_with(Arc::clone) {
+            Ok(serial) => Some((
+                serial,
+                Permit::current().ok_or("missing Omarchy control permit")?,
+            )),
+            Err(_) => None,
+        };
         Permit::check_current()?;
         let mut process =
             Managed::spawn(&mut command).map_err(|e| format!("could not start {program}: {e}"))?;
+        let limit = self.timeout;
+        let Some((serial, permit)) = mutation else {
+            let result = Self::collect(&mut process, program, limit).await;
+            if result.is_err() {
+                process.shutdown().await;
+            }
+            return result;
+        };
+        let program = program.to_owned();
+        let (mut reply, result) = oneshot::channel();
+        #[cfg(all(test, target_os = "linux"))]
+        let cleanup_probe = CLEANUP_PROBE
+            .try_with(|probe| probe.lock().unwrap().take())
+            .ok()
+            .flatten();
+        tokio::spawn(async move {
+            let result = tokio::select! {
+                biased;
+                _ = permit.cancelled() => Err(ENDED.into()),
+                _ = reply.closed() => Err("Omarchy caller disconnected".into()),
+                output = Self::collect(&mut process, &program, limit) => output,
+            };
+            if result.is_err() {
+                #[cfg(all(test, target_os = "linux"))]
+                if let Some((stopping, proceed)) = cleanup_probe {
+                    let _ = stopping.send(process.child.id().expect("owned helper PID"));
+                    let _ = proceed.await;
+                }
+                process.shutdown().await;
+            }
+            // Hold both leases through reaping regardless of whether the
+            // caller is still polling its result.
+            drop(process);
+            drop(serial);
+            drop(permit);
+            let _ = reply.send(result);
+        });
+        result
+            .await
+            .map_err(|_| "Omarchy helper lost its cleanup task".to_owned())?
+    }
+
+    async fn collect(
+        process: &mut Managed,
+        program: &str,
+        limit: Duration,
+    ) -> Result<CommandOutput, String> {
         let stdout = process
             .child
             .stdout
@@ -608,19 +677,12 @@ impl Omarchy {
                 stderr,
             })
         };
-        match tokio::time::timeout(self.timeout, collect).await {
-            Ok(Ok(output)) => Ok(output),
-            Ok(Err(error)) => {
-                process.shutdown().await;
-                Err(format!("{program}: {error}"))
-            }
-            Err(_) => {
-                process.shutdown().await;
-                Err(format!(
-                    "{program} timed out after 15 seconds; any completed state change must be checked before retrying"
-                ))
-            }
-        }
+        tokio::time::timeout(limit, collect)
+            .await
+            .map_err(|_| format!(
+                "{program} timed out after 15 seconds; any completed state change must be checked before retrying"
+            ))?
+            .map_err(|error| format!("{program}: {error}"))
     }
     async fn success(&self, program: &str, args: &[&str]) -> Result<CommandOutput, String> {
         let output = self.run(program, args).await?;
@@ -1872,6 +1934,87 @@ printf '{"id":2,"name":"2","monitor":"TEST","windows":0}\n'"#,
             );
         }
         assert!(!f.directory.join("unexpected-mutation").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelled_menu_keeps_both_leases_until_its_owned_helper_is_reaped() {
+        use std::future::{Future, poll_fn};
+        use std::{
+            ffi::CString,
+            os::unix::ffi::OsStrExt,
+            task::{Context, Poll, Waker},
+        };
+
+        for turn_off in [false, true] {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let f = Fixture::new();
+                let fifo = CString::new(f.directory.join("hold").as_os_str().as_bytes()).unwrap();
+                // SAFETY: the FIFO pathname is inside this fixture and the CString is live.
+                assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+                f.helper(
+                    "omarchy-menu",
+                    r#"# summon|close
+if [ "$1" = summon ]; then
+    printf '%s' "$$" > "$PWD/started"
+    read -r line < "$PWD/hold"
+else
+    : > "$PWD/next"
+fi"#,
+                );
+                let (stopping, cancelled) = oneshot::channel();
+                let (proceed, draining) = oneshot::channel();
+                let start = f
+                    .instance
+                    .perform("ssmcp.omarchy.menu", json!({"action":"show"}));
+                let mut start = Box::pin(
+                    CLEANUP_PROBE.scope(std::sync::Mutex::new(Some((stopping, draining))), start),
+                );
+                let started = f.directory.join("started");
+                // Poll the actual call until the owned script has reached its barrier.
+                tokio::select! {
+                    early = &mut start => panic!("helper returned before its barrier: {early:?}"),
+                    _ = async {
+                        while std::fs::read_to_string(&started).unwrap_or_default().is_empty() {
+                            tokio::task::yield_now().await;
+                        }
+                    } => {}
+                }
+                if turn_off {
+                    f.instance.control.set_local(false).unwrap();
+                    assert_eq!(start.as_mut().await.unwrap_err(), ENDED);
+                    f.instance.control.set_local(true).unwrap();
+                }
+                drop(start);
+                let supervisor = cancelled.await.unwrap();
+                let child = std::fs::read_to_string(started).unwrap();
+                let supervisor = PathBuf::from(format!("/proc/{supervisor}"));
+                let child = PathBuf::from(format!("/proc/{child}"));
+                assert!(supervisor.exists() && child.exists());
+                assert!(f.instance.serial.try_lock().is_err());
+                let next = f
+                    .instance
+                    .perform("ssmcp.omarchy.menu", json!({"action":"close"}));
+                tokio::pin!(next);
+                assert!(
+                    poll_fn(|_| Poll::Ready(
+                        next.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+                    ))
+                    .await
+                    .is_pending()
+                );
+                assert!(!f.directory.join("next").exists());
+                proceed.send(()).unwrap();
+                assert_eq!(
+                    next.await.unwrap()["structuredContent"]["request_accepted"],
+                    true
+                );
+                assert!(f.directory.join("next").exists());
+                assert!(!supervisor.exists() && !child.exists());
+            })
+            .await
+            .expect("owned Omarchy cleanup did not finish");
+        }
     }
 
     #[cfg(target_os = "linux")]
