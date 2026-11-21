@@ -141,15 +141,9 @@ Use print(value) or console.log(value) for logs; return a JSON-serializable valu
 
 ### computer
 
-Read client schemas and capabilities for desktop control. computer.desktop_start/status/stop and app_launch manage an isolated desktop; input defaults to it, and shared host input requires desktop:host. Browser-target controls are preferred for browser tasks. New primitives remain available through native(clientId).
+Use only computer.version/download/install/uninstall(clientId, args). These manage the independent Zuse CLI; they do not execute desktop or browser programs. version runs the selected executable's bounded --version, preferring PATH before a managed installation. download accepts an optional stable version and verifies the official GitHub release asset's identity, size and SHA-256; it returns download_id without executing or installing. install accepts that download_id and returns a private installation_id and path without changing PATH. uninstall accepts only the exact owned installation_id and verifies its receipt, file identity and bytes before removal. External installations are never replaced or removed.
 
-### omarchy
-
-Native Omarchy system primitives: omarchy.status, themes/theme_set, backgrounds/background_set, fonts/font_set, audio/audio_set, brightness/brightness_set, toggles/toggle_set, workspaces/workspace_switch, window_action, apps/app_launch, menu, battery and network. Inspect schemas and current state before changes.
-
-### browser
-
-Prefer the authorized ChatGPT Browser plugin when it is actually available in the caller for the requested browser; call its native API outside ssmcp code_mode. The client cannot invoke that public browser JavaScript API. Otherwise call ssmcp.browser.discover for cached routing metadata and ssmcp.harnesses.list for provider status. Search actual registered playwright.* tools and keep their native schemas and approvals. Use explicitly selected CDP only after these available extension routes. CDP controls remain browser.status/launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/evaluate/screenshot/close/disconnect. Use connect only with an observed loopback endpoint. Do not replace requested existing Chrome with launch or another browser family. No model is invoked.
+Check isError and structuredContent. Use the returned executable path with exec.run/start for desktop or browser tasks, and preserve the job's actual output, status and ownership. Read that Zuse version's --help and schema before writing its program. There is no built-in browser, cua or omarchy helper, Playwright action bridge, private-desktop fallback or internal worker. General external MCP forwarding and OAuth browser login remain available. [Lifecycle commands and examples](computer-use.md) · [Standalone CLI workflow](browser-desktop.md)
 
 ### fs
 
@@ -185,7 +179,7 @@ resources.list(cursor?), resources.templates(), resources.read(uri) discover rel
 
 ### native
 
-native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.browser.snapshot(args). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.
+native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.computer.version({}). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.
 
 ### workspace
 
