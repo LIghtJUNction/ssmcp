@@ -86,6 +86,14 @@ pub fn executable(name: &str) -> Result<PathBuf, String> {
     resolve(name, &search, home.as_deref())
 }
 
+/// Resolve one already-selected entry without searching later PATH entries.
+pub(crate) fn selected_entry(path: &Path, name: &str) -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    entry(path, name, home.as_deref(), &mut HashSet::new(), 0)
+}
+
 fn resolve(name: &str, search: &OsStr, home: Option<&Path>) -> Result<PathBuf, String> {
     let mut diagnostic = None;
     for directory in std::env::split_paths(search) {

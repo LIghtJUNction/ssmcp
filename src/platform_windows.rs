@@ -252,6 +252,19 @@ fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     Ok(info)
 }
 
+/// Inspect an existing directory handle without creating it or changing its ACL.
+pub(crate) fn verify_directory(file: &File) -> io::Result<()> {
+    let info = information(file)?;
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(io::Error::other(
+            "output root must be a directory, never a link or reparse point",
+        ));
+    }
+    verify_private(file, &Identity::current()?)
+}
+
 pub(crate) fn verify_file(file: &File) -> io::Result<()> {
     let info = information(file)?;
     if info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0

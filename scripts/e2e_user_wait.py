@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -27,14 +28,67 @@ class UserWait(InputHistory):
         self.http_timeout = 35
         self.workers = ThreadPoolExecutor(max_workers=4)
         self.wait_futures = []
+        self.wait_members = {}
 
-    def state(self):
-        return self.observe("ssmcp.ui.wait", {"op": "status"})["state"]
+    def state(self, member=None):
+        if member is None:
+            return self.observe("ssmcp.ui.wait", {"op": "status"})["state"]
+        return self.scoped_native(member, "ssmcp.ui.wait", {"op": "status"})["state"]
 
-    def native_finish(self, wait_id, outcome):
-        return self.observe("ssmcp.ui.wait", {
-            "op": "finish", "wait_id": wait_id, "outcome": outcome,
-        })
+    def native_finish(self, wait_id, outcome, *, member=None):
+        arguments = {"op": "finish", "wait_id": wait_id, "outcome": outcome}
+        if member is None:
+            return self.observe("ssmcp.ui.wait", arguments)
+        return self.scoped_native(member, "ssmcp.ui.wait", arguments)
+
+    def scoped_native(self, member, name, arguments):
+        response = self.response("return await call(%s, %s, %s);" % (
+            json.dumps(self.client_id), json.dumps(name), json.dumps(arguments)),
+            agent={"client_id": self.client_id, "id": member["agent_id"], "token": member["token"]})
+        self.check(not self.messages(response),
+                   "finish observation and native cleanup never consume an ordinary requirement")
+        native = response["structuredContent"]["result"]
+        if native.get("isError") or not isinstance(native.get("structuredContent"), dict):
+            raise AssertionError("the authenticated finish observation failed: " + name)
+        return native["structuredContent"]
+
+    def finish_question(self, member, request_id):
+        return self.scoped_native(member, "ssmcp.ui.questions", {"id": request_id})["question"]
+
+    def activity(self, front):
+        for _ in range(4):
+            if self.ui("/display/conversation")["view"] == "activity" and not self.ui("/display/sleeping"):
+                return
+            front.send(b"\x1b")
+            front.pump(0.15)
+        raise AssertionError("finish decision view did not return to the original Activity composer")
+
+    def finish_active(self, front, member):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            front.pump(0.03)
+            active = self.state(member)["active"]
+            if len(active) == 1 and active[0].get("finish_request_id"):
+                return active[0]
+        raise AssertionError("the exact native finish wait did not expose its real question ID")
+
+    def decide_finish(self, front, member, request_id, choice):
+        self.activity(front)
+        front.send(b"\x1b[1;2A")
+        self.wait_state(front, lambda state: state["view"] == "questions"
+                        and state["answering"] == request_id,
+                        "Shift+Up did not open the exact finish request")
+        question = self.finish_question(member, request_id)
+        self.check(question["kind"] == "finish" and question["finish"]["default_decision"] == "no"
+                   and question["finish"]["decision"] is None,
+                   "the real local finish control starts at No without fabricating a decision")
+        if choice == "yes":
+            front.send(b"\x1b[C")
+            front.until(lambda shot: "Yes selected" in text(shot),
+                        "the real Right key selects Yes before explicit Enter")
+        elif choice != "no":
+            raise AssertionError("fixture choice must be an explicit Human No or Yes")
+        front.send(ENTER)
 
     def draft(self, front, value):
         self.focus_input(front)
@@ -69,15 +123,19 @@ class UserWait(InputHistory):
             if entry["agent_id"] == member["agent_id"]
         )
         front.send(HOME + DOWN * index + ENTER)
-        expected = None if member is None else member["agent_id"]
+        expected = "next" if member is None else member["agent_id"]
         self.wait_state(front, lambda state: state["target"] == expected,
                         "the owned fixture did not select its exact recipient")
 
-    def begin(self, *, reason, intent="need_user", timeout_ms=20000, member=None):
+    def begin(self, *, reason, intent="need_user", timeout_ms=20000, member=None,
+              finish_request_id=None):
         client_id = self.client_id
         arguments = {"timeout_ms": timeout_ms, "intent": intent, "reason": reason, "notify": False}
+        if finish_request_id is not None:
+            arguments["finish_request_id"] = finish_request_id
         code = "return await ui.wait(%s, %s);" % (json.dumps(client_id), json.dumps(arguments))
         if member is not None:
+            self.wait_members[member["agent_id"]] = member
             code = "await collab.bind(%s, %s); %s" % (
                 json.dumps(client_id), json.dumps({
                     "agent_id": member["agent_id"], "token": member["token"],
@@ -108,7 +166,7 @@ class UserWait(InputHistory):
                 return state
         raise AssertionError(f"expected {count} active native waits\n" + front.failure_detail())
 
-    def completed(self, front, future, expected, *, wait_id=None):
+    def completed(self, front, future, expected, *, wait_id=None, may_finish=False):
         deadline = time.monotonic() + 8
         while not future.done() and time.monotonic() < deadline:
             front.pump(0.03)
@@ -129,8 +187,16 @@ class UserWait(InputHistory):
         if wait_id is not None:
             self.check(receipt["wait_id"] == wait_id,
                        "the outer receipt retains the exact native wait identity")
-        self.check("user_consent_to_end" not in receipt,
-                   "a wait outcome does not manufacture the user's consent to end")
+        self.check("user_consent_to_end" not in receipt and receipt.get("may_finish") is may_finish,
+                   "only the exact explicit finish decision can authorize ending; ordinary wait outcomes cannot")
+        if may_finish:
+            decision = receipt.get("finish_decision", {})
+            self.check(expected == "decided" and decision.get("request_id") == receipt["finish_request_id"]
+                       and decision.get("status") == "completed" and decision.get("choice") == "yes"
+                       and decision.get("actor") == {"origin": "human"}
+                       and decision.get("consumed") is True and decision.get("revision", 0) > 0
+                       and decision.get("invalidation_reason") is None,
+                       "the final receipt consumes one exact Human Yes with its true request and revision")
         if expected != "received":
             self.check(not self.messages(response) and not receipt["messages"],
                        "an unfinished delivery includes no ordinary user requirement")
@@ -168,7 +234,7 @@ class UserWait(InputHistory):
 
         waits = [
             self.begin(reason="Synthetic input A"),
-            self.begin(reason="Synthetic finish confirmation", intent="finish"),
+            self.begin(reason="Synthetic input B"),
             self.begin(reason="Synthetic input C"),
         ]
         active = self.active(front, 3)["active"]
@@ -181,17 +247,27 @@ class UserWait(InputHistory):
         self.check(self.ui("/display/conversation")["draft"]["text"] == unsent,
                    "starting concurrent waits preserves the complete unsent reference draft")
         front.until(lambda shot: "等待你的输入" in text(shot),
-                    "a legacy finish intent is displayed as an ordinary input wait")
+                    "real authenticated input waits are visible in the terminal")
         front.until(lambda shot: "Click or type to wake" in text(shot),
                     "the authenticated user wait dims the production terminal")
         self.check(self.ui("/display/sleeping"),
                    "the real terminal exposes its active visual sleep state")
-        self.save_shot("user-wait-active-120", front, cells=True)
+        self.check(re.search(r"! 等待你的输入 · 剩余 \d{2}:\d{2} · /wait", text(front.snapshot())) is not None,
+                   "three waits in one episode show the single-episode warning and bounded countdown")
+        sleep_shot = self.save_shot("user-wait-active-120", front, cells=True)
+        alert = sleep_shot["cells"][-1][1]
+        self.check(alert["text"] == "!" and alert["foreground"] == [242, 139, 130]
+                   and alert["bold"] is True and alert["dim"] is False,
+                   "the real sleeping wait warning stays bold red rather than inheriting dim gray")
         front.resize(24, 48)
         front.until(lambda shot: shot["size"] == [24, 48]
                     and "Click or type to wake" in text(shot),
                     "the same pending wait renders a narrow sleep overlay")
-        self.save_shot("user-wait-sleep-48", front, cells=True)
+        narrow = self.save_shot("user-wait-sleep-48", front, cells=True)
+        alert = narrow["cells"][-1][1]
+        self.check(alert["text"] == "!" and alert["foreground"] == [242, 139, 130]
+                   and alert["bold"] is True and alert["dim"] is False,
+                   "the same explicit red wait warning survives the narrow viewport")
         front.resize(28, 120)
         front.until(lambda shot: shot["size"] == [28, 120]
                     and "Click or type to wake" in text(shot),
@@ -288,7 +364,7 @@ class UserWait(InputHistory):
         finish = self.native_finish(first_id, "ready")
         self.check(not finish["finished"] and finish["status"] == "cancelled",
                    "a late native finish cannot overwrite the local cancellation")
-        for future, reason in zip(waits[1:], ["Synthetic finish confirmation", "Synthetic input C"]):
+        for future, reason in zip(waits[1:], ["Synthetic input B", "Synthetic input C"]):
             wait_id = by_reason[reason]["wait_id"]
             self.native_finish(wait_id, "cancelled")
             self.completed(front, future, "cancelled", wait_id=wait_id)
@@ -359,6 +435,8 @@ class UserWait(InputHistory):
         again = self.begin(reason="Synthetic no-replay deadline", member=member, timeout_ms=1000)
         self.completed(front, again, "timed_out")
 
+        self.finish_decisions(front, member, unsent)
+
         disconnected = self.begin(reason="Synthetic WSS disconnect")
         disconnect_id = self.active(front, 1)["active"][0]["wait_id"]
         previous_id = self.client_id
@@ -397,14 +475,108 @@ class UserWait(InputHistory):
         self.check(not final["alternate_screen"] and restored == front.original_termios,
                    "the isolated user-wait terminal restores its own termios")
 
+    def finish_decisions(self, front, member, unsent):
+        self.activity(front)
+        front.resize(28, 120)
+        front.until(lambda shot: shot["size"] == [28, 120], "the finish decision viewport")
+        timed = self.begin(reason="Synthetic resumable finish", intent="finish",
+                           timeout_ms=1000, member=member)
+        _, receipt = self.completed(front, timed, "timed_out")
+        request_id = receipt["finish_request_id"]
+        self.check(isinstance(request_id, str) and request_id.startswith("question_")
+                   and receipt["finish_decision"]["status"] == "pending"
+                   and receipt["finish_decision"]["actor"] is None,
+                   "a finish timeout returns its real stable request ID without any Human decision")
+        pending = self.finish_question(member, request_id)
+        self.check(pending["finish"]["status"] == "pending"
+                   and pending["finish"]["decision"] is None and not pending["finish"]["approved"],
+                   "reading a pending finish request neither answers nor consumes it")
+
+        resumed = self.begin(reason="Synthetic resumable finish", intent="finish",
+                             member=member, finish_request_id=request_id)
+        active = self.finish_active(front, member)
+        self.check(active["finish_request_id"] == request_id,
+                   "the original verified thread resumes the same request after timeout")
+        self.decide_finish(front, member, request_id, "no")
+        _, denied = self.completed(front, resumed, "decided", wait_id=active["wait_id"])
+        decision = denied["finish_decision"]
+        self.check(denied["finish_request_id"] == request_id and decision["status"] == "denied"
+                   and decision["choice"] == "no" and decision["actor"] == {"origin": "human"}
+                   and decision["revision"] > 0 and decision["consumed"] is False,
+                   "explicit Human No carries real actor/revision and never grants completion")
+        self.activity(front)
+        self.check(self.ui("/display/conversation")["draft"]["text"] == unsent,
+                   "Human No preserves the complete ordinary draft")
+
+        approved = self.begin(reason="Synthetic explicit Human Yes", intent="finish", member=member)
+        active = self.finish_active(front, member)
+        yes_id = active["finish_request_id"]
+        self.decide_finish(front, member, yes_id, "yes")
+        _, allowed = self.completed(front, approved, "decided", wait_id=active["wait_id"], may_finish=True)
+        self.check(allowed["finish_request_id"] == yes_id and allowed["recipient"] == member["agent_id"],
+                   "the single consumed Human Yes returns only to its exact verified asking thread")
+        repeated = self.begin(reason="Synthetic explicit Human Yes", intent="finish",
+                              member=member, finish_request_id=yes_id)
+        _, replay = self.completed(front, repeated, "decided")
+        self.check(replay["finish_request_id"] == yes_id
+                   and replay["finish_decision"]["status"] == "completed"
+                   and replay["finish_decision"]["consumed"] is False,
+                   "a repeated wait observes Completed but cannot consume the Human Yes again")
+        read = self.finish_question(member, yes_id)
+        self.check(read["finish"]["status"] == "completed" and not read["finish"]["approved"],
+                   "ordinary reading of a completed finish request exposes no new approval")
+        self.activity(front)
+        self.check(self.ui("/display/conversation")["draft"]["text"] == unsent,
+                   "explicit Yes and replay rejection preserve the original ordinary draft")
+
+        cancelled = self.begin(reason="Synthetic finish cancellation", intent="finish", member=member)
+        active = self.finish_active(front, member)
+        self.native_finish(active["wait_id"], "cancelled", member=member)
+        _, receipt = self.completed(front, cancelled, "cancelled", wait_id=active["wait_id"])
+        cancelled_question = self.finish_question(member, active["finish_request_id"])
+        self.check(cancelled_question["finish"]["status"] == "cancelled"
+                   and cancelled_question["finish"]["decision"] is None,
+                   "cancelling the exact wait invalidates its unresolved request without a fabricated actor")
+
+        self.select_recipient(front, member)
+        ordinary = self.begin(reason="Synthetic plain input during finish", intent="finish", member=member)
+        active = self.finish_active(front, member)
+        body = "Yes — this is ordinary input, not a finish decision."
+        self.draft(front, body)
+        front.send(ENTER)
+        response, receipt = self.completed(front, ordinary, "received", wait_id=active["wait_id"])
+        messages = self.messages(response)
+        self.check(len(messages) == 1 and messages[0]["text"] == body
+                   and messages[0]["agent_id"] == member["agent_id"],
+                   "ordinary Enter during a finish wait follows exact-thread message delivery without approval")
+        invalidated = self.finish_question(member, active["finish_request_id"])
+        self.check(invalidated["finish"]["status"] in ("cancelled", "invalidated")
+                   and invalidated["finish"]["decision"] is None and not invalidated["finish"]["approved"],
+                   "new ordinary input invalidates the unresolved finish question")
+        self.select_recipient(front)
+        self.draft(front, unsent)
+        self.active(front, 0)
+        self.save_shot("user-wait-human-decisions-120", front, cells=True)
+
     def close_waits(self):
-        try:
-            for active in self.state()["active"]:
-                self.native_finish(active["wait_id"], "cancelled")
-        except Exception:
-            # Each request also has its explicit 25s native/server deadline and
-            # the owned HTTP socket's 35s ceiling. Never touch another client.
-            pass
+        # Only fixture-owned recipients are queried. Remote status deliberately
+        # hides other threads' finish waits, so cleanup retains the original
+        # verified fixture binding instead of switching to an unbound caller.
+        seen = set()
+        for member in [None, *self.wait_members.values()]:
+            try:
+                active = self.state(member)["active"]
+            except Exception:
+                continue
+            for wait in active:
+                if wait["wait_id"] in seen:
+                    continue
+                seen.add(wait["wait_id"])
+                try:
+                    self.native_finish(wait["wait_id"], "cancelled", member=member)
+                except Exception:
+                    # Explicit native/server deadlines still bound owned calls.
+                    pass
         self.workers.shutdown(wait=True, cancel_futures=True)
 
 

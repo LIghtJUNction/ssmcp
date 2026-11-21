@@ -48,6 +48,19 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 
 更新不重启现有客户端或后台服务。它们继续执行已加载的程序，按需重启后使用新版本；Windows 若正在运行的旧文件暂时无法删除，安装器会保留带唯一名称的备份并说明位置。更新命令不会提升权限，也不会修改 Shell 或系统 PATH。
 
+## 管理独立 Zuse CLI
+
+| 本机命令 | 对应原生工具 | 作用 |
+| --- | --- | --- |
+| `ssmcp computer [version] [--json]` | `ssmcp.computer.version` | 实际执行所选 CLI 的 `--version`；默认子命令 |
+| `ssmcp computer download [VERSION] [--json]` | `ssmcp.computer.download` | 下载当前平台官方稳定版；返回 `download_id`，不执行、不安装 |
+| `ssmcp computer install DOWNLOAD_ID [--json]` | `ssmcp.computer.install` | 核验受管下载并安装到私有目录；返回 `installation_id` 和路径 |
+| `ssmcp computer uninstall INSTALLATION_ID [--json]` | `ssmcp.computer.uninstall` | 仅删除身份、所有权和字节仍匹配的受管安装 |
+
+不指定下载版本时选择最新稳定版；显式版本接受 `MAJOR.MINOR.PATCH` 或带 `v` 的同一格式。使用前一次结果中的真实 ID。`--json` 输出完整原生 MCP 结果；默认输出其结构化正文。安装不修改 PATH，也不覆盖或卸载外部 Zuse。[真实参数解析](../src/client/computer_control.rs)
+
+实际桌面与浏览器程序直接交给所选 Zuse CLI，经下方 exec 接口运行。[完整管理边界与示例](computer-use.md)
+
 ## 前台观察与终端输入
 
 前台默认使用 `dark` 主题和 `chat` 布局，连续显示执行记录，底部输入框用于追加用户要求。Enter 提交到队列；`/queue` 管理待交付项，`/agents` 选择接收成员，`/audit` 打开源码审计。Tab 切换输入与内容焦点，滚轮或 PgUp/PgDn 直接浏览当前内容；`/filter 文本` 搜索日志，F9 切换类别。[客户端 UI 与队列原子接口](client-ui.md)

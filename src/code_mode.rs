@@ -1740,7 +1740,7 @@ mod tests {
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
 
     #[tokio::test]
-    async fn native_screenshots_reach_mcp_as_images_without_base64_text_duplication() {
+    async fn native_images_reach_mcp_as_images_without_base64_text_duplication() {
         let _guard = TESTS.lock().await;
         let output = crate::output::OutputStore::new_connection().unwrap();
         let host: Host = Arc::new(move |request| {
@@ -1750,19 +1750,19 @@ mod tests {
                     name, arguments, ..
                 } = request
                 else {
-                    return Err("unexpected screenshot fixture request".into());
+                    return Err("unexpected image fixture request".into());
                 };
-                assert_eq!(name, "ssmcp.browser.screenshot");
-                assert_eq!(arguments["target_id"], "tab");
+                assert_eq!(name, "ssmcp.fs.read_image");
+                assert_eq!(arguments["path"], "fixture.png");
                 Ok(output.guard_result(json!({
                     "isError":false,
                     "content":[{"type":"image","mimeType":"image/png","data":PNG}],
-                    "structuredContent":{"width":1,"height":1,"target_id":"tab"}
+                    "structuredContent":{"width":1,"height":1,"path":"fixture.png"}
                 })))
             })
         });
         let output = trusted_execute(
-            "const shot = await browser.screenshot('one',{target_id:'tab'}); image(shot); print('captured'); return shot.structuredContent;".into(),
+            "const picture = await call('one','ssmcp.fs.read_image',{path:'fixture.png'}); image(picture); print('captured'); return picture.structuredContent;".into(),
             2_000, json!([{"id":"one"}]), host,
         ).await.unwrap();
         assert_eq!(output["images"].as_array().unwrap().len(), 1);
@@ -1773,7 +1773,10 @@ mod tests {
             response["content"][1],
             json!({"type":"image","mimeType":"image/png","data":PNG})
         );
-        assert_eq!(response["structuredContent"]["result"]["target_id"], "tab");
+        assert_eq!(
+            response["structuredContent"]["result"]["path"],
+            "fixture.png"
+        );
         assert_eq!(response["structuredContent"]["logs"], json!(["captured"]));
         assert!(response["structuredContent"].get("images").is_none());
         assert!(
@@ -1870,7 +1873,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn computer_use_helpers_use_native_routes_without_unwrapping_results() {
+    async fn computer_lifecycle_helpers_preserve_native_results_without_control_facades() {
         let _guard = TESTS.lock().await;
         let host: Host = Arc::new(|request| {
             Box::pin(async move {
@@ -1887,10 +1890,13 @@ mod tests {
         });
         let output = trusted_execute(
             r#"return {
-                computer:await computer.type('one',{text:'hello'}),
-                browser:await browser.navigate('one',{target_id:'t',url:'about:blank'}),
-                omarchy:await omarchy.audio_set('one',{target:'output',percent:25}),
-                frozen:Object.isFrozen(computer)&&Object.isFrozen(browser)&&Object.isFrozen(omarchy),
+                version:await computer.version('one'),
+                download:await computer.download('one',{version:'v0.3.0'}),
+                install:await computer.install('one',{download_id:'download-fixture'}),
+                uninstall:await computer.uninstall('one',{installation_id:'installation-fixture'}),
+                methods:Object.keys(computer).sort(),
+                frozen:Object.isFrozen(computer),
+                retired:[typeof browser,typeof cua,typeof omarchy,typeof computer.click],
                 hidden:typeof __ssmcp_image
             };"#
             .into(),
@@ -1900,26 +1906,31 @@ mod tests {
         )
         .await
         .unwrap();
+        for (operation, arguments) in [
+            ("version", json!({})),
+            ("download", json!({"version":"v0.3.0"})),
+            ("install", json!({"download_id":"download-fixture"})),
+            (
+                "uninstall",
+                json!({"installation_id":"installation-fixture"}),
+            ),
+        ] {
+            assert_eq!(
+                output["result"][operation],
+                crate::backend::result(json!({
+                    "name":format!("ssmcp.computer.{operation}"),
+                    "arguments":arguments
+                }))
+            );
+        }
         assert_eq!(
-            output["result"]["computer"]["structuredContent"]["name"],
-            "ssmcp.computer.type"
-        );
-        assert_eq!(
-            output["result"]["computer"]["structuredContent"]["arguments"]["text"],
-            "hello"
-        );
-        assert_eq!(
-            output["result"]["browser"]["structuredContent"]["name"],
-            "ssmcp.browser.navigate"
+            output["result"]["methods"],
+            json!(["download", "install", "uninstall", "version"])
         );
         assert_eq!(output["result"]["frozen"], true);
         assert_eq!(
-            output["result"]["omarchy"]["structuredContent"]["name"],
-            "ssmcp.omarchy.audio_set"
-        );
-        assert_eq!(
-            output["result"]["omarchy"]["structuredContent"]["arguments"]["percent"],
-            25
+            output["result"]["retired"],
+            json!(["undefined", "undefined", "undefined", "undefined"])
         );
         assert_eq!(output["result"]["hidden"], "undefined");
     }

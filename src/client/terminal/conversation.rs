@@ -144,7 +144,7 @@ pub(super) struct Conversation {
     force_task: Option<listener::Task>,
     force_displayed: std::collections::VecDeque<(String, String)>,
     #[cfg(test)]
-    wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
+    pub(super) wait_fixture: Option<crate::client::interface::user_wait::Snapshot>,
     #[cfg(test)]
     timing_fixture: Option<crate::runtime::time::Snapshot>,
     parked: Option<steering::SavedDraft>,
@@ -789,10 +789,6 @@ impl State {
                 }
                 crate::client::interface::harness::submit(&command[1..], rest)?;
                 self.notice = Some("Harness request queued · results appear here".into());
-            }
-            "/computer" => {
-                let command = crate::client::interface::computer::parse(rest)?;
-                self.computer_command(command)?;
             }
             "/command" => {
                 if rest.split_whitespace().count() > 1 {
@@ -1528,11 +1524,6 @@ impl State {
 
     fn chat_key(&mut self, key: Key) {
         self.chat_cancel_native_lookup();
-        if matches!(key, Key::ComputerToggle) {
-            self.sleep_key(key);
-            self.computer_toggle();
-            return;
-        }
         if self.sleep_key(key) {
             return;
         }
@@ -3083,11 +3074,15 @@ impl State {
                     || update_hint.is_some();
                 let hint_tone = if scroll_hint.is_some() {
                     PanelTone::Accent
+                } else if self.notice.is_none() {
+                    wait_hint
+                        .as_ref()
+                        .map_or(PanelTone::Muted, |(_, tone)| *tone)
                 } else {
                     PanelTone::Muted
                 };
                 let hint = self.notice.clone().or(scroll_hint).unwrap_or_else(|| {
-                    if let Some(hint) = wait_hint { return hint; }
+                    if let Some((hint, _)) = wait_hint { return hint; }
                     if let Some(hint) = paste_hint { return hint; }
                     if let Some(hint) = native_hint { return hint; }
                     if let Some(hint) = update_hint {
@@ -3206,33 +3201,24 @@ impl State {
                 let clock_width = clock_label
                     .as_ref()
                     .map_or(0, |label| label.width() as u16 + 3);
-                let computer = self
-                    .computer_badge(width.saturating_sub(mode.width() as u16 + 1 + clock_width));
-                let title_width = width
-                    .saturating_sub(clock_width)
-                    .saturating_sub(computer.width() as u16 + u16::from(!computer.is_empty()));
+                let title_width = width.saturating_sub(clock_width);
                 let title = fit(&title, title_width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if let Some(clock) = &clock_label {
-                    let detail = if computer.is_empty() {
-                        clock.clone()
-                    } else {
-                        format!("{clock} · {computer}")
-                    };
-                    fit(&detail, available.min(usize::from(u16::MAX)) as u16)
+                    fit(clock, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();
-                    let full = format!("{} · {} · {computer}", account.trim(), quota.trim());
-                    let short = format!("{} · {computer}", quota.trim());
+                    let full = format!("{} · {}", account.trim(), quota.trim());
+                    let short = quota.trim().to_owned();
                     if full.width() <= available {
                         full
                     } else if short.width() <= available {
                         short
                     } else {
-                        computer
+                        String::new()
                     }
                 } else {
-                    computer
+                    String::new()
                 };
                 let gap = "─".repeat(available.saturating_sub(detail.width()));
                 self.chat_line(

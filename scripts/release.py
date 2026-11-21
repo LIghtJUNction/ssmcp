@@ -31,10 +31,10 @@ TARGETS = {
 }
 TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio", "zuse": "zuse-computer"}
+PROJECT_Z_DIRECT = {"zplugin": "zplugin", "zharness": "zharness", "ztuio": "ztuio"}
 PROJECT_Z_PATCHES = {"zplugin", "zguard", "zcall", "zconv", "zmcpio", "zclap", "z64", "zsys"}
 PROJECT_Z_REPOS = {name: name for name in PROJECT_Z_PATCHES | {"zharness", "ztuio"}}
-PROJECT_Z_REPOS.update({"zuse-computer": "zuse", "zplugin-macros": "zplugin"})
+PROJECT_Z_REPOS["zplugin-macros"] = "zplugin"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 SHA = re.compile(r"[0-9a-f]{40}")
 CHECKSUM = re.compile(r"[0-9a-f]{64}")

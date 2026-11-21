@@ -4,7 +4,6 @@ pub(crate) mod account;
 pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
-mod browser_setup;
 mod chat_io;
 mod clipboard;
 pub(crate) mod completion;
@@ -14,12 +13,6 @@ mod config;
 mod connection_context;
 pub(crate) mod context_memory;
 
-pub(crate) use config::BrowserSettings;
-
-/// Settings are read on demand so setup changes apply on the next client connection.
-pub(crate) fn browser_settings() -> crate::Result<BrowserSettings> {
-    config::browser()
-}
 #[cfg(test)]
 mod account_compat_tests;
 mod git_status;
@@ -90,7 +83,7 @@ Manage
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
   sessions · attach · service  Saved and background sessions
-  computer on|off|status        Shared Computer Use switch
+  computer                     Zuse CLI version and installation
   setup · ui · 007             Setup, appearance and recovery
 
 Options
@@ -123,7 +116,6 @@ Usage: ssmcp username@server [options]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
        ssmcp setup [--server URL] [--no-browser]
-       ssmcp setup browser [--check | --install] [--playwright-mcp PATH] [--json]
        ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
        ssmcp sessions create NAME [options] [user@]host
        ssmcp attach [process|thread] ID|N [--remote] [--read-only]
@@ -132,7 +124,8 @@ Usage: ssmcp username@server [options]
        ssmcp send [process|thread] ID|N [TEXT|--stdin] [--wait] [--json]
        ssmcp wait [REQUEST_ID ...] [--stdin] [--any|--all|--count N]
                   [--timeout SECONDS] [--json] [--server URL]
-       ssmcp computer [on|off|toggle|status] [--json]
+       ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
+                      [--json]
        ssmcp service <install|uninstall|start|stop|restart|status|run> [options]
        ssmcp ui <show|check|init|preview> [--ui-config FILE]
        ssmcp 007 <install|upgrade|run|start|stop|status|uninstall|sessions> [options]
@@ -180,7 +173,7 @@ Usage: ssmcp username@server [options]
   -- ARGS              Native arguments for an explicit --load-harness; never parsed as ssmcp flags
 
 The client provides native tools without another harness. Optional Codex, Claude
-Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
+Code, Pi and OpenCode bridges stay unloaded until explicitly needed.
 Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
 --load-harness codex|claude-code preloads the protocol without submitting a model turn.
 --load-harness ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
@@ -270,10 +263,10 @@ or disable the dashboard when attaching to a saved session.
 New remote-created sessions inherit connection settings and stay in the current
 workspace; children do not inherit this management grant.
 Use sessions auth NAME to read private OAuth connection details explicitly.
-Use /computer on or /computer off to control SSMCP computer, browser and desktop
-mutations for this OS user. The switch does not restrict native shell programs.
-Super+Alt+C toggles the switch with a desktop binding or enhanced keyboard input.
-The local CLI `ssmcp computer toggle` is the desktop shortcut command.
+Use the standalone Zuse CLI directly for desktop and browser operations.
+SSMCP does not embed computer or browser control. The local `ssmcp computer`
+command only queries, downloads, installs or uninstalls the Zuse CLI.
+Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
@@ -1653,14 +1646,18 @@ pub async fn run() -> crate::Result<()> {
     }
     connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
-    if computer_control::dispatch(&args)? {
+    if computer_control::dispatch(&args).await? {
         return Ok(());
     }
-    if connection_context::dispatch(&args)?
-        || browser_setup::dispatch(&args).await?
-        || config::dispatch(&args)?
-        || trust::dispatch(&args)?
+    if args.first().is_some_and(|arg| arg == "setup")
+        && args.get(1).is_some_and(|arg| arg == "browser")
     {
+        return Err(
+            "Browser setup is retired; use the standalone Zuse CLI. See ssmcp computer --help"
+                .into(),
+        );
+    }
+    if connection_context::dispatch(&args)? || config::dispatch(&args)? || trust::dispatch(&args)? {
         return Ok(());
     }
     if args.first().is_some_and(|arg| arg == "setup") {

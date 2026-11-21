@@ -1,6 +1,8 @@
 //! Local presentation and cancellation for authenticated server-owned waits.
 //! This module never reads, reserves, or delivers the ordinary user queue.
+use super::questions::{self, FinishReceipt, FinishWait};
 use crate::client::notification::{Notifier, Report};
+use crate::runtime::call_scope::CallScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -24,6 +26,8 @@ pub(crate) enum Intent {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Ready,
+    #[serde(skip_deserializing)]
+    Decided,
     TimedOut,
     Cancelled,
     Disconnected,
@@ -39,6 +43,7 @@ pub(crate) struct Entry {
     pub intent: Intent,
     pub recipient: String,
     pub reason: Option<String>,
+    pub finish_request_id: Option<String>,
     pub remaining_ms: u64,
     pub notification_requested: bool,
     pub notification: Option<Report>,
@@ -58,15 +63,25 @@ pub(crate) struct Completion {
     pub status: Outcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification: Option<Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_decision: Option<FinishReceipt>,
 }
 
 #[derive(Debug, Serialize)]
 struct Finish {
+    #[serde(skip)]
+    generation: Option<u64>,
     wait_id: String,
     finished: bool,
     status: Option<Outcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notification: Option<Report>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finish_decision: Option<FinishReceipt>,
 }
 
 struct Spec {
@@ -75,6 +90,7 @@ struct Spec {
     intent: Intent,
     recipient: String,
     reason: Option<String>,
+    finish_request_id: Option<String>,
     timeout_ms: u64,
     notify: bool,
 }
@@ -89,6 +105,18 @@ impl Spec {
         }
         if !valid_id(&self.recipient) {
             return Err("recipient must be next or an exact visible ASCII agent identifier".into());
+        }
+        if (self.intent == Intent::NeedUser && self.finish_request_id.is_some())
+            || self
+                .finish_request_id
+                .as_deref()
+                .is_some_and(|id| !valid_id(id))
+            || (self.intent == Intent::Finish && self.recipient == "next")
+        {
+            return Err(
+                "finish waits require an authenticated thread; only finish accepts a request ID"
+                    .into(),
+            );
         }
         if !(1000..=25000).contains(&self.timeout_ms) {
             return Err("user wait timeout_ms must be between 1000 and 25000".into());
@@ -129,6 +157,15 @@ struct Active {
     entry: Entry,
     deadline: Instant,
     reply: watch::Sender<Option<Completion>>,
+    finish_decision: Option<FinishReceipt>,
+    finish_scope: Option<Arc<CallScope>>,
+}
+
+struct Completed {
+    generation: u64,
+    result: Completion,
+    intent: Intent,
+    finish_scope: Option<Arc<CallScope>>,
 }
 
 #[derive(Default)]
@@ -136,7 +173,7 @@ struct State {
     connection_id: Option<String>,
     generation: u64,
     active: BTreeMap<String, Active>,
-    completed: VecDeque<Completion>,
+    completed: VecDeque<Completed>,
 }
 
 impl State {
@@ -153,9 +190,16 @@ impl State {
             wait_id: pending.key.id,
             status: outcome,
             notification: pending.entry.notification,
+            finish_request_id: pending.entry.finish_request_id,
+            finish_decision: pending.finish_decision,
         };
         let _ = pending.reply.send_replace(Some(result.clone()));
-        self.completed.push_back(result);
+        self.completed.push_back(Completed {
+            generation: pending.key.generation,
+            result,
+            intent: pending.entry.intent,
+            finish_scope: pending.finish_scope,
+        });
         while self.completed.len() > MAX_COMPLETED {
             self.completed.pop_front();
         }
@@ -229,7 +273,7 @@ impl Hub {
             || state
                 .completed
                 .iter()
-                .any(|value| value.wait_id == spec.wait_id)
+                .any(|value| value.result.wait_id == spec.wait_id)
             || state.active.len() == MAX_ACTIVE
         {
             Err(BeginError::Busy)
@@ -247,12 +291,17 @@ impl Hub {
                     key: key.clone(),
                     deadline,
                     reply,
+                    finish_decision: None,
+                    finish_scope: (spec.intent == Intent::Finish)
+                        .then(crate::runtime::call_scope::current)
+                        .flatten(),
                     entry: Entry {
                         wait_id: key.id.clone(),
                         episode_id: spec.episode_id.clone(),
                         intent: spec.intent,
                         recipient: spec.recipient.clone(),
                         reason: spec.reason.clone(),
+                        finish_request_id: spec.finish_request_id.clone(),
                         remaining_ms: spec.timeout_ms,
                         notification_requested: spec.notify,
                         notification: None,
@@ -286,11 +335,75 @@ impl Hub {
         finished
     }
 
-    fn finish(&self, id: &str, outcome: Outcome) -> Result<Finish, String> {
+    fn finish(
+        &self,
+        id: &str,
+        outcome: Outcome,
+        supplied_request_id: Option<&str>,
+    ) -> Result<Finish, String> {
         if !valid_id(id) {
             return Err("invalid wait_id".into());
         }
+        let target = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state
+                .active
+                .get(id)
+                .map(|active| {
+                    (
+                        active.key.generation,
+                        active.entry.intent,
+                        active.entry.finish_request_id.clone(),
+                        active.finish_scope.clone(),
+                    )
+                })
+                .or_else(|| {
+                    state
+                        .completed
+                        .iter()
+                        .rev()
+                        .find(|entry| entry.result.wait_id == id)
+                        .map(|entry| {
+                            (
+                                entry.generation,
+                                entry.intent,
+                                entry.result.finish_request_id.clone(),
+                                entry.finish_scope.clone(),
+                            )
+                        })
+                })
+        };
+        if let Some((_, intent, request_id, owner)) = &target {
+            if supplied_request_id.is_some() && supplied_request_id != request_id.as_deref() {
+                return Err(
+                    "finish_scope_mismatch: request ID does not match the exact wait".into(),
+                );
+            }
+            if *intent == Intent::Finish {
+                let owner = owner
+                    .as_ref()
+                    .ok_or("finish_scope_missing: no captured asking thread")?;
+                questions::validate_finish_owner(owner, request_id.as_deref())?;
+            }
+        } else if let Some(request_id) = supplied_request_id {
+            questions::validate_finish(Some(request_id), None)?;
+        }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let generation = state
+            .active
+            .get(id)
+            .map(|active| active.key.generation)
+            .or_else(|| {
+                state
+                    .completed
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.result.wait_id == id)
+                    .map(|entry| entry.generation)
+            });
+        if generation != target.as_ref().map(|(generation, _, _, _)| *generation) {
+            return Err("user wait changed during finish authorization".into());
+        }
         let expired = state.expire(Instant::now());
         let key = state.active.get(id).map(|value| value.key.clone());
         let finished = key.is_some_and(|key| state.finish(&key, outcome));
@@ -298,19 +411,52 @@ impl Hub {
             .completed
             .iter()
             .rev()
-            .find(|value| value.wait_id == id);
+            .find(|value| value.result.wait_id == id)
+            .map(|value| &value.result);
         let status = completed.map(|value| value.status);
         let notification = completed.and_then(|value| value.notification);
+        let finish_request_id = completed.and_then(|value| value.finish_request_id.clone());
+        let finish_decision = completed
+            .and_then(|value| value.finish_decision.clone())
+            .map(|mut receipt| {
+                receipt.consumed = false;
+                receipt
+            });
         drop(state);
         if expired || finished {
             changed();
         }
         Ok(Finish {
+            generation,
             wait_id: id.into(),
             finished,
             status,
             notification,
+            finish_request_id,
+            finish_decision,
         })
+    }
+
+    fn decision(&self, key: &Key, receipt: FinishReceipt) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = state.active.get_mut(&key.id)
+            && active.key.generation == key.generation
+        {
+            active.entry.finish_request_id = Some(receipt.request_id.clone());
+            active.finish_decision = Some(receipt);
+        }
+    }
+
+    fn completion_decision(&self, id: &str, generation: u64, receipt: &FinishReceipt) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = state.completed.iter_mut().rev().find(|entry| {
+            entry.result.wait_id == id
+                && entry.generation == generation
+                && entry.result.finish_request_id.as_deref() == Some(receipt.request_id.as_str())
+        }) && entry.result.status != Outcome::Decided
+        {
+            entry.result.finish_decision = Some(receipt.clone());
+        }
     }
 
     fn notification(&self, key: &Key, report: Report) {
@@ -342,7 +488,70 @@ impl Hub {
                     entry
                 })
                 .collect(),
-            recent: state.completed.iter().cloned().collect(),
+            recent: state
+                .completed
+                .iter()
+                .map(|entry| entry.result.clone())
+                .collect(),
+        }
+    }
+
+    fn remote_snapshot(&self) -> Snapshot {
+        // Copy the same private generation/owner proof as the visible rows, then
+        // release the hub mutex before examining the question queue.
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let now = Instant::now();
+        let mut active = Vec::new();
+        let mut recent = Vec::new();
+        for entry in state.active.values() {
+            let mut visible = entry.entry.clone();
+            visible.remaining_ms = entry.deadline.saturating_duration_since(now).as_millis() as u64;
+            active.push((visible, entry.finish_scope.clone()));
+        }
+        for entry in &state.completed {
+            recent.push((
+                entry.result.clone(),
+                entry.intent,
+                entry.finish_scope.clone(),
+            ));
+        }
+        let connected = state.connection_id.is_some();
+        let connection_id = state.connection_id.clone();
+        drop(state);
+        Snapshot {
+            connected,
+            connection_id,
+            active: active
+                .into_iter()
+                .filter_map(|(entry, owner)| {
+                    (entry.intent != Intent::Finish
+                        || owner.as_ref().is_some_and(|owner| {
+                            questions::validate_finish_owner(
+                                owner,
+                                entry.finish_request_id.as_deref(),
+                            )
+                            .is_ok()
+                        }))
+                    .then_some(entry)
+                })
+                .collect(),
+            recent: recent
+                .into_iter()
+                .filter_map(|(mut entry, intent, owner)| {
+                    let visible = intent != Intent::Finish
+                        || owner.as_ref().is_some_and(|owner| {
+                            questions::validate_finish_owner(
+                                owner,
+                                entry.finish_request_id.as_deref(),
+                            )
+                            .is_ok()
+                        });
+                    if let Some(receipt) = &mut entry.finish_decision {
+                        receipt.consumed = false;
+                    }
+                    visible.then_some(entry)
+                })
+                .collect(),
         }
     }
 
@@ -374,6 +583,9 @@ impl Hub {
 
     async fn wait(self: &Arc<Self>, spec: Spec) -> Result<Value, String> {
         let spec = spec.validate()?;
+        if spec.intent == Intent::Finish {
+            questions::validate_finish(spec.finish_request_id.as_deref(), Some(&spec.recipient))?;
+        }
         let (registration, mut receiver, deadline) = match self.begin(&spec) {
             Ok(started) => started,
             Err(BeginError::Busy) => return Ok(json!({"wait_id":spec.wait_id,"status":"busy"})),
@@ -381,7 +593,26 @@ impl Hub {
                 return Ok(json!({"wait_id":spec.wait_id,"status":"disconnected"}));
             }
         };
-        let title = "ssmcp 正在等待你回复";
+        // Creation and guard registration are synchronous inside this one native
+        // wait. There is no separate preparation RPC whose reply can be lost
+        // before cancellation learns which Human request it owns.
+        let mut finish = if spec.intent == Intent::Finish {
+            let receipt = questions::prepare_finish(
+                spec.reason.as_deref(),
+                spec.finish_request_id.as_deref(),
+                &spec.recipient,
+            )?;
+            let finish = FinishWait::begin(&receipt.request_id, &spec.recipient)?;
+            self.decision(&registration.key, receipt);
+            Some(finish)
+        } else {
+            None
+        };
+        let title = if finish.is_some() {
+            "ssmcp 等待你决定是否结束"
+        } else {
+            "ssmcp 正在等待你回复"
+        };
         let recipient = if spec.recipient == "next" {
             "Next caller"
         } else {
@@ -398,15 +629,56 @@ impl Hub {
         let mut notified = !spec.notify;
         loop {
             let complete = receiver.borrow().clone();
-            if let Some(result) = complete {
+            if let Some(mut result) = complete {
+                if result.status != Outcome::Decided
+                    && let Some(finish) = &mut finish
+                {
+                    result.finish_decision = finish.end(result.status == Outcome::TimedOut).ok();
+                    if let Some(receipt) = &result.finish_decision {
+                        self.completion_decision(
+                            &result.wait_id,
+                            registration.key.generation,
+                            receipt,
+                        );
+                    }
+                }
                 return serde_json::to_value(result)
                     .map_err(|_| "cannot encode user wait result".into());
             }
+            if Instant::now() >= deadline {
+                self.finish_key(&registration.key, Outcome::TimedOut);
+                continue;
+            }
+            if let Some(finish) = &mut finish {
+                match finish.poll(deadline) {
+                    Ok(Some(receipt)) => {
+                        self.decision(&registration.key, receipt);
+                        self.finish_key(&registration.key, Outcome::Decided);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        self.finish_key(&registration.key, Outcome::BindingInvalid);
+                        continue;
+                    }
+                }
+            }
+            let has_finish = finish.is_some();
             tokio::select! {
                 biased;
                 result = receiver.changed() => {
                     if result.is_err() {
                         return Err("user wait channel ended before a local result".into());
+                    }
+                },
+                result = async {
+                    match &mut finish {
+                        Some(finish) => finish.changed().await,
+                        None => std::future::pending::<Result<(), String>>().await,
+                    }
+                }, if has_finish => {
+                    if result.is_err() {
+                        self.finish_key(&registration.key, Outcome::Disconnected);
                     }
                 },
                 _ = tokio::time::sleep_until(deadline.into()) => {
@@ -440,6 +712,8 @@ enum Request {
         intent: Intent,
         recipient: String,
         reason: Option<String>,
+        #[serde(default)]
+        finish_request_id: Option<String>,
         timeout_ms: u64,
         #[serde(default = "yes")]
         notify: bool,
@@ -447,6 +721,8 @@ enum Request {
     Finish {
         wait_id: String,
         outcome: Outcome,
+        #[serde(default)]
+        finish_request_id: Option<String>,
     },
     Status {},
 }
@@ -468,6 +744,10 @@ pub(crate) fn cancel(prefix: &str) -> Result<String, String> {
 }
 
 pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
+    call_on(global(), arguments).await
+}
+
+async fn call_on(hub: &Arc<Hub>, arguments: Value) -> Result<Value, String> {
     let request: Request = serde_json::from_value(arguments)
         .map_err(|_| "user wait requires a valid wait/finish/status request")?;
     match request {
@@ -477,33 +757,49 @@ pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
             intent,
             recipient,
             reason,
+            finish_request_id,
             timeout_ms,
             notify,
         } => {
-            global()
-                .wait(Spec {
-                    wait_id,
-                    episode_id,
-                    intent,
-                    recipient,
-                    reason,
-                    timeout_ms,
-                    notify,
-                })
-                .await
+            hub.wait(Spec {
+                wait_id,
+                episode_id,
+                intent,
+                recipient,
+                reason,
+                finish_request_id,
+                timeout_ms,
+                notify,
+            })
+            .await
         }
-        Request::Finish { wait_id, outcome } => {
-            serde_json::to_value(global().finish(&wait_id, outcome)?)
-                .map_err(|_| "cannot encode user wait completion".into())
+        Request::Finish {
+            wait_id,
+            outcome,
+            finish_request_id,
+        } => {
+            let mut result = hub.finish(&wait_id, outcome, finish_request_id.as_deref())?;
+            if let Some(id) = result.finish_request_id.clone().or(finish_request_id) {
+                result.finish_request_id = Some(id.clone());
+                if outcome != Outcome::TimedOut {
+                    let receipt = questions::cancel_finish(&id, "wait_cancelled")?;
+                    if let Some(generation) = result.generation {
+                        hub.completion_decision(&wait_id, generation, &receipt);
+                    }
+                    result.finish_decision = Some(receipt);
+                }
+            }
+            serde_json::to_value(result).map_err(|_| "cannot encode user wait completion".into())
         }
-        Request::Status {} => Ok(json!({"schema_version":1,"state":snapshot()})),
+        Request::Status {} => Ok(json!({"schema_version":1,"state":hub.remote_snapshot()})),
     }
 }
 
 pub(crate) fn tool() -> Value {
-    json!({"name":"ssmcp.ui.wait","description":"Client presentation and local cancellation for the authenticated server ui.wait helper. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. status is observational. This is independent of the force-send listener and invokes no model.",
+    json!({"name":"ssmcp.ui.wait","description":"Internal client presentation and local cancellation for the authenticated server ui.wait helper. A finish wait synchronously creates or resumes a real verified-thread Human Yes/No request and consumes an exact Human Yes once. Text, reads, timeout and cancellation never grant completion permission. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. Remote status is observational and exposes finish waits only to their original verified thread; the local user retains the complete view. This is independent of the force-send listener and invokes no model.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
             "op":{"enum":["wait","finish","status"]},"wait_id":{"type":"string","minLength":1,"maxLength":128},
+            "finish_request_id":{"type":["string","null"],"minLength":1,"maxLength":128},
             "episode_id":{"type":"string","pattern":"^[A-Fa-f0-9]{64}$"},"intent":{"enum":["need_user","finish"]},
             "recipient":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},
             "reason":{"anyOf":[{"type":"string","maxLength":512},{"type":"null"}]},
@@ -529,6 +825,7 @@ mod tests {
             intent: Intent::NeedUser,
             recipient: "next".into(),
             reason: None,
+            finish_request_id: None,
             timeout_ms: 25_000,
             notify: false,
         }
@@ -582,7 +879,7 @@ mod tests {
         assert!(alpha.borrow().is_none() && alpine.borrow().is_none());
         assert_eq!(hub.cancel("wait-b").unwrap(), "wait-beta");
         assert_eq!(result(&beta).status, Outcome::Cancelled);
-        let finish = hub.finish("wait-beta", Outcome::Ready).unwrap();
+        let finish = hub.finish("wait-beta", Outcome::Ready, None).unwrap();
         assert!(!finish.finished);
         assert_eq!(finish.wait_id, "wait-beta");
         assert_eq!(finish.status, Some(Outcome::Cancelled));
@@ -596,11 +893,13 @@ mod tests {
         assert_eq!(hub.cancel("wait-alpha").unwrap(), "wait-alpha");
         assert_eq!(result(&alpha).status, Outcome::Cancelled);
         assert!(alpine.borrow().is_none());
-        let ready = hub.finish("wait-alpine", Outcome::Ready).unwrap();
+        let ready = hub.finish("wait-alpine", Outcome::Ready, None).unwrap();
         assert!(ready.finished);
         assert_eq!(result(&alpine).status, Outcome::Ready);
         assert!(hub.cancel("wait-alpine").is_err());
-        let unknown = hub.finish("never-registered", Outcome::Ready).unwrap();
+        let unknown = hub
+            .finish("never-registered", Outcome::Ready, None)
+            .unwrap();
         assert!(!unknown.finished);
         assert_eq!(unknown.status, None);
     }
@@ -634,25 +933,32 @@ mod tests {
             .get_mut("expired")
             .unwrap()
             .deadline = Instant::now() - Duration::from_millis(1);
-        let late = hub.finish("expired", Outcome::Ready).unwrap();
+        let late = hub.finish("expired", Outcome::Ready, None).unwrap();
         assert!(!late.finished);
         assert_eq!(late.status, Some(Outcome::TimedOut));
         assert_eq!(result(&receiver).status, Outcome::TimedOut);
         assert!(matches!(hub.begin(&spec("expired")), Err(BeginError::Busy)));
         assert_eq!(
-            hub.finish("expired", Outcome::Cancelled).unwrap().status,
+            hub.finish("expired", Outcome::Cancelled, None)
+                .unwrap()
+                .status,
             Some(Outcome::TimedOut)
         );
         for index in 0..MAX_COMPLETED + 3 {
             let id = format!("completed-{index}");
             let (_registration, receiver, _) = hub.begin(&spec(&id)).unwrap();
-            assert!(hub.finish(&id, Outcome::Ready).unwrap().finished);
+            assert!(hub.finish(&id, Outcome::Ready, None).unwrap().finished);
             assert_eq!(result(&receiver).status, Outcome::Ready);
         }
         assert_eq!(hub.snapshot().recent.len(), MAX_COMPLETED);
-        assert_eq!(hub.finish("expired", Outcome::Ready).unwrap().status, None);
         assert_eq!(
-            hub.finish("completed-0", Outcome::Ready).unwrap().status,
+            hub.finish("expired", Outcome::Ready, None).unwrap().status,
+            None
+        );
+        assert_eq!(
+            hub.finish("completed-0", Outcome::Ready, None)
+                .unwrap()
+                .status,
             None
         );
     }
@@ -666,7 +972,9 @@ mod tests {
         let ready_barrier = barrier.clone();
         let ready = std::thread::spawn(move || {
             ready_barrier.wait();
-            ready_hub.finish("racing-wait", Outcome::Ready).unwrap()
+            ready_hub
+                .finish("racing-wait", Outcome::Ready, None)
+                .unwrap()
         });
         let cancel_hub = hub.clone();
         let cancel_barrier = barrier.clone();
@@ -682,7 +990,9 @@ mod tests {
         assert_eq!(ready.finished, outcome == Outcome::Ready);
         assert_eq!(cancel.is_ok(), outcome == Outcome::Cancelled);
         assert_eq!(
-            hub.finish("racing-wait", Outcome::Ready).unwrap().status,
+            hub.finish("racing-wait", Outcome::Ready, None)
+                .unwrap()
+                .status,
             Some(outcome)
         );
         assert_eq!(hub.snapshot().recent.len(), 1);
@@ -704,7 +1014,9 @@ mod tests {
         assert!(worker.await.unwrap_err().is_cancelled());
         assert!(hub.snapshot().active.is_empty());
         assert_eq!(
-            hub.finish("aborted-future", Outcome::Ready).unwrap().status,
+            hub.finish("aborted-future", Outcome::Ready, None)
+                .unwrap()
+                .status,
             Some(Outcome::Cancelled)
         );
         let mut short = spec("local-deadline");
@@ -749,5 +1061,171 @@ mod tests {
         let mut invalid = spec("validated");
         invalid.timeout_ms = 999;
         assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn native_finish_json_cannot_forge_a_decided_outcome_or_human_actor() {
+        assert!(
+            serde_json::from_value::<Request>(json!({
+                "op":"finish","wait_id":"wait_exact","outcome":"decided"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<Request>(json!({
+                "op":"wait","wait_id":"wait_exact","episode_id":"a".repeat(64),
+                "intent":"finish","recipient":"asking-agent","reason":null,
+                "timeout_ms":1000,"notify":false,"actor":{"origin":"human"},"choice":"yes"
+            }))
+            .is_err()
+        );
+        let ordinary = Spec {
+            finish_request_id: Some("question_exact".into()),
+            ..spec("wait_exact")
+        };
+        assert!(ordinary.validate().is_err());
+    }
+
+    fn finish_call_scope(subject: &str, suffix: char) -> Arc<CallScope> {
+        let agent_id = format!("agent_{}", suffix.to_string().repeat(32));
+        CallScope::from_relay_for_client(
+            7,
+            Some("question-history-fixture"),
+            1,
+            Some(&crate::wire::ControlAttribution {
+                account: crate::wire::ControlAccount {
+                    provider: "github".into(),
+                    subject: subject.into(),
+                    login: "fixture".into(),
+                },
+                owner: None,
+                agent: Some(crate::wire::ControlAgent {
+                    id: agent_id.clone(),
+                    name: "fixture".into(),
+                }),
+            }),
+            Some(&crate::wire::CodeContext {
+                run_id: "a".repeat(32),
+                code: "return await ui.wait(client);".into(),
+                timestamp_ms: 1,
+                session_id: Some("question-history-fixture".into()),
+                thread_id: Some(agent_id),
+            }),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn remote_finish_checks_captured_scope_before_hub_mutation_and_filters_status() {
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "ssmcp-user-wait-scope-{}",
+            crate::hex::encode(random)
+        ));
+        crate::platform::private_directory(&directory).unwrap();
+        crate::client::interface::history::with_test_history(
+            directory.join("history"),
+            questions::with_test_queue(async {
+                crate::client::interface::history::record("user", "Owned finish scope fixture").unwrap();
+                let asking = finish_call_scope("42", 'a');
+                let other_thread = finish_call_scope("42", 'b');
+                let other_account = finish_call_scope("99", 'a');
+                let hub = hub();
+                let recipient = asking.thread().unwrap().thread_id().to_owned();
+                let (registration, receiver, _) = asking.scope(async {
+                    hub.begin(&Spec {
+                        intent: Intent::Finish, recipient: recipient.clone(),
+                        ..spec("wait_scope_exact")
+                    }).unwrap()
+                }).await;
+                // The real request ID has not been attached yet. The immutable
+                // original scope must already protect this short creation window.
+                for caller in [&other_thread, &other_account] {
+                    let before = hub.state.lock().unwrap().generation;
+                    let (rejected, visible) = caller.scope(async {
+                        (
+                            call_on(&hub, json!({"op":"finish","wait_id":"wait_scope_exact","outcome":"ready"})).await,
+                            call_on(&hub, json!({"op":"status"})).await.unwrap(),
+                        )
+                    }).await;
+                    assert!(rejected.is_err());
+                    assert!(visible["state"]["active"].as_array().unwrap().is_empty());
+                    assert_eq!(hub.state.lock().unwrap().generation, before);
+                    assert!(receiver.borrow().is_none());
+                    assert_eq!(hub.snapshot().active.len(), 1, "the local user retains the complete view");
+                }
+                let (receipt, mut guard) = asking.scope(async {
+                    let receipt = questions::prepare_finish(Some("May this fixture end?"), None, &recipient).unwrap();
+                    let guard = FinishWait::begin(&receipt.request_id, &recipient).unwrap();
+                    hub.decision(&registration.key, receipt.clone());
+                    (receipt, guard)
+                }).await;
+                let before_question = questions::get_view(&receipt.request_id).unwrap();
+                for caller in [&other_thread, &other_account] {
+                    let denied = caller.scope(call_on(&hub, json!({
+                        "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                        "finish_request_id":receipt.request_id
+                    }))).await;
+                    assert!(denied.is_err());
+                    assert!(receiver.borrow().is_none());
+                    assert_eq!(hub.snapshot().active.len(), 1);
+                    assert!(hub.snapshot().recent.is_empty());
+                    assert_eq!(questions::get_view(&receipt.request_id).unwrap(), before_question);
+                }
+                let mismatched = asking.scope(call_on(&hub, json!({
+                    "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                    "finish_request_id":"question_unrelated"
+                }))).await;
+                assert!(mismatched.is_err());
+                assert!(receiver.borrow().is_none());
+                assert_eq!(questions::get_view(&receipt.request_id).unwrap(), before_question);
+                let visible = asking.scope(call_on(&hub, json!({"op":"status"}))).await.unwrap();
+                assert_eq!(visible["state"]["active"].as_array().unwrap().len(), 1);
+                let cancelled = asking.scope(call_on(&hub, json!({
+                    "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                    "finish_request_id":receipt.request_id
+                }))).await.unwrap();
+                assert_eq!(cancelled["status"], "cancelled");
+                assert_eq!(result(&receiver).status, Outcome::Cancelled);
+                assert_eq!(guard.end(false).unwrap().status, questions::FinishStatus::Cancelled);
+                assert_eq!(questions::get_view(&receipt.request_id).unwrap().finish.unwrap().decision, None);
+                let hidden = other_thread.scope(call_on(&hub, json!({"op":"status"}))).await.unwrap();
+                assert!(hidden["state"]["recent"].as_array().unwrap().is_empty());
+                assert_eq!(hub.snapshot().recent.len(), 1, "local completed records remain visible");
+
+                // Drive the production native wait future, then use the local
+                // Human cancel path. The returned and cached decision must be
+                // the same generation's Cancelled receipt, never stale Pending.
+                let mut waiting = Box::pin(asking.scope(hub.wait(Spec {
+                    intent: Intent::Finish, recipient: recipient.clone(),
+                    reason: Some("Local cancellation fixture".into()),
+                    ..spec("wait_local_cancel")
+                })));
+                std::future::poll_fn(|context| {
+                    match std::future::Future::poll(waiting.as_mut(), context) {
+                        std::task::Poll::Pending => std::task::Poll::Ready(()),
+                        std::task::Poll::Ready(result) => panic!("finish unexpectedly completed before Human cancel: {result:?}"),
+                    }
+                }).await;
+                assert_eq!(hub.cancel("wait_local_cancel").unwrap(), "wait_local_cancel");
+                let returned = waiting.await.unwrap();
+                assert_eq!(returned["status"], "cancelled");
+                assert_eq!(returned["finish_decision"]["status"], "cancelled");
+                assert_eq!(returned["finish_decision"]["consumed"], false);
+                let (generation, cached) = {
+                    let state = hub.state.lock().unwrap();
+                    let entry = state.completed.iter().find(|entry| entry.result.wait_id == "wait_local_cancel").unwrap();
+                    (entry.generation, entry.result.finish_decision.clone().unwrap())
+                };
+                assert_eq!(serde_json::to_value(&cached).unwrap(), returned["finish_decision"]);
+                let mut stale = cached.clone();
+                stale.status = questions::FinishStatus::Pending;
+                hub.completion_decision("wait_local_cancel", generation.wrapping_add(1), &stale);
+                let actual = hub.snapshot().recent.into_iter()
+                    .find(|entry| entry.wait_id == "wait_local_cancel").unwrap().finish_decision.unwrap();
+                assert_eq!(actual, cached, "a different generation cannot rewrite a completed decision");
+            }),
+        ).await;
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

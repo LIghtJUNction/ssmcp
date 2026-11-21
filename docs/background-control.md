@@ -1,95 +1,25 @@
-# Ordered browser actions and condition waits
+# 在 Zuse 程序中组织动作与等待
 
-Use `ssmcp.browser.act` to send an ordered sequence to one observed browser tab.
-The client holds that tab's operation lock through the sequence and optional
-final snapshot, so another operation on the same tab cannot interleave its
-input. Other tabs retain their independent operation locks. The implementation
-is in [browser.rs](../src/browser.rs) and [actions.rs](../src/browser/actions.rs).
+SSMCP 已撤去内置浏览器批次、条件等待和后台页面控制 API。需要操作同一页面时，把观察、动作与条件判断写入独立 Zuse 程序，再通过通用 exec 运行。具体语言与操作参数以所选 CLI 的 `schema` 和 [Zuse 指南](https://github.com/LIghtJUNction/zuse#readme) 为准。
 
-Existing browser setup, private desktops and explicit host input are described
-in [Browser control and private desktops](browser-desktop.md).
-
-## Send a batch
-
-Obtain `target_id`, `inputRef` and `buttonRef` from the target's current snapshot.
-The selector and expected text below refer to elements observed on that page.
+## 一次任务，两种时间限制
 
 ```javascript
-const reply = await browser.act(clientId, {
-  target_id,
-  actions: [
-    {type: "fill", ref: inputRef, text: "Ready to save"},
-    {type: "click", ref: buttonRef},
-    {type: "wait", selector: "#result", text: "Saved", timeout_ms: 5000}
-  ]
-});
-return reply;
-```
-
-A batch contains 1–16 fill, click, key, scroll or wait actions. Its 25-second
-deadline includes acquiring the tab lock, executing actions and taking the final
-snapshot. Fields, types, sizes and numeric bounds are checked for every action
-before input starts. Element references and selectors are resolved when their
-action executes. Successful batches report acknowledged steps and, by default,
-a fresh snapshot that replaces the previous element references. Set
-`snapshot: false` when the final snapshot is unnecessary.
-
-Input actions use the same target focus emulation and press/release cleanup as
-standalone browser input. Focus emulation applies to the CDP target and is
-restored on Computer Use revocation or disconnect; it does not activate a browser tab or move the system
-pointer. Wait actions send no input.
-
-## Continue after a partial failure
-
-Read both `isError` and `structuredContent` before continuing. A failed action
-can have an effect before its response fails, so observe the page again and
-choose the remaining work from the observed state.
-
-| Report field | Meaning |
-| --- | --- |
-| `completed_count` and `completed` | Actions whose successful replies were received, in order |
-| `phase: "queue"` | Failure before the batch began its input |
-| `phase: "actions"` and `failed_index` | Zero-based index of the action that failed or timed out |
-| `phase: "snapshot"` | Input actions completed; the final snapshot failed |
-| `replay_safe: false` | Reobserve the target before deciding which operation to issue |
-
-The client stops on the first failure and returns the partial report without
-replaying the batch or falling back to desktop input. Off uses the same partial
-report. Actions whose replies were interrupted may already have affected the page.
-
-## Wait for a page condition
-
-```javascript
-return await browser.wait(clientId, {
-  target_id,
-  selector: "#result",
-  text: "Saved",
-  state: "visible",
-  timeout_ms: 5000
+return await exec.run(clientId, {
+  command: [zusePath, "run", "automation.zuse"],
+  cwd: projectDirectory,
+  wait_ms: 1000,
+  timeout_ms: 60000,
+  max_bytes: 16384
 });
 ```
 
-Provide a CSS selector, literal text, or both. When both are supplied, the first
-matching element must contain the requested text. Conditions support
-`visible`, `hidden`, `attached` and `detached`. Visible content requires
-a positive-area client rectangle and visible CSS display. Text-only conditions
-inspect the document body.
+`wait_ms` 限制这次调用等待结果的时间；任务仍在运行时，用返回的 `job_id` 继续读取。`timeout_ms` 限制命令生命周期。程序自身的页面等待与输入顺序由 Zuse 负责，SSMCP 不再提供原来 25 秒的 browser.act 批次合同或 tab 操作锁。[exec 参数](code-mode.md#exec)
 
-The 1–10000 ms timeout includes time queued for the target lock. The host polls
-the page condition and retries transient missing execution contexts during
-navigation. It does not depend on a timer scheduled inside the page.
+## 顺序、取消与重试
 
-Existing `browser.wait_for` remains available with its text
-`present`/`absent` contract and existing timeout bounds.
+同一页面的依赖操作放在同一进程中按顺序组织。只有相互独立的目标才适合并行执行；不要把一次 CLI 退出前的浏览器状态当作另一次进程的状态。
 
-## Validation entry points
+读取真实退出码、stdout、stderr 和产物，再判断哪一步完成。对已开始的操作，超时、取消或连接错误都不证明没有副作用。停止对应 owned exec job 后，重新观察目标，按实际状态继续，而不是整段重放。
 
-- `cargo test --lib browser::` covers validation, target ordering, queue
-  deadlines, navigation recovery, focus preparation and cancellation cleanup.
-- `node --test scripts/test_cua_facade.mjs` checks native argument/result
-  routing and partial-error preservation.
-- `python3 scripts/e2e_computer_use.py` exercises real Chromium batches,
-  stale references, conditional waits and the existing browser checks.
-
-[Historical PR #13 validation](validation-background-control.md) records the
-original branch environment and results.
+SSMCP 不会因 CLI 失败而改走内置 CDP、桌面点击或 Playwright。目标选择和原生权限见 [Zuse 与浏览器](browser-desktop.md)，历史内置浏览器结果见 [原 PR #13 验证](validation-background-control.md)。

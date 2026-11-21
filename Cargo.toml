@@ -118,11 +118,6 @@ include = [
     "/scripts/e2e.py",
     "/scripts/test_cua_facade.mjs",
     "/scripts/test_client_capabilities.mjs",
-    "/scripts/e2e_browser_background.py",
-    "/scripts/e2e_browser_setup.py",
-    "/scripts/e2e_private_desktop.py",
-    "/scripts/e2e_zuse_worker.py",
-    "/scripts/e2e_x11_text.py",
     "/scripts/private_xvfb.py",
     "/docs/reports/zuse-integration-20261120/**",
     "/docs/browser-desktop.md",
@@ -134,7 +129,6 @@ include = [
     "/docs/browser-existing-session.md",
     "/docs/reports/browser-existing-session-20261117-inventory.json",
     "/docs/reports/browser-efficiency-20261117/**",
-    "/scripts/e2e_computer_use.py",
     "/scripts/e2e_onboarding.py",
     "/scripts/e2e_session_features.py",
     "/scripts/e2e_agents.py",
@@ -155,8 +149,6 @@ include = [
     "/scripts/test_setup_server.py",
     "/scripts/render_log_preview.py",
     "/packaging/ssmcp-portal.service",
-    "/packaging/ssmcp-computer.lua",
-    "/scripts/e2e_computer_controls.py",
     "/docs/backends.md",
     "/docs/optional-harnesses.md",
     "/docs/agent-entry.md",
@@ -169,8 +161,6 @@ include = [
     "/scripts/ssmcp-ztty.sh",
     "/scripts/test_ztty_launcher.py",
     "/docs/windows-browser-setup.md",
-    "/scripts/test_windows_browser_bootstrap.ps1",
-    "/scripts/smoke_windows_browser.ps1",
     "/docs/configuration.md",
     "/docs/commerce.md",
     "/docs/deployment.md",
@@ -198,16 +188,18 @@ include = [
 
 [workspace]
 members = []
-exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zuse"]
+exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio"]
 resolver = "3"
 
 [dependencies]
-zuse = { package = "zuse-computer", git = "https://github.com/LIghtJUNction/zuse.git", default-features = false, features = ["std"] }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
 zharness = { git = "https://github.com/LIghtJUNction/zharness.git", default-features = false, features = ["std"] }
 zplugin = { git = "https://github.com/LIghtJUNction/zplugin.git", default-features = false, features = ["std", "macros"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "form", "query", "ws"] }
 base64 = { version = "0.23.1", default-features = false, features = ["std"] }
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2"] }
 qrcodegen = "1.8.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 png = "0.18"

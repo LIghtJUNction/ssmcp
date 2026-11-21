@@ -1,6 +1,6 @@
 ---
 name: ssmcp
-description: Operate SSH-connected ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, automatically discovered coding harnesses, scoped file access and audit, existing Chrome and native browser discovery, concise tool search, live project-context resources, project-over-global skill views, RTK command-output compression, Linux rsync transfers, and loopback TCP forwarding.
+description: Operate authenticated ssmcp workspaces through list and code_mode. Use for parallel and background commands, bounded waits, client reload, explicitly loaded coding harnesses, scoped file access and audit, standalone Zuse CLI lifecycle management, concise tool search, live project context and skill views, RTK output compression, Linux rsync transfers, and loopback TCP forwarding.
 ---
 
 # ssmcp unified workspace bridge
@@ -11,11 +11,11 @@ Call `list` first. Use each client's optional `title` to understand its task, th
 
 Keep each tool-catalog traversal on its returned cursor. Its pages share a snapshot even if a native tool directory changes; start a fresh cursor-free request to discover updates. A client retains at most four snapshots and 64 MiB of serialized JSON total. Each successful page read renews the 120-second idle timeout, but a snapshot expires at most 900 seconds after creation. Invalid cursors do not renew it, and reusing an unchanged catalog does not reset its creation time; LRU and capacity limits may evict it earlier. Restart discovery if the server reports that a snapshot expired or was evicted.
 
-Current clients connect as `type:"shell"` and provide a main interactive terminal, additional independent terminals, independent command jobs, files and context tools without requiring a Harness. Background discovery checks installed providers and registers only interfaces whose version, startup policy, handshake and actual catalog are usable. `ssmcp.harnesses.list` reports status and diagnostics; an unavailable provider does not remove Shell or other tools. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
+Current clients connect as `type:"shell"` and provide a main interactive terminal, additional independent terminals, independent command jobs, files and context tools without requiring a Harness. Load an optional provider explicitly with `ssmcp.harnesses.load` or the local load option. Only that provider is checked, started and registered after its native handshake and catalog are usable. `ssmcp.harnesses.list` reads cached status and diagnostics; an unavailable provider does not remove Shell or other tools. Remove obsolete `-t`, `--type`, `--backend` and trailing backend arguments from startup commands.
 
 Discovery must not install runtimes, dependencies or Harnesses, submit model requests, or relax native permissions. Do not treat offline package caches as proof that nothing will be installed. Providers without a verified safe startup remain unavailable. Pi discovery connects only to an explicitly configured, already initialized native JSONL RPC session through `SSMCP_PI_RPC_SOCKET`. The absolute Unix socket and its direct parent must belong to the current UID, have no group/other permissions and not be symlinks; the connected peer UID, installed binary and version are checked before a five-second `get_state` handshake. OpenCode discovery attaches only to an existing service at `http://127.0.0.1:PORT/` (`SSMCP_OPENCODE_URL`, `OPENCODE_PASSWORD`). The explicit port and root path are required; proxies, redirects, other hosts, userinfo, query and fragment are rejected. Native discovery reads only info and OpenAPI; event subscription is lazy. Missing endpoints mean unavailable. Neither adapter starts an external service or disables user extensions to manufacture a complete catalog.
 
-`list` and `tools` use one registry, preserving native Schema and descriptors with routing namespaces. Namespaces include `codex.*`, `claude.*`, `pi.*`, `opencode.*`, and `playwright.*` when its native MCP discovery succeeds; exact names come from the current catalog. Codex MCP tools are enumerated through native `mcpServerStatus/list` and forwarded through `mcpServer/tool/call`; select discovered `codex.mcp.*` names without hardcoding a server. Pi exposes only the `pi.rpc`, `ssmcp.pi.events`, `ssmcp.pi.requests`, and `ssmcp.pi.respond` bridge operations when available. A CLI installation or known control-command list is not an enumeration of its model, plugin or internal MCP tool Schema.
+`list` and `tools` use one registry, preserving native Schema and descriptors with routing namespaces. Namespaces include `codex.*`, `claude.*`, `pi.*` and `opencode.*` after explicit loading; exact names come from the current catalog. Codex MCP tools are enumerated through native `mcpServerStatus/list` and forwarded through `mcpServer/tool/call`; select discovered `codex.mcp.*` names without hardcoding a server. Pi exposes only the `pi.rpc`, `ssmcp.pi.events`, `ssmcp.pi.requests`, and `ssmcp.pi.respond` bridge operations when available. A CLI installation or known control-command list is not an enumeration of its model, plugin or internal MCP tool Schema.
 
 Read `ssmcp://guide`, `ssmcp://limits`, and `ssmcp://clients` through MCP resources or `resources.read(uri)` inside `code_mode`. Use `resources.templates()` for client-specific resources. Check current catalogs when a connected client has an older version.
 
@@ -89,14 +89,14 @@ Use terminal.open(clientId,{name,cwd,select}) for an independent interactive she
 
 Pass controller:{name,model} with the outer code_mode request when the current caller/model is known. The client shows this declaration as caller-reported, not a verified provider identity. Never guess a model from an application name. MCP clientInfo can identify the application; unknown models stay unknown. Check list's controller_metadata before relying on old clients to display declarations.
 
-Use cua.status and native cua screenshot/input/window methods for computer use; cua.browser shares the browser methods. Emit screenshots with image(await cua.screenshot(clientId,args)) and return coordinate metadata separately. Call a Codex-connected CUA MCP through the exact codex.mcp.* name discovered in its current tool catalog. Preserve native errors, image content and approval states; do not invoke another model to proxy these operations.
+Run desktop and browser tasks directly through the standalone Zuse CLI with generic exec jobs. Use the four computer lifecycle helpers only to query, download, install or uninstall that CLI. Preserve literal argv, native output and job ownership; do not invoke another model to proxy the operation.
 
 ## Execute other native tools
 
 ```js
 const client = clients.find(c => c.id === "CLIENT_ID_FROM_LIST");
 if (!client) throw new Error("Select an online client from list");
-return await tools.search(client.id, {query:"browser", limit:10, include_schemas:true});
+return await tools.search(client.id, {query:"ssmcp.computer.", limit:10, include_schemas:true});
 ```
 
 Search matches case-insensitive name/description substrings. By default it returns names, observed routing namespaces and descriptions shortened to 240 Unicode characters; include_schemas preserves the complete native descriptor. Keep the same client/query/limit/schema options when continuing with nextCursor. Search reduces model-visible catalog output and manual pagination, not the first underlying page scan. Each page is still authorized and counts toward the call budget; use max_pages for bounded work. A changed or expired page requires restarting discovery. Oversized schemas fail explicitly rather than being truncated. See ssmcp://limits for budgets; the helper requires an updated broker.
@@ -105,13 +105,19 @@ Call a discovered operation with `await call(clientId, toolName, arguments)`. Ch
 
 The native command primitives are `ssmcp.exec.start/list/status/wait/read/write/cancel/events`, plus `ssmcp.exec.forget` for completed records. When an older server lacks `exec` helpers, call these discovered tools with `call(clientId, toolName, arguments)` and inspect the full MCP result. The schemas remain authoritative. Use `Promise.all` for independent native calls; every call is separately authorized. Concurrent Cargo commands can still contend for their shared build lock.
 
-## Reuse the operator's existing Chrome
+## Manage Zuse and execute its programs
 
-When the user names an existing Chrome session, start with `call(id,"ssmcp.browser.discover",{})` and `ssmcp.harnesses.list`. Discovery reads metadata; installed extension files do not establish a paired, authorized connection. Do not launch an isolated profile or substitute Chromium or another browser family. Use an observed CDP endpoint with browser.connect, or call only actually enumerated extension tools.
+Read the actual four-tool schema with tools.search. Call computer.version(id) first and inspect isError and structuredContent. The query runs the selected CLI's --version with a deadline; an unavailable CLI is not a reason to invent its version or install it implicitly. PATH entries take precedence over managed installations, and a failed selected executable does not silently fall back.
 
-Playwright MCP must already be installed: discover `playwright-mcp` on PATH or an explicit `SSMCP_PLAYWRIGHT_MCP` entry, verify it and enumerate its native `--extension` service. Missing packages remain unavailable; do not run npx or install dependencies during discovery. Read the actual `playwright.*` Schema with tools.search, then forward through call. Preserve extension approval and native pending-request states; do not extract extension tokens or invoke a Harness model to proxy browser actions.
+When download or installation is part of the authorized task, use computer.download(id,{version?}) for an official stable GitHub release and keep its download_id. Download verifies the published asset identity, byte size and SHA-256; it neither executes nor installs. Pass that exact ID to computer.install(id,{download_id}); save the returned installation_id and absolute path. Installation stays in private manager storage and does not modify PATH or replace external executables. Use computer.uninstall(id,{installation_id}) only for an installation owned by this manager; its ownership receipt and bytes must still match.
 
-The ChatGPT extension requires its own originating browser context; do not claim ssmcp can reuse it when that connection is absent. Claude browser tools are usable only when its native interface actually enumerates them. Keep dependent actions on one page ordered; independent CDP pages can run concurrently. Prefer bounded page text and element refs when sufficient, and use images for visual checks. Native discovery and the Playwright bridge require a client update; tools.search requires a broker update. See [existing Chrome workflow](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/browser-existing-session.md) for examples and the dated machine inventory.
+Execute a prepared Zuse program with literal argv, for example exec.start(id,{command:[zusePath,"run","automation.zuse"],cwd:projectDirectory,timeout_ms:60000}). Obtain zusePath from a real version or installation result, inspect the selected CLI's --help/schema, and prepare the program for the authorized target. Use exec.read/wait/cancel with the returned job_id. Keep dependent page/input actions ordered and reobserve after uncertain effects instead of replaying them blindly.
+
+SSMCP has no built-in browser, desktop action backend, cua/omarchy helper, Playwright-specific bridge or internal worker. It does not create a hidden private desktop or fall back to host input. General exec retains the client's operating-system permissions.
+
+Run standalone Zuse directly within the authorized task. SSMCP has no takeover step, legacy control switch or default Super+Alt+C binding.
+
+When the user names an existing browser, verify that exact browser/session through the selected Zuse version's supported interface. Do not substitute a new profile or another browser family. External MCP tools remain usable only under their actually discovered names, schemas and native approvals. OAuth login and explicit human navigation remain separate from computer automation. See [Zuse lifecycle](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/computer-use.md) and [browser workflow](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/browser-desktop.md).
 
 ## Reload an updated client
 
@@ -180,6 +186,28 @@ return await ports.open({
 ```
 
 Confirm the returned state is `running` before reading the listener address on the listening client. The open call waits at most eight seconds; if it returns `starting`, use `ports.list()` to observe the same ID until its listener is ready. A `cleanup_failed` state retains pending handles; retry close or cancel and inspect the result. Swap endpoint IDs for the reverse direction. List mappings with `ports.list()` and close one with `ports.close(id)` when done. Listeners and targets are limited to loopback; the mapping remains managed after the JavaScript invocation finishes and ends on closure, expiry, authorization loss, or disconnection.
+
+## Wait for the real user before ending
+
+Use `return await ui.wait(clientId,{intent:"need_user",timeout_ms:20000})` when user input is needed. Only the final outer `structuredContent.user_wait` entry with `status:"received"` and matching `user_messages` confirms message delivery. Read those messages before continuing.
+
+Before ending, bind the existing asking participant and request a real local Human No/Yes decision:
+
+```js
+await collab.bind(clientId, {agent_id: participant.agent_id, token: participant.token});
+return await ui.wait(clientId, {
+  intent: "finish",
+  reason: "The work is ready. May this conversation end now?",
+  timeout_ms: 20000,
+  notify: false,
+});
+```
+
+Use the actual participant ID and private token; display labels grant no authority. A finish wait requires a verified thread. Already queued user input is delivered normally and never counts as approval. Each run allows one wait per client. After timeout, bind the same thread in a new call and pass the actual returned `finish_request_id` to resume; do not invent IDs.
+
+Inspect the final outer receipt for the exact client and wait. End only with `status:"decided"`, `may_finish:true`, matching request IDs, and `finish_decision` containing `status:"completed"`, `choice:"yes"`, `actor:{origin:"human"}`, a positive revision, `consumed:true`, and `invalidation_reason:null`. An inner `decision_ready`, a question-list read, Human No, text saying yes, timeout, cancel, new input, lost connection or revoked authority is not approval. A consumed decision cannot be replayed; another agent cannot approve for the user.
+
+Progress and ordinary answer/reply messages remain available. This protocol does not intercept arbitrary external model final replies or force a model to stay running. Do not revive the retired `request_finish`, `ui.finish` or `ui.answer` tools. The live red countdown is the current wait's remaining budget; waking the screen does not answer or cancel it. See [user waiting](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/user-wait.md) for the full contract.
 
 ## Observe activity and respect lifecycle
 

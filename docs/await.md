@@ -53,9 +53,9 @@ return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
 
 ## 已退役的结束目标
 
-`finish` 目标已退役，旧参数会返回 `tool_retired`，不会恢复审批观察。普通最终回复使用 `ui.message` 或 `ui.present` 的 `kind: "answer"`，无需结束许可；普通任务和用户输入的等待行为保留。[参数校验](../src/http/await_tool.rs) · [最终回复](finish-and-questions.md)
+公共 `await` 的 `finish` 目标已退役，旧参数返回 `tool_retired`。结束前的真实用户决定使用另一个接口：先绑定已验证的提问线程，再调用 `ui.wait(clientId, {intent: "finish", ...})`；只有最终外层匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。普通任务和用户输入的等待行为保留。[参数校验](../src/http/await_tool.rs) · [结束决定](finish-and-questions.md#申请结束)
 
-等待只报告被观察对象的状态，不会注入强制续做或结束同意提示。兼容字段 `completion_permission` 保持为 `null`，`continue_wait` 只标记本次是否超时；调用者根据任务决定是否再次等待。[返回结构](../src/http/await_tool.rs)
+公共 `await` 只报告被观察对象的状态。它的兼容字段 `completion_permission` 保持为 `null`，`continue_wait` 只标记本次是否超时，不能将这些字段用作结束许可。`ui.wait(intent: "finish")` 的独立外层回执和重试规则见[等待用户输入](user-wait.md#结束前取得真实用户决定)。[返回结构](../src/http/await_tool.rs)
 
 ## 历史验证范围
 

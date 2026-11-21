@@ -275,46 +275,26 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.questions", {
 
 [完整 UI 配置与按键](client-ui.md) · [日志与输出归档](logging.md)
 
-## 8. 在 code_mode 中复用浏览器插件
+## 8. 直接调用 Zuse CLI 操作桌面与浏览器
 
-控制现有 Chrome 时，先区分三件事：本机发现了扩展文件、Playwright MCP 服务已注册工具、浏览器已经批准连接。前两项都不能替代第三项。ssmcp 的 Playwright 适配器复用已安装的 MCP 服务及其 `--extension` 模式；首次连接仍由浏览器中的原生扩展确认，默认后台模式不会替用户批准配对。
-
-先在 `code_mode` 查看元数据、服务状态和实际目录，以下代码不执行浏览器操作：
+先查询实际 Zuse CLI，再通过通用 exec 运行它。SSMCP 的 `computer` 命名空间只提供版本查询、下载、安装和卸载；旧浏览器、桌面动作和 Playwright setup 入口已撤去。
 
 ```javascript
 const clientId = "CLIENT_ID_FROM_LIST";
-const [observed, providers, catalog] = await Promise.all([
-  call(clientId, "ssmcp.browser.discover", {}),
-  call(clientId, "ssmcp.harnesses.list", {}),
-  tools.search(clientId, {
-    query: "playwright.",
-    include_schemas: true,
-    limit: 20
-  })
-]);
-return { observed, providers, catalog };
+const reply = await computer.version(clientId);
+if (reply.isError) return reply;
+const cli = reply.structuredContent;
+if (!cli.available) return cli;
+return await exec.run(clientId, {
+  command: [cli.path, "--help"],
+  wait_ms: 5000,
+  timeout_ms: 10000
+});
 ```
 
-目录有 `nextCursor` 时，沿用相同查询和游标继续读取。根据真实返回的工具名、描述和 `inputSchema` 选择动作，再调用：
+读取所选版本的帮助与 schema，准备针对当前目标的 Zuse 程序，再使用 `exec.start` 的字面 argv 执行。保留 job ID、真实输出和退出状态；需要连续浏览器状态时使用该 CLI 支持的持久进程。用户指定已有浏览器时，不以新 profile 或其他浏览器代替。
 
-```javascript
-// 把下面的名称与参数替换为刚才目录实际返回的值。
-return await call(
-  "CLIENT_ID_FROM_LIST",
-  "EXACT_PLAYWRIGHT_TOOL_NAME_FROM_CATALOG",
-  { /* 按该工具的 inputSchema 填写实际参数 */ }
-);
-```
-
-适配器只给原生名称加 `playwright.` 路由前缀，保留工具描述、参数、返回值和原生授权。操作后继续读取该工具的实际结果或快照，再决定下一步；不要根据想象的页面结构、工具名或旧引用连续点击。截图结果包含 MCP image block 时，可用本页图片示例中的 `image(result)` 展示。
-
-找不到可调用工具时，查看 `ssmcp.harnesses.list` 的实际诊断。本机 `ssmcp setup browser --check` 检查已有安装；`ssmcp setup browser` 可保存可用 CLI 的配置；只有明确需要安装时才用 `--install`。配置变化后重启客户端刷新目录。扩展已安装但 MCP CLI 缺失、CLI 不支持后台模式、浏览器尚未批准连接，是不同状态；不要将它们都当成“浏览器已可控制”。
-
-ChatGPT、Claude 等扩展的安装记录仅用于发现。它们只有在发起端会话或客户端真实暴露了可用工具时才能调用；不能凭扩展名称或磁盘文件推断出可通过 `code_mode` 使用的隐藏接口。需要复用已有登录会话时，保留当前浏览器与其原生批准流程。
-
-`browser.*` 是另一条已存在的 Chromium CDP 通道，不是 `playwright.*` 的别名。只有观察到实际可用的 loopback CDP 端点后才连接。`browser.act` 可在同一目标上按顺序执行最多 16 个动作，`browser.wait` 可等待已观察到的 selector 或文字；批次失败时检查已完成数量与失败步骤，不整批自动重放。不要为了代替用户指定的现有 Chrome 而启动另一浏览器。
-
-[现有浏览器与扩展](browser-existing-session.md) · [后台浏览器与桌面](browser-desktop.md) · [原生 Playwright 适配器](../src/backend/playwright.rs)
+下载和安装各自需要明确调用。下载返回 `download_id`，安装返回 `installation_id` 与绝对路径，不自动修改 PATH；卸载只接受仍属该管理器的安装。OAuth 浏览器登录和已授权外部 MCP 通用转发继续保留。[四个管理工具](computer-use.md) · [已有浏览器](browser-existing-session.md)
 
 ## 9. 在输入框执行 shell 命令
 

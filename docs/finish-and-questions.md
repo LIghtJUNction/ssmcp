@@ -1,19 +1,29 @@
-# 最终回复、异步问题与原生消息
+# 结束决定、异步问题与原生消息
 
-最终回复现在直接使用 `ssmcp.ui.message` 或 `ssmcp.ui.present` 的 `kind: "answer"`，无需申请结束许可。它们仍要求真实会话归属，并按原来的身份、历史记录和幂等键处理提交。[消息提交](../src/client/interface/messages.rs) · [会话归属](../src/runtime/call_scope.rs)
+准备结束对话前，通过 `ui.wait(intent: "finish")` 请求本机真实用户决定。先绑定已验证的提问线程，读取最终外层 `structuredContent.user_wait`：只有匹配的 Human Yes 被原线程按精确申请和修订号消费，并经最终权限与输入复核返回 `status: "decided"`、`may_finish: true`，才允许本轮结束。超时、普通消息、取消以及问题列表中的批准状态都不能代替这份回执。[完整参数与回执](user-wait.md#结束前取得真实用户决定) · [服务端协调](../src/http/user_wait.rs)
 
-## 已退役的入口
+## 申请结束
 
-结束审批和 agent 代答入口已从公共目录与原生目录移除。直接调用旧名称会返回 `tool_retired`，不会创建问题卡、等待审批或写入代答；旧 `await` 的 `finish` 目标也已停用。[公共分派](../src/http.rs) · [原生分派前校验](../src/wire.rs) · [等待目标](../src/http/await_tool.rs)
+`ui.wait` 使用 `intent: "finish"`，可以带 `reason`、1–25 秒的 `timeout_ms` 和 `notify`。没有已验证线程绑定时返回错误。若已有可交付的普通输入，服务按原协议交付输入，不创建新的结束申请，也不批准结束；否则，同一次原生等待创建或续接真实的 No/Yes 问题。[本机等待入口](../src/client/interface/user_wait.rs)
+
+用户在 Questions 中选择 No 或 Yes，再按 Enter 提交；默认选中 No 仍是“未决定”。评论中的 `yes`、唤醒画面和 agent 参数都不能代替用户的选择。No 表示继续工作；Yes 只用于原提问线程的这一次精确申请，不授予其他线程或后续请求通行权。其他 agent 不能代用户批准 Yes。[Human 决策规则](../src/client/interface/questions/requests.rs)
+
+一次有界等待超时后，保留实际返回的 `finish_request_id`，在新的外层调用中绑定同一线程并带该 ID 续等。超时不批准也不拒绝；取消、新的相关输入、断线或重连、权限与绑定变化都不能产生许可。已消费的 Yes 再被读取或续等时 `consumed: false`，不能重放。[续接与取消](../src/client/interface/questions/workflow.rs)
+
+脚本内部的 `decision_ready` 仍不是最终结果；最终外层回执必须同时包含匹配的申请 ID、`finish_decision.status: "completed"`、`choice: "yes"`、`actor: {"origin":"human"}`、正的修订号、`consumed: true`、空的失效原因，以及 `may_finish: true`。[回执提交](../src/code_mode/user_wait.rs)
+
+普通进度和 `ssmcp.ui.message` / `ssmcp.ui.present` 的 `kind: "answer"`、`ui.reply` 继续可用，并保留真实会话归属、历史记录和幂等处理。这些消息入口不是结束许可的消费入口；外部模型自行停止或发出最终发言也不会被 MCP 强制拦截。调用者应在结束前完成上述真实用户决策流程。[消息提交](../src/client/interface/messages.rs) · [会话归属](../src/runtime/call_scope.rs)
+
+## 继续退役的旧入口
+
+当前结束确认使用 `ui.wait(intent: "finish")`，不恢复旧公共工具。直接调用下列旧名称仍返回 `tool_retired`；普通任务、消息和用户输入等待保留。[公共分派](../src/http.rs) · [原生分派前校验](../src/wire.rs) · [等待目标](../src/http/await_tool.rs)
 
 | 原入口 | 当前行为 |
 |---|---|
-| `request_finish` | 退役，最终回复不再依赖它。 |
-| `ssmcp.ui.finish` | 退役，不创建、恢复或批准结束请求。 |
+| `request_finish` | 退役；结束决定从已验证线程的 `ui.wait` 发起。 |
+| `ssmcp.ui.finish` | 退役，不通过旧工具创建、恢复或批准结束请求。 |
 | `ssmcp.ui.answer` | 退役，agent 不能代替本机用户回答问题。 |
-| `await` 的 `type: "finish"` | 退役，普通任务、消息和用户输入等待保留。 |
-
-调用响应不再注入强制续做、结束同意或会话催答提示。等待仍返回真实状态、截止时间结果和消息回执；超时表示本次等待没有收到可交付输入，调用者可根据任务需要再次等待。[等待回执](../src/code_mode/user_wait.rs) · [响应交付](../src/http.rs)
+| 公共 `await` 的 `type: "finish"` | 退役；它与当前 `ui.wait` 的 `intent: "finish"` 是不同接口。 |
 
 ## 异步问题与答案
 
@@ -35,7 +45,7 @@
 
 ## 历史验证记录
 
-以下记录对应旧版本的结束审批行为，不是本次退役改动的验证结论。
+以下记录对应旧版本的结束审批行为，不是当前 `ui.wait` 结束决策集成的验收结论。
 
 2026-11-20 在不可变源码 `a6b1e29ddc2bac1e730efbfd063e46843731df92` 上完成了 106 项定向 Rust 回归，全部通过，格式和差异检查也通过。其中 35 项覆盖问题与结束状态机，3 项验证公共结束接口的原生回执边界，6 项覆盖原生最终消息，26 项验证通用等待及真实内存账户、成员和用户输入队列之间的集成。[验证命令、分组及范围](validation/await-finish-20261120.md)
 

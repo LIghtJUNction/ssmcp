@@ -67,6 +67,50 @@ pub(crate) enum FinishStatus {
     Completed,
 }
 
+/// Compact decision evidence. Reading a completed request does not consume it
+/// again; only the exact successful consume operation sets consumed=true.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FinishReceipt {
+    pub request_id: String,
+    pub status: FinishStatus,
+    pub choice: Option<FinishChoice>,
+    pub actor: Option<DecisionActor>,
+    pub revision: Option<u64>,
+    pub consumed: bool,
+    pub invalidation_reason: Option<String>,
+}
+
+impl FinishReceipt {
+    pub(super) fn from_view(view: QuestionView, consumed: bool) -> Result<Self, String> {
+        let finish = view
+            .finish
+            .ok_or("finish_request_required: not a finish decision")?;
+        Ok(Self {
+            request_id: view.question.id,
+            status: finish.status,
+            choice: finish.decision.as_ref().map(|decision| decision.choice),
+            actor: finish
+                .decision
+                .as_ref()
+                .map(|decision| decision.actor.clone()),
+            revision: finish.decision.as_ref().map(|decision| decision.revision),
+            consumed,
+            invalidation_reason: finish.invalidation_reason,
+        })
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn human_permission(&self) -> bool {
+        self.consumed
+            && self.status == FinishStatus::Completed
+            && self.choice == Some(FinishChoice::Yes)
+            && self.actor == Some(DecisionActor::Human)
+            && self.revision.is_some_and(|revision| revision > 0)
+            && self.invalidation_reason.is_none()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AnswerDelivery {
@@ -409,24 +453,108 @@ impl super::Queue {
         changed
     }
 
-    // Historical receipt tests exercise this invariant; production no longer
-    // consumes completion permission when publishing a final message.
+    pub(super) fn finish_view_for(
+        &self,
+        scope: &RequestScope,
+        id: &str,
+    ) -> Result<QuestionView, String> {
+        super::identifier(id)?;
+        self.validate_scope(scope)?;
+        let record = self
+            .records
+            .iter()
+            .find(|record| record.question.id == id)
+            .ok_or("finish_request_missing: this request is no longer retained")?;
+        let routing = record
+            .routing
+            .as_ref()
+            .ok_or("finish_request_required: not a scoped request")?;
+        if routing.kind != QuestionKind::Finish
+            || routing.scope_expired
+            || !routing.scope.same_thread(scope)
+        {
+            return Err(
+                "finish_scope_mismatch: this request belongs to another thread or connection"
+                    .into(),
+            );
+        }
+        Ok(record.view())
+    }
+
+    pub(super) fn consume_finish_revision(
+        &mut self,
+        scope: &RequestScope,
+        id: &str,
+        revision: u64,
+    ) -> Result<QuestionView, String> {
+        self.finish_view_for(scope, id)?;
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.question.id == id)
+            .expect("validated finish request");
+        let routing = record.routing.as_mut().expect("validated finish scope");
+        if revision == 0
+            || !routing.human_approved()
+            || routing.answer_revision != revision
+            || routing
+                .decision
+                .as_ref()
+                .is_none_or(|decision| decision.revision != revision)
+            || record.question.state != QuestionState::Answered
+        {
+            return Err("finish_approval_required: an unconsumed Human Yes for this exact request and revision is required".into());
+        }
+        routing.finish_status = Some(FinishStatus::Completed);
+        self.revision = self.revision.saturating_add(1);
+        Ok(record.view())
+    }
+
+    pub(super) fn cancel_finish_for(
+        &mut self,
+        scope: &RequestScope,
+        id: &str,
+        reason: &str,
+    ) -> Result<QuestionView, String> {
+        self.finish_view_for(scope, id)?;
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.question.id == id)
+            .expect("validated finish request");
+        let routing = record.routing.as_mut().expect("validated finish scope");
+        if matches!(
+            routing.finish_status,
+            Some(FinishStatus::Pending | FinishStatus::Approved)
+        ) {
+            routing.finish_status = Some(FinishStatus::Cancelled);
+            routing.invalidation_reason = Some(reason.into());
+            if record.question.state == QuestionState::Pending {
+                record.question.state = QuestionState::Skipped;
+            }
+            self.revision = self.revision.saturating_add(1);
+        }
+        Ok(record.view())
+    }
+
+    // Keep historical invariant tests on the same production exact-revision
+    // consume path; final messages themselves do not call this operation.
     #[cfg(test)]
     pub(super) fn consume_finish(&mut self, scope: &RequestScope) -> Result<String, String> {
         self.validate_scope(scope)?;
-        let record = self.records.iter_mut().find(|record| {
-            record.routing.as_ref().is_some_and(|routing| {
-                routing.scope.same_thread(scope)
-                    && routing.human_approved()
+        let candidate = self
+            .records
+            .iter()
+            .find_map(|record| {
+                let routing = record.routing.as_ref()?;
+                (routing.scope.same_thread(scope) && routing.human_approved())
+                    .then(|| (record.question.id.clone(), routing.answer_revision))
             })
-        }).ok_or("finish_approval_required: the local user must approve request_finish before an explicit final answer")?;
-        record
-            .routing
-            .as_mut()
-            .expect("matched scope")
-            .finish_status = Some(FinishStatus::Completed);
-        self.revision = self.revision.saturating_add(1);
-        Ok(record.question.id.clone())
+            .ok_or(
+                "finish_approval_required: the local user must approve this exact finish request",
+            )?;
+        self.consume_finish_revision(scope, &candidate.0, candidate.1)?;
+        Ok(candidate.0)
     }
 }
 

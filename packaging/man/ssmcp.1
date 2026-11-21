@@ -1,4 +1,4 @@
-.TH SSMCP 1 "2026-11-18" "ssmcp" "User Commands"
+.TH SSMCP 1 "2026-11-21" "ssmcp" "User Commands"
 .SH NAME
 ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .SH SYNOPSIS
@@ -66,6 +66,14 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .PP
 .B ssmcp
 .B \-\-list-tools
+.PP
+.B ssmcp computer
+.IR "version | download [VERSION] | install DOWNLOAD_ID | uninstall INSTALLATION_ID"
+.RB [ \-\-json ]
+.PP
+.B ssmcp computer
+.IR "on | off | toggle | status"
+.RB [ \-\-json ]
 .PP
 .B ssmcp sessions
 .IR "list | status NAME | start NAME | close NAME | stop NAME | restart NAME | logs NAME | remove NAME | auth NAME"
@@ -418,8 +426,8 @@ missing runtimes or dependencies. Node.js 18 or newer, bubblewrap 0.8 or newer a
 server dependencies managed by the operating system package manager; no npm package is needed. A client-only
 ssmcp installation does not require these server dependencies. The public
 JavaScript API includes clients, call, tools, logging, exec, reload, outputs.read/stat/cleanup,
-fs, context, skills, agents, rsync/sync, jobs, ports, resources, browser, computer
-and omarchy. Short native
+fs, context, skills, agents, rsync/sync, jobs, ports, resources and the four
+computer lifecycle helpers. Short native
 results are returned unchanged. Long backend output is replaced by artifact
 metadata; inspect spilled and use outputs.read. PTY artifacts contain raw terminal
 bytes; command streams have separate artifacts; oversized MCP results retain
@@ -480,6 +488,47 @@ The /api/event stream is connected lazily on an explicit operation or events cal
 startup can initialize schedules and install configured plugins, so automatic
 spawn is unavailable. HTTP, SSE and WebSocket operations require successful
 native discovery and retain native permission decisions.
+.SH ZUSE CLI MANAGEMENT
+.B ssmcp computer
+defaults to
+.B version .
+It queries the actual standalone Zuse executable with a bounded
+.B \-\-version
+call. An existing PATH installation takes precedence over a managed installation;
+a failed selected executable is reported without silently selecting another.
+.TP
+.BI "ssmcp computer download " "[VERSION]"
+Download the official stable GitHub release asset for this platform, checking
+its identity, published size and SHA-256. Omit VERSION for the latest stable
+release. Return a download_id without executing or installing the archive.
+.TP
+.BI "ssmcp computer install " DOWNLOAD_ID
+Reverify a managed download and install its executable in private manager storage.
+Return installation_id and the executable path. Do not change PATH or replace
+an external, Cargo or system installation.
+.TP
+.BI "ssmcp computer uninstall " INSTALLATION_ID
+Remove only the exact managed installation whose ownership receipt, file
+identity and bytes still match. Arbitrary executable paths are not accepted.
+.PP
+Append
+.B \-\-json
+to any lifecycle command for the complete native MCP result; otherwise print
+its structured body. Use the real IDs returned by the preceding operations.
+The corresponding native tools are ssmcp.computer.version, download, install
+and uninstall; the code-mode helpers use computer.METHOD(clientId, arguments).
+.PP
+Run desktop and browser programs directly with the selected Zuse CLI through
+generic exec jobs. Read that executable's help and schema, retain the job ID,
+and inspect actual output and termination before reporting success. SSMCP has
+no embedded desktop/browser action backend, Playwright-specific bridge,
+internal worker or hidden fallback. Legacy control switches, compatibility entry
+points and the default Super+Alt+C binding have been removed. Standalone Zuse
+requires no takeover step.
+.PP
+Generic exec uses the client's operating-system permissions; it does not revoke
+other programs' desktop access. OAuth browser login, explicit local navigation
+and authorized generic external MCP forwarding remain supported.
 .SH MANAGED COMMANDS
 Use exec.run(clientId,{command:[program,arg],wait_ms:5000}) for an independent
 command. Results carry job_id, running, exit_code, stdout, stderr and byte

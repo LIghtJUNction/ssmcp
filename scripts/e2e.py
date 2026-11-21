@@ -67,66 +67,9 @@ BUILTIN_TOOLS = frozenset({
     "ssmcp.ui.tool_summary",
     "ssmcp.ui.get", "ssmcp.ui.set", "ssmcp.ui.filter", "ssmcp.ui.action", "ssmcp.ui.queue", "ssmcp.ui.message", "ssmcp.ui.present", "ssmcp.ui.ask", "ssmcp.ui.questions", "ssmcp.ui.question_ack","ssmcp.ui.question_delivery", "ssmcp.ui.history", "ssmcp.ui.harness",
     "ssmcp.ui.history_archive", "ssmcp.ui.history_update",
-    "ssmcp.browser.discover",
-    "ssmcp.browser.status",
-    "ssmcp.browser.launch",
-    "ssmcp.browser.connect",
-    "ssmcp.browser.tabs",
-    "ssmcp.browser.open",
-    "ssmcp.browser.navigate",
-    "ssmcp.browser.snapshot", "ssmcp.browser.wait_for",
-    "ssmcp.browser.click",
-    "ssmcp.browser.fill",
-    "ssmcp.browser.key",
-    "ssmcp.browser.act",
-    "ssmcp.browser.wait",
-    "ssmcp.browser.scroll",
-    "ssmcp.browser.evaluate",
-    "ssmcp.browser.screenshot",
-    "ssmcp.browser.close",
-    "ssmcp.browser.disconnect",
-    "ssmcp.computer.status",
-    "ssmcp.computer.desktop_start", "ssmcp.computer.desktop_status",
-    "ssmcp.computer.desktop_stop", "ssmcp.computer.app_launch",
-    "ssmcp.computer.monitors",
-    "ssmcp.computer.windows",
-    "ssmcp.computer.focus",
-    "ssmcp.computer.screenshot",
-    "ssmcp.computer.move",
-    "ssmcp.computer.click",
-    "ssmcp.computer.drag",
-    "ssmcp.computer.key",
-    "ssmcp.computer.type",
-    "ssmcp.computer.scroll",
-    "ssmcp.computer.watch_until_click",
-    "ssmcp.omarchy.status",
-    "ssmcp.omarchy.themes",
-    "ssmcp.omarchy.theme_set",
-    "ssmcp.omarchy.backgrounds",
-    "ssmcp.omarchy.background_set",
-    "ssmcp.omarchy.fonts",
-    "ssmcp.omarchy.font_set",
-    "ssmcp.omarchy.audio",
-    "ssmcp.omarchy.audio_set",
-    "ssmcp.omarchy.brightness",
-    "ssmcp.omarchy.brightness_set",
-    "ssmcp.omarchy.toggles",
-    "ssmcp.omarchy.toggle_set",
-    "ssmcp.omarchy.workspaces",
-    "ssmcp.omarchy.workspace_switch",
-    "ssmcp.omarchy.window_action",
-    "ssmcp.omarchy.apps",
-    "ssmcp.omarchy.app_launch",
-    "ssmcp.omarchy.menu",
-    "ssmcp.omarchy.battery",
-    "ssmcp.omarchy.network",
+    "ssmcp.computer.version", "ssmcp.computer.download",
+    "ssmcp.computer.install", "ssmcp.computer.uninstall",
 })
-if sys.platform == "linux":
-    BUILTIN_TOOLS |= frozenset({
-        "ssmcp.computer.move_path",
-        "ssmcp.computer.keyboard_state",
-        "ssmcp.computer.num_lock",
-    })
 
 
 def free_port() -> int:
@@ -512,8 +455,7 @@ class Harness:
             installed.append((harness, fixture, fixture_args))
         elif fixture is not None or fixture_args:
             raise ValueError("fixture arguments require an explicit harness")
-        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode",
-                 "playwright": "playwright-mcp"}
+        names = {"codex": "codex", "cc": "claude", "pi": "pi", "opencode": "opencode"}
         for kind, program, arguments in installed:
             if kind not in names or program is None:
                 raise ValueError("a known harness and local fixture must be supplied together")

@@ -223,7 +223,6 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       BUILD_ARGS: ${{ matrix.build_args }}
-      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,33 +244,6 @@ jobs:
         run: python scripts/release.py package --target "$TARGET"
       - name: Verify native installation, update and failed-download handling
         run: python scripts/test_installers.py "$TARGET"
-      - name: Test native Windows browser bootstrap safeguards
-        if: contains(matrix.target, 'windows')
-        run: pwsh -NoProfile -NonInteractive -File scripts/test_windows_browser_bootstrap.ps1 -Out "out/windows-browser-bootstrap-${{ matrix.target }}.json"
-      - name: Smoke test real native Windows browser dependencies
-        if: contains(matrix.target, 'windows')
-        timeout-minutes: 35
-        run: >-
-          pwsh -NoProfile -NonInteractive -File scripts/smoke_windows_browser.ps1
-          -ClientPath "target/$TARGET/release/ssmcp.exe"
-          -Target "$TARGET" -ExpectedVersion "$RELEASE_VERSION"
-          -Out "out/windows-native-browser-${{ matrix.target }}.json"
-      - name: Retain real Windows browser dependency evidence
-        if: always() && contains(matrix.target, 'windows')
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows-native-browser-${{ matrix.target }}
-          path: out/windows-native-browser-${{ matrix.target }}.json
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Retain Windows browser bootstrap evidence
-        if: always() && contains(matrix.target, 'windows')
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows-browser-bootstrap-${{ matrix.target }}
-          path: out/windows-browser-bootstrap-${{ matrix.target }}.json
-          if-no-files-found: warn
-          retention-days: 14
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ssmcp-${{ matrix.target }}

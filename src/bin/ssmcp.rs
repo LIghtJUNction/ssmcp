@@ -1,14 +1,4 @@
 fn main() -> std::process::ExitCode {
-    // Run native computer-use work before Tokio or any other threads start.
-    if let Some(result) = ssmcp::computer::worker_entry() {
-        return match result {
-            Ok(()) => std::process::ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("ssmcp zuse worker: {error}");
-                std::process::ExitCode::FAILURE
-            }
-        };
-    }
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     if std::env::var_os("MALLOC_MMAP_THRESHOLD_").is_none()
         && std::env::var_os("GLIBC_TUNABLES").is_none()

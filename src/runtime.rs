@@ -270,7 +270,6 @@ pub struct Runtime {
     native: NativeHost,
     time: Arc<time::Clock>,
     files: Arc<Files>,
-    desktop: Arc<Desktop>,
     plugins: plugins::Plugins,
     output: Arc<OutputStore>,
     audit: Arc<EventLog>,
@@ -304,18 +303,17 @@ impl Runtime {
         let constructor = ConstructorContext {
             root: root.clone(),
             context_roots,
-            registry: registry.clone(),
             output: output.clone(),
         };
         let files = Files::new(&constructor)?;
-        let desktop = Desktop::new(&constructor, backend.computer_use())?;
+        let desktop = Desktop::new(&constructor)?;
         let time = time::Clock::new()?;
         let native = NativeHost::new(
             registry.clone(),
             vec![
                 Definition::new(backend.clone()),
                 Definition::new(files.clone()),
-                Definition::new(desktop.clone()),
+                Definition::new(desktop),
                 Definition::new(time.clone()),
             ],
         )?;
@@ -350,7 +348,6 @@ impl Runtime {
             native,
             time,
             files,
-            desktop,
             plugins,
             code_audit: CodeAudit::new(audit.clone()),
             call_connection: call_scope::connection(),
@@ -421,20 +418,6 @@ impl Runtime {
     pub(crate) fn disconnect_timing(&self) {
         self.time.disconnect();
     }
-    /// Local frontend methods, deliberately absent from the remote tool registry.
-    pub(crate) fn set_host_input_local(&self, enabled: bool) -> Result<Value, String> {
-        self.desktop.set_host_input_local(enabled)
-    }
-    pub(crate) fn toggle_host_input_local(&self) -> Result<Value, String> {
-        self.desktop.toggle_host_input_local()
-    }
-    pub(crate) fn cancel_host_input(&self) {
-        self.desktop.cancel_host_input();
-    }
-    pub(crate) fn host_input_status(&self) -> Value {
-        self.desktop.host_input_status()
-    }
-
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
@@ -698,14 +681,7 @@ impl Runtime {
                 "file_audit":"unknown","approval":"native"}),
             );
         }
-        let control = matches!(
-            tool.provider,
-            Provider::Browser
-                | Provider::Computer
-                | Provider::Omarchy
-                | Provider::Sessions
-                | Provider::Playwright
-        );
+        let control = matches!(tool.provider, Provider::Computer | Provider::Sessions);
         if control {
             self.audit
                 .push(json!({"type":"ssmcp.control.started","call_id":call_id,

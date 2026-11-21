@@ -149,6 +149,7 @@ async fn failed_time_calls_and_their_real_summary_probe_keep_all_delivery_passiv
         assert!(audit.time_observation_only(fixture.session.client_id()));
         let original = code_mode::tool_result(Err(failure));
         let report = fixture.report(audit.clone());
+        let response_started = std::time::Instant::now();
         let response = finish_user_response(&report, original.clone()).await;
         assert_eq!(response["isError"], true);
         assert_eq!(response["content"][0], original["content"][0]);
@@ -160,7 +161,15 @@ async fn failed_time_calls_and_their_real_summary_probe_keep_all_delivery_passiv
         }
         assert!(audit.time_observation_only(fixture.session.client_id()));
         assert!(audit.steering_targets().is_empty());
-        assert!(fixture.session.tool_summary_advertised());
+        assert!(
+            fixture.session.tool_summary_advertised(),
+            "native summary probe did not establish capability: bound={bound}, client_id={}, elapsed_ms={}, session_alive={}, peer_finished={}, {}; response={response:#}",
+            fixture.session.client_id(),
+            response_started.elapsed().as_millis(),
+            fixture.session.is_alive(),
+            fixture.peer.is_finished(),
+            fixture.summary_peer_trace(),
+        );
         assert_eq!(requirement(&fixture), queued);
         assert_eq!(fixture.message_status(&message_id).await, "queued");
         // Finalizing again neither probes twice nor replays the failed action.

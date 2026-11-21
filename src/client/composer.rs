@@ -72,10 +72,6 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Restart this client session (alias of /reload)",
     },
     SlashCommand {
-        name: "/computer",
-        description: "电脑控制：开启、关闭或查看 Computer Use 状态",
-    },
-    SlashCommand {
         name: "/command",
         description: "View complete command and script: /command [JOB_ID]",
     },
