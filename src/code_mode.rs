@@ -48,6 +48,7 @@ static PREPARATIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
 pub(crate) struct AuditRun {
     pub context: Arc<crate::wire::CodeContext>,
     pub controller: Option<crate::wire::Controller>,
+    pub openai_context: Option<crate::wire::openai::OpenAiContext>,
     targets: Arc<Mutex<HashSet<String>>>,
     steering_targets: Arc<Mutex<HashSet<String>>>,
     // An actual time-only run remains passive even when identity was bound.
@@ -118,6 +119,7 @@ impl AuditRun {
         Ok(Self {
             context: Arc::new(context),
             controller,
+            openai_context: None,
             targets: Arc::new(Mutex::new(HashSet::new())),
             steering_targets: Arc::new(Mutex::new(HashSet::new())),
             time_observation_activity: Arc::new(Mutex::new(HashMap::new())),

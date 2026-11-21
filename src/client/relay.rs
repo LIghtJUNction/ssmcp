@@ -74,13 +74,14 @@ pub(super) fn command(executable: &Path, server: &str, credential: Option<&Crede
         .env(
             "SSMCP_RELAY_CAPABILITIES",
             format!(
-                "{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{}",
                 crate::wire::SESSION_ACCESS_CAPABILITY,
                 crate::wire::CONTROL_ATTRIBUTION_CAPABILITY,
                 crate::wire::messages::CAPABILITY,
                 crate::wire::versions::CAPABILITY,
                 crate::wire::wait_display::CAPABILITY,
-                crate::wire::wait_display::TIME_CAPABILITY
+                crate::wire::wait_display::TIME_CAPABILITY,
+                crate::wire::openai::CAPABILITY
             ),
         )
         .stdin(Stdio::piped())
@@ -115,16 +116,27 @@ pub(super) fn offer_chat_disabled(command: &mut Command) {
     );
 }
 
-/// Read the actual parent-generated offer, including the self-only override.
-/// A Ready claim cannot enable a capability this process did not request.
-pub(super) fn timing_offer(command: &Command) -> (bool, bool) {
-    let offer = command
+/// The actual parent-generated offer, including the self-only override.
+fn parent_offer(command: &Command) -> Option<&str> {
+    command
         .as_std()
         .get_envs()
         .find(|(name, _)| *name == "SSMCP_RELAY_CAPABILITIES")
         .and_then(|(_, value)| value)
-        .and_then(|value| value.to_str());
-    let Some(offer) = offer.filter(|value| access_capability_header(Some(value)).is_some()) else {
+        .and_then(|value| value.to_str())
+        .filter(|value| access_capability_header(Some(value)).is_some())
+}
+
+pub(super) fn openai_context_offer(command: &Command) -> bool {
+    parent_offer(command).is_some_and(|offer| {
+        offer
+            .split(',')
+            .any(|value| value.trim() == crate::wire::openai::CAPABILITY)
+    })
+}
+
+pub(super) fn timing_offer(command: &Command) -> (bool, bool) {
+    let Some(offer) = parent_offer(command) else {
         return (false, false);
     };
     let has = |name| offer.split(',').any(|value| value.trim() == name);
@@ -157,6 +169,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::wait_display::CAPABILITY
                 | crate::wire::wait_display::TIME_CAPABILITY
                 | crate::wire::CHAT_DISABLED_CAPABILITY
+                | crate::wire::openai::CAPABILITY
         ) || capabilities[..index].contains(value)
     }) {
         return None;

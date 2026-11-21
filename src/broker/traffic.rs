@@ -457,6 +457,7 @@ mod tests {
                     operation: Operation::ListTools { cursor: None },
                     controller: None,
                     code_context: None,
+                    openai_context: None,
                     authorization: Some(auth.clone()),
                     reply,
                 })

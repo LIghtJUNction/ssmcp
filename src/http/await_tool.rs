@@ -116,6 +116,8 @@ pub(super) struct Arguments {
     agent: Option<Agent>,
     #[serde(skip)]
     pub(super) controller: Option<Controller>,
+    #[serde(skip)]
+    pub(super) openai_context: Option<crate::wire::openai::OpenAiContext>,
 }
 
 fn identifier(value: &str, limit: usize) -> bool {
@@ -965,8 +967,9 @@ pub(super) async fn execute(
     args: Arguments,
 ) -> Result<Value, String> {
     let client_id = args.client_id.clone();
-    let run =
+    let mut run =
         code_mode::AuditRun::new("await: typed passive observation", args.controller.clone())?;
+    run.openai_context = args.openai_context.clone();
     let mut report = CodeRunReport {
         broker: broker.clone(),
         user: user.clone(),

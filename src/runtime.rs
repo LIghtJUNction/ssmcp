@@ -495,6 +495,26 @@ impl Runtime {
         )
     }
 
+    pub(crate) fn relay_call_scope(
+        &self,
+        request_id: u64,
+        attribution: Option<&crate::wire::ControlAttribution>,
+        context: Option<&crate::wire::CodeContext>,
+        openai: Option<crate::wire::openai::OpenAiContext>,
+    ) -> Result<
+        (
+            Arc<call_scope::CallScope>,
+            Option<call_scope::OpenAiObservation>,
+        ),
+        String,
+    > {
+        let scope = self.call_scope(request_id, attribution, context)?;
+        let observation = openai
+            .zip(context)
+            .and_then(|(openai, context)| scope.openai_observation(openai, context.timestamp_ms));
+        Ok((scope, observation))
+    }
+
     pub(crate) fn begin_code_call(
         &self,
         operation: &Operation,

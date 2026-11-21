@@ -500,6 +500,8 @@ struct CodeArguments {
     controller: Option<ControllerInput>,
     #[serde(skip)]
     controller_context: Option<Controller>,
+    #[serde(skip)]
+    openai_context: Option<crate::wire::openai::OpenAiContext>,
     #[serde(default)]
     agent: Option<AgentInput>,
 }
@@ -725,6 +727,8 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
             let mut arguments =
                 await_tool::Arguments::parse(arguments).map_err(|error| Fault::params(&error))?;
             arguments.controller = request_controller(request);
+            arguments.openai_context =
+                crate::wire::openai::OpenAiContext::from_meta(request.param("_meta"));
             Ok(Action::Await(arguments))
         }
         "list" => {
@@ -782,6 +786,8 @@ fn operation(request: &RpcRequest<'_>) -> Result<Action, Fault> {
                     "code_mode requires code and accepts timeout_ms, controller {name, model}, and agent {client_id,id,token}",
                 )
             })?;
+            arguments.openai_context =
+                crate::wire::openai::OpenAiContext::from_meta(request.param("_meta"));
             arguments.controller_context = match &arguments.controller {
                 Some(controller) => Some(
                     controller
@@ -982,7 +988,8 @@ async fn execute(
         .try_with(Clone::clone)
         .unwrap_or_default();
     let controller = arguments.controller_context.clone();
-    let audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
+    let mut audit_run = code_mode::AuditRun::new(&arguments.code, controller.clone())?;
+    audit_run.openai_context = arguments.openai_context;
     if let Some(agent) = &arguments.agent {
         let session = broker
             .client(&user, &authorization, &agent.client_id)
@@ -3174,6 +3181,46 @@ mod tests {
         value["params"]["_meta"] =
             json!({"io.modelcontextprotocol/clientInfo":{"name":"\u{1b}[2J","version":"1"}});
         assert!(request_controller(&parse(&value)).is_none());
+    }
+
+    #[test]
+    fn openai_correlation_metadata_is_per_request_and_never_supplies_controller_identity() {
+        let mut request = json!({"jsonrpc":"2.0","method":"tools/call","id":1,"params":{
+            "name":"code_mode","arguments":{"code":"return 1;"},
+            "_meta":{"openai/session":"synthetic-session","openai/subject":"synthetic-subject"}
+        }});
+        let Action::Code(first) =
+            operation(&parse(&request)).unwrap_or_else(|err| panic!("{}", err.message))
+        else {
+            panic!("expected code_mode")
+        };
+        assert!(first.controller_context.is_none());
+        request["params"]["_meta"] = json!({"openai/subject":[1],"openai/userLocation":"ignored"});
+        let Action::Code(next) =
+            operation(&parse(&request)).unwrap_or_else(|err| panic!("{}", err.message))
+        else {
+            panic!("expected code_mode")
+        };
+        assert!(next.openai_context.is_none());
+        let original = first.openai_context.unwrap();
+        assert_eq!(original.session.as_deref(), Some("synthetic-session"));
+        assert_eq!(original.subject.as_deref(), Some("synthetic-subject"));
+
+        request["params"] = json!({
+            "name":"await",
+            "arguments":{"client_id":"fixture","targets":[{"type":"exec","job_id":"fixture_job"}]},
+            "_meta":{"openai/session":"await-session"}
+        });
+        let Action::Await(wait) =
+            operation(&parse(&request)).unwrap_or_else(|err| panic!("{}", err.message))
+        else {
+            panic!("expected typed await")
+        };
+        assert_eq!(
+            wait.openai_context.unwrap().session.as_deref(),
+            Some("await-session")
+        );
+        assert!(wait.controller.is_none());
     }
 
     fn modern_request(method: &str) -> Value {

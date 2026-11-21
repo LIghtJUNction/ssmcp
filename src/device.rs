@@ -392,6 +392,7 @@ pub(crate) struct DevicePeer {
     pub wait_display: bool,
     pub time_observation: bool,
     pub chat_disabled: bool,
+    pub openai_context: bool,
 }
 
 impl From<Registration> for DevicePeer {
@@ -404,6 +405,7 @@ impl From<Registration> for DevicePeer {
             wait_display: false,
             time_observation: false,
             chat_disabled: false,
+            openai_context: false,
             account: Some(account),
         }
     }
@@ -791,6 +793,7 @@ async fn connect(
         wait_display: capability_requested(&headers, wire::wait_display::CAPABILITY),
         time_observation: capability_requested(&headers, wire::wait_display::TIME_CAPABILITY),
         chat_disabled: capability_requested(&headers, wire::CHAT_DISABLED_CAPABILITY),
+        openai_context: capability_requested(&headers, wire::openai::CAPABILITY),
     };
     let transport = broker
         .admit_transport()
@@ -1185,6 +1188,23 @@ mod tests {
     #[tokio::test]
     async fn control_attribution_websocket_negotiates_without_changing_legacy_frames() {
         use tokio_tungstenite::tungstenite::Message;
+
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+        enum LegacyCall {
+            Call {
+                #[serde(rename = "id")]
+                _id: u64,
+                #[serde(rename = "operation")]
+                _operation: Operation,
+                #[serde(rename = "controller")]
+                _controller: Option<wire::Controller>,
+                #[serde(rename = "attribution")]
+                _attribution: Option<wire::ControlAttribution>,
+                #[serde(rename = "code_context")]
+                _code_context: Option<wire::CodeContext>,
+            },
+        }
         let directory = Temporary::new();
         let mut broker = Broker::with_identity_config(
             "https://ssmcp.test".into(),
@@ -1225,13 +1245,18 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = crate::http::router(broker.clone());
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let offers: [&[&str]; 4] = [
+        let offers: [&[&str]; 5] = [
             &[],
             &[wire::SESSION_ACCESS_CAPABILITY],
             &[wire::CONTROL_ATTRIBUTION_CAPABILITY],
             &[
                 wire::SESSION_ACCESS_CAPABILITY,
                 wire::CONTROL_ATTRIBUTION_CAPABILITY,
+            ],
+            &[
+                wire::SESSION_ACCESS_CAPABILITY,
+                wire::CONTROL_ATTRIBUTION_CAPABILITY,
+                wire::openai::CAPABILITY,
             ],
         ];
         for capabilities in offers {
@@ -1253,7 +1278,12 @@ mod tests {
                 .await
                 .unwrap();
             for bound in [false, true] {
-                let run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
+                let mut run = crate::code_mode::AuditRun::new("return 1;", None).unwrap();
+                run.openai_context = wire::openai::OpenAiContext::from_meta(Some(&json!({
+                    "openai/session":"synthetic-session",
+                    "openai/subject":"untrusted-subject",
+                    "account":{"subject":"impostor"}
+                })));
                 let owner = crate::bridge::owner(IDENTITY_RESOURCE, &authorization).unwrap();
                 let agent = if bound {
                     let agent = session
@@ -1298,7 +1328,9 @@ mod tests {
                             controller,
                             attribution,
                             code_context,
+                            openai_context,
                         } => {
+                            assert!(openai_context.is_none());
                             assert_eq!(name, "ssmcp.client.capabilities");
                             assert_eq!(arguments, json!({}));
                             assert!(controller.is_none());
@@ -1343,7 +1375,20 @@ mod tests {
                         attribution,
                         controller,
                         code_context,
+                        openai_context,
                     } => {
+                        let expected_openai =
+                            bound && capabilities.contains(&wire::openai::CAPABILITY);
+                        assert_eq!(openai_context.is_some(), expected_openai);
+                        assert_eq!(raw.get("openai_context").is_some(), expected_openai);
+                        assert_eq!(
+                            serde_json::from_value::<LegacyCall>(raw.clone()).is_err(),
+                            expected_openai
+                        );
+                        if let Some(context) = openai_context {
+                            assert_eq!(context.session.as_deref(), Some("synthetic-session"));
+                            assert_eq!(context.subject.as_deref(), Some("untrusted-subject"));
+                        }
                         assert!(matches!(operation, Operation::Status {}));
                         assert_eq!(
                             controller.unwrap().name.as_deref(),

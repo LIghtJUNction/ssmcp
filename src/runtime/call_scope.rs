@@ -4,7 +4,7 @@
 //! Run IDs correlate presentation; they do not grant access to any resource.
 use crate::{
     client::interface::history::{self, HistoryId, HistoryOwner},
-    wire::{CodeContext, ControlAttribution},
+    wire::{CodeContext, ControlAttribution, openai::OpenAiContext},
 };
 use std::{
     future::Future,
@@ -30,6 +30,20 @@ pub(crate) struct CallScope {
     attribution: Option<ControlAttribution>,
     thread: Option<ThreadScope>,
     history: Option<Result<HistoryOwner, String>>,
+}
+
+/// Local sidecar write bound to the already captured history at call admission.
+pub(crate) struct OpenAiObservation {
+    owner: HistoryOwner,
+    metadata: OpenAiContext,
+    observed_ms: u64,
+}
+
+impl OpenAiObservation {
+    /// Returns false only if the verified history has not been saved yet.
+    pub(crate) fn record(&self) -> Result<bool, String> {
+        history::openai::observe(&self.owner, &self.metadata, self.observed_ms)
+    }
 }
 
 /// Accepted only from the relay's verified participant binding, never tool JSON.
@@ -147,6 +161,22 @@ impl CallScope {
 
     pub(crate) fn thread(&self) -> Option<&ThreadScope> {
         self.thread.as_ref()
+    }
+
+    pub(crate) fn openai_observation(
+        &self,
+        metadata: OpenAiContext,
+        observed_ms: u64,
+    ) -> Option<OpenAiObservation> {
+        // Ordinary unbound calls may have a display owner. That alone cannot
+        // associate an external conversation or subject with the history.
+        self.thread()?;
+        let owner = self.history.as_ref()?.as_ref().ok()?.clone();
+        Some(OpenAiObservation {
+            owner,
+            metadata,
+            observed_ms,
+        })
     }
 
     pub(crate) fn same_call(&self, other: &Self) -> bool {
