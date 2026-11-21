@@ -1,7 +1,11 @@
 use super::*;
 use std::fs;
 use std::io::{Cursor, Write};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 
 struct Temporary(PathBuf);
 
@@ -132,6 +136,107 @@ fn package(target: &str) -> (release::Release, Vec<u8>, Vec<u8>) {
     (release(target, &bytes), bytes, executable)
 }
 
+#[tokio::test]
+async fn download_client_uses_explicit_tls_in_a_fresh_process() {
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "computer::tests::download_client_without_global_provider_fixture",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("SSMCP_COMPUTER_TLS_CLIENT_FIXTURE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(15), command.output())
+        .await
+        .expect("isolated download-client fixture exceeded its deadline")
+        .expect("could not start the isolated download-client fixture");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "isolated download-client fixture failed: {}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains("SSMCP_COMPUTER_TLS_CLIENT_OK"),
+        "the exact download-client fixture did not run: {stdout}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "isolated subprocess fixture; launched by download_client_uses_explicit_tls_in_a_fresh_process"]
+async fn download_client_without_global_provider_fixture() {
+    assert_eq!(
+        std::env::var("SSMCP_COMPUTER_TLS_CLIENT_FIXTURE").as_deref(),
+        Ok("1")
+    );
+    assert!(
+        rustls::crypto::CryptoProvider::get_default().is_none(),
+        "the fixture must start without another test's global TLS provider"
+    );
+    let _client = release::download_client().expect("the actual download client must build");
+    assert!(
+        rustls::crypto::CryptoProvider::get_default().is_none(),
+        "the download client must not install a process-global TLS provider"
+    );
+    println!("SSMCP_COMPUTER_TLS_CLIENT_OK");
+}
+
+#[test]
+fn release_target_selects_only_official_platforms() {
+    for (os, arch, gnu, expected) in [
+        ("linux", "x86_64", true, "x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64", true, "aarch64-unknown-linux-gnu"),
+        ("macos", "x86_64", false, "x86_64-apple-darwin"),
+        ("macos", "aarch64", false, "aarch64-apple-darwin"),
+        ("windows", "x86_64", false, "x86_64-pc-windows-msvc"),
+    ] {
+        assert_eq!(release::target_for(os, arch, gnu).unwrap(), expected);
+    }
+}
+
+#[test]
+fn release_target_rejects_unsupported_platforms_without_a_fallback() {
+    for (os, arch, gnu) in [
+        ("windows", "aarch64", false),
+        ("linux", "x86_64", false),
+        ("linux", "aarch64", false),
+        ("linux", "arm", true),
+        ("macos", "arm", false),
+        ("freebsd", "x86_64", false),
+    ] {
+        let error = release::target_for(os, arch, gnu)
+            .expect_err("unsupported platforms must not select another target");
+        assert!(error.contains("No official Zuse release target"));
+        assert!(error.contains("no fallback was selected"));
+    }
+}
+
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(target_os = "windows", target_arch = "x86_64")
+)))]
+#[test]
+fn native_release_target_is_explicitly_unsupported() {
+    let error = release::target().unwrap_err();
+    assert!(error.contains("No official Zuse release target"));
+    assert!(error.contains("no fallback was selected"));
+}
+
 #[test]
 fn official_asset_requires_exact_digest_size_tag_target_and_single_match() {
     let (receipt, bytes, _) = package("x86_64-unknown-linux-gnu");
@@ -256,129 +361,148 @@ fn zip_rejects_extra_executables_unsafe_paths_and_damaged_payload() {
     assert!(receipt.verify(&bytes, target).is_err());
 }
 
-fn installed(root: &Path) -> (storage::Store, storage::Installation, Vec<u8>) {
-    let store = storage::Store::open(root, true).unwrap().unwrap();
-    let (release, bytes, binary) = package(release::target().unwrap());
-    let download = store.save_download(release, &bytes).unwrap();
-    let installation = store.install(&download.download_id).unwrap();
-    (store, installation, binary)
-}
+// These tests install an archive for the current official release target.
+// Unsupported hosts still run the platform-independent archive and CLI tests.
+#[cfg(any(
+    all(
+        target_os = "linux",
+        target_env = "gnu",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+mod supported_installation {
+    use super::*;
+    use std::path::Path;
 
-#[test]
-fn install_is_private_atomic_and_never_changes_an_external_entry() {
-    let temporary = Temporary::new();
-    let external = temporary.0.join("external-zuse");
-    fs::write(&external, b"external 0.4.0").unwrap();
-    let root = temporary.0.join("manager");
-    assert!(storage::Store::open(&root, false).unwrap().is_none());
-    assert!(!root.exists());
-    let (store, receipt, binary) = installed(&root);
-    let path = store.executable(&receipt);
-    assert_eq!(fs::read(&path).unwrap(), binary);
-    assert_eq!(fs::read(&external).unwrap(), b"external 0.4.0");
-    assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
-    assert!(
-        fs::read_dir(root.join("installations"))
-            .unwrap()
-            .all(|entry| !entry
+    fn installed(root: &Path) -> (storage::Store, storage::Installation, Vec<u8>) {
+        let store = storage::Store::open(root, true).unwrap().unwrap();
+        let (release, bytes, binary) = package(release::target().unwrap());
+        let download = store.save_download(release, &bytes).unwrap();
+        let installation = store.install(&download.download_id).unwrap();
+        (store, installation, binary)
+    }
+
+    #[test]
+    fn install_is_private_atomic_and_never_changes_an_external_entry() {
+        let temporary = Temporary::new();
+        let external = temporary.0.join("external-zuse");
+        fs::write(&external, b"external 0.4.0").unwrap();
+        let root = temporary.0.join("manager");
+        assert!(storage::Store::open(&root, false).unwrap().is_none());
+        assert!(!root.exists());
+        let (store, receipt, binary) = installed(&root);
+        let path = store.executable(&receipt);
+        assert_eq!(fs::read(&path).unwrap(), binary);
+        assert_eq!(fs::read(&external).unwrap(), b"external 0.4.0");
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
+        assert!(
+            fs::read_dir(root.join("installations"))
                 .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".pending"))
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".pending"))
         );
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o700
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert!(store.uninstall("../external-zuse").is_err());
+        store.uninstall(&receipt.installation_id).unwrap();
+        assert!(!path.exists());
+        assert_eq!(fs::read(&external).unwrap(), b"external 0.4.0");
+    }
+
+    #[test]
+    fn uninstall_refuses_changed_bytes_replaced_identity_or_unrecorded_files() {
+        let temporary = Temporary::new();
+        let (store, receipt, binary) = installed(&temporary.0.join("manager"));
+        let path = store.executable(&receipt);
+        fs::write(&path, b"replacement").unwrap();
+        assert!(store.uninstall(&receipt.installation_id).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+        fs::write(&path, &binary).unwrap();
+        let extra = path.parent().unwrap().join("user-file");
+        fs::write(&extra, b"preserve").unwrap();
+        assert!(store.uninstall(&receipt.installation_id).is_err());
+        assert_eq!(fs::read(&extra).unwrap(), b"preserve");
+        fs::remove_file(&extra).unwrap();
+        let replacement = path.with_file_name("replacement");
+        fs::write(&replacement, &binary).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&replacement, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::remove_file(&path).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        assert!(store.uninstall(&receipt.installation_id).is_err());
+        assert_eq!(fs::read(&path).unwrap(), binary);
+    }
+
+    #[test]
+    fn canonical_owned_path_keeps_receipt_identity_and_external_paths_stay_unmanaged() {
+        let temporary = Temporary::new();
+        let (store, receipt, _) = installed(&temporary.0.join("manager"));
+        let canonical = store.executable(&receipt).canonicalize().unwrap();
+        let matched = store.matching(&canonical).unwrap().unwrap();
+        assert_eq!(matched.installation_id, receipt.installation_id);
+        let external = temporary.0.join("external-zuse");
+        fs::write(&external, b"external").unwrap();
+        assert!(
+            store
+                .matching(&external.canonicalize().unwrap())
+                .unwrap()
+                .is_none()
         );
     }
-    assert!(store.uninstall("../external-zuse").is_err());
-    store.uninstall(&receipt.installation_id).unwrap();
-    assert!(!path.exists());
-    assert_eq!(fs::read(&external).unwrap(), b"external 0.4.0");
-}
 
-#[test]
-fn uninstall_refuses_changed_bytes_replaced_identity_or_unrecorded_files() {
-    let temporary = Temporary::new();
-    let (store, receipt, binary) = installed(&temporary.0.join("manager"));
-    let path = store.executable(&receipt);
-    fs::write(&path, b"replacement").unwrap();
-    assert!(store.uninstall(&receipt.installation_id).is_err());
-    assert_eq!(fs::read(&path).unwrap(), b"replacement");
-    fs::write(&path, &binary).unwrap();
-    let extra = path.parent().unwrap().join("user-file");
-    fs::write(&extra, b"preserve").unwrap();
-    assert!(store.uninstall(&receipt.installation_id).is_err());
-    assert_eq!(fs::read(&extra).unwrap(), b"preserve");
-    fs::remove_file(&extra).unwrap();
-    let replacement = path.with_file_name("replacement");
-    fs::write(&replacement, &binary).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o700)).unwrap();
+    #[test]
+    fn uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match() {
+        let temporary = Temporary::new();
+        let (store, receipt, binary) = installed(&temporary.0.join("manager"));
+        let path = store.executable(&receipt);
+        let external_link = temporary.0.join("linked-zuse");
+        fs::hard_link(&path, &external_link).unwrap();
+        assert!(store.uninstall(&receipt.installation_id).is_err());
+        assert_eq!(fs::read(&path).unwrap(), binary);
+        assert_eq!(fs::read(&external_link).unwrap(), binary);
+        fs::remove_file(&external_link).unwrap();
+        store.uninstall(&receipt.installation_id).unwrap();
+        assert!(!path.exists());
     }
-    fs::remove_file(&path).unwrap();
-    fs::rename(&replacement, &path).unwrap();
-    assert!(store.uninstall(&receipt.installation_id).is_err());
-    assert_eq!(fs::read(&path).unwrap(), binary);
-}
 
-#[test]
-fn canonical_owned_path_keeps_receipt_identity_and_external_paths_stay_unmanaged() {
-    let temporary = Temporary::new();
-    let (store, receipt, _) = installed(&temporary.0.join("manager"));
-    let canonical = store.executable(&receipt).canonicalize().unwrap();
-    let matched = store.matching(&canonical).unwrap().unwrap();
-    assert_eq!(matched.installation_id, receipt.installation_id);
-    let external = temporary.0.join("external-zuse");
-    fs::write(&external, b"external").unwrap();
-    assert!(
-        store
-            .matching(&external.canonicalize().unwrap())
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
-fn uninstall_refuses_a_hard_link_even_when_identity_and_bytes_match() {
-    let temporary = Temporary::new();
-    let (store, receipt, binary) = installed(&temporary.0.join("manager"));
-    let path = store.executable(&receipt);
-    let external_link = temporary.0.join("linked-zuse");
-    fs::hard_link(&path, &external_link).unwrap();
-    assert!(store.uninstall(&receipt.installation_id).is_err());
-    assert_eq!(fs::read(&path).unwrap(), binary);
-    assert_eq!(fs::read(&external_link).unwrap(), binary);
-    fs::remove_file(&external_link).unwrap();
-    store.uninstall(&receipt.installation_id).unwrap();
-    assert!(!path.exists());
-}
-
-#[test]
-fn install_rechecks_cached_download_before_publishing_any_executable() {
-    let temporary = Temporary::new();
-    let root = temporary.0.join("manager");
-    let store = storage::Store::open(&root, true).unwrap().unwrap();
-    let (release, bytes, _) = package(release::target().unwrap());
-    let receipt = store.save_download(release, &bytes).unwrap();
-    fs::write(
-        root.join("downloads")
-            .join(&receipt.download_id)
-            .join("archive"),
-        b"changed",
-    )
-    .unwrap();
-    assert!(store.install(&receipt.download_id).is_err());
-    assert_eq!(fs::read_dir(root.join("installations")).unwrap().count(), 0);
+    #[test]
+    fn install_rechecks_cached_download_before_publishing_any_executable() {
+        let temporary = Temporary::new();
+        let root = temporary.0.join("manager");
+        let store = storage::Store::open(&root, true).unwrap().unwrap();
+        let (release, bytes, _) = package(release::target().unwrap());
+        let receipt = store.save_download(release, &bytes).unwrap();
+        fs::write(
+            root.join("downloads")
+                .join(&receipt.download_id)
+                .join("archive"),
+            b"changed",
+        )
+        .unwrap();
+        assert!(store.install(&receipt.download_id).is_err());
+        assert_eq!(fs::read_dir(root.join("installations")).unwrap().count(), 0);
+    }
 }
 
 #[cfg(unix)]
