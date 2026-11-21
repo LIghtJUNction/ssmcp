@@ -45,6 +45,32 @@ client_registry = "/var/lib/ssmcpd/oauth-clients.toml"
 
 已使用的刷新令牌哈希保留到该授权族原来的总期限。使用旧 RT 重放会撤销该族并保存撤销结果。授权码重放仍先核对客户端、resource、回调和 PKCE；错误的绑定不能被用来撤销他人的授权。一个账户或授权族的撤销不应影响另一账户的有效授权。[旋转与鉴权](../src/oauth.rs)
 
+## 同站点授权迁移
+
+原地升级只需保留原持久目录、配置和 issuer，不需要先导出再导入。`ssmcpd oauth` 提供的是独立的授权迁移入口：它只迁移 MCP OAuth 客户端登记和账户授权，不包含门户账户、CLI 设备登录、计费数据、服务配置或网络连接。[迁移实现](../src/oauth/transfer.rs)
+
+在维护窗口停止持有源注册表的核心进程后，以状态文件所属的服务账户运行。导出会取得同一独占锁；仍有写进程、未完成提交标记、损坏文件或不安全权限时拒绝继续，不会绕过检查。
+
+```sh
+sudo -u ssmcpd ssmcpd oauth export \
+  --public-url https://ssmcp.example \
+  --client-registry /var/lib/ssmcpd/oauth-clients.toml \
+  --output /var/lib/ssmcpd/oauth-export-new
+
+sudo -u ssmcpd ssmcpd oauth import \
+  --public-url https://ssmcp.example \
+  --input /var/lib/ssmcpd/oauth-export-new \
+  --output /var/lib/ssmcpd/oauth-restored-new
+```
+
+所有路径必须是绝对路径，输出目录必须不存在。命令在新建的 `0700` 临时目录中写入 `0600` 状态文件，复用现有持久层验证，并核对带摘要的 `migration.json`。整目录完成后才通过禁止覆盖的原子重命名发布；已有目标即使为空也不会被替换。返回的 JSON 只给出路径、数量、摘要和覆盖范围，不打印令牌或私有授权记录。
+
+导入只接受相同 issuer，并保留原客户端期限、授权族总期限、刷新重放记录和已用授权码。命令不自动修改配置或启动服务；将回包的 `client_registry` 路径显式配置到新核心，并继续保留原门户状态与身份提供者配置。跨机器搬运导出目录时应维持私有权限，以目标服务账户读取；命令不会自动 `chown` 或用 root 身份绕过所有权。
+
+若源目录只有客户端登记、没有账户授权文件，回包会明确标记 `coverage: "client_registrations_only"`。这不能证明旧访问令牌已保全，也不能恢复已经丢失的内存授权。完整账户授权快照标记为 `account_grants`，但仍不迁移未完成登录或 Legacy 连接授权。旧备份不能代表备份之后的刷新、撤销或新授权；应使用停写后取得的当前快照，不能把恢复旧快照当成安全的授权回滚。
+
+后端升级仍可能中断 WebSocket 和正在执行的请求。现有客户端会用保存的账户凭据自动重连，网络故障不会清除登录；已过期、已撤销或身份不匹配的凭据仍须重新授权。这项迁移不保证第三方 MCP 客户端保持原网络连接，也不会重放执行结果不确定的业务请求。
+
 ## 本地回归
 
 ```sh
@@ -56,3 +82,4 @@ cargo clippy --locked --offline --all-targets -- -D warnings
 新增回归覆盖：账户 AT/RT 恢复与原总期限、RT 重放跨再次重启、授权码 PKCE/resource 绑定、显式账户撤销、过期记录清理、损坏或未完成提交、权限与符号链接，以及意图建立后替换失败时拒绝旧快照。[持久化测试](../src/oauth/grant_tests.rs)
 
 真实进程回归启动三个私有测试进程，使用生产 HTTP router 和临时账户存储：第一个进程接受原 AT 并旋转 RT；第二个接受旋转后的 AT、拒绝旧 RT 重放；第三个确认该族仍已撤销。每一代子进程均由测试持有并等待退出，监听仅在 loopback，目录在结束时清理。它验证真实进程退出后的文件恢复，没有连接 GitHub OAuth、操作真实账户或重启已安装服务。
+

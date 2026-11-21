@@ -89,6 +89,22 @@ impl Registry {
         path: &Path,
         issuer: &str,
     ) -> crate::Result<(Self, HashMap<String, Client>)> {
+        Self::open_with_creation(path, issuer, true)
+    }
+
+    /// Migration must not turn a mistyped source path into an empty registry.
+    pub(super) fn open_existing(
+        path: &Path,
+        issuer: &str,
+    ) -> crate::Result<(Self, HashMap<String, Client>)> {
+        Self::open_with_creation(path, issuer, false)
+    }
+
+    fn open_with_creation(
+        path: &Path,
+        issuer: &str,
+        create: bool,
+    ) -> crate::Result<(Self, HashMap<String, Client>)> {
         if !path.is_absolute() {
             return Err("OAuth client registry needs an absolute path".into());
         }
@@ -128,6 +144,12 @@ impl Registry {
                 "OAuth registry directory must be owned by the daemon user with mode 0700".into(),
             );
         }
+        if !create {
+            // A missing or unsafe migration source must not even create a lock
+            // beside a mistyped path. Re-read after locking to close this check.
+            let source = open_at(&dir, &filename, libc::O_RDONLY | libc::O_NONBLOCK)?;
+            private_file(&source)?;
+        }
         let lockname = CString::new(format!("{}.lock", filename.to_string_lossy()))?;
         let lock = open_at(
             &dir,
@@ -161,7 +183,7 @@ impl Registry {
             libc::O_RDONLY | libc::O_NONBLOCK,
         ) {
             Ok(file) => registry.load(file)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(error) if create && error.kind() == io::ErrorKind::NotFound => {
                 let empty = HashMap::new();
                 registry.save(&empty)?;
                 empty
@@ -347,3 +369,4 @@ pub(super) fn write_atomic(dir: &File, filename: &CString, bytes: &[u8]) -> crat
     }
     result
 }
+

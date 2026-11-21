@@ -26,6 +26,8 @@ const HELP: &str = r#"ssmcpd - OAuth-authenticated HTTPS terminal MCP gateway
 Usage:
   ssmcpd serve [--config PATH] [--public-url https://HOST] [--listen 127.0.0.1:8080] [--portal-only]
   ssmcpd check-runtime
+  ssmcpd oauth export --public-url https://HOST --client-registry FILE --output NEW_DIR
+  ssmcpd oauth import --public-url https://HOST --input EXPORT_DIR --output NEW_DIR
 
 Runtime check:
   check-runtime verifies the installed code_mode runner and mandatory OS sandbox.
@@ -67,6 +69,7 @@ Token lifetime options for serve (whole seconds; TOML keys are under [oauth]):
   Parent directory must exist, be daemon-owned and mode 0700; files use 0600.
   Registrations and account grants survive restart with their original expiry and revocations.
   Only hashes are stored; unfinished logins and legacy connection-bound grants do not survive.
+  Use ssmcpd oauth --help for private, same-issuer offline migration to a new directory.
   Login codes and authorization forms last 30 minutes.
 
 Run serve in the foreground under systemd.
@@ -263,6 +266,10 @@ fn run() -> ssmcp::Result<()> {
         return Ok(());
     }
     let remaining: Vec<String> = args.collect();
+    if mode == "oauth" {
+        println!("{}", ssmcp::oauth::transfer::run(&remaining)?);
+        return Ok(());
+    }
     if mode == "check-runtime" {
         if remaining.len() == 1 && matches!(remaining[0].as_str(), "--help" | "-h") {
             print!("{HELP}");
@@ -1067,3 +1074,4 @@ client_secret = "example-test-secret"
     }
 
 }
+
