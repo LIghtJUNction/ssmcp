@@ -91,12 +91,18 @@ pub(crate) async fn dispatch(args: &[OsString]) -> crate::Result<bool> {
             json,
         } => {
             let computer = crate::computer::Computer::new(std::env::current_dir()?)?;
-            let result = match computer.perform(name, arguments).await {
+            let result = match computer
+                .perform_with_child_diagnostics(name, arguments, !json)
+                .await
+            {
                 Ok(result) => result,
                 Err(message) if json => {
-                    let result = crate::backend::error_result(&message);
+                    let diagnostic = json!({"type":"stderr","text": message});
+                    let safe = super::render::diagnostic_text(&diagnostic)
+                        .unwrap_or_else(|| "Zuse operation failed".into());
+                    let result = crate::backend::error_result(&safe);
                     writeln!(io::stdout().lock(), "{}", serde_json::to_string(&result)?)?;
-                    return Err(ReportedOperationError(message).into());
+                    return Err(ReportedOperationError(safe).into());
                 }
                 Err(message) => return Err(message.into()),
             };

@@ -93,6 +93,15 @@ impl Computer {
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        self.perform_with_child_diagnostics(name, args, true).await
+    }
+
+    pub(crate) async fn perform_with_child_diagnostics(
+        &self,
+        name: &str,
+        args: Value,
+        include_child_stderr: bool,
+    ) -> Result<Value, String> {
         if self.closed.load(Ordering::Acquire) {
             return Err("Zuse CLI manager connection is closed".into());
         }
@@ -103,7 +112,7 @@ impl Computer {
         let body = match name {
             "ssmcp.computer.version" => {
                 parse::<Empty>(args)?;
-                self.version().await?
+                self.version(include_child_stderr).await?
             }
             "ssmcp.computer.download" => {
                 let args: DownloadArgs = parse(args)?;
@@ -147,7 +156,7 @@ impl Computer {
             .ok_or_else(|| "Zuse manager storage is unavailable".into())
     }
 
-    async fn version(&self) -> Result<Value, String> {
+    async fn version(&self, include_child_stderr: bool) -> Result<Value, String> {
         // An existing external entry always wins. A broken/unsupported entry is
         // reported as an error instead of silently falling back to another CLI.
         if let Ok(selected) = crate::platform::executable("zuse") {
@@ -158,7 +167,7 @@ impl Computer {
                 .map(|store| store.matching(&path))
                 .transpose()?
                 .flatten();
-            let mut result = probe::version(&path).await?;
+            let mut result = probe::version(&path, include_child_stderr).await?;
             result["managed"] = json!(owned.is_some());
             result["source"] = json!(if owned.is_some() { "ssmcp" } else { "external" });
             result["installation_id"] = json!(owned.map(|receipt| receipt.installation_id));
@@ -170,7 +179,7 @@ impl Computer {
         let Some(receipt) = store.latest()? else {
             return Ok(json!({"available": false, "managed": false, "reason": "not_installed"}));
         };
-        let mut result = probe::version(&store.executable(&receipt)).await?;
+        let mut result = probe::version(&store.executable(&receipt), include_child_stderr).await?;
         if result["version"] != receipt.release.version {
             return Err("Managed Zuse --version differs from its official release receipt".into());
         }

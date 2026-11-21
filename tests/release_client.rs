@@ -101,6 +101,26 @@ fn computer_cli_keeps_json_operation_errors_and_local_diagnostics_distinct() {
             output.stderr
         );
     }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let program = scratch.0.join("zuse");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf '%s\\n' 'API_TOKEN=synthetic-placeholder' 'opaque-placeholder' >&2\nexit 7\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = run(&["version", "--json"], true);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            json_line(&output),
+            json!({"isError":true,"content":[{"type":"text","text":
+                "Zuse --version failed (exit status: 7)"}]})
+        );
+    }
 }
 
 async fn write(workspace: &Workspace, path: &str, text: &str) {
