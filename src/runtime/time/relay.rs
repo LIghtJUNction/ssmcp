@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn relay_projection_does_not_create_or_bind_a_conversation_and_disconnect_clears_it() {
         let clock = super::super::Clock::new().unwrap();
-        let directory = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "ssmcp-relay-display-{}-{}",
             std::process::id(),
             clock.id

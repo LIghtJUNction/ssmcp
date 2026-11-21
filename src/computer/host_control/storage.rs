@@ -27,7 +27,10 @@ type Directory = cap_std::fs::Dir;
 const STATE_FILE: &str = "state.json";
 const INPUT_LOCK: &str = "input.lock";
 const MAX_STATE_BYTES: u64 = 1024;
+// Observation and automatic release must fail closed promptly. An explicit
+// local switch can wait longer for another session's durable state update.
 const STATE_LOCK_TIMEOUT: Duration = Duration::from_millis(100);
+const SWITCH_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy)]
 enum Open {
@@ -50,7 +53,9 @@ pub(in crate::computer) struct InputLease {
 
 impl InputLease {
     pub(in crate::computer) fn revoke(&self) {
-        let _ = self.store.update(Some(false));
+        let _ = self
+            .store
+            .update_with_timeout(Some(false), STATE_LOCK_TIMEOUT);
     }
 }
 
@@ -136,7 +141,7 @@ impl Store {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
             Err(error) => return Err(context(error)),
         };
-        lock_state(&file).map_err(context)?;
+        lock_state(&file, STATE_LOCK_TIMEOUT).map_err(context)?;
         if read_state(&mut file)?.is_some() {
             return Ok(());
         }
@@ -162,7 +167,7 @@ impl Store {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
             Err(error) => return Err(context(error)),
         };
-        lock_state(&file).map_err(context)?;
+        lock_state(&file, STATE_LOCK_TIMEOUT).map_err(context)?;
         read_state(&mut file).map(|state| state.unwrap_or_default())
     }
 
@@ -170,9 +175,17 @@ impl Store {
     /// crash is invalid and therefore off; another process never reads a partial
     /// update. The separate input lock cannot delay publishing an off transition.
     pub(super) fn update(&self, enabled: Option<bool>) -> Result<State, String> {
+        self.update_with_timeout(enabled, SWITCH_LOCK_TIMEOUT)
+    }
+
+    fn update_with_timeout(
+        &self,
+        enabled: Option<bool>,
+        lock_timeout: Duration,
+    ) -> Result<State, String> {
         let directory = self.directory(true).map_err(context)?;
         let mut file = open(&directory, STATE_FILE, Open::Create).map_err(context)?;
-        lock_state(&file).map_err(context)?;
+        lock_state(&file, lock_timeout).map_err(context)?;
         let previous = match read_state(&mut file) {
             Ok(previous) => previous,
             // Explicit off is also the local repair path for an interrupted
@@ -281,13 +294,22 @@ fn lock_busy(error: &io::Error) -> bool {
     }
 }
 
-fn lock_state(file: &File) -> io::Result<()> {
-    let deadline = Instant::now() + STATE_LOCK_TIMEOUT;
+fn lock_state(file: &File, timeout: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + timeout;
     loop {
         match crate::platform::lock_file(file, true) {
             Ok(()) => return Ok(()),
             Err(error) if lock_busy(&error) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) if lock_busy(&error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "timed out waiting for foreground input state lock after {} ms: {error}",
+                        timeout.as_millis()
+                    ),
+                ));
             }
             Err(error) => return Err(error),
         }
@@ -379,6 +401,116 @@ fn open(directory: &Directory, name: &str, access: Open) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_switch_waits_while_observation_and_revocation_fail_closed() {
+        use std::sync::mpsc::{self, TryRecvError};
+
+        for enabled in [Some(false), None] {
+            let control = super::super::HostControl::default();
+            let store = control.store().unwrap();
+            let before = store.read().unwrap();
+            let ticket = control.ticket().unwrap();
+            let lease = store.try_input().unwrap().unwrap();
+            let directory = store.directory(false).unwrap();
+            let mut held = open(&directory, STATE_FILE, Open::Existing).unwrap();
+            lock_state(&held, STATE_LOCK_TIMEOUT).unwrap();
+
+            let operator = super::super::HostControl::at(store.path().to_owned());
+            let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                ready_tx.send(()).unwrap();
+                let result = match enabled {
+                    Some(value) => operator.set_local(value),
+                    None => operator.toggle_local(),
+                };
+                done_tx.send(result).unwrap();
+            });
+            ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+            // These real lock attempts each exhaust the short observation or
+            // cleanup budget while the explicit operator command remains queued.
+            let blocked_status = control.status();
+            let old_ticket_valid = control.valid(ticket);
+            lease.revoke();
+            let retained = read_state(&mut held).unwrap().unwrap();
+            let early = done_rx.try_recv();
+            let completed_while_locked = early.is_ok();
+            drop(held);
+            let result = match early {
+                Ok(result) => result,
+                Err(TryRecvError::Empty) => done_rx.recv_timeout(Duration::from_secs(10)).unwrap(),
+                Err(TryRecvError::Disconnected) => panic!("operator worker disconnected"),
+            };
+            worker.join().unwrap();
+
+            assert!(
+                !completed_while_locked,
+                "{enabled:?}: switch stopped waiting"
+            );
+            assert_eq!(blocked_status["enabled"], false);
+            assert!(
+                blocked_status["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("timed out waiting for foreground input state lock")
+            );
+            assert!(
+                !old_ticket_valid,
+                "a held state lock cannot authorize input"
+            );
+            assert_eq!(
+                retained, before,
+                "timed-out observation/revoke must not write"
+            );
+            let status = result.unwrap();
+            let after = store.read().unwrap();
+            assert!(!after.enabled);
+            assert_ne!(after.generation, before.generation);
+            assert_eq!(status["enabled"], false);
+            assert_eq!(
+                status["generation"],
+                super::super::generation_text(after.generation)
+            );
+            assert!(control.ticket().is_err());
+            assert!(
+                store.try_input().unwrap().is_none(),
+                "publishing off does not require releasing the existing input lease"
+            );
+            drop(lease);
+            assert!(store.try_input().unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn state_lock_timeout_preserves_the_last_committed_state() {
+        let store = Store::temporary().unwrap();
+        let before = store.read().unwrap();
+        let directory = store.directory(false).unwrap();
+        let held = open(&directory, STATE_FILE, Open::Existing).unwrap();
+        lock_state(&held, STATE_LOCK_TIMEOUT).unwrap();
+        let competing = open(&directory, STATE_FILE, Open::Existing).unwrap();
+        let error = lock_state(&competing, Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+        let operator = Store::at(store.path().to_owned());
+        let failure = operator
+            .update_with_timeout(None, Duration::from_millis(20))
+            .unwrap_err();
+        drop(competing);
+        drop(held);
+        assert!(failure.contains("timed out waiting for foreground input state lock"));
+        assert_eq!(
+            store.read().unwrap(),
+            before,
+            "a timed-out switch is not replayed"
+        );
+        let off = operator.update(Some(false)).unwrap();
+        assert!(!off.enabled);
+        assert_ne!(off.generation, before.generation);
+        assert_eq!(store.read().unwrap(), off);
+    }
 
     #[test]
     fn another_session_is_off_until_the_directory_creator_publishes_state() {

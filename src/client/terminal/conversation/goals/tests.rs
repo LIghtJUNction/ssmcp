@@ -7,7 +7,7 @@ use std::{
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "ssmcp-goal-ui-{}-{}",
             std::process::id(),
             SystemTime::now()

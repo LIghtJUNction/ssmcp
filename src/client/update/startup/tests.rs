@@ -23,7 +23,9 @@ impl Server {
     async fn start(status: &str, body: &str) -> Self {
         let mut nonce = [0; 16];
         getrandom::fill(&mut nonce).unwrap();
-        let root = std::env::temp_dir().join(format!(
+        // The fixture must not include the macOS /var -> /private/var alias:
+        // production storage deliberately rejects symlinks in every component.
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "ssmcp-startup-update-{:x}",
             u128::from_le_bytes(nonce)
         ));
@@ -237,7 +239,7 @@ async fn startup_notice_http_timeout_leaves_reconnect_backoff() {
     let fixture = Server::start("200 OK", RELEASE).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
+    let server = async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut request = Vec::new();
         let mut buffer = [0; 1024];
@@ -247,34 +249,45 @@ async fn startup_notice_http_timeout_leaves_reconnect_backoff() {
             request.extend_from_slice(&buffer[..size]);
             assert!(request.len() < 8192);
         }
-        let closed = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
-            .await
-            .unwrap();
+        let closed = stream.read(&mut buffer).await;
         assert!(matches!(closed, Ok(0)) || closed.is_err(), "{closed:?}");
-    });
+        request
+    };
     let client = crate::http_client::builder()
         .no_proxy()
         .pool_max_idle_per_host(0)
         .timeout(Duration::from_millis(200))
         .build()
         .unwrap();
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            notice_at(
-                client,
-                &url,
-                fixture.directory(),
-                installed("1.2.3"),
-                TARGET,
-                1000
-            )
-        )
-        .await
-        .unwrap(),
-        None
+    let notice = notice_at(
+        client,
+        &url,
+        fixture.directory(),
+        installed("1.2.3"),
+        TARGET,
+        1000,
     );
-    server.await.unwrap();
+    // Bound accept, request headers and socket closure as well as the client.
+    // Dropping this combined future also drops the listener/socket; no server
+    // task survives a timeout or an assertion failure.
+    let (notice, request) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(notice, server)
+    })
+    .await
+    .expect("startup update request must reach the server and close on timeout");
+    assert_eq!(notice, None);
+    assert!(request.starts_with(b"GET / HTTP/1.1\r\n"));
+    let directory = SafeDirectory::at(fixture.directory()).unwrap();
+    let cache = read_notice_cache(&directory, TARGET, 1001)
+        .expect("timed-out HTTP request must persist reconnect backoff");
+    assert_eq!(cache.checked_at, 1000);
+    assert!(!cache.succeeded);
+    assert!(cache.latest.is_none());
     assert_eq!(fixture.check("1.2.3", 1001).await, None);
     assert_eq!(fixture.hits(), 0);
+    assert_eq!(
+        fixture.check("1.2.3", 1000 + NOTICE_BACKOFF).await,
+        Some("ssmcp update --check · v1.2.4 available".into())
+    );
+    assert_eq!(fixture.hits(), 1);
 }
