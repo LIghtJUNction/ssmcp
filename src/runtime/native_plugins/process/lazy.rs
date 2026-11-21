@@ -1,5 +1,5 @@
 //! Explicit, per-provider initialization. Observation never starts a process.
-use crate::registry::Provider;
+use crate::registry::{OPTIONAL_PROVIDERS as PROVIDERS, Provider};
 use futures_util::{
     FutureExt,
     future::{BoxFuture, Shared, join_all},
@@ -8,14 +8,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, future::Future, sync::Mutex};
 use tokio::task::AbortHandle;
-
-pub(super) const PROVIDERS: [(Provider, &str); 5] = [
-    (Provider::Codex, "codex"),
-    (Provider::Claude, "claude"),
-    (Provider::Pi, "pi"),
-    (Provider::OpenCode, "opencode"),
-    (Provider::Playwright, "playwright"),
-];
 
 pub(super) fn tools() -> Vec<Value> {
     vec![
@@ -29,7 +21,7 @@ pub(super) fn tools() -> Vec<Value> {
             "name":"ssmcp.harnesses.load",
             "description":"Explicitly load one optional external harness when its capabilities are needed. Native ssmcp tools work without any harness. This may probe the selected installed executable and start its native protocol bridge, but does not start a model turn. Only a successful native handshake and catalog enumeration register tools. Concurrent loads share one initialization. Success and failure are cached; refresh:true explicitly retries or refreshes only this provider. Inspect the current tool catalog after loading. No packages are installed and no other provider is scanned.",
             "inputSchema":{"type":"object","required":["provider"],"additionalProperties":false,"properties":{
-                "provider":{"type":"string","enum":["codex","claude","pi","opencode","playwright"]},
+                "provider":{"type":"string","enum":PROVIDERS.iter().map(|(_, name)| *name).collect::<Vec<_>>()},
                 "refresh":{"type":"boolean","default":false}
             }},
             "annotations":{"readOnlyHint":false,"destructiveHint":false}
@@ -69,7 +61,7 @@ pub(super) fn parse(arguments: Value) -> Result<(Provider, bool), String> {
         .iter()
         .find(|(_, name)| *name == request.provider)
         .map(|(provider, _)| *provider)
-        .ok_or("optional harness provider must be codex, claude, pi, opencode or playwright")?;
+        .ok_or("optional harness provider must be codex, claude, pi, opencode, playwright or a configured ssmcp peer")?;
     Ok((provider, request.refresh))
 }
 
@@ -183,7 +175,7 @@ mod tests {
     #[test]
     fn untouched_providers_have_no_invented_installation_metadata() {
         let diagnostics = initial_diagnostics();
-        assert_eq!(diagnostics.len(), 5);
+        assert_eq!(diagnostics.len(), PROVIDERS.len());
         for value in diagnostics.values() {
             assert_eq!(value["status"], "not_loaded");
             assert_eq!(value["tools"], 0);

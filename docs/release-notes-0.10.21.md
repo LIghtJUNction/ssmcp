@@ -13,23 +13,33 @@
 - **账号退出与撤销。** 修复账号连接在写入先报错时丢失最终授权失效通知的问题，避免退出或撤销登录后因这条竞态再用旧凭据重连。读取结束消息使用统一期限，普通断线、主动停止和重载保留各自的处理规则。 [账号连接修复](https://github.com/LIghtJUNction/ssmcp/pull/142)
 - **为会话设置目标。** `/goal set <text>`、`/goal show` 和 `/goal clear` 管理当前会话的单行目标，最多 256 个字符且不超过 1024 个 UTF-8 字节。目标记录用户意图，不会执行任务或授予批准。 [目标命令](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/terminal/conversation/goals.rs) · [保存与限制](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/interface/history/goals.rs)
 
-## 等待与完成
+## 等待、计时与回复
 
-公共 `await` 与 JavaScript `waitFor` 可等待执行任务、relay 任务、协作成员状态、自己的协作收件、用户输入和已有结束审批请求。普通目标支持任一满足或全部满足；用户输入与结束批准使用独立事务。单轮观察预算最多 25 秒；原身份、客户端连接和记录仍有效时，超时可以用同一 wait ID 恢复。取消只停止观察，不终止任务、确认消息或批准结束。公共 `await` 不占用 JavaScript 执行槽；在 code mode 内使用 `waitFor` 仍占用所在的执行槽。 [接口与验证边界](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/validation/await-finish-20261120.md)
+公共 `await` 与 JavaScript `waitFor` 可观察执行任务、relay 任务、协作成员状态、自己的协作收件和用户输入。普通目标支持任一满足或全部满足；单轮观察最多 25 秒，原身份与连接仍有效时可用同一 wait ID 继续观察。取消只停止观察，不终止任务或确认消息。公共 `await` 不占用 JavaScript 执行槽；`waitFor` 使用所在 code mode 的执行槽。 [等待接口](await.md)
 
-`request_finish` 创建或续等人工结束请求；`await` 的 `finish` 目标只观察已有请求，不创建审批。用户选择 No 也能使等待返回 `ready`，但 `completion_permission` 仍为 `null`。决定按请求创建时的原会话归属保存；原归属失效时，不会转写到当前会话。 [结束申请](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/finish-and-questions.md) · [等待接口](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/http/await_tool.rs)
+`ssmcp.time.now` 返回 UTC 与连接内单调时间；`op:"interval"` 接受 Unix 毫秒或带时区的 RFC3339 时间，返回有符号时间差、绝对时长和分解后的天时分秒。`ssmcp.time.wait` 支持相对时长、绝对截止时间、列出、查询和取消。界面用真实任务开始时刻和截止时间显示“运行”“剩余”“已到期”，`/wait` 展示详情。计时到期不代表任务已经完成。 [时间原语](time-primitives.md)
 
-结束许可要求真人明确选择 Yes，且匹配当前请求、成员和线程。agent 的 Yes、普通 ready / done 或超时都不能产生许可；许可只能消费一次。该约束适用于 SSMCP 的完成接口，不能拦截完全停止调用 SSMCP 的宿主自行输出外部 final。
+`request_finish`、`ssmcp.ui.finish`、`ssmcp.ui.answer` 和 `await` 的结束审批目标已退役；直接调用会得到明确错误。强制继续和对话提醒钩子停止生成。正常的 `ui.message` / `ui.present` 进度与最终回复仍保存到其所属对话，最终回复无需再申请结束许可。真实用户继续通过问题界面答题；会话归属、认证和去重仍生效。 [用户问题与最终回复](finish-and-questions.md)
+
+## 本机入口与 Agent 协议
+
+`ssmcp local --socket` 增加本机 HTTP/MCP Unix socket。默认路径是 `$XDG_RUNTIME_DIR/ssmcp/mcp.sock`，未设置运行目录时使用 `/tmp/ssmcp-<有效 UID>/mcp.sock`；`--socket PATH` 可指定私有绝对路径。它沿用实际 HTTP 来源与 OAuth，支持相同 UID 的进程连接。 [本机连接](local-mode.md)
+
+`--agent codex|claude-code|pi|opencode|playwright` 显式选择已有协议适配器；`--agent list` 查看支持项。启动只加载协议和工具目录，模型任务需要另行调用。`--agent ssmcp` 通过明确的 endpoint 与令牌环境变量连接另一个 MCP 网关。原生参数放在 `--` 后，经过保存会话和重载仍按原样保留。 [Agent 入口与兼容范围](agent-entry.md)
+
+电脑控制状态改为“电脑控制：开启／关闭”，窄屏显示“键鼠：开／关”。`/computer on|off|status` 与 `ssmcp computer on|off|toggle|status` 管理当前桌面的鼠标和键盘；同一系统用户的本机连接共享该开关。 [电脑控制](computer-use.md)
+
+`ssmcp send` 将请求交给精确的线程或冻结后的进程收件集合，`ssmcp wait` 将实际最终结果写到标准输出，进度写到标准错误，可接到下一条命令的标准输入。等待支持任一、全部或指定数量的结果，超时不会取消接收方任务。线程列表右键读取所点线程的历史。 [账户与终端接口](client-accounts.md)
 
 ## 依赖与运行版本
 
-`zharness` 升级至 0.6.0，带入 `zcall 0.4.0` 和 `zguard 0.1.0`。每轮迭代及发布前核对实际使用的 Project Z 包，采用最新未撤回稳定版并固定版本、源码与锁文件。`zuse-computer 0.2.2 → zmcpio 0.4.0` 仍按已发布上游约束保留 `zcall =0.3.0`，等待兼容的正式上游版本。 [依赖版本与维护规则](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/dependencies.md)
+Project Z 内部跨仓库依赖采用各 GitHub 仓库默认分支源码。Cargo.lock 与源码 gitlink 记录本轮核对的完整提交；下一轮同步会重新核对上游默认分支。当前直接依赖的版本元数据为 zharness 0.6.0、zplugin 0.3.1、ztuio 0.1.0 和 zuse-computer 0.2.2。外部 registry 打包仍需单独验证其规范化依赖图。 [依赖来源与维护规则](dependencies.md)
 
 交互式连接启动时，客户端在后台使用缓存或检查当前平台的已发布资源元数据，提示可用更新。支持版本通知的连接结合 `Ready` 信息显示客户端与服务器版本，区分正在运行的服务器版本和已发布的客户端版本。检查不会自动安装软件或升级服务。 [启动检查](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/update/startup.rs) · [连接版本提示](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/src/client/update/notice.rs)
 
 连接 0.10.13 旧中继时，可用 `--account-compat` 和该中继已验证的自身账号注册连接。原生消息另需客户端与中继支持，`messages.*` helper 也须由中继提供。 [账号兼容说明](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/client-accounts.md) · [能力要求](https://github.com/LIghtJUNction/ssmcp/blob/v0.10.21/docs/thread-messaging.md#兼容范围)
 
-公共 `await` / `waitFor` 需要更新后的中继，被动结束观察需要支持相应操作的客户端。Release 工作流保留 0.10.21 的部署延后规则：发布安装包不会自动重启现有生产 relay，也不会让活动客户端自动加载新版本。
+公共 `await` / `waitFor`、线程请求结果回传及服务端钩子退役需要更新后的中继；时间工具还需要客户端与中继实际协商对应能力。Release 工作流保留 0.10.21 的部署延后规则：发布安装包不会自动重启现有生产 relay，也不会让活动客户端自动加载新版本。
 
 ## 验证范围
 

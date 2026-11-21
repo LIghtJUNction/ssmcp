@@ -747,24 +747,12 @@ pub(crate) fn skip(id: &str) -> Result<Question, String> {
     Ok(question)
 }
 
-pub(super) async fn finish_request(arguments: Value) -> Result<Value, String> {
-    workflow::finish(arguments).await
-}
-
-pub(super) fn agent_answer(arguments: Value) -> Result<Value, String> {
-    workflow::answer(arguments)
-}
-
 pub(super) fn acknowledge_answers(arguments: Value) -> Result<Value, String> {
     delivery::acknowledge(arguments)
 }
 
 pub(super) fn delivery_peek(arguments: Value) -> Result<Value, String> {
     delivery::peek(arguments)
-}
-
-pub(super) fn authorize_completion() -> Result<String, String> {
-    workflow::authorize_completion()
 }
 
 pub(super) fn message_scope() -> Option<String> {
@@ -891,7 +879,7 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         json!({
             "name":"ssmcp.ui.questions",
-            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. Ordinary questions may be answered by the local user or another verified agent in the same client/account; actor origin is retained. Only the local user can approve a finish request. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
+            "description":"Read queued questions or completed answers without waiting or removing them. Pass id to read one retained question, or page the list with optional state, offset and limit. States are pending, answered and skipped. The local user answers questions; agent-authored answers and finish requests are retired. Historical actor origin is retained. Pages contain at most 64 KiB; follow next_offset. Pending questions are never evicted. Unacknowledged routed answers are never reclaimed; completed acknowledged history may be reclaimed within the 64-record / 256 KiB budget. All state ends on client process restart.",
             "inputSchema":{
                 "type":"object","additionalProperties":false,
                 "properties":{
@@ -909,7 +897,6 @@ pub(super) fn tools() -> Vec<Value> {
         }),
         super::messages::tool(),
     ];
-    tools.extend(workflow::tools());
     tools.push(delivery::tool());
     tools.push(delivery::peek_tool());
     tools
@@ -1136,7 +1123,20 @@ mod tests {
     #[test]
     fn tools_do_not_offer_a_way_to_impersonate_the_users_answer() {
         let catalog = tools();
-        assert_eq!(catalog.len(), 7);
+        let names: Vec<_> = catalog
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "ssmcp.ui.ask",
+                "ssmcp.ui.questions",
+                "ssmcp.ui.message",
+                "ssmcp.ui.question_ack",
+                "ssmcp.ui.question_delivery",
+            ]
+        );
         for tool in &catalog {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["additionalProperties"], false);

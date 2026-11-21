@@ -528,11 +528,11 @@ running. Close extra terminals when done.\n\n\
 Use ui.get(clientId,{path}) for a bounded JSON Pointer projection of UI configuration or state; \
 ui.set(clientId,{patch,persist}) changes appearance, ui.filter(clientId,{text,level}) filters logs, \
 and ui.action(clientId,{action}) performs one navigation or configuration action. Discover \
-ssmcp.ui.* schemas for supported values. ssmcp.ui.history lists or reads versioned JSONL conversations. \
+ssmcp.ui.* schemas for supported values. \
 Use public await to observe typed jobs, agents and messages without a JavaScript worker. \
 waitFor(clientId,args) uses that coordinator inside code_mode. Resume an observation with the \
-server-issued wait_id. Cancellation only stops observation. \
-Read images with ssmcp.fs.read_image, then image(result); do not print base64.\n\n\
+server-issued wait_id. Cancellation only stops observation. ssmcp.ui.history lists or reads \
+versioned JSONL conversations. Read images with ssmcp.fs.read_image, then image(result).\n\n\
 A custom frontend can read ssmcp.audit.events for source lifecycle events and ssmcp.exec.events \
 for command output/results. Full code_mode source goes only to actual authorized target clients; \
 the client applies audit redaction before display and storage. The local composer retains pending \
@@ -591,14 +591,14 @@ fn client_guide(chat_enabled: bool) -> String {
         carries queued input; exact thread delivery requires collab.bind. UI and catalog queries do not \
         claim input by themselves. Use ssmcp.ui.message for Markdown replies or ssmcp.ui.ask for a \
         nonblocking question. Read typed question_answers on eligible calls or inspect ssmcp.ui.questions. \
-        The user opens the question queue with Shift+Up. An explicit final answer requires the local user's \
-        Yes through request_finish and the same verified thread. If that public tool is unavailable, bind \
-        the verified thread and use registered ssmcp.ui.finish. Pending, timeout and agent answers never \
-        approve. Public await also supports user input and observation of existing finish requests. \
-        ui.wait intent:finish waits for guidance; it grants no permission. /resume restores the local \
-        chat history without replaying tools or a model thread. The composer accepts @file and $skill."
+        The user opens the question queue with Shift+Up. Eligible final replies use ssmcp.ui.message or \
+        ssmcp.ui.present with kind:answer. The original conversation owner and idempotency checks apply. \
+        Use ssmcp.ui.reply to report progress or a result for its exact authenticated thread input. \
+        Public await also supports user input. ui.wait ends on input, cancellation, or its deadline. \
+        /resume restores local chat history without replaying tools or a model thread. The composer \
+        accepts @file and $skill."
     } else {
-        "\n\nHuman chat is disabled on this client. Human replies and approval are unavailable."
+        "\n\nHuman chat is disabled on this client. Human prompts and replies are unavailable."
     };
     format!("{GUIDE}{chat}")
 }

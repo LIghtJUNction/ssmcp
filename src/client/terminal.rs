@@ -877,6 +877,7 @@ pub(crate) fn snapshot() -> serde_json::Value {
         "sleeping":state.sleep.visible,
         "active_terminal":state.active_session,
         "versions":state.connection_versions,
+        "timing":state.chat_timing_snapshot(),
         "terminals":state.session_titles.iter().map(|(id,title)| serde_json::json!({"id":id,"title":panel::safe_text(title)})).collect::<Vec<_>>(),
         "conversation":conversation,"events":state.events.snapshot(),"selection_mode":state.selection,"audit":state.audit.snapshot(),"filter":{"text":state.log_query,"level":(["all","commands","errors"][usize::from(state.log_level)])},"help":state.help,"log_scrollback":state.logs.screen().scrollback(),"log_history":state.logs.screen().scrollback_len(),"raw_logs":state.raw_logs,
     })
@@ -914,6 +915,7 @@ fn preview_state(rows: u16, cols: u16, ui: &Ui) -> State {
         description: "Example task · custom frontend".into(),
         cwd: Some("~/project".into()),
         started: Instant::now(),
+        deadline: None,
     });
     state.panel.progress.push(panel::ProgressView {
         source: "Example".into(),
@@ -3299,7 +3301,8 @@ mod tests {
             ..Ui::default()
         };
         let mut state = preview_state(30, 120, &ui);
-        state.preview = false;
+        // Render this account fixture without observing process-wide waits or
+        // projecting the preview's example task as a live native execution.
         state.guide = None;
         state.account = AccountStatus::Local;
         state.server_origin = footer::Origin::parse_local("http://127.0.0.1:43123/alice");
@@ -4432,30 +4435,48 @@ mod tests {
 
     #[test]
     fn connection_footer_uses_the_same_last_row_in_every_layout() {
-        for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
-            let ui = Ui {
-                layout,
-                color: false,
-                sidebar: false,
-                ..Ui::default()
-            };
-            let mut state = preview_state(12, 100, &ui);
-            let before = state.geometry;
-            state.notice = Some("/exit must be used without arguments".into());
-            let frame = state.frame(Instant::now());
-            assert_eq!(state.geometry, before);
-            assert_eq!(frame.rows.len(), 12);
-            let bottom = frame.rows.last().unwrap();
-            assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
-            assert!(
-                matches!(
-                    bottom.split_whitespace().last(),
-                    Some("https://ssmcp.lmm.best" | "ssmcp.lmm.best")
-                ),
-                "{layout:?}: {bottom}"
-            );
-            assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
-            assert_eq!(bottom.width(), 100, "{layout:?}: {bottom:?}");
+        for columns in [100, 120] {
+            for layout in [Layout::Chat, Layout::Logs, Layout::Audit, Layout::Split] {
+                let ui = Ui {
+                    layout,
+                    color: false,
+                    sidebar: false,
+                    ..Ui::default()
+                };
+                let mut state = preview_state(12, columns, &ui);
+                let before = state.geometry;
+                state.notice = Some("/exit must be used without arguments".into());
+                let frame = state.frame(Instant::now());
+                assert_eq!(state.geometry, before);
+                assert_eq!(frame.rows.len(), 12);
+                let bottom = frame.rows.last().unwrap();
+                assert!(bottom.contains("without arguments"), "{layout:?}: {bottom}");
+                assert!(
+                    matches!(
+                        bottom.split_whitespace().last(),
+                        Some("https://ssmcp.lmm.best" | "ssmcp.lmm.best")
+                    ),
+                    "{layout:?}: {bottom}"
+                );
+                // A narrow row may use only the authority to preserve the
+                // complete notice and computer-control status. A wider row
+                // must retain the full origin when it fits.
+                if columns == 120 {
+                    assert!(
+                        bottom.contains("https://ssmcp.lmm.best"),
+                        "{layout:?}: {bottom}"
+                    );
+                }
+                assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
+                if layout != Layout::Chat {
+                    assert!(bottom.contains("电脑控制：未确认"), "{layout:?}: {bottom}");
+                }
+                assert_eq!(
+                    bottom.width(),
+                    usize::from(columns),
+                    "{layout:?}: {bottom:?}"
+                );
+            }
         }
     }
 }

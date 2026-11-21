@@ -129,7 +129,7 @@ class UserWait(InputHistory):
         if wait_id is not None:
             self.check(receipt["wait_id"] == wait_id,
                        "the outer receipt retains the exact native wait identity")
-        self.check(receipt["user_consent_to_end"] is None,
+        self.check("user_consent_to_end" not in receipt,
                    "a wait outcome does not manufacture the user's consent to end")
         if expected != "received":
             self.check(not self.messages(response) and not receipt["messages"],
@@ -180,8 +180,8 @@ class UserWait(InputHistory):
                    "this synthetic PTY run requests no real OS notification")
         self.check(self.ui("/display/conversation")["draft"]["text"] == unsent,
                    "starting concurrent waits preserves the complete unsent reference draft")
-        front.until(lambda shot: "等待你确认是否结束" in text(shot),
-                    "mixed-episode finish intent remains visible in the footer")
+        front.until(lambda shot: "等待你的输入" in text(shot),
+                    "a legacy finish intent is displayed as an ordinary input wait")
         front.until(lambda shot: "Click or type to wake" in text(shot),
                     "the authenticated user wait dims the production terminal")
         self.check(self.ui("/display/sleeping"),
@@ -329,8 +329,8 @@ class UserWait(InputHistory):
         timed = self.begin(reason="Synthetic deadline", timeout_ms=1000)
         response, receipt = self.completed(front, timed, "timed_out")
         self.check(receipt["continue_wait"] is True
-                   and isinstance(response["structuredContent"].get("continuation_reminder", {}).get("instruction"), str),
-                   "timeout carries the explicit continue-wait instruction")
+                   and "continuation_reminder" not in response["structuredContent"],
+                   "timeout retains its status without a continuation instruction")
         self.active(front, 0)
         self.check(self.ui("/display/conversation")["draft"]["text"] == unsent,
                    "a local/server deadline never submits or clears the unsent draft")

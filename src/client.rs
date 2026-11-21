@@ -1,6 +1,7 @@
 //! Foreground account or SSH client. Connection details are emitted once as JSON.
 mod access;
 pub(crate) mod account;
+pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
 mod browser_setup;
@@ -95,6 +96,8 @@ Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
   --input MODE  Chat input (terminal by default, none disables chat)
   --agent NAME  Chat recipient (next-caller by default)
+  --load-harness NAME  Preload one native protocol
+  --list-harnesses     List supported harness providers
   --no-browser  --no-watchdog  --theme NAME   --no-color
   --allow USER@SERVER    Allow a registered account on this relay; repeat or comma-separate
   --account-compat       Use an existing verified self account on an older relay
@@ -169,10 +172,16 @@ Usage: ssmcp username@server [options]
   --timestamps         Show UTC timestamps on event headings
   --max-inline-output N  Maximum lines per buffered output block (default 8)
   --list-tools         List native and workspace tools as JSON, then exit
+  --load-harness NAME  Preload one native protocol at startup
+  --list-harnesses     List supported providers without starting them (optional --json)
+  -- ARGS              Native arguments for an explicit --load-harness; never parsed as ssmcp flags
 
 The client provides native tools without another harness. Optional Codex, Claude
 Code, Pi, OpenCode and Playwright bridges stay unloaded until explicitly needed.
 Use ssmcp.harnesses.load for one provider, or the local /cc, /codex and /pi commands.
+--load-harness codex|claude-code preloads the protocol without submitting a model turn.
+--load-harness ssmcp requires -- --endpoint URL --token-env NAME [--socket PATH].
+The peer URL identifies an authenticated MCP gateway, not a device/session.
 Tools keep their native schemas and permission/approval behavior.
 
 Examples:
@@ -437,6 +446,7 @@ struct Options {
     config: Option<OsString>,
     shell: PathBuf,
     tty: Option<String>,
+    harness: Option<agent::Selection>,
 }
 
 impl Options {
@@ -466,6 +476,37 @@ impl Options {
     // Older saved manifests omitted --no-watchdog. Their recorded policy remains
     // authoritative as the parsing default; explicit flags must still match it.
     fn parse_saved(spec: &crate::session::SessionSpec) -> Result<Option<Self>, String> {
+        // Published legacy harness records used --agent without any chat input
+        // option. An explicit non-default chat recipient could only be saved
+        // with a separate, background-capable input. Never reinterpret the
+        // legacy argv as permission to send chat or to launch a harness.
+        let mut args = spec.args.iter();
+        let mut explicit_input = false;
+        let mut ambiguous_agent = false;
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            match arg.as_str() {
+                "--input" => {
+                    explicit_input = true;
+                    args.next();
+                }
+                "--agent" => {
+                    ambiguous_agent |= args.next().is_some_and(|value| value != "next-caller");
+                }
+                value if value.starts_with("--agent=") => {
+                    ambiguous_agent |= value != "--agent=next-caller";
+                }
+                value if connection_option_takes_value(value) => {
+                    args.next();
+                }
+                _ => {}
+            }
+        }
+        if !explicit_input && ambiguous_agent {
+            return Err("saved --agent has no explicit chat input and may select a legacy harness; recreate the session with --load-harness for protocol startup or configure a supported saved chat input and recipient".into());
+        }
         Self::parse_with_policy(
             spec.args.iter().map(OsString::from),
             None,
@@ -520,8 +561,41 @@ impl Options {
         let (mut identity, mut port, mut config) = (None, None, None);
         let mut shell = crate::platform::default_shell();
         let mut tty = None;
+        let mut harness_name = None;
+        let mut harness_arguments = Vec::new();
         while let Some(arg) = args.next() {
             match arg.to_str() {
+                Some("--load-harness") => {
+                    if harness_name.is_some() {
+                        return Err("--load-harness may be supplied only once".into());
+                    }
+                    harness_name = Some(
+                        args.next()
+                            .ok_or(
+                                "--load-harness requires a provider; use ssmcp --list-harnesses",
+                            )?
+                            .into_string()
+                            .map_err(|_| "--load-harness must be UTF-8")?,
+                    );
+                }
+                Some(value) if value.starts_with("--load-harness=") => {
+                    if harness_name
+                        .replace(value["--load-harness=".len()..].to_owned())
+                        .is_some()
+                    {
+                        return Err("--load-harness may be supplied only once".into());
+                    }
+                }
+                Some("--") => {
+                    if harness_name.is_none() {
+                        return Err("arguments after -- require an explicit --load-harness".into());
+                    }
+                    harness_arguments.extend(args.by_ref());
+                    break;
+                }
+                Some(value) if value.starts_with("--agent=") => {
+                    chat.set("--agent", OsString::from(&value["--agent=".len()..]))?;
+                }
                 Some("-h" | "--help") => {
                     #[cfg(target_os = "linux")]
                     if local_mode {
@@ -759,6 +833,10 @@ impl Options {
         if list_tools && !chat.arguments().is_empty() {
             return Err("--list-tools cannot configure chat input or an agent".into());
         }
+        let harness = harness_name
+            .as_deref()
+            .map(|name| agent::Selection::new(name, harness_arguments))
+            .transpose()?;
         if context.is_some() && !new_connection {
             return Err("saved sessions must record a concrete server, not --context".into());
         }
@@ -948,6 +1026,7 @@ impl Options {
             config,
             shell,
             tty,
+            harness,
         }))
     }
 
@@ -1086,6 +1165,9 @@ impl Options {
                     .ok_or("missing connection destination")?,
             ));
         }
+        if let Some(harness) = &self.harness {
+            harness.append_saved(&mut args);
+        }
         let args = args
             .into_iter()
             .map(|arg| {
@@ -1153,6 +1235,9 @@ impl Options {
 pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate::Result<()> {
     let mut args = spec.args.iter();
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
         if matches!(
             arg.as_str(),
             "--help" | "--help-full" | "-h" | "--version" | "-V"
@@ -1205,6 +1290,9 @@ pub(crate) fn session_title(spec: &crate::session::SessionSpec) -> crate::Result
     let mut args = spec.args.iter();
     let mut title = None;
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
         if arg == "--title" {
             title = Some(args.next().ok_or("saved session title is missing")?.clone());
         } else if let Some(value) = arg.strip_prefix("--title=") {
@@ -1301,6 +1389,11 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let mut connection = vec![OsString::from("--name"), OsString::from(&name)];
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--") => {
+                connection.push(arg);
+                connection.extend(args);
+                break;
+            }
             Some("--cwd") => cwd = PathBuf::from(args.next().ok_or("--cwd requires a directory")?).canonicalize()?,
             Some("--json") => json_output = true,
             Some("--name" | "--daemon" | "--list-tools") => return Err("sessions create takes its name before the connection options and starts a managed background session".into()),
@@ -1341,6 +1434,7 @@ fn connection_option_takes_value(option: &str) -> bool {
         || matches!(
             option,
             "--name"
+                | "--load-harness"
                 | "--server"
                 | "--context"
                 | "--username"
@@ -1535,6 +1629,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::rsync::transport_main().await;
     }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if agent::dispatch(&args)? {
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
     }
@@ -1691,7 +1788,7 @@ pub async fn run() -> crate::Result<()> {
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let backend = tokio::select! {
-            result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
+            result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
             _ = interrupt.recv() => return Ok(()),
             _ = terminate.recv() => return Ok(()),
         };
@@ -1716,7 +1813,11 @@ pub async fn run() -> crate::Result<()> {
             }
         };
         let tools = tokio::select! {
-            result = timeout(Duration::from_secs(120),async { backend.wait_discovery().await; backend.tools().await }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+            result = timeout(Duration::from_secs(180),async {
+                if let Some(harness) = &options.harness { harness.activate(&backend).await?; }
+                backend.wait_discovery().await;
+                backend.tools().await
+            }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
             _ = interrupt.recv() => { backend.shutdown().await; return Ok(()); },
             _ = terminate.recv() => { backend.shutdown().await; return Ok(()); },
         };
@@ -2488,10 +2589,21 @@ async fn connect_inner(
     let _link_metrics = display_session
         .as_ref()
         .and_then(|_| link_metrics::observe(metric_channel, &client_id, incoming.closed.clone()));
+    if let Some(harness) = &options.harness
+        && let Err(error) = harness.check_target(Some(&url))
+    {
+        let _ = ssh.kill().await;
+        incoming.stop().await;
+        return Err(error.into());
+    }
     render::status(
         "shell",
         "Progress",
-        "Starting native tools; optional harnesses stay unloaded",
+        if options.harness.is_some() {
+            "Starting native tools and the explicitly selected harness protocol"
+        } else {
+            "Starting native tools; optional harnesses stay unloaded"
+        },
     );
     let backend = tokio::select! {
         biased;
@@ -2503,7 +2615,7 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.kill().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), Backend::start_with_tty(&options.shell, options.tty.as_deref())) => result.map_err(|_| "local backend startup timed out")??,
+        result = timeout(Duration::from_secs(120), Backend::start_with_harness(&options.shell, options.tty.as_deref(), options.harness.as_ref())) => result.map_err(|_| "local backend startup timed out")??,
     };
     let backend = match Runtime::with_session_control(
         backend.clone(),
@@ -2540,7 +2652,7 @@ async fn connect_inner(
             return Err(error);
         }
     };
-    // Native tools are ready immediately; optional providers stay unloaded until requested.
+    // An explicit --load-harness uses the same lazy registry as a later tool call.
     let discovered = tokio::select! {
         biased;
         error = incoming.disconnected() => Err(error),
@@ -2550,7 +2662,10 @@ async fn connect_inner(
         },
         _ = interrupt.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
         _ = terminate.recv() => { let _ = ssh.start_kill(); backend.shutdown().await; let _ = ssh.wait().await; return Ok(ConnectionExit::Stopped); },
-        result = timeout(Duration::from_secs(120), backend.tools()) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
+        result = timeout(Duration::from_secs(180), async {
+            if let Some(harness) = &options.harness { harness.activate(&backend).await?; }
+            backend.tools().await
+        }) => result.map_err(|_| "native tool discovery timed out".to_string()).and_then(|r|r),
     };
     let readiness = discovered.and_then(|_| incoming.ensure_open(&mut ssh));
     if let Err(mut error) = readiness {
@@ -2565,6 +2680,10 @@ async fn connect_inner(
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
+    if let Some(harness) = &options.harness {
+        output["agent"] = json!(harness.provider.label());
+        output["agent_scope"] = json!("protocol_catalog");
+    }
     if options.is_local() {
         output["transport"] = json!("local");
         output["auth"] = json!("local_user");

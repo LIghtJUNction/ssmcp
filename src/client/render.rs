@@ -278,6 +278,15 @@ pub(crate) fn scoped_event(label: &str, value: &Value, source: crate::runtime::c
     emit_event(label, value, EventOrigin::Native, source.display());
 }
 
+pub(crate) fn scoped_timed_event(
+    label: &str,
+    value: &Value,
+    source: crate::runtime::call_scope::Source,
+    timing: Option<crate::runtime::time::ExecutionTiming>,
+) {
+    emit_timed_event(label, value, EventOrigin::Native, source.display(), timing);
+}
+
 /// The attach reader supplies projection metadata from its private envelope.
 pub(crate) fn replay_event(
     label: &str,
@@ -300,6 +309,16 @@ fn emit_event(
     origin: EventOrigin,
     source: crate::runtime::call_scope::DisplaySource,
 ) {
+    emit_timed_event(label, value, origin, source, None);
+}
+
+fn emit_timed_event(
+    label: &str,
+    value: &Value,
+    origin: EventOrigin,
+    source: crate::runtime::call_scope::DisplaySource,
+    timing: Option<crate::runtime::time::ExecutionTiming>,
+) {
     let trusted_control = matches!(origin, EventOrigin::Control);
     if !trusted_control && reserved_control_event(value) {
         return;
@@ -319,6 +338,15 @@ fn emit_event(
         renderer.width = width;
         renderer.dashboard_active = dashboard && !renderer.raw;
         let _ = renderer.event_inner(&mut bytes, label, value, trusted_control);
+        if let Some(timing) = timing
+            && matches!(origin, EventOrigin::Native)
+            && value["type"] == "exec.started"
+            && let Some(id) = value["job_id"].as_str()
+        {
+            renderer
+                .activities
+                .native_timing(&activity_key("job", label, id), timing);
+        }
         let snapshot = renderer
             .dashboard_active
             .then(|| renderer.panel_snapshot(Instant::now()));
@@ -645,7 +673,9 @@ impl Renderer {
             "last_controller":panel.last_controller.as_ref().map(controller),
             "tasks":self.activities.snapshot().iter().map(|task|json!({
                 "id":task.id,"display_id":short_id(&task.id),"description":task.description,"cwd":task.cwd.as_deref().map(|cwd|self.path_label(cwd)),
-                "elapsed_ms":now.saturating_duration_since(task.started).as_millis().min(u128::from(u64::MAX)) as u64
+                "elapsed_ms":now.saturating_duration_since(task.started).as_millis().min(u128::from(u64::MAX)) as u64,
+                "remaining_ms":task.deadline.map(|deadline|deadline.saturating_duration_since(now).as_millis().min(u128::from(u64::MAX)) as u64),
+                "deadline_clock":"monotonic"
             })).collect::<Vec<_>>(),
             "progress":panel.progress.iter().map(|progress|json!({
                 "source":progress.source,"message":progress.message,"value":progress.value,"total":progress.total,
@@ -834,6 +864,7 @@ impl Renderer {
                 description: task.description,
                 cwd: task.cwd.as_deref().map(|cwd| self.path_label(cwd)),
                 started: task.started,
+                deadline: task.deadline,
             })
             .collect();
         let mut progress = self
@@ -5040,5 +5071,43 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("duration unknown"), "{text}");
+    }
+
+    #[test]
+    fn provider_json_cannot_forge_native_job_deadlines_or_elapsed_origins() {
+        let mut renderer = Renderer::new(false, false, 80);
+        let mut out = Vec::new();
+        renderer
+            .event(
+                &mut out,
+                "shell",
+                &json!({
+                    "type":"exec.started","job_id":"owned-native-time","command":["fixture"],
+                    "timeout_ms":1,"remaining_ms":0,"started_ms":0,"deadline_ms":0,
+                    "timing":{"started":0,"deadline":0},"native_timing":true
+                }),
+            )
+            .unwrap();
+        assert!(
+            renderer.panel_snapshot(Instant::now()).tasks[0]
+                .deadline
+                .is_none()
+        );
+        let started = Instant::now() - Duration::from_secs(5);
+        let native = crate::runtime::time::ExecutionTiming::new(started, 7000);
+        renderer
+            .activities
+            .native_timing(&activity_key("job", "shell", "owned-native-time"), native);
+        let observed = started + Duration::from_millis(5500);
+        let panel = renderer.panel_snapshot(observed);
+        assert_eq!(panel.tasks[0].started, started);
+        assert_eq!(panel.tasks[0].deadline, native.deadline);
+        let snapshot = renderer.snapshot(observed);
+        assert_eq!(snapshot["tasks"][0]["elapsed_ms"], 5500);
+        assert_eq!(snapshot["tasks"][0]["remaining_ms"], 1500);
+        renderer.event(&mut out, "shell", &json!({
+            "type":"exec.exited","job_id":"owned-native-time","state":"completed","exit_code":0
+        })).unwrap();
+        assert!(renderer.panel_snapshot(observed).tasks.is_empty());
     }
 }

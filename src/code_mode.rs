@@ -1,6 +1,5 @@
 //! JavaScript orchestration through system Node.js inside mandatory bubblewrap isolation.
 pub(crate) mod question_answers;
-pub(crate) mod reminders;
 pub(crate) mod tool_summaries;
 pub(crate) mod user_wait;
 use crate::backend::process::Managed;
@@ -61,7 +60,6 @@ pub(crate) struct AuditRun {
     question_delivery_activity: Arc<Mutex<HashMap<String, bool>>>,
     memories: Arc<Mutex<ContextMemories>>,
     question_answers: Arc<Mutex<question_answers::Capture>>,
-    accepted_replies: Arc<Mutex<reminders::Receipts>>,
     tool_summaries: Arc<Mutex<tool_summaries::Capture>>,
     waits: Arc<Mutex<user_wait::State>>,
     started: Instant,
@@ -130,7 +128,6 @@ impl AuditRun {
             question_delivery_activity: Arc::new(Mutex::new(HashMap::new())),
             memories: Arc::new(Mutex::new(ContextMemories::default())),
             question_answers: Arc::new(Mutex::new(question_answers::Capture::default())),
-            accepted_replies: Arc::new(Mutex::new(reminders::Receipts::default())),
             tool_summaries: Arc::new(Mutex::new(tool_summaries::Capture::default())),
             waits: Arc::new(Mutex::new(user_wait::State::default())),
             started: Instant::now(),
@@ -275,29 +272,6 @@ impl AuditRun {
         PASSIVE_SUMMARY_PROBE
             .scope((self.context.clone(), client_id.into()), operation)
             .await
-    }
-
-    /// The broker calls this with a real native result and the binding captured
-    /// before dispatch. Returned JavaScript JSON cannot acknowledge a dialogue.
-    pub(crate) fn native_reply(
-        &self,
-        client_id: &str,
-        agent_id: Option<&str>,
-        tool: Option<&str>,
-        result: &Value,
-        received_at: Instant,
-    ) {
-        self.accepted_replies
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .observe(client_id, agent_id, tool, result, received_at);
-    }
-
-    pub(crate) fn accepted_replies(&self, client_id: &str) -> Vec<reminders::AcceptedReply> {
-        self.accepted_replies
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .for_client(client_id)
     }
 
     /// Observe only the broker's actual native reply under its frozen binding.

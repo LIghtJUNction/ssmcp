@@ -136,11 +136,14 @@ class InputHistory(Composer):
             )
         return self.save_shot(name, front, cells=True)
 
-    def wait_state(self, front, predicate, description):
+    def wait_state(self, front, predicate, description, *, fields=None):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             front.pump(0.05)
-            state = self.ui("/display/conversation")
+            if fields is None:
+                state = self.ui("/display/conversation")
+            else:
+                state = {field: self.ui("/display/conversation/" + field) for field in fields}
             if predicate(state):
                 return state
             if front.process.poll() is not None:
@@ -424,7 +427,7 @@ class InputHistory(Composer):
 
         reply = "## HANDOFF_LATEST_REPLY\n\n刚核对最新上下文，界。"
         # This is copy/handoff source material, not an attempt to finish a task.
-        # Explicit completion approval is exercised by e2e_interactions.py.
+        # Final display without completion approval is exercised by e2e_interactions.py.
         request = {"text": reply, "kind": "progress", "idempotency_key": "handoff-reply-once"}
         receipt = self.observe("ssmcp.ui.message", request)
         duplicate = self.observe("ssmcp.ui.message", request)

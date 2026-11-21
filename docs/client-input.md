@@ -4,7 +4,7 @@
 
 ## 启动时选择输入和处理方
 
-`--input` 默认是 `terminal`，从终端聊天框接收消息。`--agent` 默认是 `next-caller`，让下一次符合条件的工具调用领取要求。可以只改其中一个。默认配置不会主动运行模型。显式选择的原生收件人、组发和 `/send` 仍走各自的投递路径。
+`--input` 默认是 `terminal`，从终端聊天框接收消息。`--agent` 默认是 `next-caller`，让下一次符合条件的工具调用领取要求。可以只改其中一个。默认配置不会主动运行模型。需要启动时预加载协议可另用 [`--load-harness`](agent-entry.md)。显式选择的原生收件人、组发和 `/send` 仍走各自的投递路径。
 
 ```sh
 ssmcp local --agent codex
@@ -12,7 +12,7 @@ printf '%s\n' '请检查 @还没创建.md，价格 $100 保持原文' | ssmcp lo
 ssmcp local --input mcp-stdio
 ```
 
-用 `ssmcp local --input none` 禁用当前连接的聊天框、聊天提示和人的回复或确认工具。普通命令、终端、文件、审计、独立原生消息和已启用的时间原语继续可用。调用之前发现的聊天工具会返回 `chat_disabled`。这种状态不提供人工批准，也不能搭配显式 `--agent`。该选择可随保存会话和重载保留。账户连接需要 relay 确认该能力；旧 relay 仍可使用默认聊天模式。[输入选项](../src/client/chat_io/options.rs) · [工具准入](../src/broker.rs)
+用 `ssmcp local --input none` 禁用当前连接的聊天框、聊天提示和人的回复或确认工具。普通命令、终端、文件、审计、独立原生消息和已启用的时间原语继续可用。调用本连接的普通问题、等待或回复工具会返回 `chat_disabled`。全局退役的工具继续返回 `tool_retired`。此模式支持独立的 `--load-harness`，显式聊天处理方仅能使用默认的 `next-caller`。该选择可随保存会话和重载保留。账户连接需要 relay 确认该能力；旧 relay 仍可使用默认聊天模式。[输入选项](../src/client/chat_io/options.rs) · [工具准入](../src/broker.rs)
 
 `local` 是 Linux 私有会话。其他平台可以把示例中的 `local` 换成已登录的 `USERNAME@SERVER`。管道按 UTF-8 行提交，接受没有换行的最后一行。到达 EOF 后会话仍可让下一位调用方领取已入队的消息。MCP stdio 按行读写 JSON-RPC，客户端应保持连接至收到回复，关闭 stdin 会结束会话。它只在 stdout 输出协议帧。管道回执和日志使用 stderr。本机非终端输入的原生 MCP URL、一次性 OAuth 登录码及有效期也会直接显示在操作者的 stderr。登录码与下面的输入令牌分开使用。Windows 支持 Web 和 MCP HTTP，使用管道、MCP stdio 或 Unix socket 会收到明确的平台错误。
 
@@ -203,7 +203,7 @@ return await call("CLIENT_ID_FROM_LIST", "ssmcp.ui.message", {
 });
 ```
 
-`kind` 可选，接受 `progress`（默认）或 `answer`。`progress` 可以直接报告进展；明确的最终 `answer` 必须先由同一已验证线程取得 `request_finish` 的 Yes 决定，再消费一次完成许可。成功回执的 `finish_request_id` 指向该申请，相同幂等请求重试不再消耗第二次许可。具体申请、线程绑定与取消参数见[结束申请协议](finish-and-questions.md#申请结束)。
+`kind` 接受 `progress`（默认）或 `answer`，两者都按真实会话归属提交，最终回复不再需要结束审批。原有幂等键仍会复用相同内容的回执，并拒绝同一键的不同内容；旧 `finish_request_id` 字段保留为 `null`。[消息提交](../src/client/interface/messages.rs) · [入口退役说明](finish-and-questions.md#已退役的入口)
 
 两种消息都使用固定 `[AGENT]` 标签和客户端的 Markdown 排版，写入其归属会话的 JSONL，记录使用 `role: "assistant"`、`kind: "agent_message"`。已验证线程的回复沿用它首次发起原生调用时绑定的本地会话。切换到其他历史后，回复仍可保存到原会话。[本地消息的会话归属](client-ui.md#本地消息与回答问题)
 

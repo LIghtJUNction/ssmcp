@@ -21,7 +21,7 @@
 }
 ```
 
-`waitFor(clientId, options)` 使用相同的 `targets`、`mode`、`timeout_ms` 和 `wait_id`。外层 `code_mode` 超时应留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 与 `finish` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
+`waitFor(clientId, options)` 使用相同的 `targets`、`mode`、`timeout_ms` 和 `wait_id`。外层 `code_mode` 超时应留出返回余量；不要将 helper 的存在解释为旧 relay 已获得新接口。公共工具和 helper 都来自已安装的 relay；`exec` 目标还依赖客户端对应的原生工具，缺失时明确返回 `unavailable`。[公共目录](../src/http.rs) · [能力说明](../src/runtime/capabilities.rs)
 
 ## 可等待的对象
 
@@ -32,15 +32,14 @@
 | `agent_status` | `agent_id`、`statuses` | 该已登记成员当前声明的状态匹配指定字符串；状态由该 agent 自己报告，不证明用户验收。 |
 | `agent_messages` | 可选 `after`、`limit` | 当前绑定成员的收件箱已有消息；返回原始来源与游标，不自动确认消息。 |
 | `user_input` | 可选 `reason`、`notify` | 已收到可供最终响应交付的用户输入；真正交付以外层 `user_wait.status: "received"` 和匹配的 `user_messages` 为准。 |
-| `finish` | `request_id` | 原有结束申请已离开 pending；No、取消、失效也会唤醒，调用者必须查看真实决定。 |
 
 执行任务复用原生通知，relay 任务复用任务通知，协作状态与消息复用成员 watch。等待期间每秒仅复核没有对应通知的 OAuth 与成员权限；对象状态不靠循环短查询推进。[执行等待](../src/backend/shell.rs) · [relay 任务](../src/bridge.rs) · [协作通知](../src/collab.rs)
 
-最多同时选择 8 个不同目标。`any` 在一个目标就绪后返回，尚未完成观察的条目标为 `pending`；`all` 要求全部目标就绪。已观察到的权限、未知目标或其他类型错误会立即结束本次等待，并保留每个目标的位置与错误。`user_input` 和 `finish` 各自必须单独等待，避免把用户交付或审批事务混进多个对象的竞争中。[参数与聚合规则](../src/http/await_tool.rs)
+最多同时选择 8 个不同目标。`any` 在一个目标就绪后返回，尚未完成观察的条目标为 `pending`；`all` 要求全部目标就绪。已观察到的权限、未知目标或其他类型错误会立即结束本次等待，并保留每个目标的位置与错误。`user_input` 必须单独等待，避免把用户交付混进多个对象的竞争中。[参数与聚合规则](../src/http/await_tool.rs)
 
 ## 超时、恢复与取消
 
-`timeout_ms` 为 1000–25000，默认 20000。首次等待创建随机的服务端 `wait_id`；它是观察记录，不是执行任务 ID，也不是结束申请的 `request_id`。超时或资源忙时，带返回的 `wait_id` 恢复，不再传 `targets` 或 `mode`：
+`timeout_ms` 为 1000–25000，默认 20000。首次等待创建随机的服务端 `wait_id`；它标识观察记录，不是执行任务 ID。超时或资源忙时，带返回的 `wait_id` 恢复，不再传 `targets` 或 `mode`：
 
 ```javascript
 return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
@@ -48,16 +47,16 @@ return await waitFor(clientId, {wait_id: previous.wait_id, timeout_ms: 20000});
 
 只有原账户、原客户端连接和原成员能恢复或取消该记录。调用者不能指定一个新 `wait_id` 来创建记录，也不能取消同账户下其他成员的等待。每条记录最多同时有一个活动等待；普通观察每成员最多四个、每连接最多三十二个，不占用户输入的等待名额。只有 `user_input` 沿用客户端已有的四个用户等待名额，记录数量与保留时间也有明确上限。空闲记录最多保留五分钟，已结束记录在容量压力下可提前回收。已预留用户输入但尚待最终交付的记录会受保护，直到真实交付结算或外层调用取消；最终结果仍是超时或资源忙时，原 ID 继续可恢复。`ssmcp://limits` 返回当前数值。[记录和容量](../src/http/await_tool.rs)
 
-公共取消使用 `{"client_id":"…","agent":{"id":"…","token":"…"},"op":"cancel","wait_id":"…"}`；helper 使用 `waitFor.cancel(clientId, waitId)`。取消只停止观察，释放等待者；不会调用 `exec.cancel`、结束被观察的 agent、确认收件或改写结束决定。首次请求尚未返回 ID 时，宿主取消该工具请求也会释放当前观察。完成后的观察不能重新用于消费下一份用户输入；返回 `await_already_resolved` 时应为新事件创建新观察。[取消与响应](../src/http/await_tool.rs)
+公共取消使用 `{"client_id":"…","agent":{"id":"…","token":"…"},"op":"cancel","wait_id":"…"}`；helper 使用 `waitFor.cancel(clientId, waitId)`。取消只停止观察，释放等待者；不会调用 `exec.cancel`、结束被观察的 agent、确认收件。首次请求尚未返回 ID 时，宿主取消该工具请求也会释放当前观察。完成后的观察不能重新用于消费下一份用户输入；返回 `await_already_resolved` 时应为新事件创建新观察。[取消与响应](../src/http/await_tool.rs)
 
 `timed_out`、`cancelled`、`unauthorized`、`unknown_target`、`unavailable` 和 `busy` 是不同结果。权限在返回前重新检查；权限被撤销时，不返回此前取得的数据。协作消息依然遵循先接收、处理后显式 `collab.ack` 的协议；重试可返回同一未确认消息，应按消息 ID 或游标去重。`waitFor` 所在的普通 `code_mode` 响应仍遵循既有用户输入交付协议，helper 中的 `ready` 不能替代外层交付回执。[协作接收](../src/collab.rs) · [用户交付](../src/http/user_wait.rs)
 
-## 等待就绪不等于批准结束
+## 已退役的结束目标
 
-首先用 `request_finish`，或绑定后调用原生 `ssmcp.ui.finish` 的 `op: "request"`，创建带具体理由的结束申请。之后可用 `finish` 目标观察它；原生 `op: "wait"` 只观察已有请求，不新建审批卡，取消观察也不会取消申请。显式 `op: "cancel"` 和原申请调用被取消，仍按原有规则使该申请失效。[结束等待](../src/client/interface/questions/workflow.rs)
+`finish` 目标已退役，旧参数会返回 `tool_retired`，不会恢复审批观察。普通最终回复使用 `ui.message` 或 `ui.present` 的 `kind: "answer"`，无需结束许可；普通任务和用户输入的等待行为保留。[参数校验](../src/http/await_tool.rs) · [最终回复](finish-and-questions.md)
 
-只有 `Approved + Human + Yes` 同时成立，原请求者才能提交一次显式原生 `kind: "answer"`。通用等待的顶层 `completion_permission` 始终为 null；进程退出、agent 报告 done、消息正文里的 `approved`、普通用户文本以及超时都不发出许可。pending 超时后继续等待同一申请；No 后继续处理反馈或等待用户输入。`ui.wait(intent: "finish")` 只是继续指导的等待。SSMCP 不能拦截完全不再调用它的宿主自行发出的外部 final；宿主必须遵守先请求、获准再结束的调用约定。[许可投影与消费](../src/client/interface/questions/requests.rs) · [完整结束协议](finish-and-questions.md)
+等待只报告被观察对象的状态，不会注入强制续做或结束同意提示。兼容字段 `completion_permission` 保持为 `null`，`continue_wait` 只标记本次是否超时；调用者根据任务决定是否再次等待。[返回结构](../src/http/await_tool.rs)
 
-## 验证范围
+## 历史验证范围
 
 2026-11-20，源码 `a6b1e29ddc2bac1e730efbfd063e46843731df92` 的 26 项等待回归及 80 项关联回归全部通过。等待测试包括真实内存身份的范围隔离、两个成员并发、租约到期、取消与最终交付竞争、容量和保留期限保护、同一 ID 超时恢复；它们没有启动外部模型或切换生产进程。[完整验证记录](validation/await-finish-20261120.md)

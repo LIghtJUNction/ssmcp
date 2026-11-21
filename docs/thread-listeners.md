@@ -99,7 +99,7 @@ Linux 接收程序可以在 open 时显式设置 enable_reply: true。这个选�
 }
 ~~~
 
-execution_state 可以是 completed 或 failed。返回值的 reply.message_id 标识已保存的模型结果，history_saved 表示 JSONL 已提交，shown 表示本次结果已加入原会话的显示区。它是监听程序的执行结果，不是用户同意结束整个任务；ui.message、request_finish 的认证和批准规则不变。
+execution_state 可以是 completed 或 failed。返回值的 reply.message_id 标识已保存的模型结果，history_saved 表示 JSONL 已提交，shown 表示本次结果已加入原会话的显示区。它是监听程序的执行结果，不是用户同意结束整个任务；ui.message 仍保留认证和原会话归属，结束审批已退役。
 
 回复要求原租约仍有效、原接收回执仍在当前连接的 32 条窗口内、原会话仍是当前会话。未确认、拒收、过期、关闭、更换租约、断线和切换会话都会拒绝迟到结果。相同消息的相同正文与执行状态返回原结果；修改正文或状态会报冲突。每条输入最多保存和显示一条结果，旧连接不会自动重发生成或回复。
 

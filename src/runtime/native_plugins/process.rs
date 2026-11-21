@@ -2,7 +2,7 @@
 //! Owns provider state, registration, native dispatch and cleanup.
 mod lazy;
 use super::super::native_host::{Call, NativePlugin, PluginFuture};
-use crate::backend::{cc, codex, opencode, pi, playwright, process, result, shell};
+use crate::backend::{cc, codex, opencode, peer, pi, playwright, process, result, shell};
 use crate::{
     output::OutputStore,
     pty::Terminal,
@@ -29,6 +29,7 @@ enum Driver {
     Pi(Arc<pi::Pi>),
     OpenCode(Arc<opencode::OpenCode>),
     Playwright(Arc<playwright::Playwright>),
+    Peer(Arc<peer::Peer>),
 }
 impl Driver {
     async fn tools(&self) -> Result<Vec<crate::catalog::ToolDescriptor>, String> {
@@ -38,6 +39,7 @@ impl Driver {
             Self::Pi(d) => d.tools().await,
             Self::OpenCode(d) => return d.compact_tools().await,
             Self::Playwright(d) => return d.compact_tools().await,
+            Self::Peer(d) => return d.compact_tools().await,
         }?;
         crate::catalog::compact(tools)
     }
@@ -48,6 +50,7 @@ impl Driver {
             Self::Pi(d) => d.call(name, args).await,
             Self::OpenCode(d) => d.call(name, args).await,
             Self::Playwright(d) => d.call(name, args).await,
+            Self::Peer(d) => d.call(name, args).await,
         }
     }
     async fn shutdown(&self) {
@@ -57,6 +60,7 @@ impl Driver {
             Self::Pi(d) => d.shutdown().await,
             Self::OpenCode(d) => d.shutdown().await,
             Self::Playwright(d) => d.shutdown().await,
+            Self::Peer(d) => d.shutdown().await,
         }
     }
     async fn details(&self) -> Value {
@@ -66,11 +70,37 @@ impl Driver {
             Self::Claude(_) => json!({"scope":"native MCP tools"}),
             Self::OpenCode(_) => json!({"scope":"native OpenAPI operations"}),
             Self::Playwright(d) => d.diagnostics(),
+            Self::Peer(d) => d.details(),
         }
     }
 }
 
 type Installed = (PathBuf, u64, std::time::SystemTime);
+
+fn reject_self_program(program: &Path) -> Result<(), String> {
+    let own = std::env::current_exe().map_err(|_| "could not identify the running ssmcp binary")?;
+    let same_path = program
+        .canonicalize()
+        .ok()
+        .zip(own.canonicalize().ok())
+        .is_some_and(|(a, b)| a == b);
+    #[cfg(unix)]
+    let same_file = {
+        use std::os::unix::fs::MetadataExt;
+        let selected = std::fs::metadata(program).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "linux")]
+        let running = std::fs::metadata("/proc/self/exe").map_err(|e| e.to_string())?;
+        #[cfg(not(target_os = "linux"))]
+        let running = std::fs::metadata(&own).map_err(|e| e.to_string())?;
+        selected.dev() == running.dev() && selected.ino() == running.ino()
+    };
+    #[cfg(not(unix))]
+    let same_file = false;
+    if same_path || same_file {
+        return Err("an agent executable resolves to the running ssmcp; use --load-harness ssmcp with an explicit authenticated MCP peer endpoint".into());
+    }
+    Ok(())
+}
 
 pub struct Process {
     terminal: Arc<Terminals>,
@@ -84,6 +114,7 @@ pub struct Process {
     installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
     chat_enabled: AtomicBool,
+    harness: Option<crate::client::agent::Selection>,
 }
 impl Process {
     pub async fn start(shell_path: &Path) -> crate::Result<Arc<Self>> {
@@ -95,6 +126,14 @@ impl Process {
         .await
     }
     pub async fn start_with_tty(shell_path: &Path, tty: Option<&str>) -> crate::Result<Arc<Self>> {
+        Self::start_with_harness(shell_path, tty, None).await
+    }
+
+    pub(crate) async fn start_with_harness(
+        shell_path: &Path,
+        tty: Option<&str>,
+        harness: Option<&crate::client::agent::Selection>,
+    ) -> crate::Result<Arc<Self>> {
         let observer = match tty {
             Some(terminal) => Some(crate::observer::Pool::new(terminal).await?),
             None => None,
@@ -104,6 +143,7 @@ impl Process {
             std::env::current_dir()?,
             OutputStore::new_connection()?,
             observer,
+            harness.cloned(),
         )
         .await
     }
@@ -113,13 +153,14 @@ impl Process {
         root: PathBuf,
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
-        Self::with_observer(shell_path, root, output, None).await
+        Self::with_observer(shell_path, root, output, None, None).await
     }
     async fn with_observer(
         shell_path: &Path,
         root: PathBuf,
         output: Arc<OutputStore>,
         observer: Option<Arc<crate::observer::Pool>>,
+        harness: Option<crate::client::agent::Selection>,
     ) -> crate::Result<Arc<Self>> {
         if let Some(observer) = &observer {
             output.set_observer(observer);
@@ -146,6 +187,7 @@ impl Process {
             installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
             chat_enabled: AtomicBool::new(true),
+            harness,
         });
         Ok(backend)
     }
@@ -163,6 +205,9 @@ impl Process {
     }
 
     fn admit_chat_tool(&self, name: &str) -> Result<(), String> {
+        if let Some(error) = crate::wire::retired_tool_error(name) {
+            return Err(error.into());
+        }
         if !self.chat_enabled() && crate::wire::human_chat_tool(name) {
             return Err(crate::wire::CHAT_DISABLED.into());
         }
@@ -237,7 +282,13 @@ impl Process {
         let mut detected_program = None;
         let mut detected_version = None;
         let outcome = async {
+            if provider == Provider::Peer {
+                return self.refresh_peer().await;
+            }
+            let arguments = self.harness.as_ref().filter(|agent| agent.provider == provider)
+                .map_or(&[][..], |agent| agent.arguments.as_slice());
             let program = if provider == Provider::Playwright { playwright::installed()? } else { crate::program::executable(name)? };
+            reject_self_program(&program)?;
             let metadata = std::fs::metadata(&program).map_err(|e| e.to_string())?;
             detected_program = Some(program.clone());
             let identity = (program.clone(), metadata.len(), metadata.modified().map_err(|e| e.to_string())?);
@@ -254,8 +305,8 @@ impl Process {
                 let future = async {
                     match provider {
                         Provider::Playwright => playwright::Playwright::start_with_output(&program, output).await.map(Driver::Playwright),
-                        Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Codex),
-                        Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), &[], output).await.map(Driver::Claude),
+                        Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Codex),
+                        Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Claude),
                         Provider::Pi => pi::Pi::start_discovered_with_output(program.as_os_str(), &[], output).await.map(Driver::Pi),
                         Provider::OpenCode => {
                             let endpoint = std::env::var("SSMCP_OPENCODE_URL").map_err(|_| "OpenCode is installed; set SSMCP_OPENCODE_URL to an already-running native loopback service. Discovery does not start scheduled work.")?;
@@ -350,6 +401,42 @@ impl Process {
         }
     }
 
+    async fn refresh_peer(&self) -> Result<Value, String> {
+        let settings = self.harness.as_ref().and_then(|agent| agent.peer.as_ref())
+            .ok_or("ssmcp peer requires explicit startup configuration: --load-harness ssmcp -- --endpoint URL --token-env NAME")?;
+        let existing = self.drivers.lock().unwrap().get(&Provider::Peer).cloned();
+        let driver = match existing {
+            Some(driver) => driver,
+            None => Driver::Peer(peer::Peer::start(settings.clone()).await?),
+        };
+        let catalog = match driver.tools().await {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                driver.shutdown().await;
+                return Err(error);
+            }
+        };
+        let count = catalog.len();
+        let details = driver.details().await;
+        let published = {
+            let mut drivers = self.drivers.lock().unwrap();
+            drivers.insert(Provider::Peer, driver.clone());
+            let result = self.registry.replace_catalog(Provider::Peer, catalog);
+            if result.is_err() {
+                drivers.remove(&Provider::Peer);
+            }
+            result
+        };
+        if let Err(error) = published {
+            driver.shutdown().await;
+            return Err(error);
+        }
+        Ok(
+            json!({"provider":"ssmcp","status":"ready","executable":null,"version":null,
+            "tools":count,"details":details}),
+        )
+    }
+
     pub async fn perform(self: &Arc<Self>, operation: Operation) -> Result<Value, String> {
         operation.validate()?;
         match operation {
@@ -439,7 +526,10 @@ impl Process {
                 }
                 _ => Err("unknown optional harness primitive".into()),
             },
-            provider if provider.is_harness() || provider == Provider::Playwright => {
+            provider
+                if provider.is_harness()
+                    || matches!(provider, Provider::Playwright | Provider::Peer) =>
+            {
                 let driver = self
                     .drivers
                     .lock()
@@ -624,6 +714,7 @@ impl NativePlugin for Process {
             Provider::Pi,
             Provider::OpenCode,
             Provider::Playwright,
+            Provider::Peer,
         ]
     }
 
@@ -651,5 +742,17 @@ impl NativePlugin for Process {
             Process::shutdown(&self).await;
             Ok(json!({"status":"stopped"}))
         })
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+
+    #[test]
+    fn agent_provider_refuses_the_current_binary_before_any_version_probe() {
+        assert!(reject_self_program(&std::env::current_exe().unwrap()).is_err());
+        #[cfg(target_os = "linux")]
+        assert!(reject_self_program(Path::new("/proc/self/exe")).is_err());
     }
 }

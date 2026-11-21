@@ -11,6 +11,7 @@ pub(super) struct Activity {
     pub description: String,
     pub cwd: Option<String>,
     pub started: Instant,
+    pub deadline: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -33,7 +34,15 @@ impl Activities {
             description,
             cwd,
             started: now,
+            deadline: None,
         });
+    }
+
+    pub fn native_timing(&mut self, key: &str, timing: crate::runtime::time::ExecutionTiming) {
+        if let Some(activity) = self.active.get_mut(key) {
+            activity.started = timing.started;
+            activity.deadline = timing.deadline;
+        }
     }
 
     pub fn finish(&mut self, key: &str) -> Option<Activity> {

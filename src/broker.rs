@@ -528,7 +528,7 @@ impl Session {
             Ok(Err(_)) => Err(self.connection_error(true, "client disconnected")),
             Err(_) => Err("client request timed out; its outcome may be unknown".into()),
         };
-        let result = if authorization
+        let mut result = if authorization
             .is_some_and(|authorization| !authorization.is_live() || !authorization.permits(self))
         {
             Err("session access was revoked; response withheld".into())
@@ -540,7 +540,6 @@ impl Session {
         } else {
             result
         };
-        let received_at = std::time::Instant::now();
         if audit_tool.is_some() {
             let outcome = if result
                 .as_ref()
@@ -581,6 +580,19 @@ impl Session {
                 }
                 return Err("tool may have executed; audit completion could not be saved; inspect its state before retrying".into());
             }
+        }
+        if catalog_query
+            && let Ok(value) = &mut result
+            && value["isError"] != true
+            && let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut)
+        {
+            // Older clients may still advertise names this relay rejects.
+            tools.retain(|tool| {
+                tool["name"].as_str().is_none_or(|name| {
+                    wire::retired_tool_error(name).is_none()
+                        && (self.chat_enabled() || !wire::human_chat_tool(name))
+                })
+            });
         }
         if catalog_query
             && let Ok(value) = &result
@@ -629,15 +641,6 @@ impl Session {
                 reply_agent.as_deref(),
                 audit_tool.as_deref(),
                 &result,
-            );
-        }
-        if let (Some(run), Ok(value)) = (audit_run.as_ref(), &result) {
-            run.native_reply(
-                self.client_id(),
-                reply_agent.as_deref(),
-                audit_tool.as_deref(),
-                value,
-                received_at,
             );
         }
         let timed_out = result.as_ref().is_err_and(|e| e.contains("timed out"));
@@ -1720,13 +1723,7 @@ fn accessible_sessions<'a>(
 }
 
 pub fn valid_username(user: &str) -> bool {
-    !user.is_empty()
-        && user.len() <= 64
-        && !matches!(user, "healthz" | "." | "..")
-        && user.as_bytes()[0] != b'-'
-        && user
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    crate::username::valid_resource_name(user)
 }
 
 fn username(uid: u32) -> io::Result<String> {
@@ -1971,7 +1968,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dialogue_receipts_use_native_ack_and_binding_at_dispatch() {
+    async fn native_messages_preserve_dispatch_without_completion_hooks() {
         for tool in ["ssmcp.ui.message", "ssmcp.ui.present"] {
             for bind_after_dispatch in [false, true] {
                 let (sender, mut receiver) = mpsc::channel(1);
@@ -2021,19 +2018,14 @@ mod tests {
                     "structuredContent":{"accepted":true,"duplicate":false,"message_id":"message_1"}
                 }))).unwrap();
                 request.await.unwrap().unwrap();
-                let replies = run.accepted_replies("dialogue");
-                assert_eq!(replies.len(), 1, "{tool}");
-                assert_eq!(
-                    replies[0].agent_id.as_deref(),
-                    (!bind_after_dispatch).then_some(agent_id),
-                );
-                assert!(run.accepted_replies("other").is_empty());
+                assert_eq!(run.user_wait_addition()["content"], serde_json::json!([]));
+                assert_eq!(run.user_wait_reserve_bytes(), 0);
             }
         }
     }
 
     #[tokio::test]
-    async fn failed_duplicate_or_other_native_tools_cannot_acknowledge_dialogue() {
+    async fn native_errors_and_duplicate_receipts_never_create_completion_hooks() {
         for (tool, result) in [
             (
                 "ssmcp.ui.message",
@@ -2080,7 +2072,11 @@ mod tests {
             let expected = result.clone();
             call.reply.send(result).unwrap();
             assert_eq!(request.await.unwrap(), expected);
-            assert!(run.accepted_replies("dialogue").is_empty(), "{tool}");
+            assert_eq!(
+                run.user_wait_addition()["content"],
+                serde_json::json!([]),
+                "{tool}"
+            );
         }
     }
 

@@ -34,6 +34,9 @@ terminal open. The displayed MCP URL uses one-time connection-code OAuth.
                          Custom PATH: absolute, with an existing 0700 parent
   --public-url URL       HTTPS NAME.local origin of an existing local TLS proxy;
                          requires a fixed nonzero --listen port; excludes --socket
+  --input MODE           Chat input (terminal by default; none disables chat)
+  --agent RECIPIENT      Chat recipient (next-caller by default)
+  --load-harness NAME    Preload one native harness; see ssmcp --list-harnesses
   --name NAME            Device name
   --title TEXT           Session title
   --context-root PATH    Additional local context directory

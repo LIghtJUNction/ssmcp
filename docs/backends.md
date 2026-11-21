@@ -1,6 +1,6 @@
 # 统一客户端、Harness 与代码模式
 
-本开发分支对外提供 `list`、`code_mode`、`collab`、`request_finish`、`await` 和 `messages` 六个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`request_finish` 在 Rust 中等待有理由的人工结束决定；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。协议与验证范围见[结束申请与问题](finish-and-questions.md)和[统一等待](await.md)。每条新连接显示为 `shell`，提供交互式终端、独立命令任务和已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
+本开发分支对外提供 `list`、`code_mode`、`collab`、`await` 和 `messages` 五个 MCP 工具。`list` 枚举当前获准客户端；`code_mode` 编排原生操作；`collab` 管理现有参与者；`await` 观察任务、协作对象或用户输入；`messages` 按明确收件人处理原生消息。每条新连接显示为 `shell`，提供交互式终端、独立命令任务和已安装 harness 的原生能力。[HTTP 入口](../src/http.rs) · [后端分派](../src/backend.rs)
 
 <a id="启动参数"></a>
 

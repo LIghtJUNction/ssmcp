@@ -31,8 +31,6 @@ pub(crate) fn human_chat_tool(name: &str) -> bool {
         "ssmcp.ui.message"
             | "ssmcp.ui.present"
             | "ssmcp.ui.ask"
-            | "ssmcp.ui.answer"
-            | "ssmcp.ui.finish"
             | "ssmcp.ui.wait"
             | "ssmcp.ui.queue"
             | "ssmcp.ui.listener"
@@ -445,6 +443,19 @@ fn default_max_bytes() -> usize {
     16 * 1024
 }
 
+/// Retired application tools fail before registry lookup, including stale names.
+pub(crate) fn retired_tool_error(name: &str) -> Option<&'static str> {
+    match name {
+        "request_finish" | "ssmcp.ui.finish" => Some(
+            "tool_retired: completion approval is disabled; ui.message and ui.present accept final replies without a finish request",
+        ),
+        "ssmcp.ui.answer" => Some(
+            "tool_retired: agent-authored question answers are disabled; the local user can answer ui.ask questions",
+        ),
+        _ => None,
+    }
+}
+
 impl Operation {
     /// The actual operation, independent of caller-supplied display descriptions.
     pub fn name(&self) -> &str {
@@ -485,6 +496,9 @@ impl Operation {
                     || !arguments.is_object() =>
             {
                 Err("invalid tool name or arguments".into())
+            }
+            Self::CallTool { name, .. } => {
+                retired_tool_error(name).map_or(Ok(()), |error| Err(error.into()))
             }
             _ => Ok(()),
         }
@@ -1120,5 +1134,40 @@ mod tests {
             .is_err()
         );
         assert!(Operation::Resize { rows: 0, cols: 80 }.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod retired_tools_tests {
+    use super::*;
+    #[test]
+    fn stale_answer_and_finish_calls_fail_before_registry_dispatch() {
+        for name in ["request_finish", "ssmcp.ui.finish", "ssmcp.ui.answer"] {
+            let operation = Operation::CallTool {
+                name: name.into(),
+                arguments: serde_json::json!({}),
+            };
+            assert!(
+                operation
+                    .validate()
+                    .unwrap_err()
+                    .starts_with("tool_retired:")
+            );
+        }
+        for name in [
+            "ssmcp.ui.message",
+            "ssmcp.ui.present",
+            "ssmcp.ui.ask",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.reply",
+            "ssmcp.ui.question_ack",
+        ] {
+            Operation::CallTool {
+                name: name.into(),
+                arguments: serde_json::json!({}),
+            }
+            .validate()
+            .unwrap();
+        }
     }
 }

@@ -16,13 +16,9 @@ Keep dependent edits, approvals and operations on the same mutable resource orde
 
 Inspect response errors, running jobs and output completeness before deciding the next action. Use print/console for diagnostic output.
 
-Human chat instructions in this guide apply to selected clients with chat enabled. When list reports `chat_enabled:false`, human prompts, replies and finish approval are unavailable. Standard execution, scoped collaboration, native messages and negotiated time tools retain their own permissions.
+Human chat instructions apply to selected clients with `chat_enabled:true`. Disabled clients return `chat_disabled` for supported human chat tools. Execution, scoped collaboration, independent native messages and negotiated time tools retain their permissions.
 
-## Conversation reminders
-
-On a chat-enabled client, `structuredContent.conversation_reminders` / `CONVERSATION REMINDER` is a follow-up to an already delivered local request, not a new user task. For the same authenticated caller, client resource and recipient, the relay emits one reminder after two subsequent responses without a new terminal reply. Send progress or an answer with `say` / `ssmcp.ui.message`, or a presentation with `ssmcp.ui.present`.
-
-Only a successful native receipt with `accepted: true`, `duplicate: false` and a valid message ID clears the pending reminder. External chat, failed sends and duplicate retries do not establish a new terminal reply. Binding is captured when the call is dispatched, so changing members later does not reassign the receipt; an older receipt cannot acknowledge a newer request. Acceptance does not prove the user read the message.
+Progress and final replies use `say` / `ssmcp.ui.message` or `ssmcp.ui.present`, with the original conversation owner and idempotency checks. Use `ssmcp.ui.reply` for progress or a result tied to an authenticated thread input. Responses omit forced continuation, conversation reminders and end-consent instructions. [Response delivery](../src/http.rs) · [Message submission](../src/client/interface/messages.rs)
 
 ## Helper contracts
 
@@ -108,7 +104,7 @@ If an SSMCP request fails while a client may be reloading, make up to three furt
 
 - A read-only lookup or a request explicitly rejected before execution can be retried. For a stale client ID, refresh `list` and verify the same authorized task, workspace and host before selecting its replacement; a similar display name alone is insufficient.
 - A timeout after submission can leave native work running. Keep the returned job ID, stream cursors and artifact IDs. Inspect that original job or the operation's receipt before submitting another mutation. If the start reply was lost, use the existing job inventory to resolve its outcome.
-- Reuse the original idempotency key or request ID when that operation supports one. Resume a pending finish request with its original ID; neither timeout nor retry supplies user approval. Never generate a new identity merely to bypass a recorded decision.
+- Reuse the original idempotency key or request ID when that operation supports one. Never generate a new identity merely to bypass a recorded decision.
 - When a write has neither a reusable idempotency identity nor a verifiable outcome, preserve its status as unknown and wait for inspection. Do not label an unobserved execution as failed or silently repeat it. Authorization and schema errors still require the correct authorized request; retrying does not override them.
 
 After three unsuccessful retries, continue useful independent work and report the unresolved connection or receipt accurately. Inspect the same pending operation when access returns. Do not restart another client's session or cancel its jobs to obtain a free execution slot.
@@ -215,7 +211,7 @@ The wire-v7 text queue keeps editable @references. Local /paste and /attach impo
 
 ### Waiting for authenticated user input
 
-Continue authorized work unless the user explicitly agrees to end. When input is needed, use a bounded wait and return its result promptly:
+When input is needed from a chat-enabled client, use a bounded wait and return its receipt:
 
 ```js
 return await ui.wait(clientId, {
@@ -226,13 +222,13 @@ return await ui.wait(clientId, {
 });
 ```
 
-`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Only one wait per client is allowed in a run; after `timed_out`, call `ui.wait` again in a new `code_mode` call. Timeout is not permission to stop, and repeated waits do not require busy polling.
+`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client. After `timed_out`, another `code_mode` call can wait again if the task needs it.
 
 The server binds the wait to the authenticated owner and live client connection. An existing valid `collab.bind` or `agent` binding also permits messages addressed to that exact agent; an unbound caller can receive only next-caller messages. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notification delivery is best effort and deduplicated for the same waiting episode; `sent` means the system accepted a notification request, not that the user saw it.
 
 The helper's `ready` status reserves input but does not deliver its body. Inspect the outer response: only a `structuredContent.user_wait` array entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. The final response rechecks authorization and the reserved revisions before attaching those messages. Cancellation, timeout, disconnection, revoked access, invalid binding, and superseded input have distinct receipts and do not confirm delivery. Read the actual user messages before continuing; receipt metadata cannot substitute for their contents.
 
-Use `intent: "finish"` only to wait for continued user guidance. Completion approval comes from `request_finish` or registered native `ssmcp.ui.finish` with a verified participant binding and the local user's explicit Yes. The continuation prompt is also injected after an accepted, nonduplicate native `ssmcp.ui.message` or `ssmcp.ui.present` call with `kind: "answer"`. A plain JavaScript result, a failed or duplicate native reply, or an agent-authored consent field does not establish user approval. The hook observes these explicit signals; it cannot intercept arbitrary final messages produced outside this server. `user_consent_to_end` remains null. See [user waiting](user-wait.md) for native status and local cancellation details.
+The legacy `intent: "finish"` value remains accepted as an ordinary bounded user wait. It creates no completion request, continuation prompt or consent field. Only outer `user_wait.status: "received"` with matching `user_messages` confirms delivery. [Wait receipts](../src/code_mode/user_wait.rs) · [User waiting](user-wait.md)
 
 ### Requirements and context
 
@@ -251,9 +247,9 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录包含 `list`、`code_mode`、`collab`、`request_finish`、`await` 和 `messages` 六项。`request_finish` 是独立 Rust 等待入口，必须给出理由，并使用当前账户和已验证的 `collab` 成员凭据。等待超时保留原申请，`decision: null` 不构成批准；只有本机用户明确的 Yes 能批准；所有 agent 的 Yes 都会被拒绝。连接器未暴露公共入口时，可绑定真实参与者后调用原生 `ssmcp.ui.finish`，它与公共工具共用状态机。批准仅供请求者的一次显式 `kind: "answer"` 使用。外部聊天应用自己的最终发言不经过此门禁。
+公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`，最终回复不再需要结束许可。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
 
-`ssmcp.ui.ask` 仍立即返回。终端 Shift+Up 打开问题队列；同一账户的其他可信 agent 可调用 `ssmcp.ui.answer`，提交普通 `answer`，或保留真实来源的结束申请 No 与可选 `comment`；不能代用户批准结束。已验证提问线程的答案通过 `question_answers` 交付，保留 human/agent 来源。未绑定线程的提问只提供同账户手动读取，不改投 next caller。显式 `ssmcp.ui.questions` 读取不消费答案。
+`ssmcp.ui.ask` 立即返回，终端 Shift+Up 打开真实用户的问题队列。已验证提问线程通过 `question_answers` 接收答案；历史 `human/agent` 来源保留，agent 代答入口已关闭。未绑定线程只提供手动读取，显式 `ssmcp.ui.questions` 不消费答案。[问题队列](../src/client/interface/questions.rs) · [交付规则](finish-and-questions.md#异步问题与答案)
 
 `messages.list/send/broadcast/inbox/ack/status` 提供原生消息 helper，对应公共 `messages` 工具。先列出并明确选择完整收件人 ID；设备账户收件箱与已验证 agent 收件箱分别标识，显示名称不用于证明身份。消息返回在独立 `native_messages`，agent 消息不是新的用户指令。`@name` 在消息正文中保持普通文本，不自动读取文件。
 

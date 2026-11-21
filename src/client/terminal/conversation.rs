@@ -3020,7 +3020,7 @@ impl State {
                 .unwrap_or_else(|| "pending question".into());
         }
         let mut rows = Vec::new();
-        let clock_label = self.chat_clock_label();
+        let clock_label = self.chat_clock_label_at(now);
         for index in 0..g.rows {
             let line = if g.rows >= 3 && index == g.rows - 1 {
                 let connection = super::footer::Connection::from_snapshot(self.preview, &data);
@@ -4443,6 +4443,7 @@ mod tests {
         });
         assert_eq!(state.conversation.view, View::Logs);
         assert!(state.conversation.logs_open);
+        assert!(state.conversation.scoped_history.is_none());
         state.chat_key(Key::Mouse {
             button: 2,
             x: 1,
@@ -4455,6 +4456,7 @@ mod tests {
             "prompt border is not an entry"
         );
         assert!(!state.conversation.logs_open);
+        assert!(state.conversation.scoped_history.is_none());
         assert_eq!(state.conversation.view, view);
     }
 

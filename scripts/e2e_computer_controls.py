@@ -67,7 +67,7 @@ def render(snapshot, path, label):
 
 
 class Session:
-    def __init__(self, root, label, binary, decoder, report):
+    def __init__(self, root, label, binary, decoder, report, capabilities=None):
         self.root = root / label
         self.root.mkdir()
         self.label, self.report = label, report
@@ -76,7 +76,7 @@ class Session:
         workspace.mkdir()
         config = self.root / "config.toml"
         config.write_text("[ui]\ndashboard = true\n")
-        self.state = e2e_account_relay.State()
+        self.state = e2e_account_relay.State(capabilities=capabilities)
         self.server = e2e_account_relay.ThreadingHTTPServer(("127.0.0.1", 0), e2e_account_relay.Handler)
         self.server.daemon_threads = True
         self.server.state = self.state
@@ -195,8 +195,10 @@ def quiet(sessions, seconds=0.4):
 
 
 def badge(session):
-    return {"on" if state == "开启" else "off"
-            for state in re.findall(r"电脑控制：(开启|关闭)", session.screen)}
+    # Read the current input divider, not a retained command receipt in the footer.
+    return {"on" if state in ("开启", "开") else "off"
+            for line in session.screen.splitlines() if "─" in line
+            for state in re.findall(r"(?:电脑控制：|键鼠：)(开启|关闭|开|关)", line)}
 
 
 def inside(args):

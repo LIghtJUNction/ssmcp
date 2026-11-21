@@ -500,6 +500,9 @@ pub(crate) async fn call(
     arguments: Value,
     terminals: &crate::terminals::Terminals,
 ) -> Result<Value, String> {
+    if let Some(error) = crate::wire::retired_tool_error(name) {
+        return Err(error.into());
+    }
     if name == tool_summary::TOOL {
         return tool_summary::call(arguments);
     }
@@ -509,9 +512,6 @@ pub(crate) async fn call(
     // Bounded waits must not hold the UI configuration lock.
     if name == "ssmcp.ui.wait" {
         return user_wait::call(arguments).await;
-    }
-    if name == "ssmcp.ui.finish" {
-        return questions::finish_request(arguments).await;
     }
     if name == "ssmcp.ui.listener" {
         return listener::call(arguments).await;
@@ -584,7 +584,6 @@ pub(crate) async fn call(
         match name {
             "ssmcp.ui.harness" => return harness::call(arguments),
             "ssmcp.ui.ask" => return questions::ask(arguments),
-            "ssmcp.ui.answer" => return questions::agent_answer(arguments),
             "ssmcp.ui.question_ack" => return questions::acknowledge_answers(arguments),
             "ssmcp.ui.question_delivery" => return questions::delivery_peek(arguments),
             "ssmcp.ui.questions" => return questions::read(arguments),
@@ -1150,10 +1149,8 @@ mod tests {
         }
         let expected = std::collections::BTreeSet::from([
             "ssmcp.ui.action",
-            "ssmcp.ui.answer",
             "ssmcp.ui.ask",
             "ssmcp.ui.filter",
-            "ssmcp.ui.finish",
             "ssmcp.ui.get",
             "ssmcp.ui.harness",
             "ssmcp.ui.history",
