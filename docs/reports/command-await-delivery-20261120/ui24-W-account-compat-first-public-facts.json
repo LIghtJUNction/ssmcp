@@ -1,0 +1,209 @@
+{
+  "schema": "ssmcp.partial-ui-acceptance-public-facts.v1",
+  "status": "failed",
+  "execution_label": "W UI24 first attempt",
+  "source": {
+    "commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "product_version": "0.10.25"
+  },
+  "period": {
+    "started_utc": "2026-11-21T06:10:05Z",
+    "finished_utc": "2026-11-21T06:12:42Z",
+    "controller_seconds": 156.116
+  },
+  "counts": {
+    "planned_independent_suites": 24,
+    "logical_suites_including_alias": 25,
+    "started": 7,
+    "passed": 6,
+    "failed": 1,
+    "not_run": 17,
+    "checks_in_fully_passed_suites": 503,
+    "failed_suite_producer_records": 62,
+    "failed_suite_producer_true": 61,
+    "failed_suite_producer_false": 1,
+    "failed_suite_controller_checks": null,
+    "alias_coverage": 1,
+    "counting_rule": "503 sums only the six fully passed suites. The failed producer's 61 true records, its false record, and the alias are not added. zuse_worker records 32 checks in this attempt."
+  },
+  "passed_suite_columns": [
+    "name",
+    "checks",
+    "seconds",
+    "exit_code"
+  ],
+  "passed_suites": [
+    [
+      "message_references",
+      53,
+      17.132,
+      0
+    ],
+    [
+      "force_send",
+      137,
+      25.077,
+      0
+    ],
+    [
+      "listener_transports",
+      74,
+      10.91,
+      0
+    ],
+    [
+      "zuse_worker",
+      32,
+      4.501,
+      0
+    ],
+    [
+      "interactions",
+      172,
+      62.787,
+      0
+    ],
+    [
+      "private_desktop",
+      35,
+      5.611,
+      0
+    ]
+  ],
+  "failed_suite": {
+    "name": "account_compat",
+    "ordinal": 7,
+    "status": "failed",
+    "exit_code": 1,
+    "controller_seconds": 3.683,
+    "controller_checks": null,
+    "controller_checks_field_present": false,
+    "producer_passed": false,
+    "producer_elapsed_seconds": 1.515,
+    "producer_records": 62,
+    "producer_true_records": 61,
+    "producer_false_records": 1,
+    "failed_check": "new-main:another_subject_cannot_list_connection",
+    "failed_record_fields": [
+      "check",
+      "passed"
+    ],
+    "failure_location_in_existing_log": {
+      "file": "scripts/e2e_account_compat.py",
+      "line": 374,
+      "function": "self_only"
+    },
+    "observed_error": "AssertionError: new-main:another_subject_cannot_list_connection",
+    "actual_failed_http_status_recorded": false,
+    "actual_failed_http_body_recorded": false,
+    "actual_failed_http_status": null,
+    "actual_failed_http_body": null,
+    "missing_value_meaning": "Null denotes absent evidence, not an observed HTTP response value. Status/response fields from earlier successful checks are not substituted.",
+    "cause": "undetermined from the preserved report and log",
+    "script_sha256": "6464d132cf6d51777564ddf1245a3a95c3a2cf238c757b813c296c4d412ef5a4",
+    "suite_json_equals_final_acceptance_entry": true,
+    "ui_evidence_contract": "The upstream script exports report/log only; the controller records no UI snapshot artifact for this failed suite."
+  },
+  "not_run_suites": [
+    "input_history",
+    "reload_state",
+    "session_groups",
+    "client_ui",
+    "canvas_logs",
+    "composer",
+    "questions",
+    "presentations",
+    "context_memory",
+    "file_paste",
+    "relay_composer",
+    "goal_startup",
+    "tool_summaries",
+    "readable_commands",
+    "summary_commands",
+    "physical_latency",
+    "time_wait"
+  ],
+  "alias": {
+    "name": "human_finish",
+    "status": "covered_by",
+    "covered_by": "interactions",
+    "independently_executed": false,
+    "independent_pass": false,
+    "source_revision": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "alias_source_sha256": "a6103ab116650dfb0afeef211be7e7f94f28ec904d90f484d38824670437709f",
+    "target_source_sha256": "8bfd7e5ac4519be9e186e3361e8e683b47e8b396a8b7df880035ecc6e8ba43e5",
+    "target_report_sha256_recorded": "29cc88a027754f6877e15a4dc935c74b9bc0643a3889876e50e1fd2676b1a6de"
+  },
+  "cleanup_and_inputs": {
+    "started_suite_children": 7,
+    "all_seven_owned_children_reaped": true,
+    "all_seven_before_and_after_records_present": true,
+    "all_seven_input_records_equal": true,
+    "all_seven_before_and_after_unchanged_flags_true": true,
+    "acceptance_inputs_unchanged": true,
+    "changed_inputs": [],
+    "input_set_sha256_before": "fcf7a8eb49e1d77598d0fc40b80c2b68afc457eaf3b1eacc995149e6169f4610",
+    "input_set_sha256_after": "fcf7a8eb49e1d77598d0fc40b80c2b68afc457eaf3b1eacc995149e6169f4610",
+    "evidence_scope": "Final acceptance entries and the matching failed suite.json; no new live-process or independent descendant/temp-directory cleanup audit."
+  },
+  "outer_native_execution_receipt": {
+    "durable_receipt_found_in_bounded_lookup": false,
+    "outer_native_exit_code": null,
+    "running": null,
+    "stdout_eof": null,
+    "stderr_eof": null,
+    "lookup_scope": "At this read, no top-level JSON filename matching execution, exit or launch was found within this attempt directory. No outside search, wait or job polling was performed.",
+    "gap": "The final acceptance status and failed suite exit 1 are confirmed. An outer native execution response with its own exit/EOF fields was not available to this extractor; the read-only extraction command's exit 0 is not a product result."
+  },
+  "producer_scope_recorded": {
+    "production_state_used": false,
+    "production_connections_opened": false,
+    "global_configuration_modified": false,
+    "client_sha256": "d654703a12f9479e97b9807ac8d61f370bd5c413963bf6e5b6e45dfbd8434f41",
+    "new_server_sha256": "c1991fac3c0c6aa0a229781c87fe67ef24c028fd5ffc88b0c50dc413baaa5527",
+    "binary_files_read_or_rehashed_by_this_review": false
+  },
+  "originals_read": [
+    {
+      "role": "acceptance",
+      "file": "acceptance.json",
+      "bytes": 865869,
+      "sha256": "d7aad6e79802b14164b0811dd358bcab68312b23245038d1de2166b9575d304c",
+      "full_bytes_read_and_sha256_computed": true,
+      "provided_expected_hash_verified": true
+    },
+    {
+      "role": "producer",
+      "file": "suites/account_compat/evidence/report.json",
+      "bytes": 7896,
+      "sha256": "4e2c2218321320f9905c35d8b3592507deaba9bd430a4c4f95e183337aa03b3b",
+      "full_bytes_read_and_sha256_computed": true,
+      "provided_expected_hash_verified": true
+    },
+    {
+      "role": "suite",
+      "file": "suites/account_compat/suite.json",
+      "bytes": 6457,
+      "sha256": "935f0fa9c2e7ced1f580fc1a2f52e4ded4f921babb89ca91bbb1218a0be92a17",
+      "full_bytes_read_and_sha256_computed": true,
+      "provided_expected_hash_verified": false
+    },
+    {
+      "role": "log",
+      "file": "suites/account_compat/run.log",
+      "bytes": 6818,
+      "sha256": "0567b3341d57157d4e2b0c3602d0f133bf943055fd49cab52ee1cfdf9aa9f3a4",
+      "full_bytes_read_and_sha256_computed": true,
+      "provided_expected_hash_verified": false,
+      "log_hash_matches_final_acceptance": true
+    }
+  ],
+  "known_gaps": [
+    "No actual status or response body is preserved for the failing cross-subject connection-list check, so no cause is concluded.",
+    "Individual passing producer reports were not reopened; their results come from final acceptance.json.",
+    "No source code was read or changed, and no product, test, helper, Cargo, model or additional Gate was executed.",
+    "This first-attempt result does not validate any later correction or retry, and is not a runtime18, P1 or publication result.",
+    "The separate Linux multi-OS-user login and temporary-socket issue is not identified as the cause of this HTTP assertion.",
+    "Native job, agent, session and process identities, private absolute paths, account identifiers and synthetic test-chat content are omitted."
+  ]
+}

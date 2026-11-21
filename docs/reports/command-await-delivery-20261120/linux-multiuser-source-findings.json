@@ -1,0 +1,252 @@
+{
+  "schema": "ssmcp-linux-multiuser-source-findings-v1",
+  "observed_at_utc": "2026-11-21T06:26:12Z",
+  "source": {
+    "commit": "4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "tree": "5be29af415b915ef3307bfed08c6cefec2798898",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8",
+    "inspection": "GitHub 固定提交源码及限定行段；本次没有运行产品、构建或测试。"
+  },
+  "summary": "W 已有按有效 UID 隔离输出目录及 su 继承终端的显示回退实现。所报告的共享 /tmp/ssmcp fatal 不能直接归属于 W 当前默认实现；实际报错进程的版本、可执行文件及环境未由本次任务核验。",
+  "diagnostic_attribution": [
+    {
+      "topic": "output",
+      "evidence_level": "reported symptom plus directly inspected W source",
+      "finding": "报告的致命诊断明确指向共享 /tmp/ssmcp 的所有权或权限检查。W 普通连接却直接选择 /tmp/ssmcp-<euid>，src/output.rs 中没有该旧式诊断文本。共享父目录由第一用户拥有而第二用户被拒绝，与源码明确注释的旧设计问题相容，但本次未读取实际运行二进制，不能断言用户正在运行哪个旧版本。",
+      "sources": [
+        "src/output.rs:165-220",
+        "src/output.rs:240-266"
+      ]
+    },
+    {
+      "topic": "dashboard",
+      "evidence_level": "directly inspected independent call chain; incident cause unconfirmed",
+      "finding": "Dashboard unavailable 来自 terminal Session 启动错误。Unix PhysicalOutput 重开 stderr 对应 tty；PermissionDenied 时改开 /dev/tty 并验证同一控制终端。su 后设备节点仍归原用户是代码已处理的一种情形；仅凭警告不能确认这次失败发生在重开设备、回退打开或其他启动步骤，也不能归因于输出目录。",
+      "sources": [
+        "src/client.rs:2551-2562",
+        "src/client/terminal.rs:92-111",
+        "src/client/terminal.rs:2943-3034"
+      ]
+    },
+    {
+      "topic": "local_memory",
+      "evidence_level": "directly inspected separate state path; diagnostic tail unavailable",
+      "finding": "Local memory 初始化使用 XDG_STATE_HOME/HOME 下的 context-memory，经过 SafeDirectory 验证，不使用 /tmp/ssmcp。切换用户时若保留另一用户的 HOME/XDG_STATE_HOME，可能触发不可访问或所有权错误；本次没有实际环境或完整警告尾部，不能确认此假设或三条诊断同源。",
+      "sources": [
+        "src/client.rs:1771-1778",
+        "src/client/context_memory.rs:673-706",
+        "src/client/interface/history.rs:306-326",
+        "src/client/interface/history.rs:1158-1204"
+      ]
+    }
+  ],
+  "paths": [
+    {
+      "purpose": "Unix output artifacts",
+      "default": "/tmp/ssmcp-<effective UID>",
+      "selection": "普通连接固定使用 /tmp，与 TMPDIR/XDG 无关；SSMCP_OUTPUT_RELOAD 是一次性授权令牌，不是任意路径覆盖。",
+      "guards": "创建 mode 0700；O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC 打开；要求有效 UID 拥有且无 group/other 权限。产物 openat 不跟随链接，并检查普通文件、UID、私有权限、单链接。",
+      "sources": [
+        "src/output.rs:165-196",
+        "src/output.rs:240-266",
+        "src/output.rs:403-443",
+        "src/output.rs:1280-1284"
+      ]
+    },
+    {
+      "purpose": "Legacy output reload",
+      "default": "/tmp/ssmcp/<effective UID> only for a valid existing reload grant",
+      "selection": "仅有 reload token 才探测旧目录；父目录限 root/当前 UID，非 sticky 的 group/other 可写父目录不接受；子目录限当前 UID 私有目录。消费时还验证授权文件、schema、owner、期限并删除一次性令牌；保留已公布的旧产物路径。",
+      "sources": [
+        "src/output.rs:199-220",
+        "src/output.rs:335-361"
+      ]
+    },
+    {
+      "purpose": "Linux local MCP endpoint",
+      "default": "$XDG_RUNTIME_DIR/ssmcp/mcp.sock; unset -> /tmp/ssmcp-<effective UID>/mcp.sock",
+      "selection": "显式 --socket 优先；无效 XDG_RUNTIME_DIR 拒绝，不静默选另一端点；路径长度上限 107 bytes。",
+      "guards": "祖先 root/本 UID 且不可被非可信用户替换；最终父目录本 UID 0700、socket 0600，同 UID peer；清理前核对 inode。",
+      "sources": [
+        "src/client/local/socket.rs:29-100",
+        "src/local_socket.rs:72-94",
+        "src/local_socket.rs:107-146"
+      ]
+    },
+    {
+      "purpose": "Linux background session state",
+      "default": "SSMCP_SESSION_HOME override; otherwise $XDG_STATE_HOME/ssmcp/sessions or $HOME/.local/state/ssmcp/sessions",
+      "guards": "绝对路径、拒绝最终 symlink、有效 UID 拥有、无 group/other 权限。",
+      "sources": [
+        "src/session.rs:906-985"
+      ]
+    },
+    {
+      "purpose": "Local history and context memory",
+      "default": "$XDG_STATE_HOME or $HOME/.local/state -> ssmcp/conversations and ssmcp/context-memory/<workspace SHA256>/state.json",
+      "guards": "状态路径绝对且无 parent traversal；拒绝 symlink/non-directory；叶目录有效 UID 私有；文件普通、私有、单链接；使用目录 fd 并核对身份。",
+      "sources": [
+        "src/client/interface/history.rs:306-326",
+        "src/client/context_memory.rs:336-355",
+        "src/client/context_memory.rs:685-692",
+        "src/client/interface/history.rs:1100-1204"
+      ]
+    },
+    {
+      "purpose": "Account credentials",
+      "default": "SSMCP_AUTH_HOME override; otherwise $XDG_CONFIG_HOME/ssmcp/auth or $HOME/.config/ssmcp/auth",
+      "guards": "绝对路径、目录有效 UID 私有、文件普通/不跟随 symlink/有效 UID 私有；现有权限失败不应通过共享凭证目录绕过。",
+      "sources": [
+        "src/client/account.rs:89-144",
+        "src/client/account.rs:152-190"
+      ]
+    },
+    {
+      "purpose": "Client/UI configuration",
+      "default": "SSMCP_CLIENT_CONFIG; else $XDG_CONFIG_HOME/ssmcp/config.toml or $HOME/.config/ssmcp/config.toml",
+      "selection": "UI 显式 --ui-config > SSMCP_UI_CONFIG > client config。保留这些明确覆盖优先级。",
+      "sources": [
+        "src/client/config.rs:104-142",
+        "src/client/ui.rs:437-459"
+      ]
+    },
+    {
+      "purpose": "Private X11 display allocation",
+      "default": "/tmp/ssmcp-x11-<effective UID>/allocate.lock; X11 sockets retain /tmp/.X11-unix",
+      "guards": "分配目录 0700、锁 0600/单链接/本 UID；锁 inode 保持稳定；验证新 Xvfb 的 UID、进程和 socket 身份。此路径不是 Dashboard tty 输出路径。",
+      "sources": [
+        "src/computer/isolated/display.rs:35-48",
+        "src/computer/isolated/display.rs:60-136",
+        "src/computer/isolated/display.rs:270-325"
+      ]
+    },
+    {
+      "purpose": "Shared foreground-input state for one OS user",
+      "default": "/var/tmp/ssmcp-host-input-<effective UID>",
+      "selection": "固定 machine-local 根供同一 OS 用户跨终端/工作区共享，不随 TMPDIR 改变。",
+      "guards": "目录不跟随链接、有效 UID 私有。",
+      "sources": [
+        "src/computer/host_control/storage.rs:77-99",
+        "src/computer/host_control/storage.rs:244-263"
+      ]
+    }
+  ],
+  "existing_regressions": {
+    "status": "仅确认固定 W 中的现有源码；本次未执行，也未借用其他来源的通过记录。",
+    "output_tests": [
+      {
+        "name": "output::tests::per_user_directory_bypasses_and_preserves_the_legacy_parent",
+        "source": "src/output.rs:1440-1461"
+      },
+      {
+        "name": "output::tests::per_user_directory_rejects_symlinks_and_public_permissions",
+        "source": "src/output.rs:1465-1486"
+      },
+      {
+        "name": "output::tests::per_user_reload_retains_legacy_paths_and_consumes_the_grant_once",
+        "source": "src/output.rs:1490-1535"
+      },
+      {
+        "name": "output::tests::per_user_reload_does_not_follow_a_legacy_parent_symlink",
+        "source": "src/output.rs:1539-1562"
+      }
+    ],
+    "driver": {
+      "path": "scripts/test_multi_user_runtime.py",
+      "source": "scripts/test_multi_user_runtime.py:21-180",
+      "coverage": "独立数值 UID 的输出隔离、互相不可读、旧目录不变、foreign-owned 新根拒绝；继承原用户 PTY 时同控制终端可显示、不同控制终端拒绝且无写入、父描述符 flags 不变。",
+      "explicit_ignored_workers": [
+        "output::tests::per_user_output_fixture",
+        "client::terminal::tests::physical_output_multi_user_fixture"
+      ],
+      "workers_are_not_run_by_default_test_selection": true
+    },
+    "local_state_tests": [
+      {
+        "name": "client::interface::history::tests::private_storage_rejects_symlinks_hardlinks_fifo_and_shared_modes",
+        "source": "src/client/interface/history.rs:2169-2227"
+      },
+      {
+        "name": "client::account::tests::credentials_reject_public_permissions_and_symlinks",
+        "source": "src/client/account.rs:1593-1612"
+      }
+    ]
+  },
+  "minimal_direction": [
+    "优先分清报错进程与 W 已有实现的身份，不重复实现已有 per-user 修复，也不把源码存在视为用户机器已经升级或场景已通过。",
+    "保持临时输出/端点按有效 UID 隔离、持久状态按用户 XDG/HOME 分层；若原作者统一路径辅助函数，统一 UID/绝对路径/可信目录验证语义，保留各类目录的生命周期与稳定锁域。",
+    "保留 --socket、SSMCP_SESSION_HOME、SSMCP_AUTH_HOME、SSMCP_CLIENT_CONFIG、--ui-config/SSMCP_UI_CONFIG 优先级与 fail-closed 规则；不要通过 chmod/chown 其他用户目录、共享凭证或放宽 UID 校验解决登录。",
+    "保留旧输出的一次性 reload grant、已公布产物路径和原数据不变；不要自动迁移或删除其他用户的数据。",
+    "Dashboard 保留独立文件描述符与控制终端身份验证；X11 分配锁与 host-input 锁仍需保持各自稳定的同 UID 协调范围。"
+  ],
+  "bounds": {
+    "native_product_or_test_execution": false,
+    "cargo_or_build": false,
+    "account_switch_or_permission_change": false,
+    "source_or_fixture_mutation": false,
+    "new_acceptance_gate": false,
+    "reported_process_binary_or_environment_verified": false,
+    "original_private_log_included": false,
+    "windows_or_remote_subject_compatibility_review": false,
+    "account_compat_cross_subject_failure": "独立问题；本记录没有归因或迁移其结论。",
+    "source_owner_handoff": "只提供源码事实和最小方向，具体修改与执行仍由原 source owner 负责。"
+  },
+  "sources": {
+    "src/output.rs": {
+      "git_blob": "483da229603dbc250b14b2ca27b046b58975823c",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/output.rs"
+    },
+    "src/client.rs": {
+      "git_blob": "8c105204c063d2f6b5d35c053a5f0a4908d81b6a",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client.rs"
+    },
+    "src/client/terminal.rs": {
+      "git_blob": "69f8e2c2e1c00c50a1737b101479c6d3f5f31ac9",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/terminal.rs"
+    },
+    "src/client/context_memory.rs": {
+      "git_blob": "7c3d95f698c26407056811e9064c77284a1f3011",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/context_memory.rs"
+    },
+    "src/client/interface/history.rs": {
+      "git_blob": "267df707651c850fd4f245aacb62e24a73acbaf6",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/interface/history.rs"
+    },
+    "src/client/local/socket.rs": {
+      "git_blob": "da6851e0401fd9371580f0d87e4e252b34972f76",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/local/socket.rs"
+    },
+    "src/local_socket.rs": {
+      "git_blob": "5a6248e0f935c0734cf33a9fa44bcf04884cec47",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/local_socket.rs"
+    },
+    "src/session.rs": {
+      "git_blob": "877baeecca3c8d8796a854ddac41e05164502f51",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/session.rs"
+    },
+    "src/client/account.rs": {
+      "git_blob": "8762977e159704044a7fd7bf82f813a14f603ccd",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/account.rs"
+    },
+    "src/client/config.rs": {
+      "git_blob": "f12062a555ef47f58c9ffb17c6ab07057388f7e2",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/config.rs"
+    },
+    "src/client/ui.rs": {
+      "git_blob": "745b7ae0bb27832180c4d81c5b4b39142caf5e06",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/client/ui.rs"
+    },
+    "src/computer/isolated/display.rs": {
+      "git_blob": "50d3f573fa21d0dde005c6564c3c264575e84a04",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/computer/isolated/display.rs"
+    },
+    "src/computer/host_control/storage.rs": {
+      "git_blob": "2b81a6559e7b9650bbb70266eed0c1039cdea821",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/src/computer/host_control/storage.rs"
+    },
+    "scripts/test_multi_user_runtime.py": {
+      "git_blob": "a18ac619bca5c775799a96c134dc9cd2217f6ffc",
+      "url": "https://github.com/LIghtJUNction/ssmcp/blob/4de17310ce2ecdbc8b6c6ab86ee365653f753ee8/scripts/test_multi_user_runtime.py"
+    }
+  }
+}
