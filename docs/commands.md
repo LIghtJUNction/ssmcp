@@ -54,6 +54,22 @@ Linux、macOS 使用系统 Shell、curl、tar 和校验工具；Windows 使用 W
 
 输入框要求通过支持协议 v7 的连接附加到下一次符合目标的 `code_mode` 响应，已交付不代表模型已阅读或执行。需要直接终端输入时，在另一个终端运行 `ssmcp -i`；自定义前端使用 `terminal.read/write/resize`。`ssmcp attach NAME` 用于观察本地后台会话，目前不转发 attach 输入框的要求队列；后台连接可通过 `ssmcp.ui.queue` 管理要求。独立命令继续使用下方的 `exec.*`。
 
+## 查看 OpenAI 调用标识和打开 ChatGPT
+
+在当前已保存的对话中输入 `/openai`，可以查看最近观察到的 `openai/session` 和 `openai/subject`。只看其中一项时用 `/openai-session` 或 `/openai-subject`。面板会标明来源、字段缺失状态和最后观察时间。字段来自当前 MCP 工具请求的 `_meta`，并且只由支持此能力的中继和客户端在已验证的调用线程上记录。客户端、请求或线程没有提供这些条件时，出现“未观察到”属正常情况。[OpenAI Plugins 参考](https://developers.openai.com/plugins/reference)
+
+这两个值是匿名关联标识，无法从中解析出 ChatGPT 地址。要返回网页继续对话，请从浏览器复制会话地址，再在对应的 SSMCP 对话里执行以下命令。地址须使用 HTTPS，主机须为 `chatgpt.com` 或 `chat.openai.com`，路径为 `/c/ID` 或 `/g/ID/c/ID`。
+
+| 命令 | 用途 |
+| --- | --- |
+| `/chatgpt set <URL>` | 把浏览器复制的链接保存到当前已保存的本地对话 |
+| `/chatgpt open` 或 `/chatgpt` | 请求本机浏览器打开已保存的链接，然后可在网页手动发送「继续」 |
+| `/chatgpt copy` | 把已保存的链接复制到本机剪贴板 |
+| `/chatgpt clear` | 只删除该对话的链接，保留已观察到的标识 |
+| `/plugin-docs` | 在本机浏览器打开官方 Plugins 参考 |
+
+切换或恢复历史时只切换对应的本地数据。浏览器和剪贴板操作只在显式命令发出时执行，启动浏览器程序后仍由浏览器处理加载和登录。
+
 ## 独立命令接口
 
 `exec` 在选定客户端启动独立进程，并用任务 ID 保存状态。每个任务有自己的工作目录、退出码和 stdout/stderr。它适合构建、测试、开发服务器等可由 argv 表达的命令。需要持续交互、终端控制或修改同一 Shell 状态时，使用 `terminal.*`。

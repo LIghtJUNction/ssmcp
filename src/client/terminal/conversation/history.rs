@@ -580,6 +580,9 @@ impl State {
     }
 
     pub(super) fn chat_help_rows(&mut self, height: u16) -> Vec<String> {
+        if let Some(lines) = self.chat_openai_rows() {
+            return self.chat_help_page(lines, height);
+        }
         let mut text = String::from("# ssmcp help\n\n");
         if let Some(guide) = &self.guide {
             text.push_str("Online guide: ");
@@ -595,6 +598,10 @@ impl State {
         text.push_str("\n## Conversation goal\n/goal: show the current conversation goal.\n/goal set <text> (or /goal <text>): set a single-line goal, up to 256 characters / 1024 UTF-8 bytes.\n/goal clear: remove the goal and continue the conversation.\nThe saved goal follows this conversation through resume/reload and is readable in ui.get.\nSetting a goal does not send a request or approve task completion.\n");
         text.push_str("\n## Native harnesses\n/pi, /cc, /codex: inspect installed capabilities.\nUse /cc TOOL {JSON} or /codex TOOL {JSON} with the discovered schema.\nUse /pi rpc {\"type\":\"get_commands\",\"args\":{}} to inspect installed commands.\nBackend capabilities and approvals stay with the installed harness.\n\nHelp: Up/Down, PgUp/PgDn, Home/End scroll; Esc returns.\n");
         let lines = markdown::rows(&text, self.geometry.left, &self.ui);
+        self.chat_help_page(lines, height)
+    }
+
+    fn chat_help_page(&mut self, lines: Vec<String>, height: u16) -> Vec<String> {
         self.conversation.help_scroll = self
             .conversation
             .help_scroll

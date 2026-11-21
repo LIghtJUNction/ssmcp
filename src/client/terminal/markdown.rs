@@ -201,6 +201,17 @@ fn wrap(cells: Vec<(char, Face)>, prefix: &str, width: usize, ui: &Ui, out: &mut
     out.push(paint(&row, width, ui));
 }
 
+/// Wrap literal labels and values with the same cell widths as other chat rows.
+pub(super) fn literal_rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {
+    let mut output = Vec::new();
+    for line in text.lines() {
+        let mut cells = Vec::new();
+        plain(line, Face::default(), &mut cells);
+        wrap(cells, "", usize::from(width.max(1)), ui, &mut output);
+    }
+    output
+}
+
 /// Headings, emphasis, inline/fenced code, links, lists and block quotes.
 /// Input escape sequences, URLs and HTML never execute terminal commands.
 pub(crate) fn rows(text: &str, width: u16, ui: &Ui) -> Vec<String> {

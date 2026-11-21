@@ -605,7 +605,7 @@ fn verification_url(server: &str, raw: &str, secret: &str) -> Result<Url> {
     Ok(url)
 }
 
-async fn open_browser(url: &Url) -> Result<()> {
+pub(super) async fn open_browser(url: &Url) -> Result<()> {
     let mut command = if cfg!(windows) {
         let mut c = Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);

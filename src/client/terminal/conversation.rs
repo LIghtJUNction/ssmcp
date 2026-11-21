@@ -16,6 +16,7 @@ mod listener;
 mod login;
 pub(super) mod logout;
 mod messaging;
+mod openai;
 mod paste;
 mod questions;
 mod queue;
@@ -175,6 +176,7 @@ pub(super) struct Conversation {
     #[cfg(test)]
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
+    openai_panel: Option<openai::Panel>,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     pub(super) history_list_stale: bool,
     history_archived: bool,
@@ -706,7 +708,11 @@ impl State {
                 self.notice = Some("Closing this client · restoring the terminal".into());
             }
             "/goal" => self.chat_goal(rest)?,
+            "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs" => {
+                self.chat_openai_command(command, rest)?;
+            }
             "/help" => {
+                self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = true;
                 self.conversation.content_focus = true;
@@ -1097,6 +1103,17 @@ impl State {
             self.conversation.composer.text().to_owned()
         };
         if text.trim().is_empty() {
+            return;
+        }
+        if self.conversation.editing.is_some()
+            && matches!(
+                text.split_whitespace().next(),
+                Some(
+                    "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs"
+                )
+            )
+        {
+            self.notice = Some("Finish the held queue edit before using this local command".into());
             return;
         }
         if self.conversation.editing.is_none() && self.chat_native_is_command(&text) {
@@ -1661,6 +1678,7 @@ impl State {
         let content = self.conversation.content_focus;
         match key {
             Key::Help => {
+                self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = !self.help;
                 self.conversation.content_focus = self.help;
@@ -1929,6 +1947,7 @@ impl State {
         }
         if self.help {
             self.help = false;
+            self.conversation.openai_panel = None;
             self.conversation.content_focus = false;
             self.notice = None;
             return;
@@ -2180,6 +2199,7 @@ impl State {
                 self.conversation.composer.backspace();
             }
             '?' if self.conversation.composer.is_empty() && !self.conversation.content_focus => {
+                self.conversation.openai_panel = None;
                 self.help = !self.help;
             }
             ch if !ch.is_control() => {
@@ -2239,10 +2259,14 @@ impl State {
         source: attachments::Source,
         command: bool,
     ) -> Result<(), String> {
+        let web = matches!(&source, attachments::Source::Web(_));
         if self.preview {
-            return Err(
-                "Preview cannot read or write the system clipboard or import local files".into(),
-            );
+            return Err(if web {
+                "Preview cannot open a real browser or copy a ChatGPT URL"
+            } else {
+                "Preview cannot read or write the system clipboard or import local files"
+            }
+            .into());
         }
         if self.selection {
             return Err("Leave copy mode before importing input".into());
@@ -2252,7 +2276,7 @@ impl State {
         }
         let copying = matches!(&source, attachments::Source::Copy(_));
         let context = matches!(&source, attachments::Source::Context { .. });
-        let inserts = !copying && !context;
+        let inserts = !copying && !context && !web;
         if inserts
             && self.conversation.paste_recovery.is_some()
             && !self.conversation.retrying_paste
@@ -2287,6 +2311,8 @@ impl State {
         self.notice = Some(
             if copying {
                 "Copying the latest agent message…"
+            } else if web {
+                "Requesting the local browser or clipboard…"
             } else if context {
                 "Reading local context…"
             } else {
@@ -2338,6 +2364,7 @@ impl State {
             Ok(attachments::Loaded::Copied) => {
                 self.notice = Some("Latest agent message copied to the system clipboard".into());
             }
+            Ok(attachments::Loaded::WebNotice(notice)) => self.notice = Some(notice.into()),
             Ok(attachments::Loaded::Context(text)) => {
                 let mut record = String::from("\n[CONTEXT]\n");
                 for line in markdown::rows(&text, self.geometry.left, &self.ui) {
@@ -2952,6 +2979,8 @@ impl State {
         };
         if self.help {
             body = self.chat_help_rows(height);
+        } else {
+            self.conversation.openai_panel = None;
         }
         body.resize_with(usize::from(height), || {
             self.chat_line("", PanelTone::Normal, g.left)

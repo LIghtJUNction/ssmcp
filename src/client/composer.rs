@@ -88,6 +88,26 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Current conversation goal: /goal [set <text> | clear]",
     },
     SlashCommand {
+        name: "/openai",
+        description: "Show the saved conversation's observed OpenAI session and subject",
+    },
+    SlashCommand {
+        name: "/openai-session",
+        description: "Show only the observed openai/session value",
+    },
+    SlashCommand {
+        name: "/openai-subject",
+        description: "Show only the observed openai/subject value",
+    },
+    SlashCommand {
+        name: "/chatgpt",
+        description: "Saved ChatGPT conversation URL: set <URL>, open, copy, clear",
+    },
+    SlashCommand {
+        name: "/plugin-docs",
+        description: "Open the official OpenAI Plugins reference in your browser",
+    },
+    SlashCommand {
         name: "/queue",
         description: "Show queued requests",
     },

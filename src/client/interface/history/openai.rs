@@ -1,6 +1,7 @@
 //! Private caller observations associated with a saved local conversation.
 use super::{History, HistoryOwner, ownership::with_owner, session_name};
 use crate::wire::openai::{self, OpenAiContext};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::io::Read as _;
 
@@ -8,19 +9,64 @@ const MAX_SIDECAR_BYTES: usize = 16 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Observed {
-    value: String,
-    observed_ms: u64,
+pub(crate) struct Observed {
+    pub(crate) value: String,
+    pub(crate) observed_ms: u64,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Saved {
+pub(crate) struct Saved {
     schema_version: u32,
     id: String,
     workspace: String,
-    session: Option<Observed>,
-    subject: Option<Observed>,
+    pub(crate) session: Option<Observed>,
+    pub(crate) subject: Option<Observed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) chatgpt_url: Option<String>,
+}
+
+const LINK_HINT: &str = "Use an HTTPS ChatGPT conversation URL from chatgpt.com or chat.openai.com (/c/ID or /g/ID/c/ID)";
+
+pub(crate) fn validate_chatgpt_url(raw: &str) -> Result<Url, String> {
+    if raw.len() > 2048
+        || raw.contains('\\')
+        || raw.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err(LINK_HINT.into());
+    }
+    let url = Url::parse(raw).map_err(|_| LINK_HINT)?;
+    let (authority, path_and_suffix) = raw
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .ok_or(LINK_HINT)?;
+    let host = url.host_str().ok_or(LINK_HINT)?;
+    let supplied_path = path_and_suffix.split(['?', '#']).next().ok_or(LINK_HINT)?;
+    if url.scheme() != "https"
+        || !matches!(host, "chatgpt.com" | "chat.openai.com")
+        || !(authority.eq_ignore_ascii_case(host)
+            || authority
+                .strip_suffix(":443")
+                .is_some_and(|name| name.eq_ignore_ascii_case(host)))
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path().strip_prefix('/') != Some(supplied_path)
+    {
+        return Err(LINK_HINT.into());
+    }
+    let id = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+    };
+    let segments: Vec<_> = supplied_path.split('/').collect();
+    match segments.as_slice() {
+        ["c", conversation] if id(conversation) => Ok(url),
+        ["g", project, "c", conversation] if id(project) && id(conversation) => Ok(url),
+        _ => Err(LINK_HINT.into()),
+    }
 }
 
 fn name(id: &str) -> Result<String, String> {
@@ -53,6 +99,7 @@ impl History {
                 workspace: self.workspace.clone(),
                 session: None,
                 subject: None,
+                chatgpt_url: None,
             });
         }
         let mut bytes = Vec::new();
@@ -73,6 +120,10 @@ impl History {
                 .into_iter()
                 .flatten()
                 .any(|field| !openai::valid(&field.value))
+            || saved
+                .chatgpt_url
+                .as_deref()
+                .is_some_and(|url| validate_chatgpt_url(url).is_err())
         {
             return Err("Invalid saved OpenAI context".into());
         }
@@ -128,6 +179,24 @@ impl History {
         Ok(true)
     }
 
+    fn selected_openai(&self, owner: &HistoryOwner) -> Result<Option<Saved>, String> {
+        let pending = self.ownership.pending(owner)?;
+        if self.ownership.current.get().as_ref() != Some(owner) {
+            return Err("The selected conversation changed; retry the command".into());
+        }
+        if pending {
+            return Ok(None);
+        }
+        if self.archive_index()?.contains(owner.id())
+            || self.active.as_ref().is_none_or(|active| {
+                active.metadata.id != owner.id() || active.metadata.workspace != self.workspace
+            })
+        {
+            return Err("The selected conversation is no longer available".into());
+        }
+        self.openai_sidecar(owner.id()).map(Some)
+    }
+
     pub(super) fn remove_openai(&self, id: &str, names: &[String]) -> Result<(), String> {
         let filename = name(id)?;
         if names.contains(&filename) {
@@ -145,6 +214,37 @@ pub(crate) fn observe(
 ) -> Result<bool, String> {
     with_owner(owner, |history, owner| {
         history.observe_openai(owner, metadata, observed_ms)
+    })
+}
+
+/// Read the saved values only through the currently selected history lease.
+pub(crate) fn read_selected(owner: &HistoryOwner) -> Result<Option<Saved>, String> {
+    with_owner(owner, |history, owner| {
+        let _lock = history.directory.lock()?;
+        history.selected_openai(owner)
+    })
+}
+
+/// Update only the explicitly supplied URL on the original selected history.
+pub(crate) fn change_url(owner: &HistoryOwner, url: Option<&str>) -> Result<bool, String> {
+    if let Some(url) = url {
+        validate_chatgpt_url(url)?;
+    }
+    with_owner(owner, |history, owner| {
+        let _lock = history.directory.lock()?;
+        let mut saved = history
+            .selected_openai(owner)?
+            .ok_or("Start or resume a saved conversation before associating a ChatGPT URL")?;
+        if saved.chatgpt_url.as_deref() == url {
+            return Ok(false);
+        }
+        saved.chatgpt_url = url.map(str::to_owned);
+        if saved.chatgpt_url.is_none() && saved.session.is_none() && saved.subject.is_none() {
+            history.remove_openai(owner.id(), &history.directory.names()?)?;
+        } else {
+            history.save_openai(&saved)?;
+        }
+        Ok(true)
     })
 }
 
@@ -194,6 +294,69 @@ mod tests {
             session: Some(session.into()),
             subject: subject.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn only_exact_https_chatgpt_conversation_paths_are_accepted() {
+        for url in [
+            "https://chatgpt.com/c/fictional-123",
+            "https://chat.openai.com/c/fictional-id?model=fixture#message",
+            "https://chatgpt.com:443/g/g-p-123/c/fictional_123",
+        ] {
+            assert!(validate_chatgpt_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "http://chatgpt.com/c/fictional",
+            "https://chatgpt.com.evil.test/c/fictional",
+            "https://chatgpt.com@evil.test/c/fictional",
+            "https://user:password@chatgpt.com/c/fictional",
+            "https://@chatgpt.com/c/fictional",
+            "https://chatgpt.com:444/c/fictional",
+            "https://%63hatgpt.com/c/fictional",
+            "https://chatgpt.com/../c/fictional",
+            "https://chatgpt.com/c/%2F",
+            "https://chatgpt.com/c/",
+            "https://chatgpt.com/g//c/fictional",
+            "https://chatgpt.com/share/fictional",
+            "https://chatgpt.com/c/fictional/extra",
+            "https://chatgpt.com/c/fictional\\other",
+            "https://chatgpt.com/c/fictional\n",
+            "javascript:document.domain",
+        ] {
+            assert!(validate_chatgpt_url(url).is_err(), "{url}");
+        }
+        assert!(
+            validate_chatgpt_url(&format!("https://chatgpt.com/c/{}", "x".repeat(2048))).is_err()
+        );
+    }
+
+    #[test]
+    fn retention_reclaims_sidecar_with_its_closed_history() {
+        let temp = super::super::tests::Temporary::new();
+        let mut history = temp.history();
+        history.record("user", "Saved for fixture").unwrap();
+        let owner = history.capture_owner().unwrap();
+        assert!(
+            history
+                .observe_openai(&owner, &metadata("synthetic", None), 11)
+                .unwrap()
+        );
+        let sidecar = name(owner.id()).unwrap();
+        assert!(history.directory.names().unwrap().contains(&sidecar));
+        history.release_current();
+
+        let replacement = super::super::random_id("conversation").unwrap();
+        history
+            .retain(&replacement, super::super::MAX_TOTAL_BYTES)
+            .unwrap();
+        let names = history.directory.names().unwrap();
+        assert!(!names.contains(&sidecar));
+        assert!(!names.contains(&session_name(owner.id()).unwrap()));
+        assert!(
+            history
+                .observe_openai(&owner, &metadata("stale", None), 12)
+                .is_err()
+        );
     }
 
     #[tokio::test]
