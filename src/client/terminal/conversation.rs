@@ -3141,9 +3141,9 @@ impl State {
                             "Esc · back to Sessions · ←/→ panels".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "Enter / h · call history · Esc back · ←/→ panels".into()
+                                "Esc back · h history · Enter call history · ←/→ panels".into()
                             } else {
-                                format!("Enter recipient · h history · Esc back · {} selected · Space/g group · i IDs",
+                                format!("Esc back · h history · Enter recipient · {} selected · Space/g group · i IDs",
                                     self.conversation.groups.selected.len())
                             }
                         };
@@ -4453,6 +4453,8 @@ mod tests {
         for rows in [1, 3, 6, 10, 18, 36] {
             for cols in [1, 4, 20, 60, 80, 120, 160] {
                 let mut state = preview(rows, cols);
+                state.conversation.composer.set_text("draft stays here");
+                let saved = state.chat_saved_draft();
                 state.chat_agents();
                 let frame = state.chat_frame(Instant::now());
                 assert_eq!(frame.rows.len(), usize::from(rows));
@@ -4463,8 +4465,12 @@ mod tests {
                     let visible = shot.screen().contents();
                     assert!(visible.contains("Sessions"));
                     assert!(visible.contains("Esc back"), "{cols}×{rows}: {visible}");
+                    assert!(visible.contains("h history"), "{cols}×{rows}: {visible}");
                     assert!(!visible.contains("collab.join"));
                 }
+                state.chat_key(Key::Escape);
+                assert_eq!(state.conversation.view, View::Activity);
+                assert_eq!(state.chat_saved_draft(), saved);
             }
         }
     }
