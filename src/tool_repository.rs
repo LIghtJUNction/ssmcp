@@ -585,30 +585,44 @@ impl Drop for Lock {
     }
 }
 
+async fn existing_official(official: &Path) -> Result<Option<PathBuf>, String> {
+    if !official.try_exists().map_err(|e| e.to_string())? {
+        return Ok(None);
+    }
+    for path in [official, &official.join(".git")] {
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("official tools require a real working directory and an independent .git directory".into());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return Err("official tool directories must not be reparse points".into());
+            }
+        }
+    }
+    let identity = git::identity(official)
+        .await?
+        .ok_or("official tools are not a Git working tree")?;
+    if Path::new(&identity.root) != official.canonicalize().map_err(|e| e.to_string())? {
+        return Err("official tool repository is nested in a different Git root".into());
+    }
+    official.canonicalize().map(Some).map_err(|e| e.to_string())
+}
+
 async fn ensure_official(directory: &Path) -> Result<PathBuf, String> {
-    let _lock = Lock::take(directory)?;
+    private_directory(directory)?;
     let official = directory.join("official");
-    if official.try_exists().map_err(|e| e.to_string())? {
-        for path in [&official, &official.join(".git")] {
-            let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                return Err("official tools require a real working directory and an independent .git directory".into());
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::fs::MetadataExt;
-                if metadata.file_attributes() & 0x400 != 0 {
-                    return Err("official tool directories must not be reparse points".into());
-                }
-            }
-        }
-        let identity = git::identity(&official)
-            .await?
-            .ok_or("official tools are not a Git working tree")?;
-        if Path::new(&identity.root) != official.canonicalize().map_err(|e| e.to_string())? {
-            return Err("official tool repository is nested in a different Git root".into());
-        }
-        return official.canonicalize().map_err(|e| e.to_string());
+    // Existing sources are read-only. Parallel calls must not contend for the
+    // bootstrap/update lease; source() checks the complete snapshot separately.
+    if let Some(path) = existing_official(&official).await? {
+        return Ok(path);
+    }
+    let _lock = Lock::take(directory)?;
+    // Another initializer may have published before this lease was acquired.
+    if let Some(path) = existing_official(&official).await? {
+        return Ok(path);
     }
     let stage = Temporary::new(directory)?;
     let bundle = stage.0.join("official.bundle");
@@ -787,6 +801,47 @@ pub(crate) async fn run(args: Vec<OsString>) -> crate::Result<()> {
     };
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn concurrent_warm_sources_do_not_take_the_repository_write_lease() {
+    let temporary = Temporary::new(&std::env::temp_dir()).unwrap();
+    let directory = temporary.0.join("tools");
+    git::owned(async move {
+        let official = ensure_official(&directory).await?;
+        let before = source("official".into(), &official).await?;
+        assert_eq!(before.sha256, SEED_SOURCE_SHA256);
+        let _write_lease = Lock::take(&directory)?;
+
+        async fn load(directory: &Path) -> Result<Source, String> {
+            let official = ensure_official(directory).await?;
+            source("official".into(), &official).await
+        }
+
+        // Holding the write lease makes the old read path fail deterministically,
+        // even if the scheduler happened to poll these readers serially.
+        let (a, b, c, d) = tokio::join!(
+            load(&directory),
+            load(&directory),
+            load(&directory),
+            load(&directory),
+        );
+        for loaded in [a, b, c, d] {
+            let loaded = loaded?;
+            assert_eq!(loaded.path, before.path);
+            assert_eq!(loaded.sha256, before.sha256);
+            assert_eq!(loaded.code, before.code);
+            assert_eq!(
+                serde_json::to_value(&loaded.repository).unwrap(),
+                serde_json::to_value(&before.repository).unwrap()
+            );
+        }
+        assert!(Lock::take(&directory).err().unwrap().contains("busy"));
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 #[cfg(test)]
