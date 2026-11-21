@@ -26,7 +26,7 @@
 
 桌面和浏览器主操作直接调用独立 Zuse CLI，经 SSMCP 通用 exec 管理进程、输入和输出。`computer` 原生工具只保留 `version/download/install/uninstall`：版本来自实际 `--version`；下载验证官方稳定版资产；安装使用私有管理目录；卸载要求真实 `installation_id` 与所有权、文件身份、字节一致。不覆盖外部安装，也不修改 PATH。[工具与 CLI 参数](computer-use.md)
 
-旧桌面、CDP、Omarchy、Playwright 专用桥和内部 Zuse worker 已撤去，没有隐藏执行 fallback。默认 `Super + Alt + C` 快捷键移除；显式 `on/off/toggle/status` 与 `/computer` 保留为旧版 SSMCP 兼容状态入口，只供仍遵守旧门禁的会话读取，不控制本版工具、普通 exec 或独立 Zuse CLI。状态查询不初始化文件，独立 CLI 不增加 takeover 前置流程。[兼容开关](computer-use.md#兼容旧版-ssmcp-的手动开关)OAuth 浏览器登录、显式本地导航和外部 MCP 通用转发保留。Windows 安装器不再自动安装浏览器依赖，旧 `SkipBrowserDependencies` 仅作为无操作兼容参数接受。[浏览器工作流](browser-desktop.md) · [Windows 安装范围](windows-browser-setup.md)
+旧桌面、CDP、Omarchy、Playwright 专用桥和内部 Zuse worker 已撤去，没有隐藏执行 fallback。旧控制开关、兼容入口和默认 `Super + Alt + C` 快捷键一并移除，独立 CLI 不增加 takeover 前置流程。OAuth 浏览器登录、显式本地导航和外部 MCP 通用转发保留。Windows 安装器不再自动安装浏览器依赖，旧 `SkipBrowserDependencies` 仅作为无操作兼容参数接受。[浏览器工作流](browser-desktop.md) · [Windows 安装范围](windows-browser-setup.md)
 
 通用 exec 和独立 CLI 仍使用客户端的操作系统权限；不宣称通过界面状态就能撤销同一系统用户下其他程序的桌面访问。
 

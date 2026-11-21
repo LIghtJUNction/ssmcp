@@ -522,34 +522,13 @@ Run desktop and browser programs directly with the selected Zuse CLI through
 generic exec jobs. Read that executable's help and schema, retain the job ID,
 and inspect actual output and termination before reporting success. SSMCP has
 no embedded desktop/browser action backend, Playwright-specific bridge,
-internal worker or hidden fallback. The default Super+Alt+C binding remains removed.
+internal worker or hidden fallback. Legacy control switches, compatibility entry
+points and the default Super+Alt+C binding have been removed. Standalone Zuse
+requires no takeover step.
 .PP
 Generic exec uses the client's operating-system permissions; it does not revoke
 other programs' desktop access. OAuth browser login, explicit local navigation
 and authorized generic external MCP forwarding remain supported.
-.SH LEGACY SSMCP COMPATIBILITY SWITCH
-.B ssmcp computer
-.IR "on | off | toggle | status"
-.RB [ \-\-json ]
-provides explicit manual compatibility for older SSMCP mutation providers.
-In chat, use
-.B /computer
-with status, on, off or toggle; no argument reads status.
-The CLI with no subcommand still queries the standalone Zuse version.
-.PP
-These commands share the old same-OS-user state.json and generation protocol.
-They do not control this version's tools, ordinary exec or standalone Zuse.
-The four native computer tools remain lifecycle operations only; no remote
-computer.on/off/toggle/status or ui.action switch is registered.
-Standalone Zuse use requires no switch or takeover step.
-.PP
-Status creates no directory and initializes no state. An absent valid record
-is unset; an observation error is unavailable. Neither claims the CLI is Off.
-Only explicit on/off/toggle writes legacy state. Off success means that the
-state was published, not that all older work has exited or its effects were undone.
-No global keyboard binding is installed. The read-only ui.get computer snapshot
-reports compatibility_only, controls_this_version and standalone_zuse_controlled.
-For these manual commands, \-\-json prints the compatibility state itself.
 .SH MANAGED COMMANDS
 Use exec.run(clientId,{command:[program,arg],wait_ms:5000}) for an independent
 command. Results carry job_id, running, exit_code, stdout, stderr and byte

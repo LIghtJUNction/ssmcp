@@ -145,8 +145,6 @@ Use only computer.version/download/install/uninstall(clientId, args). These mana
 
 Check isError and structuredContent. Use the returned executable path with exec.run/start for desktop or browser tasks, and preserve the job's actual output, status and ownership. Read that Zuse version's --help and schema before writing its program. There is no built-in browser, cua or omarchy helper, Playwright action bridge, private-desktop fallback or internal worker. General external MCP forwarding and OAuth browser login remain available. [Lifecycle commands and examples](computer-use.md) · [Standalone CLI workflow](browser-desktop.md)
 
-Explicit local `ssmcp computer on|off|toggle|status` and `/computer` commands are a compatibility switch for older SSMCP mutation providers only. The default Super+Alt+C binding stays removed. These commands do not control this version's four lifecycle tools, general exec or standalone Zuse, and are not a prerequisite for running Zuse. `ui.get` exposes only a read-only `computer` snapshot; remote `ui.action` has no switch action. An unset or unavailable old record is not proof that any CLI is Off. [Manual compatibility scope](computer-use.md#兼容旧版-ssmcp-的手动开关)
-
 ### fs
 
 fs.list/stat/read/write/mkdir and fs.readText/writeText/editText(clientId, options) provide rooted binary and UTF-8 file primitives.

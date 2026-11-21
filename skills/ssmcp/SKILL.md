@@ -115,7 +115,7 @@ Execute a prepared Zuse program with literal argv, for example exec.start(id,{co
 
 SSMCP has no built-in browser, desktop action backend, cua/omarchy helper, Playwright-specific bridge or internal worker. It does not create a hidden private desktop or fall back to host input. General exec retains the client's operating-system permissions.
 
-Explicit local `ssmcp computer on|off|toggle|status` and `/computer` commands remain only as compatibility controls for older SSMCP providers that read the old shared state. They do not control this version's lifecycle tools, general exec or the standalone Zuse CLI, and are never a prerequisite for ordinary Zuse work. The default Super+Alt+C shortcut remains removed. Status is observational: `unset` or `unavailable` is not an Off or protection claim. Publishing Off does not prove all older work has exited. Do not describe this compatibility state as an OS-wide boundary or invent a takeover step for Zuse.
+Run standalone Zuse directly within the authorized task. SSMCP has no takeover step, legacy control switch or default Super+Alt+C binding.
 
 When the user names an existing browser, verify that exact browser/session through the selected Zuse version's supported interface. Do not substitute a new profile or another browser family. External MCP tools remain usable only under their actually discovered names, schemas and native approvals. OAuth login and explicit human navigation remain separate from computer automation. See [Zuse lifecycle](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/computer-use.md) and [browser workflow](https://github.com/LIghtJUNction/ssmcp/blob/main/docs/browser-desktop.md).
 
