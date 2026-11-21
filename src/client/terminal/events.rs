@@ -1251,14 +1251,14 @@ impl EventView {
             // Source is display metadata, not command output. Keep it separate
             // so transcript bytes, summary parsing and lifecycle correlation
             // retain their existing meaning.
-            self.ingest_inner_with_source(bytes, meta, Some(CommandSource::new(source)));
+            let _ = self.ingest_inner_with_source(bytes, meta, Some(CommandSource::new(source)), true);
         } else {
             self.ingest_inner(bytes, meta);
         }
     }
 
     fn ingest_inner(&mut self, bytes: &[u8], meta: Meta) {
-        self.ingest_inner_with_source(bytes, meta, None);
+        let _ = self.ingest_inner_with_source(bytes, meta, None, true);
     }
 
     fn ingest_inner_with_source(
@@ -1266,26 +1266,27 @@ impl EventView {
         bytes: &[u8],
         mut meta: Meta,
         command_source: Option<CommandSource>,
-    ) {
+        correlate: bool,
+    ) -> Option<u64> {
         if meta.skip {
-            return;
+            return None;
         }
-        let mut matches = self
-            .summary_event_for(&meta)
-            .into_iter()
-            .collect::<Vec<_>>();
-        for key in &meta.keys {
-            if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
-                event.meta.same_source(&meta)
-                    && event.meta.keys.contains(key)
-                    && (!meta.started
-                        || event
-                            .meta
-                            .status
-                            .is_none_or(|status| status == Status::Running))
-            }) && !matches.contains(&index)
-            {
-                matches.push(index);
+        let mut matches = Vec::new();
+        if correlate {
+            matches.extend(self.summary_event_for(&meta));
+            for key in &meta.keys {
+                if let Some((index, _)) = self.events.iter().enumerate().rev().find(|(_, event)| {
+                    event.meta.same_source(&meta)
+                        && event.meta.keys.contains(key)
+                        && (!meta.started
+                            || event
+                                .meta
+                                .status
+                                .is_none_or(|status| status == Status::Running))
+                }) && !matches.contains(&index)
+                {
+                    matches.push(index);
+                }
             }
         }
         matches.sort_unstable();
@@ -1293,7 +1294,7 @@ impl EventView {
         let plain = unstyled(&text);
         let first = plain.lines().map(heading).find(|line| !line.is_empty());
         if first.is_none() && matches.is_empty() {
-            return; // Empty stream chunks must not become separate UI cards.
+            return None; // Empty stream chunks must not become separate UI cards.
         }
         if meta.kind == Kind::Conversation
             || (meta.kind == Kind::Log && !meta.read_bookkeeping && matches.is_empty())
@@ -1359,7 +1360,7 @@ impl EventView {
             || meta.diff
             || meta.status.is_some_and(Status::failed);
         let follow = self.follow || self.events.is_empty();
-        if let Some(&index) = matches.first() {
+        let id = if let Some(&index) = matches.first() {
             // A response can join a request row and its native job row. Keep
             // their earliest position and both retained bodies, once.
             for &other in matches.iter().skip(1).rev() {
@@ -1405,6 +1406,7 @@ impl EventView {
             event.meta.merge(meta);
             event.expanded |= expanded;
             event.cache = None;
+            event.id
         } else {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
@@ -1446,7 +1448,8 @@ impl EventView {
                 reload_boundary: false,
                 tool_group_id: None,
             });
-        }
+            id
+        };
         self.prune();
         self.preserve_read_selection();
         let visible = self.visible_ids();
@@ -1458,6 +1461,7 @@ impl EventView {
             self.reveal = true;
         }
         // Updating a correlated row does not move a reader away from their viewport.
+        Some(id)
     }
 
     fn prune(&mut self) {
@@ -1556,30 +1560,38 @@ impl EventView {
         if let Some(source) = source {
             meta.set_source(source);
         }
-        // The placeholder and image are one update. A skipped insertion must
-        // never attach the preview to a previously selected or retained card.
-        let id = self.next_id;
-        self.ingest_inner(bytes, meta);
-        if self.events.back().is_some_and(|event| event.id == id) {
-            self.attach_image(preview);
+        // Each image is a separate card, including multiple images from one
+        // native call. Keep its source, but do not merge its placeholder into
+        // the call's summary/job row, which only has room for one preview.
+        // A skipped or pruned insertion must never attach to a different card.
+        if let Some(id) = self.ingest_inner_with_source(bytes, meta, None, false) {
+            self.attach_image_at(id, preview);
         }
     }
 
     /// Attach only a decoded image from the native result path. Text containing
     /// "[IMAGE]" cannot manufacture a protocol placement.
+    #[cfg(test)]
     pub(crate) fn attach_image(&mut self, preview: images::Preview) {
+        if let Some(event) = self.events.back() {
+            self.attach_image_at(event.id, preview);
+        }
+    }
+
+    fn attach_image_at(&mut self, id: u64, preview: images::Preview) {
+        let Some(event) = self.events.iter_mut().find(|event| event.id == id) else {
+            return;
+        };
         self.active_summary_group = None;
-        if let Some(event) = self.events.back_mut() {
-            event.image = Some(preview);
-            event.meta.kind = Kind::Tool;
-            event.chat_expanded = false;
-            if self.follow
-                && event.matches(&self.query, self.level, self.scope, &self.history_selection)
-            {
-                self.selected = Some(event.id);
-                if self.scope != EventScope::Conversation {
-                    self.new_image.get_or_insert(event.id);
-                }
+        event.image = Some(preview);
+        event.meta.kind = Kind::Tool;
+        event.chat_expanded = false;
+        if self.follow
+            && event.matches(&self.query, self.level, self.scope, &self.history_selection)
+        {
+            self.selected = Some(event.id);
+            if self.scope != EventScope::Conversation {
+                self.new_image.get_or_insert(event.id);
             }
         }
         let mut bytes = self.image_bytes();
