@@ -1,12 +1,14 @@
-# SSMCP 0.10.25：源码增量已结束，三处控制问题待修
+# SSMCP 0.10.25：控制与夹具修正已合并，依赖来源继续同步
 
-本轮 E9 源码阶段已于 **2026-11-21 08:30:20 UTC** 正常结束，最终提交为 **`27e9733fa539c400c532474e076971eba03f845a`**，目录树为 `205138cdce8368956a4e96ed87df3285f9f5011f`。五次普通推送退出码均为 0，回执记录工作树与子模块干净。它包含离线依赖版本树、统一 Computer Use On/Off、内部 Git 依赖刷新，以及写帧边界和夹具清理修正。[E9 完成、窄检查与待修事实](source-E9-completed-control-review-public-facts.json)
+[PR #166](https://github.com/LIghtJUNction/ssmcp/pull/166) 已于 **2026-11-21 09:13:10 UTC** 正常合并，主仓提交为 **`f69db30c3a9e461c48731c81dbde5a35ea176dc2`**，目录树为 `98f89ac6be9dd4867d45b017ea56c687f7a55147`。两个真实父提交为 4b4cbff 与 814c07c，树与原作者的夹具修正提交一致。[E11 完成及实际合并事实](source-E11-merged-fixture-public-facts.json)
 
-**106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1` 已在该工作树上通过；仍有三处控制问题需要源码修复。** 最后检查前后的源码与输入指纹一致，回收完成，但没有运行 Rust 回归、实际桌面操作或最终 35 阶段验收。CDP 锁顺序、Playwright 已发送但未获回复的结果处理，以及 Omarchy 清理时的锁生命周期尚未闭合。
+E10 的三个控制问题修正已先经 [PR #165](https://github.com/LIghtJUNction/ssmcp/pull/165) 合并；E11 又修正了 Playwright 回归夹具的故障触发方式。E11 已于 **09:08:36 UTC** 正常退出，普通推送成功；814c07c 工作树通过 **106 项发布策略测试及 `cargo check --tests --locked --offline --jobs 1`**，源码与输入前后相同，自有检查进程回收完成。这些是合并前的窄检查，新增 Rust 回归用例尚未实际运行。
+
+**第 16 轮完整验收尚未绑定或运行，当前合并结果仍是待验候选。** 原执行者在最新依赖预检中观察到 zuse 默认分支从锁定的 830fcef 前进到 ac5713c，其余十个来源一致，预备步骤退出 1 并保留原件。下一步先审阅并同步这项上游来源，再从实际合并结果选择验收源码；没有将旧检查转移给新提交。本报告已独立读取全部 11 份原始 HEAD 输出及错误流、合并身份和树差异，并核对完整锁文件摘要、Git 来源条目与实际预备失败字段。[来源观察与执行边界](source-E11-merged-fixture-public-facts.json)
 
 E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
-**最终候选仍未固定，整套运行验收尚未开始。** E7、E8、E9 的源码阶段均已结束，剩余窄修继续由同一原作者处理。此前 W 的通过结果和失败记录继续归属于 W。
+E7 至 E11 的源码阶段均已结束；当前继续处理新观察到的依赖来源变化。此前 W 的通过结果和失败记录继续归属于 W，E9、E10、E11 的窄检查也各自绑定当时源码，不替代后续合并结果的完整验收。
 
 ## 本轮实际提交
 
@@ -19,10 +21,15 @@ E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推
 | [879ba17](https://github.com/LIghtJUNction/ssmcp/commit/879ba17fc3ba4bad6a26a85494b79e29acf1938a) | Git 源二进制发行、独立 registry 导出及旧标签发布分支 | 已读取固定源码并静态审阅；尚无新流程运行结果 |
 | [f6ca9d0](https://github.com/LIghtJUNction/ssmcp/commit/f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b) | 在既有 HTTP/WebSocket 测试中扩展同账号双会话元数据乱序完成检查 | 回归定义已提交，尚未运行；没有新增独立 Rust 测试项 |
 | [71851cf](https://github.com/LIghtJUNction/ssmcp/commit/71851cf221076e661b5c243a63d585fb1b04fdaf) | 离线依赖版本树、早期版本命令路由，以及 boxed error 断言修正 | 四个文件完成静态核对；三个新回归定义尚未运行 |
-| [2619686](https://github.com/LIghtJUNction/ssmcp/commit/26196862691774cab333e1f110b2fdb9c15e5b97) | 统一 Computer、CDP Browser、Omarchy 和 Playwright 的控制开关，迁移配置及界面文案 | 固定源码静态审阅发现四项问题；其中一项后续已补修，其余三项待修 |
+| [2619686](https://github.com/LIghtJUNction/ssmcp/commit/26196862691774cab333e1f110b2fdb9c15e5b97) | 统一 Computer、CDP Browser、Omarchy 和 Playwright 的控制开关，迁移配置及界面文案 | 固定源码静态审阅发现四项问题；后续分别在 8ce982c 与 E10 三个提交中修正，运行验证仍待完成 |
 | [43fde19](https://github.com/LIghtJUNction/ssmcp/commit/43fde1904cd37b006f033b07682068ebab7bb7be) | 更新 zharness、zplugin 的 gitlink 及五个包的 Git 锁来源 | 固定差异与解析回执字段已读；不是实际版本树命令的执行结果 |
 | [8ce982c](https://github.com/LIghtJUNction/ssmcp/commit/8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5) | Playwright 等待 writer 锁后再次检查 permit；另恢复两个构造方法的非测试可见性 | 写帧前复验缺口已静态闭合，未执行撤权复现 |
 | [27e9733](https://github.com/LIghtJUNction/ssmcp/commit/27e9733fa539c400c532474e076971eba03f845a) | 夹具显式调用其自有 Playwright 清理方法 | 最后两项窄检查通过；原断言保留，Rust 夹具未运行 |
+| [2951c06](https://github.com/LIghtJUNction/ssmcp/commit/2951c06b3c212d8286fd53bf1aaada009888319a) | CDP 单动作与批次统一为先取 page、再取输入租约，并复核原会话 | 锁顺序问题静态闭合；新增回归未运行 |
+| [4cd3940](https://github.com/LIghtJUNction/ssmcp/commit/4cd3940c76bf202570b34e2c82ebe6d8673fb577) | Omarchy 自有任务持有两把锁直到异步清理路径返回 | 正常取消生命周期静态闭合；异常清理的既有限制保留 |
+| [9b1581d](https://github.com/LIghtJUNction/ssmcp/commit/9b1581d1bfd8b723d32d2c032a8369c5980dcbfd) | 记录 Playwright 实际写入与回复进度，区分未知结果与未发送失败 | 产品路径静态审阅完成；夹具触发方式后续由 814c07c 修正，尚未实际运行 |
+| [5623e52](https://github.com/LIghtJUNction/ssmcp/commit/5623e52a48a03727f3341613beaa767bd94ea98d) | 明确拒绝混合启动与版本参数，修正旧错误文案并整合发布说明 | 106 项策略测试与测试目标检查通过；五个新增 Rust 回归未运行 |
+| [814c07c](https://github.com/LIghtJUNction/ssmcp/commit/814c07c4374b3a800e3842f5cd676af7cfc1f32d) | 将 Playwright 夹具改为刷新无效 JSON；澄清两处清理说明 | 106 项策略测试及测试目标检查通过；原严格断言与 10 秒上限保留，Rust 夹具未运行 |
 
 E7 三次提交依次基于 PR #164 合并点 **P2 `3f678a7`**，形成 P2 → 7c1cd94 → a53a0c5 → 1a2f759 的连续提交链。源码事实表包含完整 commit、tree、差异范围和执行边界。E7 三次提交一共涉及 12 个路径；E7 三次普通推送退出码均在回执中记录为 0，公开 GitHub 提交已直接读回。
 
@@ -111,12 +118,16 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 | E8 源码阶段 | f6ca9d0；发布配方 879ba17 | 阶段退出 0、三次推送和静态核对完成；尚无编译、测试或发布运行结果 |
 | E9 版本树与统一控制源码 | 71851cf → 27e9733 | 源码阶段结束，五次推送；13 个新增或扩展 Rust 回归定义尚未执行 |
 | E9 最后窄检查 | 27e9733 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；不是 Rust 测试运行或完整产品验收 |
+| E10 最后窄检查 | 5623e52 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；五个新增 Rust 定义未运行 |
+| 第 15 轮完整验收准备 | 合并结果 4b4cbff | 未执行；夹具问题的原准备记录保留，不覆盖 |
+| E11 最后窄检查 | 814c07c 工作树，前后源码指纹一致 | 106 项发布策略测试及 cargo check --tests 通过；不是 Rust 测试运行 |
+| 第 16 轮合并候选与依赖预检 | 合并结果 f69db30 | zuse 默认分支新提交与锁定来源不一致，预备退出 1；完整 Gate 尚未绑定或运行 |
 | 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
 | 首轮完整界面流程 | W | 24 套中启动 7 套：6 通过、1 失败、17 未执行；通过套件共 503 条记录 |
 | 单次账户诊断 | W 产物 | 69 条通过；未复现旧失败，未加入 503 |
-| 本轮完整构建、UI 与 P1 | 最终候选待固定 | 尚未执行 |
+| 本轮完整构建、UI 与 P1 | 待依赖同步后的最终合并候选 | 尚未执行 |
 | 正式发布与公开产物核验 | 最终来源待绑定 | 尚未完成 |
 
 W 失败 producer 中的 61 条 true 与 1 条 false 单独保留，未并入 503；`human_finish` 仅由 `interactions` 覆盖。W 首轮未执行 `session_groups` 和 `composer`，所以没有用旧 V 的通过记录补齐 W。剩余 ignored 项与多用户驱动也按实际运行边界记录。
@@ -149,22 +160,22 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 用户要求的 `ssmcp --version --all` 已在 71851cf 提交。它从二进制内嵌的构建期 Cargo.lock 显示从 ssmcp 可达的依赖树，按 name、version、source 区分包；重复身份、歧义和缺失依赖会报错，共享节点和环分别标记。完整字符串生成成功后才输出，普通 `--version` 继续只输出应用版本与换行。
 
-输出与文档明确说明：锁图包含构建、开发和各目标的依赖，实际链接代码仍随目标与 features 改变。已审阅的版本处理代码不在运行时读取工作区的锁文件、查询网络或执行 Cargo。版本树本身没有给出主仓 commit 或完整锁文件摘要，仍须结合发行 manifest 和源码回执判断构建来源。该增量完成独立静态审阅，后继 27e9733 已通过测试目标的类型检查；版本命令和三个新回归仍未实际执行。[版本树固定源码](source-E9-version-tree-public-facts.json) · [后继检查记录](source-E9-completed-control-review-public-facts.json)
+输出与文档明确说明：锁图包含构建、开发和各目标的依赖，实际链接代码仍随目标与 features 改变。已审阅的版本处理代码不在运行时读取工作区的锁文件、查询网络或执行 Cargo。版本树本身没有给出主仓 commit 或完整锁文件摘要，仍须结合发行 manifest 和源码回执判断构建来源。该增量完成独立静态审阅，后继 27e9733 已通过测试目标的类型检查；版本命令仍未实际执行；E10 又补入一个参数边界回归，版本模块共四个定义，尚未运行。[版本树固定源码](source-E9-version-tree-public-facts.json) · [E9 检查记录](source-E9-completed-control-review-public-facts.json) · [E10 参数边界及检查](source-E10-merged-control-fixes-public-facts.json)
 
 统一 Computer Use On/Off 已在 2619686 进入源码，覆盖 SSMCP 内的 Computer host/isolated、CDP Browser、Omarchy，以及启用时的 Playwright 控制和变更路径。合同要求 Off 阻止新控制，并取消尚未发送的旧请求；再次 On 不恢复旧 generation 的 ticket。只读观察、自有资源清理与默认 isolated 路由保留，已经送达的动作不能承诺回滚。
 
-固定源码审阅发现的四项问题按后继提交分别记录：
+固定源码审阅发现的四项问题已按后继提交分别处理：
 
 | 路径 | 问题与当前状态 |
 |---|---|
-| CDP 同页操作 | direct input 先取输入租约再取 page 锁，act 路径顺序相反；并发操作可互相等待。仍待源码修复，未执行复现。 |
+| CDP 同页操作 | 2951c06 让单动作与批次都先取得 page、再取得输入租约，等待后复核原会话。原锁顺序问题静态闭合，回归未运行。 |
 | Playwright 写入队列 | 8ce982c 已在取得 writer 锁后、创建半帧清理 guard 和首次写入前重新检查 permit。固定 27e9733 调用链静态核对闭合；无 permit 的普通 RPC 检查为空操作。尚无运行验证。 |
-| Playwright 已发送但无回复 | On 状态下的该错误分支仍需如实记录未知或部分完成、禁止盲目重放，并保留实际确认回复。仍待源码修复。 |
-| Omarchy 取消与清理 | 外层取消可能使输入租约和串行锁先于异步 shutdown 完成而释放。仍待源码修复。 |
+| Playwright 已发送但无回复 | 9b1581d 为控制调用跟踪可能开始的写入及有效回复。请求错误或撤权结束后，没有回复的写入报告未知或部分执行、replay_safe=false，并清理确切的自有驱动；实际返回的 native 结果保持。新增夹具已由 814c07c 修正为无效 JSON 注入，尚未执行。 |
+| Omarchy 取消与清理 | 4cd3940 用自有任务持有输入租约和串行锁，直到异步清理路径返回。正常取消生命周期静态闭合；Managed.shutdown 不向调用者传播 wait 错误这一既有限制仍在，不能概括所有异常清理都已确认成功。 |
 
-上述问题来自固定源码的静态可达分析，没有执行复现。写入队列修正也不意味着 Off 与首字节发送已经成为跨进程原子操作。深层取消仍可以关闭当前操作拥有的 Playwright driver，不能把发送层写前拒绝不污染通道扩大为永不清理 driver。[问题状态及来源](source-E9-completed-control-review-public-facts.json)
+这些问题及后继修正均已按固定源码审阅，尚无对应运行复现或回归通过结果。写入队列修正也不意味着 Off 与首字节发送已经成为跨进程原子操作。深层取消仍可以关闭当前操作拥有的 Playwright driver，不能把发送层写前拒绝不污染通道扩大为永不清理 driver。[历史发现](source-E9-completed-control-review-public-facts.json) · [后继修正状态](source-E10-merged-control-fixes-public-facts.json)
 
-持久状态与配置迁移的窄审没有发现额外的旧 Off 自动开启或旧 ticket 复活问题；旧浏览器 focus_policy 只迁移展示设置，不写入控制开关。现有 e2e_computer_controls 定义覆盖 CLI、双终端状态同步、generation、草稿/快捷键和重启后 Off 持久性，没有执行真实的四类后端控制动作。另有一处“Background browser control remains enabled”旧错误文案已交原作者修正；它是文案错配，不是已证实的开关绕过。
+持久状态与配置迁移的窄审没有发现额外的旧 Off 自动开启或旧 ticket 复活问题；旧浏览器 focus_policy 只迁移展示设置，不写入控制开关。现有 e2e_computer_controls 定义覆盖 CLI、双终端状态同步、generation、草稿/快捷键和重启后 Off 持久性，没有执行真实的四类后端控制动作。此前“Background browser control remains enabled”旧错误文案已在 5623e52 修正，现在准确说明观察与控制所需的状态；该历史问题属于文案错配，没有被算作已证实的开关绕过。
 
 这个开关约束应用内入口，同一系统用户的 Shell、独立程序以及本机切换命令仍拥有原有主机权限。当前源码明确 `os_permission_boundary=false`，不承诺阻止同 UID 任意程序直接控制桌面。要建立系统边界，需要让 agent 无法直接取得桌面权限，由唯一受控入口执行获准动作；该方案仍在准备，当前没有修改生产账户、权限或安装隔离服务。
 
@@ -178,7 +189,27 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 [发布说明审阅草稿](release-notes-review-unbound/README.md)已单独交付，正文、补丁、固定原件及证据复核均已推送并逐件读回。草稿按 2619686 的状态冻结；交付说明列出后续依赖刷新、写帧修正与三项剩余问题，原作者整合时须按最新事实更新，不能直接套用到已变化的文档。
 
-接下来由同一原作者完成三项控制窄修、旧文案和命令兼容性收尾，再正常合并。从实际 main 合并结果选定最终 S 并核对 tree、差异和父链，之后由原执行者完成构建、真实进程、多用户、完整界面与 P1 验收，再核对正式发行及公开产物。即使合并发生 squash，也先固定实际合并提交再运行最终验收，不把旧成绩移给新提交。H2 的六份固定发布配方在 E9 改动路径中均未变化，核验器仍未执行。
+## E10、E11 与当前验收候选
+
+E10 从 **08:39:28 UTC 至 08:49:59 UTC**，只修改十个路径并进行四次普通推送。原退出回执已完整读取；源码回执 51,715 字节，按整件字节计算摘要并读取了提交、未变化绑定、检查和新回归字段，没有宣称独立审阅全部 95 条源码命令记录。
+
+唯一一次窄检查从 **08:47:35 UTC 至 08:49:01 UTC**，两个实际命令均退出 0，无超时或错误，源码及输入前后相同，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取；发布策略记录 106 项通过，Cargo 仅检查测试目标。此次新增五个 Rust 回归定义，分别覆盖同页锁顺序、Omarchy 取消期间保留两把锁、Playwright On 时丢回复、写入排队后撤权，以及混合版本参数。它们尚未执行。[E10 原件摘要和读取范围](source-E10-merged-control-fixes-public-facts.json)
+
+审阅期间另检查了一项回复与取消的竞态候选。实际客户端使用单线程 Tokio，reader 的取出请求、标记已回复及发送 oneshot 为连续同步代码，两个 task-local scope 不会创建线程；没有找到使所提出的直接交错成立的生产路径。同时，真实撤权错误已说明已派发效果可能完成，要求先观察再重试。因此未将该候选认定为新增阻断，也没有增加源修或 Gate。这个结论不等于全局无竞态证明；源码合同限定为保留 native future 实际返回的结果，不保证取消后所有内部或晚到回复仍交付调用者。
+
+E11 已完成丢回复夹具的触发修正：原先仅关闭 Python stdout，但监护进程仍持有管道，不能可靠触发 EOF；这仍属于静态诊断，没有记录为已观察到的测试超时。814c07c 改为 `print('!', flush=True)`，向真实 RPC 解析器送入一行无效 JSON。错误原因仍作完整等值判断：`native JSON stream failed: expected value at line 1 column 1`，没有放宽为模糊匹配。
+
+原 On 状态、失败状态、未知或部分执行、禁止重放、不虚构完成进度、移除确切自有驱动、清理完成，以及外层 10 秒上限全部保留。该用例现在覆盖已发送请求后收到无效 JSON、未取得有效对应回复的路径，不再直接注入 stdout EOF。产品函数与其他测试的字节没有为此修改。[固定提交与夹具范围](source-E11-merged-fixture-public-facts.json)
+
+E11 从 **09:03:00 UTC 至 09:08:36 UTC**，只提交两个文件并普通推送一次。窄检查从 **09:05:51 UTC 至 09:06:59 UTC**，两个实际命令退出码均为 0；源码 814c07c、目录树 98f89ac 和前后指纹一致，输入未变，自有检查进程回收完成。四份原始 stdout/stderr 已全文读取，结果 JSON 按整件字节计算摘要并读取实际阶段、源码、输入和清理字段。没有把编译通过记作 Rust 用例已运行，也没有把策略夹具的模拟发布输出当成真实发布。
+
+混合版本参数现在明确报错，例如启动参数与 `--version --all` 混用；独立的 `--version` / `-V` 单行输出保持，`--` 后的 harness 尾参不由顶层版本入口消费。这是有意收紧的参数边界，不能写成全部旧混合形式保持兼容。
+
+产品发布说明已吸收草稿中的命令、依赖和权限范围，原互发、引用、技能完整读取、历史归属、图片卡片与 Unix 租约说明均保留。814c07c 只进一步澄清两处条件：Omarchy 持有输入租约直到清理流程返回；Playwright 在错误或撤权结束调用、可能已写入且没有有效回复时，报告未知结果并清理其自有驱动。前者没有扩大为所有异常子进程清理均已确认成功，后者也没有把正常等待回复当作错误。
+
+PR #166 的实际 main ref、merge commit 和 PR 回执已经分别读取，f69db30 的两个父提交与 tree 相符。随后原执行者在 **09:14:07 UTC** 命名的最新来源观察中发现 zuse 默认分支已前进到 `ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc`，当前锁仍为 `830fcefd2277cbba46536c67d206f29058ba7fb3`。其余十个仓库与锁定来源一致；预备步骤退出 1，完整第 16 轮 Gate 尚未绑定或运行。原失败回执记录于 **09:18:51 UTC**，实际错误为 `fresh upstream heads differ from final lock`；当时尚未创建源码验收工作树或冻结 heads 文件。原观察文件保留，尚不能把依赖同步写成已完成。
+
+依赖同步后仍须从实际正常合并结果重新选择验收源码，核对 tree、差异、真实父链和新的来源观察；再由原执行者运行原 35 阶段、真实进程、多用户、完整界面与 P1 验收，最后核对正式发行及公开产物。4b4cbff 的第 15 轮未运行记录保留。H2 的六份固定发布配方、Cargo manifest/lock 和四个 gitlink 在 E10、E11 均未变化，核验器仍未执行。
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
 

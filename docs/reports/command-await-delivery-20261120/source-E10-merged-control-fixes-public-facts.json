@@ -1,0 +1,492 @@
+{
+  "schema_version": 1,
+  "kind": "source-fixes-completed-and-actual-main-merge-selected",
+  "observed_utc": "2026-11-21T08:58:00Z",
+  "source_stage": {
+    "started_utc": "2026-11-21T08:39:28.680626+00:00",
+    "finished_utc": "2026-11-21T08:49:59.261072+00:00",
+    "exit_code": 0,
+    "error": null,
+    "same_original_author": true,
+    "author_wrapper_unchanged": true,
+    "rustc_wrapper_unchanged": true,
+    "final_acceptance_allowed": false,
+    "start": {
+      "head": "27e9733fa539c400c532474e076971eba03f845a",
+      "tree": "205138cdce8368956a4e96ed87df3285f9f5011f",
+      "parents": [
+        "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5"
+      ],
+      "subject": "test: call the owned Playwright fixture cleanup directly [skip ci]"
+    },
+    "final": {
+      "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+      "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+      "parents": [
+        "9b1581d1bfd8b723d32d2c032a8369c5980dcbfd"
+      ],
+      "subject": "fix: reject mixed version requests and update release notes [skip ci]"
+    },
+    "remote_readback": "5623e52a48a03727f3341613beaa767bd94ea98d",
+    "clean_worktree_and_submodules_reported": true,
+    "source_paths": [
+      "docs/dependencies.md",
+      "docs/release-notes-0.10.25.md",
+      "src/backend/playwright.rs",
+      "src/backend/rpc.rs",
+      "src/browser.rs",
+      "src/client.rs",
+      "src/client/version.rs",
+      "src/computer/isolated.rs",
+      "src/omarchy.rs",
+      "src/runtime/native_plugins/process.rs"
+    ]
+  },
+  "milestones": [
+    {
+      "source": {
+        "head": "2951c06b3c212d8286fd53bf1aaada009888319a",
+        "tree": "e42335894355d8140c3707dc51498825d37c239d",
+        "parents": [
+          "27e9733fa539c400c532474e076971eba03f845a"
+        ],
+        "subject": "fix: align CDP page and input lease ordering [skip ci]"
+      },
+      "paths": [
+        "src/browser.rs"
+      ],
+      "receipt": {
+        "path": "milestone-1-cdp-lock-order.json",
+        "bytes": 3442,
+        "sha256": "709cea713d6356e537a7707048dcbca448e0faaf494196f852cbefc5dc4f7328"
+      },
+      "push_exit_code": 0
+    },
+    {
+      "source": {
+        "head": "4cd3940c76bf202570b34e2c82ebe6d8673fb577",
+        "tree": "5aa0bb0c9edb3720c66a695f7b9ac37cddf3801b",
+        "parents": [
+          "2951c06b3c212d8286fd53bf1aaada009888319a"
+        ],
+        "subject": "fix: hold Omarchy input leases until owned helpers exit [skip ci]"
+      },
+      "paths": [
+        "src/omarchy.rs"
+      ],
+      "receipt": {
+        "path": "milestone-2-omarchy-cleanup.json",
+        "bytes": 3476,
+        "sha256": "9d48787d4158bf7cb53b9c51817cd7191ae48ec4d16c452f8a3ab48f33b7057f"
+      },
+      "push_exit_code": 0
+    },
+    {
+      "source": {
+        "head": "9b1581d1bfd8b723d32d2c032a8369c5980dcbfd",
+        "tree": "e3970e585f33ed81ab81ab6e06fb96cefb4fec78",
+        "parents": [
+          "4cd3940c76bf202570b34e2c82ebe6d8673fb577"
+        ],
+        "subject": "fix: report unanswered Playwright writes as uncertain [skip ci]"
+      },
+      "paths": [
+        "src/backend/playwright.rs",
+        "src/backend/rpc.rs",
+        "src/runtime/native_plugins/process.rs"
+      ],
+      "receipt": {
+        "path": "milestone-3-playwright-dispatch.json",
+        "bytes": 3716,
+        "sha256": "4f9c3283187db3fb8744823d021c2f003be80885baebfb378ff3e84296877e9d"
+      },
+      "push_exit_code": 0
+    },
+    {
+      "source": {
+        "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+        "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+        "parents": [
+          "9b1581d1bfd8b723d32d2c032a8369c5980dcbfd"
+        ],
+        "subject": "fix: reject mixed version requests and update release notes [skip ci]"
+      },
+      "paths": [
+        "docs/dependencies.md",
+        "docs/release-notes-0.10.25.md",
+        "src/client.rs",
+        "src/client/version.rs",
+        "src/computer/isolated.rs"
+      ],
+      "receipt": {
+        "path": "milestone-4-commands-and-release-notes.json",
+        "bytes": 3865,
+        "sha256": "a704722eb35d59650fa70bd48fdaf5e2fef3c91ac55ea620b08e6ff5605f24ad"
+      },
+      "push_exit_code": 0
+    }
+  ],
+  "merge": {
+    "pull_request": 165,
+    "url": "https://github.com/LIghtJUNction/ssmcp/pull/165",
+    "merged": true,
+    "merged_at": "2026-11-21T08:51:57Z",
+    "commit": "4b4cbff311e930a8c8280ff1989a7f036ce7a892",
+    "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+    "parents": [
+      "3f678a7fca7ea64d220454f1723189e43d3b5546",
+      "5623e52a48a03727f3341613beaa767bd94ea98d"
+    ],
+    "author_branch_is_real_parent": true,
+    "tree_equals_author_tree": true,
+    "main_ref_observed": "4b4cbff311e930a8c8280ff1989a7f036ce7a892",
+    "squash_merge": false,
+    "role": "historical selected candidate; full gate not run before fixture followup"
+  },
+  "narrow_checks": {
+    "source": "5623e52a48a03727f3341613beaa767bd94ea98d",
+    "source_tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+    "schema": "ssmcp-e9-author-checks-v1",
+    "started_utc": "2026-11-21T08:47:35.828128+00:00",
+    "finished_utc": "2026-11-21T08:49:01.954090+00:00",
+    "status": "passed",
+    "exit_code": 0,
+    "error": null,
+    "check_commands_started": 2,
+    "final_35_stage_gate_executed": false,
+    "owned_cleanup_complete": true,
+    "target_lock_acquired": true,
+    "target_lock_held_until_owned_cleanup": true,
+    "stop_signal": null,
+    "stages": [
+      {
+        "name": "release-policy",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "python3",
+            "-B",
+            "scripts/test_release.py"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T08:47:37.717786+00:00",
+          "finished_utc": "2026-11-21T08:47:46.005031+00:00",
+          "duration_seconds": 8.287247618020047,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 291
+        },
+        "source_before": {
+          "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+          "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+          "sha256": "f1784451fb075b4d3247d580721121c30c5cf3ce67ae2b144642031780a5f99f",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+          "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+          "sha256": "f1784451fb075b4d3247d580721121c30c5cf3ce67ae2b144642031780a5f99f",
+          "untracked_files": 0
+        }
+      },
+      {
+        "name": "cargo-check-tests",
+        "status": "passed",
+        "source_unchanged": true,
+        "inputs_unchanged": true,
+        "actual": {
+          "argv": [
+            "cargo",
+            "check",
+            "--tests",
+            "--locked",
+            "--offline",
+            "--jobs",
+            "1"
+          ],
+          "exit_code": 0,
+          "succeeded": true,
+          "timed_out": false,
+          "error": null,
+          "started_utc": "2026-11-21T08:47:49.145818+00:00",
+          "finished_utc": "2026-11-21T08:48:59.806349+00:00",
+          "duration_seconds": 70.660592086002,
+          "stop_signal": null
+        },
+        "cleanup": {
+          "all_owned_descendants_reaped": true,
+          "errors": [],
+          "process_count": 49
+        },
+        "source_before": {
+          "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+          "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+          "sha256": "f1784451fb075b4d3247d580721121c30c5cf3ce67ae2b144642031780a5f99f",
+          "untracked_files": 0
+        },
+        "source_after": {
+          "head": "5623e52a48a03727f3341613beaa767bd94ea98d",
+          "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+          "sha256": "f1784451fb075b4d3247d580721121c30c5cf3ce67ae2b144642031780a5f99f",
+          "untracked_files": 0
+        }
+      }
+    ],
+    "release_policy_test_count": 106,
+    "release_policy_stderr_summary": "Ran 106 tests in 8.075s; OK",
+    "rust_test_execution": false,
+    "full_gate_execution": false,
+    "outputs": [
+      {
+        "file": "024-release-policy.stdout",
+        "bytes": 4856,
+        "sha256": "bde81168c2cc2b5ed1e6d47ca2a2e9c258080bd15dd29e6c68a63f7f93ec9fff",
+        "full_text_read": true
+      },
+      {
+        "file": "024-release-policy.stderr",
+        "bytes": 890,
+        "sha256": "248f21cf16e145477a27efae102a8ec4de44cfeafcba5dd699adcad6531fbb24",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "full_text_read": true
+      },
+      {
+        "file": "071-cargo-check-tests.stderr",
+        "bytes": 185,
+        "sha256": "f406cbf001f0ab73662d219b829cb58560ea4a6bb9184a14371c20f6b0cde9b1",
+        "full_text_read": true
+      }
+    ],
+    "fixture_outputs_are_not_real_tag_crate_or_release_evidence": true,
+    "results_not_reassigned_to_merge_commit": true
+  },
+  "static_review": {
+    "original_findings": {
+      "cdp_lock_order": {
+        "status": "statically-closed",
+        "commit": "2951c06b3c212d8286fd53bf1aaada009888319a",
+        "behavior": "Single input actions and batches acquire the page before the shared input lease; the admitted session and generation are retained and rechecked."
+      },
+      "omarchy_cleanup_lock_lifetime": {
+        "status": "statically-closed",
+        "commit": "4cd3940c76bf202570b34e2c82ebe6d8673fb577",
+        "behavior": "An owned helper task retains the input permit and serial guard until its awaited cleanup path returns, even if its caller is cancelled.",
+        "existing_limitation": "Managed.shutdown returns unit and does not propagate wait errors. Static closure of the normal cancellation lock lifetime is not proof that every abnormal cleanup completes successfully."
+      },
+      "playwright_on_unanswered_write": {
+        "status": "statically-closed",
+        "commit": "9b1581d1bfd8b723d32d2c032a8369c5980dcbfd",
+        "behavior": "Playwright-only wire progress distinguishes a possible write without a valid reply from an unsent failure or native result. Unknown or partial outcomes retain their cause, set replay_safe=false and clean only the exact owned driver."
+      },
+      "playwright_writer_recheck": {
+        "status": "static-fix-retained-and-regression-added",
+        "initial_fix": "8ce982cd2f37e3bbb3c6a218a7388fefdbf0c7e5",
+        "new_regression_definition": "revoked_writer_wait_sends_no_bytes_and_preserves_healthy_successor",
+        "runtime_executed": false
+      }
+    },
+    "review_sources": "Three control-chain static reviews reported by the source coordinator; root read implementation diffs and exact prior callers. Separate direct reviews read CLI/version and product documentation.",
+    "cli": {
+      "plain_version_one_line_preserved": true,
+      "mixed_startup_version_arguments_now_rejected": true,
+      "all_old_mixed_argument_forms_compatible": false,
+      "harness_tail_after_double_dash_preserved": true,
+      "version_module_test_definitions": 4,
+      "new_test_definitions_this_stage": 1,
+      "executed": false
+    },
+    "stale_background_error_text": {
+      "status": "corrected in 5623e52",
+      "path": "src/computer/isolated.rs",
+      "not_an_established_bypass": true
+    },
+    "additional_reply_cancel_candidate": {
+      "status": "not-established-as-blocking-defect; scoped-review-closed-without-source-change",
+      "root_withdrew_safe_replay_inference": true,
+      "scope": "Actual current-thread CLI, same-runtime reader with synchronous receive, task-local scopes, direct native await and the real ENDED warning. No production interleaving establishing the proposed bare store/send race was found.",
+      "supported_contract": "Preserve the native future's actually returned result. Internal or late replies after cancellation is linearized are not guaranteed to be delivered to the caller.",
+      "limitations": "No runtime reproduction and no global race-freedom proof; no additional gate requested."
+    },
+    "desktop_or_control_runtime_validation_performed": false,
+    "operating_system_isolation_implemented": false,
+    "new_fixture_followup": {
+      "status": "source followup required before full gate",
+      "source": "9b1581d1bfd8b723d32d2c032a8369c5980dcbfd",
+      "test": "on_playwright_lost_reply_revokes_the_driver_without_inventing_results",
+      "description": "The Linux fixture closes Python stdout while the guardian retains the stdout pipe; the intended EOF is not established before the outer 10-second test deadline.",
+      "evidence": "Acceptance coordinator reported exact static fixture analysis, confirmed by source owner; no test executed or timeout observed.",
+      "planned_change": "Use a flushed invalid-JSON frame to cause the intended transport/protocol error, preserving On, unknown outcome, replay_safe=false, owned-cleanup assertions and the original deadline."
+    }
+  },
+  "unrun_rust_regression_definitions": [
+    "same_page_wait_batch_then_queued_key_both_finish_in_order",
+    "cancelled_menu_keeps_both_leases_until_its_owned_helper_is_reaped",
+    "on_playwright_lost_reply_revokes_the_driver_without_inventing_results",
+    "revoked_writer_wait_sends_no_bytes_and_preserves_healthy_successor",
+    "version_cannot_hide_mixed_startup_options_or_consume_harness_tail"
+  ],
+  "new_integration_targets": 0,
+  "unchanged_source_bindings": {
+    "Cargo.toml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "9e51d222b8049615691a6830e0447ec275e27058",
+      "bytes": 10109,
+      "sha256": "c7e9fa819512800dfee8704f22b4c2d0db74713622a0e0d82be6dea96007e8d1"
+    },
+    "Cargo.lock": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "5cfd13289784a9da530c25fcf33d3d9aeee500bd",
+      "bytes": 66476,
+      "sha256": "0f213ad0db728a3448d70009141375711b098f4e9fd69b1334cc8217746e4f14"
+    },
+    ".github/workflows/release.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "41968605ad5d459d07ae599fccb1fb3d89a848d8",
+      "bytes": 24312,
+      "sha256": "00b3fcbf20ea8d94e66ab74324dfa49e35486ba7450f837e47279e7de10fa04e"
+    },
+    ".github/workflows/ci.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "e4bad0fe9c19f451cd597678a4e8c7cdc9bedfce",
+      "bytes": 14941,
+      "sha256": "d6d920faddfa8840a1ec4b37d54fddb6d169335139fa1bf241d04d716a753873"
+    },
+    ".github/workflows/deploy-server.yml": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "a550ffbfb4b915af8d6922bdf0f05ba5c58763ca",
+      "bytes": 4499,
+      "sha256": "2b8accbeaa94a674a1e6ddea762567cd97b74a1293cc45a53c4e34032a1e4a4c"
+    },
+    "scripts/release.py": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "1197f9b919f6fdfbbbb339a859fb50e63d17cfd9",
+      "bytes": 65061,
+      "sha256": "f935d7868e2b7fd4f1287c9cb2941d5b28feb4d6bf40665946ae0702be5d27cd"
+    },
+    "scripts/install.sh": {
+      "mode": "100755",
+      "type": "blob",
+      "object": "7620b1d29b87173492ea9d8b74d846f8d9c3c185",
+      "bytes": 6783,
+      "sha256": "25e5f2f8f93ca093b3851277fe436d3ba3a1451962f70ed957280f97f96c4906"
+    },
+    "scripts/install.ps1": {
+      "mode": "100644",
+      "type": "blob",
+      "object": "eb13725db6cb24c06a137f1ff2129649d2c25515",
+      "bytes": 29653,
+      "sha256": "24844a03fb6eaef23979748b47f6fa1ecc6e956b3272c0d3c41dd7f36ded1277"
+    },
+    "crates/zharness": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "fb2948f78467dd92b216aabda6f18a5645f0e7f6"
+    },
+    "crates/zplugin": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "592a1be623b81a775026c470e6f0efe91fcf78f3"
+    },
+    "crates/ztuio": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "9c632b30f7e2c2fd51a19b4bc5d90d529041ae7e"
+    },
+    "crates/zuse": {
+      "mode": "160000",
+      "type": "commit",
+      "object": "830fcefd2277cbba46536c67d206f29058ba7fb3"
+    }
+  },
+  "release_notes": {
+    "path": "docs/release-notes-0.10.25.md",
+    "source": "5623e52a48a03727f3341613beaa767bd94ea98d",
+    "draft_used": "90c6bde6d4ee910cebf24985a6b89834fcc87789",
+    "original_features_retained": [
+      "native inter-thread messages",
+      "missing @file still sends literal text",
+      "skill scope and full read",
+      "history ownership and idempotence",
+      "per-image cards",
+      "explicit Unix input lease unlock"
+    ],
+    "scope_preserved": [
+      "real relay ACK for remote input none",
+      "no OS isolation guarantee",
+      "locked build-time version graph",
+      "crate publication and server deployment separately deferred"
+    ],
+    "documentation_suggestions_not_treated_as_new_product_failures": true
+  },
+  "evidence": {
+    "author_exit": {
+      "file": "author-exit.json",
+      "bytes": 2192,
+      "sha256": "7f5f598c5f65e9f82be289cfdee73c27d2d6a97251eea02c67c22aeb822b85bd",
+      "read": "full original JSON"
+    },
+    "source_changes": {
+      "file": "source-changes-receipt.json",
+      "bytes": 51715,
+      "sha256": "e347fd0291eb387ac77efacc48ba5e7c1a1727cb30efbcac2f1758529f43cf2d",
+      "read": "full bytes hashed; selected source, milestone, push, unchanged-binding, final-check and unrun-definition fields read; not all 95 command records or referenced source snapshots independently reopened"
+    },
+    "final_checks": {
+      "file": "result.json",
+      "bytes": 87681,
+      "sha256": "5389ae836cf026acdd8c1353543f545e8060aa103d0b3468142299bc59e2195c",
+      "read": "full bytes hashed; selected actual command/source/input/cleanup fields read; all four stdout/stderr files read in full"
+    },
+    "source_snapshot": {
+      "bytes": 528606,
+      "sha256": "f1784451fb075b4d3247d580721121c30c5cf3ce67ae2b144642031780a5f99f",
+      "read": "identity and before/after equality fields read from original check receipt; full snapshot not reopened"
+    },
+    "github": {
+      "read": "exact four-commit compare chain and ten changed paths, selected implementation diffs, full RPC patch and integrated release notes; actual PR 165, main ref and merge commit identity; exact client runtime annotation and ENDED text"
+    }
+  },
+  "final_acceptance": {
+    "selected_source": "4b4cbff311e930a8c8280ff1989a7f036ce7a892",
+    "tree": "16c341e1e5f828be0a4b4ee1ef0fe9f2945afe26",
+    "gate_round": 15,
+    "full_35_stage_gate": "not_run; round 15 historical preparation retained",
+    "runtime_18": "not_run",
+    "ui_24": "not_run",
+    "P1": "not_run",
+    "fresh_root_group_window_ack": true,
+    "old_W_results_reassigned": false,
+    "source_branch_narrow_checks_reassigned": false,
+    "selected_source_status": "superseded as final candidate by required fixture followup; replacement merge not yet observed",
+    "next_planned_gate_round": 16
+  },
+  "release_verifier": {
+    "h2_commit": "2e8e58ac1a7047900feac8501878b80e64f4bd52",
+    "six_recipe_bindings_unchanged": true,
+    "executed": false,
+    "workflow_P": null,
+    "run_id": null,
+    "tag_created": false,
+    "dispatch_performed": false,
+    "production_deployed": false
+  }
+}
