@@ -3070,6 +3070,10 @@ mod tests {
         assert_eq!(output, b"\t");
         assert_eq!(keys.len(), 1);
         assert!(matches!(keys[0], Key::Select));
+        let (output, keys) =
+            keyboard.feed(b"\x1b[99;3u", Instant::now(), false, true, false);
+        assert!(output.is_empty());
+        assert!(matches!(keys.as_slice(), [Key::Select]));
     }
 
     #[test]
@@ -3123,8 +3127,7 @@ mod tests {
             assert!(state.actions.is_empty());
         }
         for sequence in [
-            b"\x1b[99;3u".as_slice(),
-            b"\x1b[99;12u",
+            b"\x1b[99;12u".as_slice(),
             b"\x1b[99;15u",
             b"\x1b[99;11:0u",
             b"\x1b[99;11;1;2u",
