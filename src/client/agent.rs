@@ -16,7 +16,6 @@ codex                     Codex App Server (installed codex executable)
 claude, claude-code, cc    Claude Code MCP server (installed claude executable)
 pi                        Existing private SSMCP_PI_RPC_SOCKET session
 opencode                  Existing SSMCP_OPENCODE_URL + OPENCODE_PASSWORD service
-playwright                Existing Playwright MCP extension provider
 ssmcp                     Explicit authenticated MCP peer; no child ssmcp is started
 
 Only Codex/Claude accept native process arguments, and only after --.
@@ -222,6 +221,7 @@ mod tests {
                 "test",
             ],
             vec!["--list-tools", "--load-harness", "opencode", "--", "serve"],
+            vec!["--list-tools", "--load-harness", "playwright"],
             vec![
                 "--list-tools",
                 "--load-harness",

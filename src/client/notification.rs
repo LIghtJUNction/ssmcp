@@ -320,7 +320,7 @@ async fn submit(title: &str, body: &str) -> Report {
         let Some(program) = program.to_str() else {
             return Report::new(Status::Unavailable, Reason::HelperUnavailable);
         };
-        match crate::computer::run_helper(
+        match crate::backend::run_helper(
             Path::new("."),
             program,
             &request.arguments,

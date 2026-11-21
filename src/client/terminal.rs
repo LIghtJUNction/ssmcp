@@ -21,8 +21,6 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-mod computer;
-mod computer_keys;
 mod conversation;
 pub(super) use conversation::reload_state::{
     Snapshot as ReloadState, restore as restore_reload, snapshot as reload_snapshot,
@@ -1110,7 +1108,6 @@ enum Key {
     Help,
     Questions,
     Select,
-    ComputerToggle,
     Layout,
     Sidebar,
     Theme,
@@ -1266,7 +1263,6 @@ impl Keyboard {
             | Key::Help
             | Key::Questions
             | Key::Select
-            | Key::ComputerToggle
             | Key::Layout
             | Key::Sidebar
             | Key::Theme
@@ -1340,26 +1336,6 @@ impl Keyboard {
                 continue;
             }
             self.pending.push(byte);
-            if !self.pasting {
-                match computer_keys::decode(&self.pending) {
-                    computer_keys::Decoded::Press => {
-                        actions.push(Key::ComputerToggle);
-                        self.pending.clear();
-                        self.since = None;
-                        continue;
-                    }
-                    computer_keys::Decoded::Ignore => {
-                        self.pending.clear();
-                        self.since = None;
-                        continue;
-                    }
-                    computer_keys::Decoded::Pending => {
-                        self.since.get_or_insert(now);
-                        continue;
-                    }
-                    computer_keys::Decoded::Other => {}
-                }
-            }
             if !self.pasting && self.pending.starts_with(b"\x1b[<") {
                 if matches!(byte, b'M' | b'm') {
                     let values = std::str::from_utf8(&self.pending[3..self.pending.len() - 1])
@@ -1528,7 +1504,6 @@ struct State {
     logout_target: Option<conversation::logout::Target>,
     guide: Option<guide::Guide>,
     account: AccountStatus,
-    computer: computer::Control,
     link_metrics: super::link_metrics::View,
     graphics: images::Graphics,
     media: Vec<images::Placement>,
@@ -1579,7 +1554,6 @@ impl State {
             logout_target: None,
             guide: None,
             account: AccountStatus::Unavailable,
-            computer: computer::Control::default(),
             link_metrics: super::link_metrics::View::default(),
             graphics: images::Graphics::default(),
             media: Vec::new(),
@@ -1994,11 +1968,6 @@ impl State {
             self.selection || actions.iter().any(|action| matches!(action, Key::Select));
         let mut layout_changed = false;
         for action in actions {
-            if matches!(action, Key::ComputerToggle) {
-                self.sleep_key(action);
-                self.computer_toggle();
-                continue;
-            }
             if self.sleep_key(action) {
                 continue;
             }
@@ -2334,25 +2303,13 @@ impl State {
                     " F7 Copy · Wheel / PgUp Logs · ↑↓ Audit · Enter/→ Open · ← Back · / Filter · F9 Level · F1 Help ".into()
                 };
                 let connection = footer::Connection::from_snapshot(self.preview, &self.chat_data());
-                let badge_width = g.cols.saturating_sub(2).min((g.cols / 2).max(10));
-                let badge = self.computer_badge(badge_width);
-                let reserved = if badge.is_empty() {
-                    0
-                } else {
-                    badge.width() as u16 + 2
-                };
                 let text = footer::render(
                     &hint,
                     self.server_origin.as_ref(),
                     connection,
-                    g.cols.saturating_sub(reserved),
+                    g.cols,
                     self.notice.is_some() || self.filter_editing || idle_update,
                 );
-                let text = if badge.is_empty() {
-                    text
-                } else {
-                    format!("{badge}  {text}")
-                };
                 rows.push(self.tone(
                     if self.keyboard.logs {
                         PanelTone::Accent
@@ -2411,7 +2368,6 @@ impl State {
                 "F4         Cycle color themes".into(),
                 "F5         Reload your configuration".into(),
                 "Alt+C / F7 Freeze display for native text selection; Alt+C/F7/Esc returns".into(),
-                "Super+Alt+C 切换 Computer Use".into(),
                 "Copy       Use your terminal copy shortcut after selecting text".into(),
                 "Wheel      Scroll logs directly; PgUp / PgDn also work".into(),
                 "Up / Down  Select a code_mode call; Enter / Right opens".into(),
@@ -2811,7 +2767,6 @@ fn draw_loop(shared: &Shared, output: PhysicalOutput) {
     let mut pending_update_notice = None;
     let mut last_panel = Instant::now();
     while !shared.stop.load(Ordering::Acquire) {
-        computer::refresh(shared, Instant::now());
         if offset >= pending.len() {
             output.media.complete();
             let (refresh, requests) = {
@@ -3090,6 +3045,47 @@ impl Drop for PhysicalOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_and_alt_c_keep_editor_and_selection_bindings() {
+        let mut keyboard = Keyboard::default();
+        let (output, keys) = keyboard.feed(b"\t\x1bc", Instant::now(), false, true, false);
+        assert_eq!(output, b"\t");
+        assert_eq!(keys.len(), 1);
+        assert!(matches!(keys[0], Key::Select));
+    }
+
+    #[test]
+    fn control_sequences_are_literal_inside_bracketed_paste_at_every_split() {
+        let bytes = b"\x1b[200~\x1b[99;11u\t\x1bc\x1b[201~";
+        for split in 0..=bytes.len() {
+            let mut keyboard = Keyboard::default();
+            let now = Instant::now();
+            let mut output = Vec::new();
+            for part in [&bytes[..split], &bytes[split..]] {
+                let (text, keys) = keyboard.feed(part, now, false, true, false);
+                assert!(keys.is_empty());
+                output.extend(text);
+            }
+            assert_eq!(output, bytes);
+        }
+    }
+
+    #[test]
+    fn tab_completion_and_content_focus_round_trip_preserve_the_draft() {
+        let mut state = State::new(36, 120, &Ui::default());
+        state.preview = true;
+        state.conversation.composer.set_text("/aud");
+        state.chat_keyboard(b"\t", Instant::now(), false);
+        assert_eq!(state.conversation.composer.text(), "/audit ");
+        assert!(!state.conversation.content_focus);
+        state.chat_keyboard(b"\t", Instant::now(), false);
+        assert!(state.conversation.content_focus);
+        state.chat_keyboard(b"\t", Instant::now(), false);
+        assert!(!state.conversation.content_focus);
+        assert_eq!(state.conversation.composer.text(), "/audit ");
+    }
+
 
     #[cfg(unix)]
     #[test]
@@ -4463,8 +4459,8 @@ mod tests {
                     "{layout:?}: {bottom}"
                 );
                 // A narrow row may use only the authority to preserve the
-                // complete notice and computer-control status. A wider row
-                // must retain the full origin when it fits.
+                // complete notice. A wider row must retain the full origin
+                // when it fits.
                 if columns == 120 {
                     assert!(
                         bottom.contains("https://ssmcp.lmm.best"),
@@ -4472,9 +4468,7 @@ mod tests {
                     );
                 }
                 assert!(bottom.contains("preview"), "{layout:?}: {bottom}");
-                if layout != Layout::Chat {
-                    assert!(bottom.contains("电脑控制：未确认"), "{layout:?}: {bottom}");
-                }
+                assert!(!bottom.contains("电脑控制"), "{layout:?}: {bottom}");
                 assert_eq!(
                     bottom.width(),
                     usize::from(columns),

@@ -294,7 +294,9 @@ impl Default for Ui {
 struct Document {
     ui: Ui,
     client: super::config::ClientSettings,
-    browser: super::config::BrowserSettings,
+    // Accept saved settings from older clients without configuring a controller.
+    #[serde(rename = "browser")]
+    _legacy_browser: Option<serde::de::IgnoredAny>,
     git: super::config::GitSettings,
     contexts: super::connection_context::Store,
 }
@@ -305,7 +307,6 @@ impl Ui {
         let doc: Document =
             toml::from_str(text).map_err(|_| "invalid ssmcp UI TOML configuration")?;
         doc.client.validate().map_err(|error| error.to_string())?;
-        doc.browser.validate().map_err(|error| error.to_string())?;
         doc.git.validate().map_err(|error| error.to_string())?;
         doc.contexts.validate().map_err(|error| error.to_string())?;
         doc.ui.validate()?;
@@ -585,7 +586,7 @@ mod tests {
         assert_eq!(old.colors.accent, "#123456");
     }
     #[test]
-    fn combined_ui_client_browser_and_git_config_loads_for_startup() {
+    fn combined_ui_client_legacy_browser_and_git_config_loads_for_startup() {
         let entry = std::env::temp_dir().join("ssmcp-ui-browser-fixture.js");
         let entry = serde_json::to_string(entry.to_str().unwrap()).unwrap();
         let text = format!(
@@ -652,16 +653,16 @@ mod tests {
     }
 
     #[test]
-    fn browser_settings_keep_their_validation_in_ui_configuration() {
-        assert!(
-            !Ui::parse("[browser]\nbackground = false\n")
-                .unwrap()
-                .timestamps
-        );
+    fn retired_browser_settings_are_ignored_without_weakening_ui_validation() {
+        let ui = Ui::parse(
+            "[ui]\ntheme = 'nord'\n[browser]\nplaywright_mcp = 'legacy/cli.js'\nbackground = false\n",
+        )
+        .unwrap();
+        assert_eq!(ui.theme, Theme::Nord);
+        assert!(!ui.timestamps);
         for text in [
-            "[browser]\nplaywright_mcp = 'relative/cli.js'\n",
-            "[browser]\nbackground = 'secret-value'\n",
-            "[browser]\nplaywrigt_mcp = '/tmp/secret-value'\n",
+            "[ui]\ntheme = 'secret-value'\n[browser]\nbackground = false\n",
+            "[unknown]\nvalue = 'secret-value'\n",
         ] {
             let error = Ui::parse(text).unwrap_err();
             assert!(!error.contains("secret-value"), "{error}");

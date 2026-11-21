@@ -74,16 +74,6 @@ fn real_frames_keep_a_live_clock_visible_beside_a_draft_and_specific_notice() {
         state.conversation.timing_fixture.as_mut().unwrap().active[0] = observation;
         let wait = screen(&mut state);
         assert!(wait.contains("观察剩余 00:06"), "{cols}: {wait}");
-        for frame in [&first, &later, &elapsed, &wait] {
-            let divider = frame
-                .lines()
-                .find(|row| row.contains("剩余 ") || row.contains("计时 "))
-                .unwrap();
-            assert!(
-                divider.contains("电脑控制：未确认") || divider.contains("电脑：?"),
-                "{cols}: {divider}"
-            );
-        }
         assert_eq!(
             state.conversation.composer.text(),
             "keep this draft exactly"

@@ -790,10 +790,6 @@ impl State {
                 crate::client::interface::harness::submit(&command[1..], rest)?;
                 self.notice = Some("Harness request queued · results appear here".into());
             }
-            "/computer" => {
-                let command = crate::client::interface::computer::parse(rest)?;
-                self.computer_command(command)?;
-            }
             "/command" => {
                 if rest.split_whitespace().count() > 1 {
                     return Err("Use /command [JOB_ID] to inspect a complete command".into());
@@ -1528,11 +1524,6 @@ impl State {
 
     fn chat_key(&mut self, key: Key) {
         self.chat_cancel_native_lookup();
-        if matches!(key, Key::ComputerToggle) {
-            self.sleep_key(key);
-            self.computer_toggle();
-            return;
-        }
         if self.sleep_key(key) {
             return;
         }
@@ -3206,33 +3197,24 @@ impl State {
                 let clock_width = clock_label
                     .as_ref()
                     .map_or(0, |label| label.width() as u16 + 3);
-                let computer = self
-                    .computer_badge(width.saturating_sub(mode.width() as u16 + 1 + clock_width));
-                let title_width = width
-                    .saturating_sub(clock_width)
-                    .saturating_sub(computer.width() as u16 + u16::from(!computer.is_empty()));
+                let title_width = width.saturating_sub(clock_width);
                 let title = fit(&title, title_width);
                 let available = usize::from(g.left).saturating_sub(title.width() + 4);
                 let detail = if let Some(clock) = &clock_label {
-                    let detail = if computer.is_empty() {
-                        clock.clone()
-                    } else {
-                        format!("{clock} · {computer}")
-                    };
-                    fit(&detail, available.min(usize::from(u16::MAX)) as u16)
+                    fit(clock, available.min(usize::from(u16::MAX)) as u16)
                 } else if g.left == g.cols {
                     let [account, quota] = self.account.compact_rows();
-                    let full = format!("{} · {} · {computer}", account.trim(), quota.trim());
-                    let short = format!("{} · {computer}", quota.trim());
+                    let full = format!("{} · {}", account.trim(), quota.trim());
+                    let short = quota.trim().to_owned();
                     if full.width() <= available {
                         full
                     } else if short.width() <= available {
                         short
                     } else {
-                        computer
+                        String::new()
                     }
                 } else {
-                    computer
+                    String::new()
                 };
                 let gap = "─".repeat(available.saturating_sub(detail.width()));
                 self.chat_line(
