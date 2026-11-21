@@ -179,6 +179,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn version_cannot_hide_mixed_startup_options_or_consume_harness_tail() {
+        use super::super::Options;
+
+        for args in [
+            ["--no-browser", "--version", "--all"],
+            ["--no-browser", "--all", "--version"],
+            ["--no-browser", "-V", "--all"],
+        ] {
+            let args = args.map(OsString::from);
+            assert_eq!(request(&args).unwrap(), None);
+            let error = Options::parse(args)
+                .err()
+                .expect("mixed version options accepted");
+            assert!(error.contains("--version"));
+        }
+        let tail = ["--", "--all", "--version"];
+        let args = [
+            "example.test",
+            "--load-harness",
+            "codex",
+            tail[0],
+            tail[1],
+            tail[2],
+        ]
+        .map(OsString::from);
+        assert_eq!(request(&args).unwrap(), None);
+        let options = Options::parse(args).unwrap().unwrap();
+        assert_eq!(
+            options.harness.unwrap().arguments,
+            tail[1..].iter().map(OsString::from).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn version_requests_are_top_level_and_plain_output_is_unchanged() {
         let parse = |args: &[&str]| request(&args.iter().map(OsString::from).collect::<Vec<_>>());
         assert_eq!(parse(&["--version"]).unwrap(), Some(Request::Plain));

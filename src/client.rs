@@ -614,8 +614,7 @@ impl Options {
                 }
                 Some("--all") => return Err("--all requires a top-level --version request".into()),
                 Some("-V" | "--version") => {
-                    println!("ssmcp {}", env!("CARGO_PKG_VERSION"));
-                    return Ok(None);
+                    return Err("use --version alone or with --all at the top level".into());
                 }
                 Some("-t" | "--type" | "--backend") => {
                     return Err("harness selection was removed; remove -t/--type/--backend and connect directly: ssmcp [options] user@server; optional harnesses load only when explicitly requested".into());

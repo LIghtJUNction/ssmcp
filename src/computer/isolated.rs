@@ -387,7 +387,7 @@ pub(super) async fn dispatch(
                 parse::<Empty>(args)?;
                 return Ok(surface(result(inactive_status()), "isolated"));
             }
-            Err("no private desktop is running; computer.app_launch starts one automatically, or call computer.desktop_start. Background browser control remains enabled; desktop: host permits observation, while host input also requires the local operator's /computer on switch".into())
+            Err("no private desktop is running. Use desktop: host to observe the host explicitly. Starting a private desktop or sending input requires Computer Use On".into())
         }
     }
 }

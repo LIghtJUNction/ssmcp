@@ -11,7 +11,7 @@ ssmcp 把终端绘制、原生扩展接口、动态库加载和桌面能力拆�
 
 应用的 Project Z 跨仓库依赖使用 `https://github.com/LIghtJUNction/<repo>.git` 的默认分支源码。根 manifest 直接声明 Git 默认分支来源，保留包别名和 feature。实际解析版本来自上游 manifest，提交由 Cargo.lock 记录。仓库内的 path 或 workspace 依赖继续保留，例如 zplugin 自己的 `zplugin-macros`。
 
-四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/cb63a9a0aa163214c6062664cd62fefb357be5a8/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/cf02c1d9db575b92b36297dfe1fde72de9ee51e4/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/317c52f101f112c6af671a629d8406305a168e4a/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml)
+四个 gitlink 保留独立源码和契约测试。发行前的完整 `cargo metadata --locked --format-version 1` 必须核对 Cargo 使用的 Git 提交和工作树内容与对应 gitlink 一致。同步的上游 manifest 已直接声明八项传递依赖的 Git 源，因此移除了相应根级覆盖。实际解析图中，SSMCP 和 zharness 必须指向同一个 zplugin 包标识。[zharness](https://github.com/LIghtJUNction/zharness/blob/fb2948f78467dd92b216aabda6f18a5645f0e7f6/Cargo.toml) · [zplugin](https://github.com/LIghtJUNction/zplugin/blob/592a1be623b81a775026c470e6f0efe91fcf78f3/Cargo.toml) · [zcall](https://github.com/LIghtJUNction/zcall/blob/199678d08104bed588e5d10b2c0634a47d7c8417/Cargo.toml) · [zuse](https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml)
 
 `ssmcp --version --all` 可离线查看构建所用 Cargo.lock 中从 ssmcp 可达的依赖树。`--version` 仍只输出应用版本。树包含锁定的构建、开发与各目标依赖，实际链接的代码随目标和 features 而变。
 
@@ -42,7 +42,7 @@ GitHub 二进制发行记录固定 Git 源码及 Cargo 解析图。开启 crates
 | [ztuio](https://crates.io/crates/ztuio) | 直接 | `0.1.0` | [0.1.0](https://github.com/LIghtJUNction/ztuio/tree/v0.1.0) |
 | [zuse-computer](https://crates.io/crates/zuse-computer) | 直接 | `0.2.2` | [0.2.2](https://github.com/LIghtJUNction/zuse/tree/v0.2.2) |
 
-表中两条 zcall 调用链来自迁移前的 registry 核对。当时发布的 zmcpio 0.4.0 要求 zcall `=0.3.0`。本轮实取的 zmcpio Git 源码仍为 0.4.0，直接要求 canonical Git 的 zcall `=0.4.0`。外部发行使用实际 registry 图，其兼容性仍待规范化打包确认。[zmcpio Git manifest](https://github.com/LIghtJUNction/zmcpio/blob/84fc4978a248c2a3e2dd110f4f26fa52dd8b6890/Cargo.toml) · [官方索引条目](https://index.crates.io/zm/cp/zmcpio)
+表中两条 zcall 调用链来自迁移前的 registry 核对。当时发布的 zmcpio 0.4.0 要求 zcall `=0.3.0`。当前锁定的 zmcpio Git 源码仍为 0.4.0，直接使用 zcall 的规范 Git 来源；锁中 zcall 解析为 0.4.0。外部发行使用实际 registry 图，其兼容性仍待规范化打包确认。[zmcpio Git manifest](https://github.com/LIghtJUNction/zmcpio/blob/04bb6cd05c5295ab41a892a76cbef10b8ac07402/Cargo.toml) · [官方索引条目](https://index.crates.io/zm/cp/zmcpio)
 
 当时的锁定解析、原生插件契约和 91 项发布规则测试属于上述历史源码，完整范围见核对记录。
 
