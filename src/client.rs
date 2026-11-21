@@ -3060,10 +3060,8 @@ async fn connect_inner(
     // Only connected sessions schedule cleanup. Constructors, discovery commands
     // and the private worker child never initialize or scan a workspace here.
     let cleanup_period = Duration::from_secs(5 * 60);
-    let mut cleanup_updates = tokio::time::interval_at(
-        tokio::time::Instant::now() + cleanup_period,
-        cleanup_period,
-    );
+    let mut cleanup_updates =
+        tokio::time::interval_at(tokio::time::Instant::now() + cleanup_period, cleanup_period);
     cleanup_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut managed_cleanup = backend.start_managed_file_cleanup("startup");
     backend.start_workers();

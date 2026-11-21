@@ -134,7 +134,10 @@ mod tests {
     fn cleanup_modes_are_explicit_and_preserve_the_config_path() {
         for (values, expected) in [
             (vec!["cleanup"], Action::Clean { dry_run: false }),
-            (vec!["cleanup", "--dry-run"], Action::Clean { dry_run: true }),
+            (
+                vec!["cleanup", "--dry-run"],
+                Action::Clean { dry_run: true },
+            ),
             (vec!["cleanup", "--list"], Action::List),
             (vec!["cleanup", "--config"], Action::Config),
             (vec!["cleanup", "--help"], Action::Help),
@@ -194,4 +197,3 @@ mod tests {
         );
     }
 }
-

@@ -4,9 +4,9 @@
 //! are tracking warnings, not evidence that the preceding file write failed.
 //! Active users retain a Registration or FileLease; the independently opened file
 //! description is locked until that guard is dropped.
+pub mod command;
 mod config;
 mod storage;
-pub mod command;
 #[cfg(test)]
 mod tests;
 
@@ -55,7 +55,10 @@ impl ObjectIdentity {
         {
             use std::os::unix::fs::MetadataExt;
             let metadata = file.metadata()?;
-            Ok(Self { volume: metadata.dev(), index: metadata.ino() })
+            Ok(Self {
+                volume: metadata.dev(),
+                index: metadata.ino(),
+            })
         }
         #[cfg(windows)]
         {
@@ -65,9 +68,7 @@ impl ObjectIdentity {
             };
             let mut information = BY_HANDLE_FILE_INFORMATION::default();
             // SAFETY: file owns a live handle and information is writable.
-            if unsafe {
-                GetFileInformationByHandle(file.as_raw_handle(), &mut information)
-            } == 0 {
+            if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(Self {
@@ -95,7 +96,10 @@ impl FileIdentity {
         if !metadata.is_file() {
             return Err(invalid("created object must be a regular file"));
         }
-        let modified = metadata.modified()?.duration_since(UNIX_EPOCH).map_err(io::Error::other)?;
+        let modified = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .map_err(io::Error::other)?;
         Ok(Self {
             object: ObjectIdentity::from_file(file)?,
             bytes: metadata.len(),
@@ -167,13 +171,18 @@ pub struct CleanupSummary {
 impl CleanupSummary {
     fn new(dry_run: bool, trigger: &str, registry_present: bool) -> Self {
         Self {
-            dry_run, trigger: trigger.to_owned(), registry_present,
+            dry_run,
+            trigger: trigger.to_owned(),
+            registry_present,
             ..Self::default()
         }
     }
 
     fn issue(&mut self, path: &str, error: impl std::fmt::Display) {
-        self.errors.push(CleanupIssue { path: path.to_owned(), error: error.to_string() });
+        self.errors.push(CleanupIssue {
+            path: path.to_owned(),
+            error: error.to_string(),
+        });
     }
 
     fn decision(&mut self, record: &Record, action: &str, reason: &str) {
@@ -219,12 +228,17 @@ impl Drop for LockedFile {
             };
             let mut overlap = OVERLAPPED {
                 Anonymous: OVERLAPPED_0 {
-                    Anonymous: OVERLAPPED_0_0 { Offset: u32::MAX, OffsetHigh: 0 },
+                    Anonymous: OVERLAPPED_0_0 {
+                        Offset: u32::MAX,
+                        OffsetHigh: 0,
+                    },
                 },
                 ..Default::default()
             };
             // Match exactly the byte range used by platform::lock_file.
-            unsafe { UnlockFileEx(self.0.as_raw_handle(), 0, 1, 0, &mut overlap); }
+            unsafe {
+                UnlockFileEx(self.0.as_raw_handle(), 0, 1, 0, &mut overlap);
+            }
         }
     }
 }
@@ -241,7 +255,9 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn record(&self) -> &Record { &self.record }
+    pub fn record(&self) -> &Record {
+        &self.record
+    }
 }
 
 pub struct ManagedFiles {
@@ -269,7 +285,12 @@ impl ManagedFiles {
             Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let store = Self { workspace_path, workspace, state, registry };
+        let store = Self {
+            workspace_path,
+            workspace,
+            state,
+            registry,
+        };
         store.check_attached()?;
         if create {
             match store.registry.open(LOCK, Access::Create, true) {
@@ -335,7 +356,9 @@ impl ManagedFiles {
     pub fn set_config(&self, config: &CleanupConfig) -> io::Result<()> {
         config.validate()?;
         let bytes = json_bytes(config)?;
-        if bytes.len() > CONFIG_BYTES_LIMIT { return Err(invalid("cleanup configuration is too large")); }
+        if bytes.len() > CONFIG_BYTES_LIMIT {
+            return Err(invalid("cleanup configuration is too large"));
+        }
         let lock = self.lock()?;
         // Re-check the existing file without requiring valid old JSON. This allows
         // an explicit --set-config to repair malformed, otherwise safe metadata.
@@ -354,24 +377,48 @@ impl ManagedFiles {
     pub fn list(&self) -> io::Result<Vec<Record>> {
         let _lock = self.lock()?;
         let (names, truncated) = self.registry.names(MAX_RECORDS + 1)?;
-        if truncated { return Err(invalid("managed registry scan limit reached")); }
+        if truncated {
+            return Err(invalid("managed registry scan limit reached"));
+        }
         let mut records = Vec::new();
         for name in names {
-            let Some(name) = name.to_str().filter(|name| record_name(name)) else { continue; };
+            let Some(name) = name.to_str().filter(|name| record_name(name)) else {
+                continue;
+            };
             records.push(self.read_record(name)?);
         }
-        records.sort_by(|left, right| left.relative_path.cmp(&right.relative_path).then(left.id.cmp(&right.id)));
+        records.sort_by(|left, right| {
+            left.relative_path
+                .cmp(&right.relative_path)
+                .then(left.id.cmp(&right.id))
+        });
         Ok(records)
     }
 
     pub fn register_created(
-        &self, relative: &Path, created: &File, category: Category, source: &str, owner: &str,
+        &self,
+        relative: &Path,
+        created: &File,
+        category: Category,
+        source: &str,
+        owner: &str,
     ) -> io::Result<Registration> {
-        self.register_expected(relative, &FileIdentity::from_file(created)?, category, source, owner)
+        self.register_expected(
+            relative,
+            &FileIdentity::from_file(created)?,
+            category,
+            source,
+            owner,
+        )
     }
 
     fn register_expected(
-        &self, relative: &Path, expected: &FileIdentity, category: Category, source: &str, owner: &str,
+        &self,
+        relative: &Path,
+        expected: &FileIdentity,
+        category: Category,
+        source: &str,
+        owner: &str,
     ) -> io::Result<Registration> {
         let relative_path = relative_path(relative)?;
         label(source)?;
@@ -379,21 +426,29 @@ impl ManagedFiles {
         if category == Category::Temporary
             && (!Path::new(&relative_path).starts_with(".ssmcp") || protected_path(&relative_path))
         {
-            return Err(invalid("temporary registration is restricted to unprotected .ssmcp files"));
+            return Err(invalid(
+                "temporary registration is restricted to unprotected .ssmcp files",
+            ));
         }
         let lock = self.lock()?;
         let (parent, name, parent_ids) = self.workspace.parent_with_ids(&relative_path)?;
         let file = parent.open(&name, Access::Read, false)?;
         let identity = FileIdentity::from_file(&file)?;
         if !identity.same_file(expected) || identity.bytes != expected.bytes {
-            return Err(invalid("published file no longer matches its creation identity"));
+            return Err(invalid(
+                "published file no longer matches its creation identity",
+            ));
         }
         // Windows may finalize last-write time only after the publishing writer
         // closes. Keep that finalized snapshot for cleanup; do not confuse it
         // with a different file at the publication boundary.
         #[cfg(unix)]
-        if identity != *expected { return Err(invalid("published file changed before registration")); }
-        let lease = FileLease { _locked: LockedFile::acquire(file)? };
+        if identity != *expected {
+            return Err(invalid("published file changed before registration"));
+        }
+        let lease = FileLease {
+            _locked: LockedFile::acquire(file)?,
+        };
         let (_, _, current_parent_ids) = self.workspace.parent_with_ids(&relative_path)?;
         if current_parent_ids != parent_ids || !storage::same_at(&parent, &name, &identity)? {
             return Err(invalid("published file changed before registration"));
@@ -403,28 +458,43 @@ impl ManagedFiles {
         let record = match self.registry.read(&filename, RECORD_BYTES_LIMIT, true) {
             Ok(bytes) => {
                 let existing = parse_record(&filename, &bytes)?;
-                if existing.category != category || existing.removed_at_unix.is_some()
+                if existing.category != category
+                    || existing.removed_at_unix.is_some()
                     || existing.parent_ids != parent_ids
                 {
-                    return Err(invalid("existing registration cannot be reclassified or revived"));
+                    return Err(invalid(
+                        "existing registration cannot be reclassified or revived",
+                    ));
                 }
                 existing
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let record = Record {
-                    schema_version: 1, id, relative_path, category,
-                    source: source.to_owned(), owner: owner.to_owned(), created_at_unix: now()?,
-                    identity, parent_ids, removed_at_unix: None,
+                    schema_version: 1,
+                    id,
+                    relative_path,
+                    category,
+                    source: source.to_owned(),
+                    owner: owner.to_owned(),
+                    created_at_unix: now()?,
+                    identity,
+                    parent_ids,
+                    removed_at_unix: None,
                 };
                 let bytes = json_bytes(&record)?;
-                if bytes.len() > RECORD_BYTES_LIMIT { return Err(invalid("managed record is too large")); }
+                if bytes.len() > RECORD_BYTES_LIMIT {
+                    return Err(invalid("managed record is too large"));
+                }
                 self.check_lock(&lock)?;
                 self.registry.write_new(&filename, &bytes)?;
                 record
             }
             Err(error) => return Err(error),
         };
-        Ok(Registration { record, _lease: lease })
+        Ok(Registration {
+            record,
+            _lease: lease,
+        })
     }
 
     pub fn lease(&self, relative: &Path) -> io::Result<FileLease> {
@@ -435,9 +505,13 @@ impl ManagedFiles {
         let identity = FileIdentity::from_file(&file)?;
         let record = self.read_record(&format!("{}.json", record_id(&relative, &identity)?))?;
         if record.parent_ids != parent_ids || record.removed_at_unix.is_some() {
-            return Err(invalid("managed file's parent identity or lifecycle changed"));
+            return Err(invalid(
+                "managed file's parent identity or lifecycle changed",
+            ));
         }
-        let lease = FileLease { _locked: LockedFile::acquire(file)? };
+        let lease = FileLease {
+            _locked: LockedFile::acquire(file)?,
+        };
         if !storage::same_at(&parent, &name, &identity)? {
             return Err(invalid("managed file changed while acquiring its lease"));
         }
@@ -465,7 +539,9 @@ impl ManagedFiles {
         };
         let config = self.config()?;
         summary.enabled = config.enabled;
-        if !config.enabled { return Ok(summary); }
+        if !config.enabled {
+            return Ok(summary);
+        }
         let (names, truncated) = self.registry.names(MAX_RECORDS + 1)?;
         if truncated {
             summary.scan_truncated = true;
@@ -475,14 +551,23 @@ impl ManagedFiles {
         let mut candidates = Vec::new();
         let mut total = 0u64;
         for filename in names {
-            let Some(filename) = filename.to_str().filter(|name| record_name(name)) else { continue; };
+            let Some(filename) = filename.to_str().filter(|name| record_name(name)) else {
+                continue;
+            };
             let record = match self.read_record(filename) {
                 Ok(record) => record,
-                Err(error) => { summary.issue(filename, error); summary.kept_changed += 1; continue; }
+                Err(error) => {
+                    summary.issue(filename, error);
+                    summary.kept_changed += 1;
+                    continue;
+                }
             };
             summary.scanned_records += 1;
-            if record.removed_at_unix.is_some() { continue; }
-            if record.category != Category::Temporary || protected_path(&record.relative_path)
+            if record.removed_at_unix.is_some() {
+                continue;
+            }
+            if record.category != Category::Temporary
+                || protected_path(&record.relative_path)
                 || !Path::new(&record.relative_path).starts_with(".ssmcp")
             {
                 summary.kept_protected += 1;
@@ -503,7 +588,10 @@ impl ManagedFiles {
                             summary.kept_active += 1;
                             summary.decision(&record, "kept", "active lease");
                         }
-                        Err(error) => { summary.issue(&record.relative_path, error); summary.kept_changed += 1; }
+                        Err(error) => {
+                            summary.issue(&record.relative_path, error);
+                            summary.kept_changed += 1;
+                        }
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -513,12 +601,18 @@ impl ManagedFiles {
                 Err(error) => {
                     summary.kept_changed += 1;
                     summary.issue(&record.relative_path, error);
-                    summary.decision(&record, "kept", "identity, link, ownership or permissions changed");
+                    summary.decision(
+                        &record,
+                        "kept",
+                        "identity, link, ownership or permissions changed",
+                    );
                 }
             }
         }
         candidates.sort_by(|(left, _), (right, _)| {
-            left.created_at_unix.cmp(&right.created_at_unix).then(left.id.cmp(&right.id))
+            left.created_at_unix
+                .cmp(&right.created_at_unix)
+                .then(left.id.cmp(&right.id))
         });
         for (mut record, max_age) in candidates {
             let last_written = record.created_at_unix.max(record.identity.modified_at_unix);
@@ -527,7 +621,11 @@ impl ManagedFiles {
                 summary.decision(&record, "kept", "within age and capacity limits");
                 continue;
             }
-            let reason = if expired { "maximum age" } else { "maximum total bytes" };
+            let reason = if expired {
+                "maximum age"
+            } else {
+                "maximum total bytes"
+            };
             // Reopen and reacquire immediately before deletion. No large scan
             // retains thousands of data-file descriptors or bypasses a new lease.
             let result = self.remove_candidate(&record, &lock, dry_run);
@@ -536,17 +634,23 @@ impl ManagedFiles {
                     total = total.saturating_sub(record.identity.bytes);
                     if dry_run {
                         summary.would_remove_files += 1;
-                        summary.would_remove_bytes = summary.would_remove_bytes.saturating_add(record.identity.bytes);
+                        summary.would_remove_bytes = summary
+                            .would_remove_bytes
+                            .saturating_add(record.identity.bytes);
                         summary.decision(&record, "would_remove", reason);
                     } else {
                         summary.removed_files += 1;
-                        summary.removed_bytes = summary.removed_bytes.saturating_add(record.identity.bytes);
+                        summary.removed_bytes =
+                            summary.removed_bytes.saturating_add(record.identity.bytes);
                         summary.decision(&record, "removed", reason);
                         record.removed_at_unix = Some(now);
                         let saved = json_bytes(&record).and_then(|bytes| {
-                            self.registry.write_atomic(&format!("{}.json", record.id), &bytes)
+                            self.registry
+                                .write_atomic(&format!("{}.json", record.id), &bytes)
                         });
-                        if let Err(error) = saved { summary.issue(&record.relative_path, error); }
+                        if let Err(error) = saved {
+                            summary.issue(&record.relative_path, error);
+                        }
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -566,7 +670,9 @@ impl ManagedFiles {
 
     fn open_record(&self, record: &Record) -> io::Result<(Directory, String, File)> {
         let (parent, name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids { return Err(invalid("registered parent directory was replaced")); }
+        if identities != record.parent_ids {
+            return Err(invalid("registered parent directory was replaced"));
+        }
         let file = parent.open(&name, Access::Read, false)?;
         if FileIdentity::from_file(&file)? != record.identity {
             return Err(invalid("registered file was replaced or modified"));
@@ -574,17 +680,27 @@ impl ManagedFiles {
         Ok((parent, name, file))
     }
 
-    fn remove_candidate(&self, record: &Record, lock: &LockedFile, dry_run: bool) -> io::Result<()> {
+    fn remove_candidate(
+        &self,
+        record: &Record,
+        lock: &LockedFile,
+        dry_run: bool,
+    ) -> io::Result<()> {
         let (parent, name, file) = self.open_record(record)?;
         let _lease = LockedFile::acquire(file)?;
         self.check_lock(lock)?;
-        let (current_parent, current_name, identities) = self.workspace.parent_with_ids(&record.relative_path)?;
-        if identities != record.parent_ids || current_parent.identity()? != parent.identity()?
-            || current_name != name || !storage::same_at(&parent, &name, &record.identity)?
+        let (current_parent, current_name, identities) =
+            self.workspace.parent_with_ids(&record.relative_path)?;
+        if identities != record.parent_ids
+            || current_parent.identity()? != parent.identity()?
+            || current_name != name
+            || !storage::same_at(&parent, &name, &record.identity)?
         {
             return Err(invalid("registered path changed before cleanup"));
         }
-        if !dry_run { parent.remove(&name)?; }
+        if !dry_run {
+            parent.remove(&name)?;
+        }
         Ok(())
     }
 }
@@ -592,7 +708,11 @@ impl ManagedFiles {
 /// For successful creation hooks which have already captured the creator's FD.
 /// This does not grant a lasting active lease; retain Registration when needed.
 pub fn record_created(
-    root: &Path, relative: &Path, kind: Category, source: &str, expected: &FileIdentity,
+    root: &Path,
+    relative: &Path,
+    kind: Category,
+    source: &str,
+    expected: &FileIdentity,
 ) -> io::Result<Record> {
     let store = ManagedFiles::open(root)?;
     let owner = current_owner();
@@ -622,12 +742,16 @@ pub fn config(root: &Path) -> io::Result<CleanupConfig> {
             let root = Directory::workspace(root)?;
             let state = match root.child(".ssmcp", false, false) {
                 Ok(state) => state,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(CleanupConfig::default()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(CleanupConfig::default());
+                }
                 Err(error) => return Err(error),
             };
             match state.read(CONFIG, CONFIG_BYTES_LIMIT, false) {
                 Ok(bytes) => parse_config(&bytes),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(CleanupConfig::default()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    Ok(CleanupConfig::default())
+                }
                 Err(error) => Err(error),
             }
         }
@@ -645,9 +769,13 @@ pub fn set_config(root: &Path, value: &CleanupConfig) -> io::Result<()> {
 
 fn current_owner() -> String {
     #[cfg(unix)]
-    { format!("uid:{}", unsafe { libc::geteuid() }) }
+    {
+        format!("uid:{}", unsafe { libc::geteuid() })
+    }
     #[cfg(windows)]
-    { "current_windows_user".to_owned() }
+    {
+        "current_windows_user".to_owned()
+    }
 }
 
 fn parse_config(bytes: &[u8]) -> io::Result<CleanupConfig> {
@@ -677,8 +805,11 @@ fn record_id(path: &str, identity: &FileIdentity) -> io::Result<String> {
 }
 
 fn record_name(name: &str) -> bool {
-    name.len() == 69 && name.ends_with(".json")
-        && name.as_bytes()[..64].iter().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    name.len() == 69
+        && name.ends_with(".json")
+        && name.as_bytes()[..64]
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
@@ -688,55 +819,97 @@ fn json_bytes(value: &impl Serialize) -> io::Result<Vec<u8>> {
 }
 
 fn now() -> io::Result<u64> {
-    Ok(SystemTime::now().duration_since(UNIX_EPOCH).map_err(io::Error::other)?.as_secs())
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs())
 }
 
 fn relative_path(path: &Path) -> io::Result<String> {
     let mut parts = Vec::new();
     for component in path.components() {
         let Component::Normal(part) = component else {
-            return Err(invalid("managed path must be relative without dot, parent or prefix components"));
+            return Err(invalid(
+                "managed path must be relative without dot, parent or prefix components",
+            ));
         };
-        let part = part.to_str().ok_or_else(|| invalid("managed path must be UTF-8"))?;
-        if part.is_empty() || part.contains(['/', '\\', '\0', ':']) || part.chars().any(char::is_control) {
+        let part = part
+            .to_str()
+            .ok_or_else(|| invalid("managed path must be UTF-8"))?;
+        if part.is_empty()
+            || part.contains(['/', '\\', '\0', ':'])
+            || part.chars().any(char::is_control)
+        {
             return Err(invalid("invalid managed path component"));
         }
         #[cfg(windows)]
         if part.ends_with(['.', ' ']) {
-            return Err(invalid("Windows managed paths cannot use trailing-dot or trailing-space aliases"));
+            return Err(invalid(
+                "Windows managed paths cannot use trailing-dot or trailing-space aliases",
+            ));
         }
         parts.push(part);
     }
     let path = parts.join("/");
-    if path.is_empty() || path.len() > 4096 { return Err(invalid("invalid managed path length")); }
+    if path.is_empty() || path.len() > 4096 {
+        return Err(invalid("invalid managed path length"));
+    }
     Ok(path)
 }
 
 fn protected_path(path: &str) -> bool {
     let path = Path::new(path);
-    if path == Path::new(".ssmcp") { return true; }
-    let Some(name) = path.strip_prefix(".ssmcp").ok().and_then(|path| path.components().next()) else {
+    if path == Path::new(".ssmcp") {
+        return true;
+    }
+    let Some(name) = path
+        .strip_prefix(".ssmcp")
+        .ok()
+        .and_then(|path| path.components().next())
+    else {
         return false;
     };
     let name = name.as_os_str().to_string_lossy().into_owned();
     #[cfg(windows)]
     let name = name.to_lowercase();
     if [
-        REGISTRY, CONFIG, "inputs", "webhooks.json", "skills",
-        "config", "configs", "history", "histories", "sessions", "conversations",
-        "credentials", "secrets", "auth", "auth.json", "tokens", "token.json",
-    ].contains(&name.as_str()) {
+        REGISTRY,
+        CONFIG,
+        "inputs",
+        "webhooks.json",
+        "skills",
+        "config",
+        "configs",
+        "history",
+        "histories",
+        "sessions",
+        "conversations",
+        "credentials",
+        "secrets",
+        "auth",
+        "auth.json",
+        "tokens",
+        "token.json",
+    ]
+    .contains(&name.as_str())
+    {
         return true;
     }
-    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
-        name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
-    })
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name == "lock" || name == ".lock" || name.ends_with(".lock") || name.ends_with(".pid")
+        })
 }
 
 fn label(value: &str) -> io::Result<()> {
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
-        Err(invalid("managed file labels must be nonempty, bounded text"))
-    } else { Ok(()) }
+        Err(invalid(
+            "managed file labels must be nonempty, bounded text",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn random_id() -> io::Result<String> {

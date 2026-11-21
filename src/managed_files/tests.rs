@@ -68,7 +68,8 @@ impl TestRoot {
         }
         let mut file = options.open(&path).expect("create a new fixture file");
         file.write_all(contents).expect("write fixture contents");
-        file.sync_all().expect("finish fixture bytes before registration");
+        file.sync_all()
+            .expect("finish fixture bytes before registration");
         // Closing the writer finalizes Windows last-write metadata as well.
         drop(file);
         File::open(path).expect("reopen the fully published fixture for registration")
@@ -91,10 +92,18 @@ fn register(
 ) -> u64 {
     let file = root.create(relative, contents);
     let registration = manager
-        .register_created(Path::new(relative), &file, category, "unit fixture", "unit owner")
+        .register_created(
+            Path::new(relative),
+            &file,
+            category,
+            "unit fixture",
+            "unit owner",
+        )
         .expect("register the exact newly created file");
     assert_eq!(registration.record().relative_path, relative);
-    let created = registration.record().created_at_unix
+    let created = registration
+        .record()
+        .created_at_unix
         .max(registration.record().identity.modified_at_unix);
     drop(registration);
     drop(file);
@@ -105,7 +114,9 @@ fn expire_immediately(manager: &ManagedFiles) {
     let mut config = manager.config().expect("read cleanup configuration");
     config.enabled = true;
     config.max_age_seconds = 0;
-    manager.set_config(&config).expect("set a deterministic immediate expiry");
+    manager
+        .set_config(&config)
+        .expect("set a deterministic immediate expiry");
 }
 
 #[test]
@@ -119,16 +130,22 @@ fn registered_temporary_files_expire_at_the_age_boundary_with_exact_byte_counts(
     config.max_age_seconds = 60;
     manager.set_config(&config).unwrap();
 
-    let before = manager.cleanup_at(false, "unit-age-before", created + 59).unwrap();
+    let before = manager
+        .cleanup_at(false, "unit-age-before", created + 59)
+        .unwrap();
     assert_eq!(before.removed_files, 0);
     assert_eq!(fs::read(root.join(relative)).unwrap(), bytes);
 
-    let expired = manager.cleanup_at(false, "unit-age-at", created + 60).unwrap();
+    let expired = manager
+        .cleanup_at(false, "unit-age-at", created + 60)
+        .unwrap();
     assert_eq!(expired.removed_files, 1);
     assert_eq!(expired.removed_bytes, bytes.len() as u64);
     assert!(expired.errors.is_empty());
     assert!(!root.join(relative).exists());
-    let repeated = manager.cleanup_at(false, "unit-age-repeat", created + 61).unwrap();
+    let repeated = manager
+        .cleanup_at(false, "unit-age-repeat", created + 61)
+        .unwrap();
     assert_eq!(repeated.removed_files, 0);
     assert_eq!(repeated.removed_bytes, 0);
 }
@@ -142,10 +159,15 @@ fn capacity_cleanup_counts_only_the_registered_temporary_bytes_it_actually_remov
         (".ssmcp/temporary/b.bin", b"bbbbb"),
         (".ssmcp/temporary/c.bin", b"ccc"),
     ];
-    let now = fixtures.iter().map(|(relative, bytes)| {
-        register(&manager, &root, relative, bytes, Category::Temporary)
-    }).max().unwrap();
-    drop(root.create(".ssmcp/temporary/unregistered.bin", b"unregistered bytes stay put"));
+    let now = fixtures
+        .iter()
+        .map(|(relative, bytes)| register(&manager, &root, relative, bytes, Category::Temporary))
+        .max()
+        .unwrap();
+    drop(root.create(
+        ".ssmcp/temporary/unregistered.bin",
+        b"unregistered bytes stay put",
+    ));
     let mut config = manager.config().unwrap();
     config.max_age_seconds = 86_400;
     config.max_total_bytes = 8;
@@ -169,8 +191,10 @@ fn capacity_cleanup_counts_only_the_registered_temporary_bytes_it_actually_remov
     assert_eq!(summary.removed_files, deleted_files);
     assert_eq!(summary.removed_bytes, deleted_bytes);
     assert!(summary.errors.is_empty());
-    assert_eq!(fs::read(root.join(".ssmcp/temporary/unregistered.bin")).unwrap(),
-               b"unregistered bytes stay put");
+    assert_eq!(
+        fs::read(root.join(".ssmcp/temporary/unregistered.bin")).unwrap(),
+        b"unregistered bytes stay put"
+    );
 }
 
 #[test]
@@ -182,10 +206,19 @@ fn registration_and_reader_leases_protect_a_file_from_another_instance() {
     let relative = Path::new(".ssmcp/temporary/active.bin");
     let file = root.create(relative.to_str().unwrap(), b"leased bytes");
     let registration = first
-        .register_created(relative, &file, Category::Temporary, "unit fixture", "original owner")
+        .register_created(
+            relative,
+            &file,
+            Category::Temporary,
+            "unit fixture",
+            "original owner",
+        )
         .unwrap();
-    let now = registration.record().created_at_unix
-        .max(registration.record().identity.modified_at_unix) + 1;
+    let now = registration
+        .record()
+        .created_at_unix
+        .max(registration.record().identity.modified_at_unix)
+        + 1;
     drop(file);
     let held = second.cleanup_at(false, "unit-registration", now).unwrap();
     assert_eq!(held.removed_files, 0);
@@ -218,20 +251,36 @@ fn persistent_categories_and_unknown_files_are_protected_even_under_zero_age_pol
     ];
     let mut now = 0_u64;
     for (relative, category) in &protected {
-        now = now.max(register(&manager, &root, relative, b"keep registered", *category));
+        now = now.max(register(
+            &manager,
+            &root,
+            relative,
+            b"keep registered",
+            *category,
+        ));
     }
-    now = now.max(register(&manager, &root, ".ssmcp/temporary/disposable.bin",
-                           b"delete temporary", Category::Temporary));
+    now = now.max(register(
+        &manager,
+        &root,
+        ".ssmcp/temporary/disposable.bin",
+        b"delete temporary",
+        Category::Temporary,
+    ));
     drop(root.create(".ssmcp/temporary/unknown.bin", b"keep unknown"));
     expire_immediately(&manager);
-    let summary = manager.cleanup_at(false, "unit-protected", now + 1).unwrap();
+    let summary = manager
+        .cleanup_at(false, "unit-protected", now + 1)
+        .unwrap();
     assert_eq!(summary.removed_files, 1);
     assert_eq!(summary.removed_bytes, b"delete temporary".len() as u64);
     assert_eq!(summary.kept_protected, protected.len() as u64);
     for (relative, _) in protected {
         assert_eq!(fs::read(root.join(relative)).unwrap(), b"keep registered");
     }
-    assert_eq!(fs::read(root.join(".ssmcp/temporary/unknown.bin")).unwrap(), b"keep unknown");
+    assert_eq!(
+        fs::read(root.join(".ssmcp/temporary/unknown.bin")).unwrap(),
+        b"keep unknown"
+    );
 }
 
 #[test]
@@ -240,8 +289,13 @@ fn dry_run_disabled_policy_and_component_rules_cannot_delete_an_unselected_file(
     let manager = ManagedFiles::open(root.path()).unwrap();
     let selected = ".ssmcp/temporary/selected/item.bin";
     let sibling = ".ssmcp/temporary/selected-other/item.bin";
-    let now = register(&manager, &root, selected, b"selected", Category::Temporary)
-        .max(register(&manager, &root, sibling, b"sibling", Category::Temporary)) + 1;
+    let now = register(&manager, &root, selected, b"selected", Category::Temporary).max(register(
+        &manager,
+        &root,
+        sibling,
+        b"sibling",
+        Category::Temporary,
+    )) + 1;
     let mut config = manager.config().unwrap();
     config.max_age_seconds = 86_400;
     config.rules = vec![CleanupRule {
@@ -260,7 +314,13 @@ fn dry_run_disabled_policy_and_component_rules_cannot_delete_an_unselected_file(
 
     config.enabled = false;
     manager.set_config(&config).unwrap();
-    assert_eq!(manager.cleanup_at(false, "unit-disabled", now).unwrap().removed_files, 0);
+    assert_eq!(
+        manager
+            .cleanup_at(false, "unit-disabled", now)
+            .unwrap()
+            .removed_files,
+        0
+    );
     assert_eq!(fs::read(root.join(selected)).unwrap(), b"selected");
     config.enabled = true;
     manager.set_config(&config).unwrap();
@@ -277,9 +337,17 @@ fn dry_run_disabled_policy_and_component_rules_cannot_delete_an_unselected_file(
         assert!(manager.set_config(&invalid).is_err());
         assert_eq!(manager.config().unwrap(), previous);
     }
-    fs::write(root.join(".ssmcp").join(CONFIG), b"{ malformed configuration").unwrap();
+    fs::write(
+        root.join(".ssmcp").join(CONFIG),
+        b"{ malformed configuration",
+    )
+    .unwrap();
     assert!(manager.config().is_err());
-    assert!(manager.cleanup_at(false, "unit-malformed-config", now + 86_400).is_err());
+    assert!(
+        manager
+            .cleanup_at(false, "unit-malformed-config", now + 86_400)
+            .is_err()
+    );
     assert_eq!(fs::read(root.join(sibling)).unwrap(), b"sibling");
 }
 
@@ -290,26 +358,59 @@ fn replaced_files_parent_directories_and_added_hard_links_are_never_deleted() {
     let replaced = ".ssmcp/temporary/replaced.bin";
     let nested = ".ssmcp/temporary/parent/nested.bin";
     let linked = ".ssmcp/temporary/linked.bin";
-    let now = [replaced, nested, linked].into_iter().map(|relative| {
-        register(&manager, &root, relative, b"original bytes", Category::Temporary)
-    }).max().unwrap() + 1;
+    let now = [replaced, nested, linked]
+        .into_iter()
+        .map(|relative| {
+            register(
+                &manager,
+                &root,
+                relative,
+                b"original bytes",
+                Category::Temporary,
+            )
+        })
+        .max()
+        .unwrap()
+        + 1;
     let nested_identity = FileIdentity::from_file(&File::open(root.join(nested)).unwrap()).unwrap();
-    fs::rename(root.join(replaced), root.join(".ssmcp/temporary/replaced-original.bin")).unwrap();
+    fs::rename(
+        root.join(replaced),
+        root.join(".ssmcp/temporary/replaced-original.bin"),
+    )
+    .unwrap();
     drop(root.create(replaced, b"original bytes"));
-    fs::rename(root.join(".ssmcp/temporary/parent"),
-               root.join(".ssmcp/temporary/parent-original")).unwrap();
+    fs::rename(
+        root.join(".ssmcp/temporary/parent"),
+        root.join(".ssmcp/temporary/parent-original"),
+    )
+    .unwrap();
     private_directory(&root.join(".ssmcp/temporary/parent")).unwrap();
-    fs::rename(root.join(".ssmcp/temporary/parent-original/nested.bin"), root.join(nested)).unwrap();
-    assert_eq!(FileIdentity::from_file(&File::open(root.join(nested)).unwrap()).unwrap(),
-               nested_identity, "this case must change the parent, not the recorded file identity");
-    fs::hard_link(root.join(linked), root.join(".ssmcp/temporary/second-link.bin")).unwrap();
+    fs::rename(
+        root.join(".ssmcp/temporary/parent-original/nested.bin"),
+        root.join(nested),
+    )
+    .unwrap();
+    assert_eq!(
+        FileIdentity::from_file(&File::open(root.join(nested)).unwrap()).unwrap(),
+        nested_identity,
+        "this case must change the parent, not the recorded file identity"
+    );
+    fs::hard_link(
+        root.join(linked),
+        root.join(".ssmcp/temporary/second-link.bin"),
+    )
+    .unwrap();
     expire_immediately(&manager);
     let summary = manager.cleanup_at(false, "unit-identity", now).unwrap();
     assert_eq!(summary.removed_files, 0);
     assert_eq!(summary.removed_bytes, 0);
     assert!(summary.kept_changed >= 3);
-    for relative in [replaced, linked, ".ssmcp/temporary/replaced-original.bin",
-                     ".ssmcp/temporary/second-link.bin"] {
+    for relative in [
+        replaced,
+        linked,
+        ".ssmcp/temporary/replaced-original.bin",
+        ".ssmcp/temporary/second-link.bin",
+    ] {
         assert_eq!(fs::read(root.join(relative)).unwrap(), b"original bytes");
     }
     assert_eq!(fs::read(root.join(nested)).unwrap(), b"original bytes");
@@ -325,13 +426,25 @@ fn symlink_replacements_of_a_file_or_parent_never_reach_their_targets() {
     let manager = ManagedFiles::open(root.path()).unwrap();
     let leaf = ".ssmcp/temporary/leaf.bin";
     let nested = ".ssmcp/temporary/parent/nested.bin";
-    let now = register(&manager, &root, leaf, b"original leaf", Category::Temporary)
-        .max(register(&manager, &root, nested, b"original nested", Category::Temporary)) + 1;
-    fs::rename(root.join(leaf), root.join(".ssmcp/temporary/leaf-original.bin")).unwrap();
+    let now = register(&manager, &root, leaf, b"original leaf", Category::Temporary).max(register(
+        &manager,
+        &root,
+        nested,
+        b"original nested",
+        Category::Temporary,
+    )) + 1;
+    fs::rename(
+        root.join(leaf),
+        root.join(".ssmcp/temporary/leaf-original.bin"),
+    )
+    .unwrap();
     drop(root.create("external/target.bin", b"external leaf"));
     symlink(root.join("external/target.bin"), root.join(leaf)).unwrap();
-    fs::rename(root.join(".ssmcp/temporary/parent"),
-               root.join(".ssmcp/temporary/parent-original")).unwrap();
+    fs::rename(
+        root.join(".ssmcp/temporary/parent"),
+        root.join(".ssmcp/temporary/parent-original"),
+    )
+    .unwrap();
     drop(root.create("external/nested.bin", b"external nested"));
     symlink(root.join("external"), root.join(".ssmcp/temporary/parent")).unwrap();
     expire_immediately(&manager);
@@ -339,12 +452,34 @@ fn symlink_replacements_of_a_file_or_parent_never_reach_their_targets() {
     assert_eq!(summary.removed_files, 0);
     assert_eq!(summary.removed_bytes, 0);
     assert!(summary.kept_changed >= 2);
-    assert!(fs::symlink_metadata(root.join(leaf)).unwrap().file_type().is_symlink());
-    assert!(fs::symlink_metadata(root.join(".ssmcp/temporary/parent")).unwrap().file_type().is_symlink());
-    assert_eq!(fs::read(root.join("external/target.bin")).unwrap(), b"external leaf");
-    assert_eq!(fs::read(root.join("external/nested.bin")).unwrap(), b"external nested");
-    assert_eq!(fs::read(root.join(".ssmcp/temporary/leaf-original.bin")).unwrap(), b"original leaf");
-    assert_eq!(fs::read(root.join(".ssmcp/temporary/parent-original/nested.bin")).unwrap(), b"original nested");
+    assert!(
+        fs::symlink_metadata(root.join(leaf))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        fs::symlink_metadata(root.join(".ssmcp/temporary/parent"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(root.join("external/target.bin")).unwrap(),
+        b"external leaf"
+    );
+    assert_eq!(
+        fs::read(root.join("external/nested.bin")).unwrap(),
+        b"external nested"
+    );
+    assert_eq!(
+        fs::read(root.join(".ssmcp/temporary/leaf-original.bin")).unwrap(),
+        b"original leaf"
+    );
+    assert_eq!(
+        fs::read(root.join(".ssmcp/temporary/parent-original/nested.bin")).unwrap(),
+        b"original nested"
+    );
 }
 
 #[test]
@@ -352,25 +487,36 @@ fn concurrent_cleanup_instances_remove_and_count_each_file_only_once() {
     let root = TestRoot::new("competing");
     let manager = ManagedFiles::open(root.path()).unwrap();
     let relative = ".ssmcp/temporary/once.bin";
-    let now = register(&manager, &root, relative, b"one removal", Category::Temporary) + 1;
+    let now = register(
+        &manager,
+        &root,
+        relative,
+        b"one removal",
+        Category::Temporary,
+    ) + 1;
     expire_immediately(&manager);
     let competitors = [
         ManagedFiles::open(root.path()).unwrap(),
         ManagedFiles::open(root.path()).unwrap(),
     ];
     let barrier = Arc::new(Barrier::new(3));
-    let workers: Vec<_> = competitors.into_iter().map(|manager| {
-        let barrier = Arc::clone(&barrier);
-        std::thread::spawn(move || {
-            barrier.wait();
-            manager.cleanup_at(false, "unit-competing", now)
+    let workers: Vec<_> = competitors
+        .into_iter()
+        .map(|manager| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                manager.cleanup_at(false, "unit-competing", now)
+            })
         })
-    }).collect();
+        .collect();
     barrier.wait();
     let mut removed_files = 0_u64;
     let mut removed_bytes = 0_u64;
     for worker in workers {
-        let summary = worker.join().expect("cleanup thread must not panic")
+        let summary = worker
+            .join()
+            .expect("cleanup thread must not panic")
             .expect("a contending instance returns a busy summary, not an error");
         assert!(summary.errors.is_empty());
         if summary.busy {
@@ -392,14 +538,29 @@ fn creation_hook_rejects_a_replaced_path_even_when_its_bytes_are_unchanged() {
     let file = root.create(relative, b"same bytes");
     let identity = FileIdentity::from_file(&file).unwrap();
     drop(file);
-    fs::rename(root.join(relative), root.join(".ssmcp/temporary/hook-original.bin")).unwrap();
+    fs::rename(
+        root.join(relative),
+        root.join(".ssmcp/temporary/hook-original.bin"),
+    )
+    .unwrap();
     drop(root.create(relative, b"same bytes"));
-    assert!(record_created(root.path(), Path::new(relative), Category::Temporary,
-                           "creation-hook fixture", &identity).is_err());
+    assert!(
+        record_created(
+            root.path(),
+            Path::new(relative),
+            Category::Temporary,
+            "creation-hook fixture",
+            &identity
+        )
+        .is_err()
+    );
     let summary = cleanup(root.path(), false, "unit-creation-hook").unwrap();
     assert_eq!(summary.removed_files, 0);
     assert_eq!(fs::read(root.join(relative)).unwrap(), b"same bytes");
-    assert_eq!(fs::read(root.join(".ssmcp/temporary/hook-original.bin")).unwrap(), b"same bytes");
+    assert_eq!(
+        fs::read(root.join(".ssmcp/temporary/hook-original.bin")).unwrap(),
+        b"same bytes"
+    );
 }
 
 #[test]
@@ -409,6 +570,9 @@ fn cleanup_without_a_registry_preserves_unknown_files_and_does_not_create_metada
     let summary = cleanup(root.path(), false, "unit-no-registry").unwrap();
     assert_eq!(summary.removed_files, 0);
     assert_eq!(summary.removed_bytes, 0);
-    assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"user-owned notes");
+    assert_eq!(
+        fs::read(root.join("notes.txt")).unwrap(),
+        b"user-owned notes"
+    );
     assert!(!root.join(".ssmcp").exists());
 }

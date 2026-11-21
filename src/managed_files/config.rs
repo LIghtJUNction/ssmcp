@@ -44,10 +44,14 @@ impl CleanupConfig {
                 || prefix == ".ssmcp"
                 || super::protected_path(&prefix)
             {
-                return Err(invalid("cleanup rule must name an unprotected path inside .ssmcp"));
+                return Err(invalid(
+                    "cleanup rule must name an unprotected path inside .ssmcp",
+                ));
             }
             if rule.category != Category::Temporary {
-                return Err(invalid("cleanup rules may only select registered temporary files"));
+                return Err(invalid(
+                    "cleanup rules may only select registered temporary files",
+                ));
             }
         }
         Ok(())

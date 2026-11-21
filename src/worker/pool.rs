@@ -324,7 +324,10 @@ mod tests {
         };
         let key = actor_context_key(&actor).unwrap();
         assert_eq!(key.len(), 64);
-        assert!(key.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert!(
+            key.bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
         assert_eq!(key, actor_context_key(&actor.clone()).unwrap());
 
         // These two identities collided under colon-separated concatenation.

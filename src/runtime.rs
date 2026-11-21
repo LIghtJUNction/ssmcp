@@ -408,7 +408,9 @@ impl Runtime {
                     warning
                 }
                 Ok(Err(error)) => Some(format!("Managed-file {trigger} cleanup failed: {error}")),
-                Err(error) => Some(format!("Managed-file {trigger} cleanup task failed: {error}")),
+                Err(error) => Some(format!(
+                    "Managed-file {trigger} cleanup task failed: {error}"
+                )),
             };
             if let Some(warning) = warning {
                 audit.push(json!({

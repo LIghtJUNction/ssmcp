@@ -20,9 +20,9 @@ pub(crate) mod http_client;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub(crate) mod local_socket;
+pub mod managed_files;
 #[cfg(target_os = "linux")]
 pub mod management;
-pub mod managed_files;
 pub(crate) mod memory;
 #[cfg(target_os = "linux")]
 pub(crate) mod messaging;
