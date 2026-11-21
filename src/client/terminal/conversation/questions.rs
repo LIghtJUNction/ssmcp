@@ -493,6 +493,8 @@ impl State {
                     editor.down(width);
                 }
             }
+            Key::Back if !self.conversation.detail => self.canvas_move(-1),
+            Key::Open if !self.conversation.detail => self.canvas_move(1),
             Key::Back if content && finish => self.question_choose(FinishChoice::No),
             Key::Open if content && finish => self.question_choose(FinishChoice::Yes),
             Key::Back if content => self.question_escape(),
@@ -590,7 +592,7 @@ impl State {
 
     pub(super) fn question_navigation_hint(&self) -> &'static str {
         if !self.conversation.detail {
-            "↑↓ select · Enter details · Shift+↑ pending · Esc back"
+            "↑↓ select · Enter details · ←/→ panels · Shift+↑ pending · Esc back"
         } else if self
             .question_current()
             .is_some_and(|view| view.kind == QuestionKind::Finish && editable(&view))
