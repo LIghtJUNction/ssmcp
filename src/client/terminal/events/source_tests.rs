@@ -484,7 +484,10 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
             b.display(),
         );
         let b_id = view.events.back().unwrap().id;
-        assert_ne!(summary_id, b_id, "the correlated call is not the back event");
+        assert_ne!(
+            summary_id, b_id,
+            "the correlated call is not the back event"
+        );
         view.follow = false;
         view.selected = Some(b_id);
         let old_scroll = view.scroll;
@@ -505,8 +508,16 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
         }
         view.summary_call_finished(&a, true);
 
-        let images = view.events.iter().filter(|event| event.image.is_some()).collect::<Vec<_>>();
-        assert_eq!(images.len(), 2, "two images from one call retain two previews");
+        let images = view
+            .events
+            .iter()
+            .filter(|event| event.image.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            images.len(),
+            2,
+            "two images from one call retain two previews"
+        );
         assert_ne!(images[0].id, images[1].id);
         for (event, label) in images.iter().zip(["first", "second"]) {
             assert!(event.text.contains(label));
@@ -517,11 +528,21 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
             assert!(event.tool_group_id.is_none());
         }
         let image_ids = images.iter().map(|event| event.id).collect::<Vec<_>>();
-        let summary = view.events.iter().find(|event| event.id == summary_id).unwrap();
-        assert!(summary.image.is_none(), "image payloads never replace the logical call row");
+        let summary = view
+            .events
+            .iter()
+            .find(|event| event.id == summary_id)
+            .unwrap();
+        assert!(
+            summary.image.is_none(),
+            "image payloads never replace the logical call row"
+        );
         assert!(!summary.text.contains("[IMAGE]"));
         assert_eq!(summary.meta.status, Some(Status::Done));
-        assert_eq!(view.tool_summary_list(&a).unwrap()["groups"][0]["call_count"], 1);
+        assert_eq!(
+            view.tool_summary_list(&a).unwrap()["groups"][0]["call_count"],
+            1
+        );
         assert_eq!(view.visible_ids(), vec![b_id]);
         assert_eq!(view.selected, Some(b_id));
         assert_eq!(view.scroll, old_scroll);
@@ -535,7 +556,8 @@ async fn native_images_keep_distinct_cards_and_call_ownership_after_summary_corr
         assert!(!visible.contains(&b_id));
         view.set_history_owner(Some(b_history));
         assert_eq!(view.visible_ids(), vec![b_id]);
-    }).await;
+    })
+    .await;
     runtime.shutdown().await;
 }
 

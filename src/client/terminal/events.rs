@@ -1251,7 +1251,8 @@ impl EventView {
             // Source is display metadata, not command output. Keep it separate
             // so transcript bytes, summary parsing and lifecycle correlation
             // retain their existing meaning.
-            let _ = self.ingest_inner_with_source(bytes, meta, Some(CommandSource::new(source)), true);
+            let _ =
+                self.ingest_inner_with_source(bytes, meta, Some(CommandSource::new(source)), true);
         } else {
             self.ingest_inner(bytes, meta);
         }
