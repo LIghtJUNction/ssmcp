@@ -1,0 +1,54 @@
+{
+  "schema": "ssmcp.git-latest-dependency-policy-observation.v1",
+  "observation_recorded_utc": "2026-11-21 06:56:41 UTC",
+  "development_policy": "Internal projects depend directly on current upstream Git default branches; record actual resolved commits in the build lockfile.",
+  "external_release_policy": "Use version numbers for external releases.",
+  "source_of_policy": "Confirmed current user instructions delivered through the native client and complete user-history records, with private request and account identifiers omitted.",
+  "supersedes_old_snapshot_only_after_its_time": {
+    "file": "zuse-update-source-observation.json",
+    "observation_utc": "2026-11-21T06:40:59Z",
+    "head": "a1bb8fd2cbce0a9d85134999883c578358065242",
+    "preserve_as_historical": true
+  },
+  "new_zuse": {
+    "head": "830fcefd2277cbba46536c67d206f29058ba7fb3",
+    "tree": "3c110034f10ba5f35b0e18ac6b890d533121a473",
+    "parents": [
+      "687c6349cffb45947bce5ae922f44523acca9465"
+    ],
+    "package": "zuse-computer",
+    "version": "0.3.0",
+    "pr2_merged_at": "2026-11-21T06:46:06Z",
+    "pr2_merge_commit": "fe47f963e604c13a2646baf5d391df5a7c69fc36",
+    "manifest_internal_dependencies": "Git sources without registry version selectors",
+    "manifest_url": "https://github.com/LIghtJUNction/zuse/blob/830fcefd2277cbba46536c67d206f29058ba7fb3/Cargo.toml",
+    "observed_main_differs_from_pr2_merge_commit": true
+  },
+  "registry_observation": {
+    "url": "https://crates.io/api/v1/crates/zuse-computer/0.3.0",
+    "http_status": 404,
+    "body": "{\"errors\":[{\"detail\":\"crate `zuse-computer` does not have a version `0.3.0`\"}]}",
+    "read_exit_code": 0,
+    "read_stdout_eof": true,
+    "read_stderr_eof": true,
+    "scope": "Read-only point-in-time registry metadata; no upload or publication attempted."
+  },
+  "existing_ssmcp_release_source": {
+    "commit": "3f678a7fca7ea64d220454f1723189e43d3b5546",
+    "workflow_file": ".github/workflows/release.yml",
+    "verify_crate_step_present": true,
+    "publish_crates_job_present": true,
+    "status": "Existing publication implementation must be reconciled with the latest development dependency and versioned external-release requirements; no changed publication contract is inferred yet."
+  },
+  "implementation": {
+    "dependency_update_completed": false,
+    "new_candidate_tests": null,
+    "new_release_contract_confirmed": false,
+    "source_owner_preparing_successor": true
+  },
+  "boundaries": [
+    "GitHub source availability, resolved build inputs, and external registry publication are distinct recorded states.",
+    "The old a1bb observation was accurate at its recorded time and is not rewritten.",
+    "No source edit, Cargo run, product test, release dispatch, installation or native model start was performed by this observation."
+  ]
+}

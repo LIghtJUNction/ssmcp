@@ -46,7 +46,13 @@ V 阶段的完整结果同时保存在 [V 阶段报告](current-iteration-V-r13-
 
 [官方字段说明](https://developers.openai.com/plugins/reference#_meta-fields-the-client-provides) 将两者定义为匿名用户及会话标识。因此本轮将这些标识与真实网页地址分别处理，只打开用户明确保存的实际 URL。命令、允许的网址格式和按会话保存的行为已写入[固定 C2 使用说明](https://github.com/LIghtJUNction/ssmcp/blob/cb3d51c90e82a2d116c77782f9da146b98744af2/docs/commands.md)，运行表现待后继候选验收。
 
-同时核对了 zuse 更新要求：在 **2026-11-21 06:40:59 UTC** 的实际观察中，C 的 `crates/zuse`、Cargo.lock 锁定 revision 和上游默认分支 main 均为 **`a1bb8fd2cbce0a9d85134999883c578358065242`**，版本为 0.2.2。该时刻没有相对当前 pin 的新默认分支提交可升级；后继候选固定时继续按实际目标核对，不能把这个观察视为已经实施依赖更新或完成兼容性验收。[依赖来源观察](zuse-update-source-observation.json)
+zuse 的 **2026-11-21 06:40:59 UTC** 观察保留为历史快照：当时 C 的 gitlink、Cargo.lock 和上游默认分支均为 `a1bb8fd`／0.2.2。随后上游于 **06:46:06 UTC** 合并 PR #2，新的默认分支实际读到 **`830fcefd2277cbba46536c67d206f29058ba7fb3`／0.3.0**；下一轮依赖更新以新的实际来源为准。[较早观察](zuse-update-source-observation.json) · [新的来源与政策记录](git-latest-dependency-policy-public-facts.json)
+
+## 内部依赖使用 Git 最新来源，对外发行使用版本号
+
+用户已再次明确：项目之间直接依赖 Git 最新提交，对外发布时再使用版本号。因此，内部依赖声明指向各自 Git 默认分支，锁文件记录本轮实际解析到的提交；它负责复现这次构建，不用旧的 registry 版本选择器限制开发依赖。依赖声明、实际锁定结果和对外发布流程由原作者在同一后继候选中对齐。
+
+新的 zuse 0.3.0 源码已可从 Git 取得，其内部依赖声明也使用 Git 来源。对 `crates.io` 的该版本 API 实际读取为 HTTP 404，表示这个时刻 registry 尚无该版本；这与 Git 源码可用是两项不同事实。现有 SSMCP 发布工作流仍有 crate 校验及发布步骤，相应对齐尚在准备，尚未声明新的发布合同已经实现。[实际来源、查询和执行边界](git-latest-dependency-policy-public-facts.json)
 
 ## Linux 多用户需求：先核对实际执行身份
 
@@ -61,6 +67,8 @@ V 阶段的完整结果同时保存在 [V 阶段报告](current-iteration-V-r13-
 | 本地状态与凭据 | 使用各自的 HOME/XDG 状态、配置和私有目录，按工作区区分历史与本地记忆 | 切换用户后的实际环境；原日志的本地记忆错误尾部本身已截短 |
 
 Linux 的有效 UID 是进程当前所属用户的数值身份。临时资源按它分开，可以避免第二个用户碰到第一个用户拥有的共享私有目录。现有源码已采用这一方式；日志中的旧路径本身不能证明当前 W 缺少该处理，也不能证明用户运行的是哪个旧版本。
+
+现有现场记录还确认了一个系统程序候选：`/usr/bin/ssmcp` 的 ELF 字节与包管理器记录相符，登记包版本为 `0.9.1.r377.gee05244-1`。但报错用户当时实际使用的 PATH、wrapper、会话固定入口及版本仍未取得，不能把这个候选直接认定为报错程序。原工作区位于另一用户的私有 HOME 内，其目录模式为 0700 且未返回 access ACL，支持普通用户无法遍历该路径的判断；观察者无法读取另一用户私有 HOME 则是正常隔离，不能据此推断该用户自己的 HOME 已损坏。[现场只读观察及推断范围](linux-multiuser-runtime-observation-public-facts.json)
 
 仓库已有 `scripts/test_multi_user_runtime.py`，覆盖两个 UID 的输出隔离和继承控制终端场景，并对应两个显式 ignored worker。本次只读确认了这些代码和覆盖边界，没有执行该驱动或更改用户目录权限。后续先核实实际运行身份，再记录针对性执行结果。这个操作系统用户问题与下面的 HTTP 跨 subject 断言分别调查。
 
@@ -205,12 +213,12 @@ V 的 `message_references` 报告记录 53 项检查及 8 份 VT 帧引用；53 
 
 ## 发布验证准备
 
-[manual-main 核验器](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound) 已交付三份代码及相关说明、差异和静态审阅记录，共九个文件。其代码完成语法和独立静态审阅，尚未运行；正式产品提交 S、main 工作流提交 P、运行及原始 dispatch 回执仍待实际绑定。
+[manual-main 核验器](https://github.com/LIghtJUNction/ssmcp/tree/2257fb1d235bba59e8a0d1747a4f4afc6348bad3/docs/reports/command-await-delivery-20261120/publication-verifier-manual-main-unbound) 已交付三份代码及相关说明、差异和静态审阅记录，共九个文件。其代码完成语法和独立静态审阅，尚未运行；正式产品提交 S、main 工作流提交 P、运行及原始 dispatch 回执仍待实际绑定。 用户现已明确内部依赖的 Git 来源规则，原静态版本中的 registry 发布假设需按实际后继工作流重新对齐；当前没有把旧版本当作新发布流程已经验证的证明。
 
 S 表示发布包应包含的产品源码，P 表示本次 main 上使用的工作流。核验器会把原始请求、执行回执、各 job 实际检出的源码，以及 Actions 和公开发行文件连接起来。当前已测试 W、合并后 main 以及最终发布源码的身份会分别记录。此次 squash 已确认改变祖先关系；最终 S/P 按实际提交绑定，并保留原核验条件。
 
 ## 接下来的工作
 
-先完成后继候选的账户场景同步和多用户诊断修正，固定包含新增命令的源码后，按原流程执行构建、真实进程、完整界面与 P1 验收。账户兼容首轮失败和一次未复现的诊断结果继续保留。同时核实 Linux 多用户报错程序的实际入口、版本与环境，并记录现有针对性用例的运行结果。正式发布按最终实际候选、标签、main 工作流和公开产物建立对应关系，继续同步本报告及原 Google 文档。
+先完成后继候选的账户场景同步、多用户诊断修正以及 Git 依赖和版本发行规则对齐，固定包含新增命令的源码后，按原流程执行构建、真实进程、完整界面与 P1 验收。账户兼容首轮失败和一次未复现的诊断结果继续保留。同时核实 Linux 多用户报错程序的实际入口、版本与环境，并记录现有针对性用例的运行结果。正式发布按最终实际候选、标签、main 工作流和公开产物建立对应关系，继续同步本报告及原 Google 文档。
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit) · [更早的完整历史](https://github.com/LIghtJUNction/ssmcp/blob/7cc6e79e85f134cf62993089d31969d06050e3bd/docs/reports/command-await-delivery-20261120/README.md)
