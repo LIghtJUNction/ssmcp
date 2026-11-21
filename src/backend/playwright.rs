@@ -24,6 +24,15 @@ pub struct Playwright {
     server: Value,
     next_progress: AtomicU64,
     background: bool,
+    shutdown: tokio::sync::OnceCell<()>,
+}
+
+/// These two native routes inspect cached peer state without invoking the extension.
+pub(crate) fn requires_computer_use(name: &str) -> bool {
+    !matches!(
+        name,
+        "ssmcp.playwright.events" | "ssmcp.playwright.requests"
+    )
 }
 
 /// An operator may point at a previously installed CLI entry. Never run npx,
@@ -128,6 +137,7 @@ async fn background_supported(path: &Path) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::computer::host_control::Permit::check_current()?;
     let mut process = super::process::Managed::spawn(&mut command)
         .map_err(|e| format!("Playwright background capability check: {e}"))?;
     let mut stdout = process
@@ -158,7 +168,7 @@ async fn background_supported(path: &Path) -> Result<(), String> {
             return Err(format!("Playwright --help failed ({status})"));
         }
         if !help_has_background(&out) && !help_has_background(&err) {
-            return Err("Installed Playwright MCP does not support --background; run ssmcp setup browser --install to install a version with background control. Foreground fallback is disabled; set browser.background=false only when foreground control is intended.".to_owned());
+            return Err("Installed Playwright MCP does not support --background; run ssmcp setup browser --install to install a version that supports background tabs, or explicitly choose the provider's default presentation with browser.background=false.".to_owned());
         }
         Ok(())
     }).await.map_err(|_| "Playwright background capability check timed out".to_owned()).and_then(|v| v);
@@ -191,6 +201,7 @@ impl Playwright {
         if background {
             command.arg("--background");
         }
+        crate::computer::host_control::Permit::check_current()?;
         let peer = Peer::spawn_with_output_and_audit(
             command,
             "playwright",
@@ -232,6 +243,7 @@ impl Playwright {
                 server,
                 next_progress: AtomicU64::new(1),
                 background,
+                shutdown: tokio::sync::OnceCell::new(),
             })),
             Err(error) => {
                 peer.shutdown().await;
@@ -292,6 +304,9 @@ impl Playwright {
     }
 
     pub async fn call(&self, name: &str, arguments: Value) -> Result<Value, String> {
+        if requires_computer_use(name) {
+            crate::computer::host_control::Permit::check_current()?;
+        }
         match name {
             "ssmcp.playwright.events" => {
                 Ok(super::result(self.peer.events().read(arguments).await?))
@@ -319,14 +334,19 @@ impl Playwright {
         json!({"scope":"native Playwright MCP tools", "browser_mode":"existing_browser_extension",
             "browser_connection":"on_demand_with_native_extension_approval",
             "background":self.background,"input_scope":"browser_target","moves_system_pointer":false,
-            "focus_policy":if self.background {"background_after_native_pairing"} else {"explicit_foreground"},
-            "pairing_note":"Initial extension approval may open a foreground page; background mode does not bypass native approval.",
+            "presentation":if self.background {"background_tabs"} else {"provider_default"},
+            "pairing_note":"Initial extension approval may open a visible page. Both presentations require Computer Use On and native approval.",
             "serverInfo":self.server.get("serverInfo"),"protocolVersion":self.server["protocolVersion"],
             "browser_control":"not_checked_by_discovery"})
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn shutdown_complete_for_test(&self) -> bool {
+        self.shutdown.get().is_some()
+    }
+
     pub async fn shutdown(&self) {
-        self.peer.shutdown().await;
+        self.shutdown.get_or_init(|| self.peer.shutdown()).await;
     }
 }
 
@@ -336,6 +356,16 @@ fn control_tools() -> Vec<Value> {
         json!({"name":"ssmcp.playwright.requests","description":"List pending native server requests without approving them. Browser extension approval remains in the extension UI.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false}}),
         json!({"name":"ssmcp.playwright.respond","description":"Respond to one reviewed pending native MCP request by its exact id. This does not replace the browser extension's connection approval.","inputSchema":{"type":"object","properties":{"id":{"type":["string","integer"]},"result":{},"error":{"type":"object","properties":{"code":{"type":"integer"},"message":{"type":"string"},"data":{}},"required":["code","message"]}},"required":["id"],"additionalProperties":false}}),
     ]
+}
+
+#[cfg(all(test, unix))]
+pub(crate) async fn fixture_peer(script: &str) -> Arc<Playwright> {
+    let mut command = Command::new("python3");
+    command.args(["-u", "-c", script]);
+    let peer = Peer::spawn(command, "playwright-fixture", Dialect::JsonRpc)
+        .await
+        .unwrap();
+    Playwright::initialize(peer, true).await.unwrap()
 }
 
 #[cfg(all(test, unix))]
@@ -404,15 +434,6 @@ for line in sys.stdin:
         bridge.shutdown().await;
     }
 
-    async fn fixture(script: &str) -> Arc<Playwright> {
-        let mut command = Command::new("python3");
-        command.args(["-u", "-c", script]);
-        let peer = Peer::spawn(command, "playwright-fixture", Dialect::JsonRpc)
-            .await
-            .unwrap();
-        Playwright::initialize(peer, true).await.unwrap()
-    }
-
     #[tokio::test]
     async fn discovery_replaces_changed_tools_and_rejects_repeated_cursors() {
         let script = r#"
@@ -429,7 +450,7 @@ for line in sys.stdin:
  else: out={}
  print(json.dumps({'jsonrpc':'2.0','id':ident,'result':out}),flush=True)
 "#;
-        let bridge = fixture(script).await;
+        let bridge = fixture_peer(script).await;
         let first = bridge.tools().await.unwrap();
         let second = bridge.tools().await.unwrap();
         assert!(first.iter().any(|tool| tool["name"] == "playwright.before"));
@@ -448,7 +469,7 @@ for line in sys.stdin:
             "out={'tools':[{'name':name,'inputSchema':{'type':'object'},'_native_revision':revision}]}",
             "out={'tools':[], 'nextCursor':'same'}",
         );
-        let bridge = fixture(&repeated).await;
+        let bridge = fixture_peer(&repeated).await;
         assert!(
             bridge
                 .tools()
@@ -482,7 +503,7 @@ for line in sys.stdin:
  else: out={}
  print(json.dumps({'jsonrpc':'2.0','id':ident,'result':out}),flush=True)
 "#;
-            let bridge = fixture(script).await;
+            let bridge = fixture_peer(script).await;
             let call = tokio::spawn({
                 let bridge = bridge.clone();
                 async move { bridge.call("playwright.native_permission", json!({})).await }

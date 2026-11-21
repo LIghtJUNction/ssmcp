@@ -2,6 +2,7 @@
 """Validate, package and publish a tag using only Python's standard library."""
 
 import argparse
+from contextlib import contextmanager
 import gzip
 import hashlib
 import io
@@ -38,6 +39,12 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 SHA = re.compile(r"[0-9a-f]{40}")
 CHECKSUM = re.compile(r"[0-9a-f]{64}")
 VERIFIED_CRATE = "ssmcp-verified-crate.json"
+VERIFIED_SOURCE = "verified-source.json"
+REGISTRY_EXPORT_LOCK = "ssmcp-registry-Cargo.lock"
+RELEASE_CONTRACT = "git-source-v1"
+CRATE_DEFERRALS = {
+    "0.10.25": "Independent registry dependencies and the external package require separate verification.",
+}
 
 
 def command(*args, cwd=None):
@@ -82,10 +89,16 @@ def project_z_url(package):
     return f"https://github.com/LIghtJUNction/{PROJECT_Z_REPOS[package]}.git"
 
 
-def require_project_z_git(name, spec, package):
+def require_project_z_git(name, spec, package, *, upstream=False):
+    allowed = {"package", "git", "default-features", "features", "optional"}
+    if upstream:
+        allowed.add("version")
     if (not isinstance(spec, dict) or spec.get("package", name) != package
             or spec.get("git") != project_z_url(package)
-            or set(spec) - {"package", "git", "version", "default-features", "features", "optional"}):
+            or set(spec) - allowed
+            or any(type(spec.get(key, False)) is not bool for key in ("default-features", "optional"))
+            or not isinstance(spec.get("features", []), list)
+            or any(not isinstance(feature, str) for feature in spec.get("features", []))):
         raise ValueError(f"{name} must use canonical default-branch Git source {project_z_url(package)}")
 
 
@@ -96,11 +109,12 @@ def package_version(manifest, workspace):
     return value
 
 
-def registry_dependencies(root=None):
-    """Validate the development declarations and return the external registry prerequisites."""
+def development_dependencies(root=None, *, modules=None):
+    """Read version metadata from the checked-out Git packages and match the lock."""
     root = Path(root or ROOT)
     manifest = read_toml(root / "Cargo.toml")
     dependencies = manifest.get("dependencies", {})
+    locked = locked_project_z(read_toml(root / "Cargo.lock"))
     result = []
     for target, kind, name, spec in dependency_tables(manifest):
         package = spec.get("package", name)
@@ -124,27 +138,33 @@ def registry_dependencies(root=None):
         if dependency is None:
             continue
         require_project_z_git(name, dependency, package_name)
-        if (not isinstance(dependency.get("version"), str)
-                or not dependency["version"].startswith("=")):
-            raise ValueError(f"{name} requires an exact registry version alongside Git")
-        release_version = dependency["version"][1:]
-        version_key(release_version)
         path = root / "crates" / name / "Cargo.toml"
         if not path.is_file():
             raise ValueError(f"{name} source is missing; initialize the pinned submodules recursively")
         local = read_toml(path)
-        if local["package"]["name"] != package_name or package_version(local, local) != release_version:
-            raise ValueError(f"{name} source and exact dependency version differ")
+        release_version = package_version(local, local)
+        if modules is None:
+            modules = {row["path"]: row for row in source_submodules(root)}
+        module = modules.get("crates/" + name)
+        row = locked.get(package_name)
+        if (local["package"]["name"] != package_name or not module or not row
+                or row["version"] != release_version
+                or project_z_revision(package_name, row.get("source")) != module["commit"]):
+            raise ValueError(f"{name} source, gitlink and locked dependency version/commit differ")
+        version_key(release_version)
         if name == "ztuio" and local.get("lib", {}).get("name", name) != name:
             raise ValueError("the ztuio package must expose the ztuio library name")
         if name == "zharness":
             plugin = dependencies.get("zplugin", {})
             declared = local.get("dependencies", {}).get("zplugin")
             requirement = declared.get("version") if isinstance(declared, dict) else declared
-            if not plugin or requirement != plugin.get("version"):
-                raise ValueError("zharness and ssmcp require the same exact zplugin version")
+            if not plugin or "zplugin" not in locked:
+                raise ValueError("zharness requires the same locked zplugin package as ssmcp")
+            expected = "=" + locked["zplugin"]["version"]
             if isinstance(declared, dict) and "git" in declared:
-                require_project_z_git("zplugin", declared, "zplugin")
+                require_project_z_git("zplugin", declared, "zplugin", upstream=True)
+                if requirement is not None and requirement != expected:
+                    raise ValueError("zharness requires the same locked zplugin version as ssmcp")
             else:
                 if isinstance(declared, dict) and (
                     declared.get("package", "zplugin") != "zplugin"
@@ -153,6 +173,8 @@ def registry_dependencies(root=None):
                     raise ValueError("zharness must resolve zplugin through its canonical Git source")
                 if "zplugin" not in patches:
                     raise ValueError("registry zplugin in zharness requires the canonical crates.io patch")
+                if requirement != expected:
+                    raise ValueError("zharness requires the same locked zplugin version as ssmcp")
         result.append((package_name, release_version))
     return result
 
@@ -242,7 +264,7 @@ def validate_package(tag, root):
         raise ValueError(f"tag {tag} does not match Cargo.toml version {actual}")
     lock = read_toml(root / "Cargo.lock")
     locked_project_z(lock)
-    for name, package_version in publication_packages(root) + registry_dependencies(root):
+    for name, package_version in publication_packages(root) + development_dependencies(root):
         locked = [p["version"] for p in lock["package"] if p["name"] == name]
         if locked != [package_version]:
             raise ValueError(f"Cargo.lock must contain exactly the manifest's {name} version")
@@ -311,10 +333,10 @@ def dependency_graph(root=None):
     checksum = digest(root / "Cargo.lock")
     lock = read_toml(root / "Cargo.lock")
     internal = locked_project_z(lock)
-    direct = dict(registry_dependencies(root))
+    modules = {row["path"]: row for row in source_submodules(root)}
+    direct = dict(development_dependencies(root, modules=modules))
     required = set(direct)
     required.update(PROJECT_Z_PATCHES & read_toml(manifest_path).get("patch", {}).get("crates-io", {}).keys())
-    modules = {row["path"]: row for row in source_submodules(root)}
     root_id, packages, nodes = metadata_graph(root, version(root))
     identities = {key: package_identity(item) for key, item in packages.items()}
     locked = {package_identity(item) for item in lock["package"]}
@@ -334,6 +356,7 @@ def dependency_graph(root=None):
                     or Path(command("git", "rev-parse", "--show-toplevel", cwd=manifest.parent)).resolve() != root):
                 raise ValueError(f"path dependency escapes the SSMCP repository: {name}")
             item["manifest"] = manifest.relative_to(root).as_posix()
+            item["manifest_sha256"] = digest(manifest)
         elif source.startswith("git+"):
             revision = source.rpartition("#")[2]
             if not SHA.fullmatch(revision):
@@ -342,7 +365,8 @@ def dependency_graph(root=None):
             data = read_toml(manifest)
             if data["package"]["name"] != name or package_version(data, read_toml(checkout / "Cargo.toml")) != resolved_version:
                 raise ValueError(f"Cargo Git checkout manifest identity differs for {name}")
-            item.update(commit=revision, tree=tree, manifest=manifest.relative_to(checkout).as_posix())
+            item.update(commit=revision, tree=tree, manifest=manifest.relative_to(checkout).as_posix(),
+                        manifest_sha256=digest(manifest))
             if name in PROJECT_Z_REPOS:
                 git_records[name] = item
                 module = modules.get("crates/" + PROJECT_Z_REPOS[name])
@@ -394,6 +418,21 @@ def event_mode(event_name, ref, event):
     raise ValueError("this event is not an authorized release or main preflight trigger")
 
 
+def crate_publication(release_version, *, build_only=False):
+    version_key(release_version)
+    if build_only:
+        return {"status": "not_requested", "reason": "Build-only validation does not publish crates."}
+    if release_version in CRATE_DEFERRALS:
+        return {"status": "deferred", "reason": CRATE_DEFERRALS[release_version]}
+    return {"status": "registry", "reason": None}
+
+
+def require_registry_mode(root):
+    policy = crate_publication(version(root))
+    if policy["status"] != "registry":
+        raise ValueError(f"crate publication is {policy['status']}: {policy['reason']}")
+
+
 def validate_tag(tag, root=None, *, build_only=False):
     root = root or ROOT
     if build_only and tag is not None:
@@ -409,7 +448,8 @@ def validate_tag(tag, root=None, *, build_only=False):
     return emit({"tag": tag or "", "version": actual, "sha": sha, "submodule_count": len(modules),
                  "prerelease": str("-" in actual).lower(),
                  "publish": str(not build_only).lower(), "create_tag": "false",
-                 "build_only": str(build_only).lower()})
+                 "build_only": str(build_only).lower(), "release_contract": RELEASE_CONTRACT,
+                 "crate_publication": crate_publication(actual, build_only=build_only)["status"]})
 
 
 def prepare(tag=None, automatic=False, root=None):
@@ -548,7 +588,7 @@ def package(target, root=None):
     print(json.dumps({"archive": archive.name, "sha256": checksum, "bytes": archive.stat().st_size}))
 
 
-def checksums(root=None):
+def checksums(root=None, *, build_only=False, recheck=False):
     """Verify GitHub archives; Publisher raw-client release.json is separate."""
     root = root or ROOT
     release_version = version(root)
@@ -558,10 +598,14 @@ def checksums(root=None):
     if actual != expected:
         raise ValueError(f"release archive set differs: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
     installers = {"install.sh", "install.ps1"}
-    allowed = expected | installers | {name + ".sha256" for name in expected} | {"SHA256SUMS", "release-manifest.json"}
+    inputs = expected | installers | {name + ".sha256" for name in expected}
+    allowed = inputs | {"SHA256SUMS", "release-manifest.json"}
     unexpected = {p.name for p in output.iterdir()} - allowed
     if unexpected:
         raise ValueError(f"unexpected release files: {sorted(unexpected)}")
+    for name in sorted(allowed & {p.name for p in output.iterdir()}):
+        if (output / name).is_symlink() or not (output / name).is_file():
+            raise ValueError(f"release attachment must be a regular file: {name}")
     records = []
     for name in sorted(expected):
         path = output / name
@@ -574,13 +618,29 @@ def checksums(root=None):
         if not path.is_file() or digest(path) != digest(root / "scripts" / name):
             raise ValueError(f"installer is missing or differs from the validated source: {name}")
         records.append({"name": name, "sha256": digest(path), "bytes": path.stat().st_size})
-    verified = verified_crate_receipt(root)
-    (output / "SHA256SUMS").write_text("".join(f"{r['sha256']}  {r['name']}\n" for r in records), encoding="utf-8")
-    manifest = {"package": "ssmcp", "version": release_version,
-                "commit": verified["source"]["commit"], "submodules": source_submodules(root),
-                "dependency_graph": verified["source"]["dependency_graph"],
-                "verified_crate": verified, "artifacts": records}
-    (output / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    source = verified_source_receipt(root)
+    policy = crate_publication(release_version, build_only=build_only)
+    verified = verified_crate_receipt(root) if policy["status"] == "registry" else None
+    if verified is not None and verified["source"] != source:
+        raise ValueError("verified crate and verified binary source differ")
+    manifest = {"schema_version": 2, "package": "ssmcp", "version": release_version,
+                "commit": source["commit"], "tree": source["tree"],
+                "source_manifest_sha256": source["manifest_sha256"],
+                "cargo_lock_sha256": source["cargo_lock_sha256"],
+                "toolchain": {"cargo": source["cargo"], "rustc": source["rustc"]},
+                "submodules": source["submodules"], "dependency_graph": source["dependency_graph"],
+                "crate_publication": policy, "verified_crate": verified, "artifacts": records}
+    documents = {
+        "SHA256SUMS": "".join(f"{r['sha256']}  {r['name']}\n" for r in records),
+        "release-manifest.json": json.dumps(manifest, indent=2) + "\n",
+    }
+    for name, text in documents.items():
+        path = output / name
+        if recheck:
+            if not path.is_file() or path.read_bytes() != text.encode():
+                raise ValueError(f"finalized release proof differs: {name}")
+        else:
+            path.write_bytes(text.encode())
     print(f"Verified {len(expected)} target archives and {len(installers)} installers")
 
 
@@ -618,7 +678,7 @@ def check_registry(root=None, package="ssmcp", release_version=None):
 
 
 def check_registry_dependencies(root=None):
-    for package, release_version in registry_dependencies(root):
+    for package, release_version in development_dependencies(root):
         if registry_checksum(release_version, package) is None:
             raise ValueError(f"publish {package} {release_version} from its independent repository before releasing ssmcp")
 
@@ -628,23 +688,143 @@ def crate_archive(root, target=None):
 
 
 def release_source(root):
-    commit = command("git", "rev-parse", "HEAD", cwd=root)
-    manifest_sha = digest(root / "Cargo.toml")
-    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    if command("git", "ls-files", "--others", "--exclude-standard", cwd=root):
-        raise ValueError("crate verification requires a clean source checkout")
+    root = Path(root).resolve()
+    def identity():
+        subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
+        if command("git", "ls-files", "--others", "--exclude-standard", cwd=root):
+            raise ValueError("release verification requires a clean source checkout")
+        commit = command("git", "rev-parse", "HEAD", cwd=root)
+        return {"commit": commit, "tree": command("git", "rev-parse", f"{commit}^{{tree}}", cwd=root),
+                "manifest_sha256": digest(root / "Cargo.toml"),
+                "cargo_lock_sha256": digest(root / "Cargo.lock"),
+                "submodules": source_submodules(root)}
+
+    source = identity()
     graph = dependency_graph(root)
-    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=True)
-    if (commit != command("git", "rev-parse", "HEAD", cwd=root)
-            or manifest_sha != digest(root / "Cargo.toml")):
-        raise ValueError("source commit changed during dependency verification")
-    return {"commit": commit, "tree": command("git", "rev-parse", f"{commit}^{{tree}}", cwd=root),
-            "manifest_sha256": manifest_sha, "dependency_graph": graph,
+    if identity() != source or graph["cargo_lock_sha256"] != source["cargo_lock_sha256"]:
+        raise ValueError("source commit, lock or gitlinks changed during dependency verification")
+    return {**source, "dependency_graph": graph,
             "cargo": command("cargo", "--version", cwd=root),
             "rustc": command("rustc", "--version", cwd=root)}
 
 
-def normalized_crate(root, data, commit):
+def source_receipt_path(root):
+    return root / "target/release-proof" / VERIFIED_SOURCE
+
+
+def verify_source(root=None):
+    root = Path(root or ROOT).resolve()
+    source = release_source(root)
+    path = source_receipt_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"contract": RELEASE_CONTRACT, "source": source}, indent=2) + "\n",
+                    encoding="utf-8")
+    return source
+
+
+def verified_source_receipt(root):
+    recorded = json.loads(source_receipt_path(root).read_text(encoding="utf-8"))
+    actual = release_source(root)
+    if recorded != {"contract": RELEASE_CONTRACT, "source": actual}:
+        raise ValueError("verified source receipt differs from the fixed checkout")
+    return actual
+
+
+def inline_dependency(text, section, name, edit):
+    header = re.search(r"(?m)^\[" + re.escape(section) + r"\][ \t]*(?:#.*)?$", text)
+    if header is None:
+        raise ValueError(f"missing [{section}] for registry export")
+    body = text[header.end():]
+    next_header = re.search(r"(?m)^\[", body)
+    end = next_header.start() if next_header else len(body)
+    changed, count = re.subn(r"(?m)^[ \t]*" + re.escape(name)
+                             + r"[ \t]*=[ \t]*\{[^\r\n]*\}[^\r\n]*$",
+                             lambda match: edit(match[0]), body[:end])
+    if count != 1:
+        raise ValueError(f"expected one inline {name} declaration in [{section}]")
+    return text[:header.end()] + changed + body[end:]
+
+
+def registry_export_manifest(root):
+    """Derive exact registry selectors from verified Git package identities."""
+    raw = (root / "Cargo.toml").read_bytes()
+    text = raw.decode()
+    expected = tomllib.loads(text)
+    versions = dict(development_dependencies(root))
+    for name, package in PROJECT_Z_DIRECT.items():
+        spec = expected.get("dependencies", {}).get(name)
+        if spec is None:
+            continue
+        url = spec.pop("git")
+        spec["version"] = "=" + versions[package]
+
+        def replace_source(line):
+            line, count = re.subn(r"(?<![\w-])git[ \t]*=[ \t]*(['\"])" + re.escape(url) + r"\1",
+                                  'version = ' + json.dumps(spec["version"]), line)
+            if count != 1:
+                raise ValueError(f"cannot identify the Git selector for {name}")
+            return line
+
+        text = inline_dependency(text, "dependencies", name, replace_source)
+    # Registry consumers cannot use the development-only internal Git overrides.
+    overrides = expected.get("patch", {}).get("crates-io", {})
+    for name in sorted(overrides.keys() & PROJECT_Z_PATCHES):
+        del overrides[name]
+        text = inline_dependency(text, "patch.crates-io", name, lambda _: "")
+    if tomllib.loads(text) != expected:
+        raise ValueError("registry export changed fields beyond the internal Git source selectors")
+    return text.encode()
+
+
+def registry_lock(data, release_version, direct):
+    lock = tomllib.loads(data.decode())
+    locked = lock["package"]
+    seen = set()
+    app = ("ssmcp", release_version, None)
+    for entry in locked:
+        identity = package_identity(entry)
+        if (identity in seen or identity != app and
+                (identity[2] != CRATES_IO or not CHECKSUM.fullmatch(entry.get("checksum", "")))):
+            raise ValueError("normalized Cargo.lock contains an unexpected source or duplicate package")
+        seen.add(identity)
+    if (app not in seen or "patch" in lock
+            or any((name, source_version, CRATES_IO) not in seen for name, source_version in direct.items())):
+        raise ValueError("normalized Cargo.lock does not match the registry publication contract")
+    return locked
+
+
+def require_registry_export(export, commit, manifest, lock):
+    if (command("git", "rev-parse", "HEAD", cwd=export) != commit
+            or (export / "Cargo.toml").read_bytes() != manifest
+            or (export / "Cargo.lock").read_bytes() != lock):
+        raise ValueError("publication export commit, manifest or registry lock changed")
+    subprocess.run(["git", "-c", "core.fsmonitor=false", "diff", "--quiet", "HEAD", "--", ".",
+                    ":(exclude)Cargo.toml", ":(exclude)Cargo.lock"], cwd=export, check=True)
+    if command("git", "ls-files", "--others", cwd=export):
+        raise ValueError("publication export contains uncommitted files outside its manifest and lock")
+
+
+@contextmanager
+def registry_export(root, commit, manifest, frozen_lock=None):
+    """Use an owned clone so original worktree, index and lock stay unchanged."""
+    with tempfile.TemporaryDirectory(prefix="ssmcp-registry-") as temporary:
+        export = Path(temporary) / "source"
+        command("git", "clone", "--shared", "--no-tags", "--no-checkout", "--", str(root), str(export), cwd=root)
+        command("git", "checkout", "--detach", commit, cwd=export)
+        (export / "Cargo.toml").write_bytes(manifest)
+        if frozen_lock is None:
+            subprocess.run(["cargo", "generate-lockfile"], cwd=export, check=True)
+        else:
+            (export / "Cargo.lock").write_bytes(frozen_lock)
+        lock = (export / "Cargo.lock").read_bytes()
+        if frozen_lock is not None and lock != frozen_lock:
+            raise ValueError("publication export must reuse the verified registry lock")
+        require_registry_export(export, commit, manifest, lock)
+        yield export, Path(temporary) / "target", lock
+        require_registry_export(export, commit, manifest, lock)
+
+
+def normalized_crate(root, data, commit, export_lock=None):
     """Inspect the package Cargo actually normalized and built."""
     prefix = f"ssmcp-{version(root)}"
     members = {}
@@ -666,9 +846,12 @@ def normalized_crate(root, data, commit):
     required = {"Cargo.toml", "Cargo.toml.orig", "Cargo.lock", ".cargo_vcs_info.json", "src/lib.rs"}
     if not required <= members.keys():
         raise ValueError("missing normalized package manifest, lock or source identity")
+    derived = registry_export_manifest(root)
+    dirty = (derived != (root / "Cargo.toml").read_bytes()
+             or export_lock is not None and export_lock != (root / "Cargo.lock").read_bytes())
     vcs = json.loads(members[".cargo_vcs_info.json"])
-    if (vcs.get("git", {}).get("sha1") != commit or vcs["git"].get("dirty", False) is not False
-            or vcs.get("path_in_vcs") != "" or members["Cargo.toml.orig"] != (root / "Cargo.toml").read_bytes()):
+    if (vcs.get("git", {}).get("sha1") != commit or vcs["git"].get("dirty", False) is not dirty
+            or vcs.get("path_in_vcs") != "" or members["Cargo.toml.orig"] != derived):
         raise ValueError("normalized package source identity differs from the verified checkout")
     for name, raw in members.items():
         if name in {"Cargo.toml", "Cargo.toml.orig", "Cargo.lock", ".cargo_vcs_info.json"}:
@@ -683,46 +866,35 @@ def normalized_crate(root, data, commit):
     if ((package["name"], package["version"]) != ("ssmcp", version(root))
             or any(key in manifest for key in ("patch", "replace", "workspace"))):
         raise ValueError("invalid normalized package manifest")
-    development = read_toml(root / "Cargo.toml").get("dependencies", {})
+    exported = tomllib.loads(derived.decode()).get("dependencies", {})
     for _, _, name, spec in dependency_tables(manifest):
         if (not isinstance(spec.get("version"), str)
                 or set(spec) & {"git", "path", "rev", "tag", "branch", "registry", "registry-index", "workspace"}):
             raise ValueError(f"normalized dependency is not a crates.io version: {name}")
     for name, package_name in PROJECT_Z_DIRECT.items():
-        if name not in development:
+        if name not in exported:
             continue
-        source = development[name]
+        source = exported[name]
         normalized = manifest.get("dependencies", {}).get(name, {})
         if (not isinstance(normalized, dict) or normalized.get("package", name) != package_name
                 or normalized.get("version") != source["version"]
                 or normalized.get("default-features", True) != source.get("default-features", True)
+                or normalized.get("optional", False) != source.get("optional", False)
                 or sorted(normalized.get("features", [])) != sorted(source.get("features", []))):
             raise ValueError(f"normalized {name} changed its package, version or features")
-    lock = tomllib.loads(members["Cargo.lock"].decode())
-    locked = lock["package"]
-    seen = set()
-    app = ("ssmcp", version(root), None)
-    for entry in locked:
-        identity = package_identity(entry)
-        if (identity in seen or identity != app and
-                (identity[2] != CRATES_IO or not CHECKSUM.fullmatch(entry.get("checksum", "")))):
-            raise ValueError("normalized Cargo.lock contains an unexpected source or duplicate package")
-        seen.add(identity)
-    direct = dict(registry_dependencies(root))
-    if (app not in seen or "patch" in lock
-            or any((name, source_version, CRATES_IO) not in seen for name, source_version in direct.items())):
-        raise ValueError("normalized Cargo.lock does not match the registry publication contract")
+    direct = dict(development_dependencies(root))
+    locked = registry_lock(members["Cargo.lock"], version(root), direct)
     proof = {"manifest_sha256": hashlib.sha256(members["Cargo.toml"]).hexdigest(),
              "lock_sha256": hashlib.sha256(members["Cargo.lock"]).hexdigest(),
              "packages": locked, "direct_project_z": direct}
     return proof, members
 
 
-def package_crate(root):
-    args = ["cargo", "package", "--locked", "--package", "ssmcp", "--registry", "crates-io",
-            "--target-dir", str(root / "target")]
-    subprocess.run(args, cwd=root, check=True)
-    return crate_archive(root)
+def package_crate(export, target):
+    args = ["cargo", "package", "--locked", "--allow-dirty", "--package", "ssmcp", "--registry", "crates-io",
+            "--target-dir", str(target)]
+    subprocess.run(args, cwd=export, check=True)
+    return crate_archive(export, target)
 
 
 def check_registry_graph(graph, normalized, release_version):
@@ -763,42 +935,68 @@ def normalized_registry_graph(normalized, members, release_version):
     return graph
 
 
-def verify_crate(root=None):
-    root = Path(root or ROOT).resolve()
-    source = release_source(root)
-    check_registry_dependencies(root)
-    archive = package_crate(root)
-    if release_source(root) != source:
-        raise ValueError("source graph changed during cargo package verification")
-    data = archive.read_bytes()
-    normalized, members = normalized_crate(root, data, source["commit"])
-    graph = normalized_registry_graph(normalized, members, version(root))
+def check_registry_project_z(normalized):
     for item in normalized["packages"]:
         if item["name"] in PROJECT_Z_REPOS:
             if registry_checksum(item["version"], item["name"]) != item["checksum"]:
                 raise ValueError(f"normalized registry dependency is unpublished or changed: {item['name']} {item['version']}")
+
+
+def export_receipt(manifest, lock):
+    return {"manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+            "lock_sha256": hashlib.sha256(lock).hexdigest()}
+
+
+def verify_crate(root=None):
+    root = Path(root or ROOT).resolve()
+    require_registry_mode(root)
+    check_registry_dependencies(root)
+    source = release_source(root)
+    manifest = registry_export_manifest(root)
+    direct = dict(development_dependencies(root))
+    with registry_export(root, source["commit"], manifest) as (export, target, lock):
+        registry_lock(lock, version(root), direct)
+        packed = package_crate(export, target)
+        data = packed.read_bytes()
+    if release_source(root) != source:
+        raise ValueError("source graph changed during cargo package verification")
+    normalized, members = normalized_crate(root, data, source["commit"], lock)
+    graph = normalized_registry_graph(normalized, members, version(root))
+    check_registry_project_z(normalized)
+    archive = crate_archive(root)
     receipt = {"source": source, "name": archive.name, "sha256": hashlib.sha256(data).hexdigest(),
-               "bytes": len(data), "normalized": normalized, "registry_graph": graph}
+               "bytes": len(data), "export": export_receipt(manifest, lock),
+               "normalized": normalized, "registry_graph": graph}
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(data)
+    (archive.parent / REGISTRY_EXPORT_LOCK).write_bytes(lock)
     (archive.parent / VERIFIED_CRATE).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 
 def verified_crate_receipt(root):
     root = Path(root).resolve()
+    require_registry_mode(root)
     archive = crate_archive(root)
     receipt = json.loads((archive.parent / VERIFIED_CRATE).read_text(encoding="utf-8"))
     source = release_source(root)
+    manifest = registry_export_manifest(root)
+    lock = (archive.parent / REGISTRY_EXPORT_LOCK).read_bytes()
+    registry_lock(lock, version(root), dict(development_dependencies(root)))
     data = archive.read_bytes()
-    normalized, _ = normalized_crate(root, data, source["commit"])
+    normalized, members = normalized_crate(root, data, source["commit"], lock)
     actual = {"source": source, "name": archive.name, "sha256": hashlib.sha256(data).hexdigest(),
-              "bytes": len(data), "normalized": normalized}
+              "bytes": len(data), "export": export_receipt(manifest, lock), "normalized": normalized}
     if any(receipt.get(key) != value for key, value in actual.items()):
         raise ValueError("verified crate or source graph changed before publication")
     check_registry_graph(receipt["registry_graph"], normalized, version(root))
+    if receipt["registry_graph"] != normalized_registry_graph(normalized, members, version(root)):
+        raise ValueError("verified registry graph differs from the actual normalized package graph")
     return receipt
 
 
 def publish(root=None):
     root = Path(root or ROOT).resolve()
+    require_registry_mode(root)
     check_registry_dependencies(root)
     verified = verified_crate_receipt(root)
     source = verified["source"]
@@ -807,16 +1005,21 @@ def publish(root=None):
     package, release_version = publication_packages(root)[0]
     if check_registry(root, package, release_version):
         return
-    with tempfile.TemporaryDirectory(prefix="ssmcp-repackage-") as temporary:
-        target = Path(temporary)
+    check_registry_project_z(verified["normalized"])
+    manifest = registry_export_manifest(root)
+    lock = (archive.parent / REGISTRY_EXPORT_LOCK).read_bytes()
+    if export_receipt(manifest, lock) != verified["export"]:
+        raise ValueError("publication export manifest or frozen lock differs from the verified crate")
+    with registry_export(root, source["commit"], manifest, lock) as (export, target, _):
         args = ["cargo", "publish", "--locked", "--no-verify", "--registry", "crates-io",
-                "--package", package, "--target-dir", str(target)]
-        subprocess.run([*args, "--dry-run"], cwd=root, check=True)
+                "--package", package, "--target-dir", str(target), "--allow-dirty"]
+        subprocess.run([*args, "--dry-run"], cwd=export, check=True)
         fresh = crate_archive(root, target)
         if (digest(fresh) != checksum or digest(archive) != checksum
                 or release_source(root) != source):
             raise ValueError("fresh package bytes or source graph differ from the verified crate")
-        subprocess.run(args, cwd=root, check=True)
+        require_registry_export(export, source["commit"], manifest, lock)
+        subprocess.run(args, cwd=export, check=True)
         if (digest(fresh) != checksum or digest(archive) != checksum
                 or release_source(root) != source):
             raise ValueError("generated crate bytes or source graph changed during Cargo publication")
@@ -834,11 +1037,16 @@ def publish(root=None):
 def release_notes(root=None):
     root = root or ROOT
     release_version = version(root)
-    notes = (
-        "Download an archive or use the attached installers. The separate `publish_crates` "
-        "job requires the independently published dependencies, then publishes ssmcp "
-        "and verifies its checksum; after it succeeds, install with "
-        f"`cargo install ssmcp --version {release_version} --locked --bin ssmcp`.\n\n"
+    policy = crate_publication(release_version)
+    introduction = "Download an archive or use the attached installers. "
+    if policy["status"] == "deferred":
+        introduction += f"crates.io publication for {release_version} is deferred. {policy['reason']}\n\n"
+    else:
+        introduction += (
+            "The separate `publish_crates` job verifies its upload. After it succeeds, install with "
+            f"`cargo install ssmcp --version {release_version} --locked --bin ssmcp`.\n\n"
+        )
+    notes = introduction + (
         "Linux / macOS: `curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh`\n\n"
         "Windows PowerShell: `irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex`\n\n"
         "Linux archives include `ssmcp` and `ssmcpd`. macOS and Windows archives include the "
@@ -900,7 +1108,7 @@ def should_mark_latest(repository, release_version, root=None):
 def release(tag, root=None):
     root = root or ROOT
     validate_tag(tag, root)
-    checksums(root)
+    checksums(root, recheck=True)
     repository = os.environ["GITHUB_REPOSITORY"]
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("invalid repository name")
@@ -927,28 +1135,35 @@ def release(tag, root=None):
     metadata = json.loads(command("gh", "api", endpoint, cwd=root))
     if metadata["tag_name"] != tag:
         raise ValueError("resolved release ID does not match the requested tag")
+    def downloaded_digest(path):
+        with tempfile.TemporaryDirectory(prefix="ssmcp-asset-") as temporary:
+            subprocess.run(["gh", "release", "download", tag, "--repo", repository,
+                            "--pattern", path.name, "--dir", temporary], cwd=root, check=True)
+            return digest(Path(temporary) / path.name)
+
+    paths = sorted(p for p in (root / "dist").iterdir() if p.is_file())
+    expected = {p.name for p in paths}
     assets = {a["name"]: a for a in metadata["assets"]}
-    for path in sorted((root / "dist").iterdir()):
-        if not path.is_file():
-            continue
+    if len(assets) != len(metadata["assets"]) or assets.keys() - expected:
+        raise ValueError("existing release contains duplicate or unexpected assets")
+    for path in paths:
         if path.name in assets:
-            asset = assets[path.name]
-            checksum = "sha256:" + digest(path)
-            if asset.get("digest") != checksum:
-                with tempfile.TemporaryDirectory(prefix="ssmcp-asset-") as temporary:
-                    subprocess.run(["gh", "release", "download", tag, "--repo", repository,
-                                    "--pattern", path.name, "--dir", temporary], cwd=root, check=True)
-                    if digest(Path(temporary) / path.name) != digest(path):
-                        raise ValueError(f"existing release asset differs: {path.name}; assets are never overwritten")
+            if (assets[path.name].get("digest") != "sha256:" + digest(path)
+                    and downloaded_digest(path) != digest(path)):
+                raise ValueError(f"existing release asset differs: {path.name}; assets are never overwritten")
             continue
         subprocess.run(["gh", "release", "upload", tag, str(path), "--repo", repository], cwd=root, check=True)
     uploaded = json.loads(command("gh", "api", endpoint, cwd=root))
     uploaded_assets = {a["name"]: a for a in uploaded["assets"]}
-    for path in (root / "dist").iterdir():
+    if (len(uploaded_assets) != len(uploaded["assets"])
+            or uploaded_assets.keys() != expected):
+        raise ValueError("release upload is incomplete or includes unexpected assets")
+    for path in paths:
         asset = uploaded_assets.get(path.name)
         if not asset or asset["size"] != path.stat().st_size:
             raise ValueError(f"release upload is incomplete: {path.name}")
-        if asset.get("digest") and asset["digest"] != "sha256:" + digest(path):
+        actual = asset.get("digest") or "sha256:" + downloaded_digest(path)
+        if actual != "sha256:" + digest(path):
             raise ValueError(f"release upload checksum mismatch: {path.name}")
     if metadata["draft"]:
         release_version = version(root)
@@ -982,8 +1197,11 @@ def main():
     validation_mode.add_argument("--event", action="store_true")
     commands.add_parser("package").add_argument("--target", required=True, choices=TARGETS)
     commands.add_parser("pack").add_argument("target", choices=TARGETS)
-    commands.add_parser("checksums")
+    sums = commands.add_parser("checksums")
+    sums.add_argument("--build-only", action="store_true")
+    sums.add_argument("--recheck", action="store_true")
     commands.add_parser("dependency-graph")
+    commands.add_parser("verify-source")
     commands.add_parser("verify-crate")
     commands.add_parser("check-registry")
     commands.add_parser("publish")
@@ -1009,12 +1227,15 @@ def main():
     elif args.command in {"package", "pack"}:
         package(args.target)
     elif args.command == "checksums":
-        checksums()
+        checksums(build_only=args.build_only, recheck=args.recheck)
+    elif args.command == "verify-source":
+        verify_source()
     elif args.command == "dependency-graph":
         print(json.dumps(dependency_graph(), indent=2))
     elif args.command == "verify-crate":
         verify_crate()
     elif args.command == "check-registry":
+        require_registry_mode(ROOT)
         check_registry_dependencies()
         for package_name, release_version in publication_packages():
             check_registry(package=package_name, release_version=release_version)

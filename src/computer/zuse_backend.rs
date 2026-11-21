@@ -140,6 +140,26 @@ impl Drop for WorkerGuard {
     }
 }
 
+/// Keep the ingress generation even when an isolated desktop has its own
+/// Computer. A worker must never acquire a fresh permit after Off/On.
+fn worker_ticket_for_dispatch(
+    computer: &Computer,
+    operation: &str,
+    host_ticket: Option<host_control::Ticket>,
+) -> Result<Option<host_control::WorkerTicket>, String> {
+    if !host_control::input_tool(&format!("ssmcp.computer.{operation}")) {
+        return Ok(None);
+    }
+    let ticket = if let Some(ticket) = host_ticket {
+        computer.host_control.worker_ticket(ticket)?
+    } else {
+        host_control::Permit::current()
+            .ok_or("missing computer-use permit")?
+            .worker_ticket()?
+    };
+    Ok(Some(ticket))
+}
+
 async fn call(
     computer: &Computer,
     operation: &str,
@@ -161,9 +181,7 @@ async fn call(
         capture_path: capture_directory
             .as_ref()
             .map(|directory| directory.0.join("capture.png")),
-        host_ticket: host_ticket
-            .map(|ticket| computer.host_control.worker_ticket(ticket))
-            .transpose()?,
+        host_ticket: worker_ticket_for_dispatch(computer, operation, host_ticket)?,
     })
     .map_err(|error| error.to_string())?;
     if request.len() > REQUEST_LIMIT {
@@ -202,6 +220,7 @@ async fn call(
             },
         );
     }
+    super::host_control::Permit::check_current()?;
     let mut process = Managed::spawn(&mut command)
         .map_err(|error| format!("could not start zuse library worker: {error}"))?;
     let worker = Worker {
@@ -1486,7 +1505,7 @@ fn validate_literal_text(backend: &str, text: &str) -> Result<(), String> {
         return Err("invalid literal text".into());
     }
     if backend == "wayland" {
-        // zuse 0.2.1 validates the whole string before creating a virtual keyboard.
+        // zuse validates the whole string before creating a virtual keyboard.
         // Keep that guarantee when splitting native calls for cancellation.
         for (offset, character) in text.char_indices() {
             if character.is_control() && !matches!(character, '\t' | '\n' | '\r') {
@@ -1501,8 +1520,8 @@ fn validate_literal_text(backend: &str, text: &str) -> Result<(), String> {
 }
 
 fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool {
-    // zuse 0.2.1 (d930769) has String errors. These branches are verified
-    // against the pinned library and return before any native input mutation.
+    // zuse exposes native failures as String errors. These branches are verified
+    // against the locked library source and precede native input mutation.
     // Unknown native/runtime errors remain unconfirmed and keep input locked.
     if backend == "x11" {
         // x11_input::unsupported wraps only failures before its first mutation.
@@ -1799,6 +1818,41 @@ mod wayland_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn isolated_worker_inherits_ingress_generation_without_rearming() {
+        let control = Arc::new(host_control::HostControl::default());
+        control.set_local(true).unwrap();
+        let permit = control.permit().unwrap();
+        let private = Computer::new(std::env::temp_dir()).unwrap();
+        // This is intentionally a different store. The private Computer must
+        // not select its own setting when the ingress permit is forwarded.
+        private.host_control.set_local(false).unwrap();
+        let inherited = permit
+            .scope(async { worker_ticket_for_dispatch(&private, "move_path", None) })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(inherited.submit(|| Ok(7)), Ok(7));
+
+        private.host_control.set_local(true).unwrap();
+        control.set_local(false).unwrap();
+        control.set_local(true).unwrap();
+        assert!(private.host_control.ticket().is_ok());
+        assert_eq!(inherited.submit(|| Ok(())), Err(host_control::ENDED.into()));
+        let error = permit
+            .scope(async { worker_ticket_for_dispatch(&private, "move_path", None) })
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error, host_control::ENDED);
+        assert!(worker_ticket_for_dispatch(&private, "key", None).is_err());
+        assert!(
+            worker_ticket_for_dispatch(&private, "keyboard_state", None)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     fn click_watch_arguments(endpoint: &str) -> Value {
         json!({"endpoint":endpoint,"tab_id":"owned-existing-page","scope":"#owned-scope",

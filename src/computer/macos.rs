@@ -523,12 +523,14 @@ fn focus_once(target: &Window) -> Result<(), String> {
     let frontmost = cf_string("AXFrontmost")?;
     let raise = cf_string("AXRaise")?;
     // The focus action is sent once. Verification below never repeats it.
+    super::host_control::Permit::check_current()?;
     let activate = unsafe { AXUIElementSetAttributeValue(app.0, frontmost.0, kCFBooleanTrue) };
     if activate != 0 {
         return Err(format!(
             "Accessibility could not activate the application ({activate})"
         ));
     }
+    super::host_control::Permit::check_current()?;
     let raised = unsafe { AXUIElementPerformAction(selected.0, raise.0) };
     if raised != 0 {
         return Err(format!(
@@ -539,6 +541,7 @@ fn focus_once(target: &Window) -> Result<(), String> {
     // supported setters improve focus, and the actual result is always checked.
     let focused = cf_string("AXFocusedWindow")?;
     let main = cf_string("AXMain")?;
+    super::host_control::Permit::check_current()?;
     unsafe {
         AXUIElementSetAttributeValue(app.0, focused.0, selected.0);
         AXUIElementSetAttributeValue(selected.0, main.0, kCFBooleanTrue);
@@ -738,6 +741,7 @@ impl Drop for InputRelease {
 }
 
 fn move_pointer(point: Point) -> Result<(), String> {
+    super::host_control::Permit::check_current()?;
     mouse_event(5, Button::Left, point, 0)
 }
 async fn click(value: Click) -> Result<(), String> {
@@ -755,6 +759,7 @@ async fn click(value: Click) -> Result<(), String> {
     }
     move_pointer(point)?;
     for count in 1..=value.count {
+        super::host_control::Permit::check_current()?;
         let mut release = InputRelease {
             mouse: Some((value.button, point, count)),
             key: None,
@@ -786,6 +791,7 @@ async fn drag(value: Drag) -> Result<(), String> {
     }
     let start = value.path[0];
     move_pointer(start)?;
+    super::host_control::Permit::check_current()?;
     let mut release = InputRelease {
         mouse: Some((value.button, start, 1)),
         key: None,
@@ -807,6 +813,7 @@ async fn drag(value: Drag) -> Result<(), String> {
         }
         // Store the last requested position before injecting: cancellation or an
         // event allocation error still releases at this position.
+        super::host_control::Permit::check_current()?;
         release.mouse = Some((value.button, *point, 1));
         mouse_event(kind, value.button, *point, 1)?;
     }
@@ -992,9 +999,11 @@ async fn key(value: Key) -> Result<(), String> {
         if modifier_code == code || unsafe { CGEventSourceKeyState(0, modifier_code) } {
             continue;
         }
+        super::host_control::Permit::check_current()?;
         release.modifiers.push((modifier_code, mask));
         keyboard_event(modifier_code, true, release.flags(), None)?;
     }
+    super::host_control::Permit::check_current()?;
     release.key = Some(code);
     keyboard_event(
         code,
@@ -1038,6 +1047,7 @@ async fn type_text(value: TypeText) -> Result<Value, String> {
                     "The ANSI A key is currently held; release it before Unicode text input".into(),
                 );
             }
+            super::host_control::Permit::check_current()?;
             let mut release = InputRelease {
                 mouse: None,
                 key: Some(0),
@@ -1082,6 +1092,7 @@ fn scroll(value: Scroll) -> Result<(), String> {
         unsafe { CGEventCreateScrollWheelEvent(ptr::null(), 1, 2, vertical, horizontal) },
         "CGEventCreateScrollWheelEvent",
     )?;
+    super::host_control::Permit::check_current()?;
     unsafe { CGEventPost(0, event.0) };
     Ok(())
 }

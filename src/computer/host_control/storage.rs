@@ -1,4 +1,4 @@
-//! Machine-local, OS-user-private foreground input state and process locks.
+//! Machine-local, OS-user-private computer-use state and process locks.
 use super::State;
 #[cfg(test)]
 use std::path::Path;
@@ -151,7 +151,7 @@ impl Store {
             let base = std::env::var_os("LOCALAPPDATA")
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
-                .ok_or("foreground input state requires an absolute LOCALAPPDATA")?;
+                .ok_or("computer-use state requires an absolute LOCALAPPDATA")?;
             base.join("ssmcp").join("host-input")
         };
         let store = Self {
@@ -234,18 +234,25 @@ impl Store {
     }
 
     pub(super) fn read(&self) -> Result<State, String> {
+        self.inspect(Ok)
+    }
+
+    pub(super) fn inspect<T>(
+        &self,
+        read: impl FnOnce(State) -> Result<T, String>,
+    ) -> Result<T, String> {
         let directory = match self.directory(false) {
             Ok(directory) => directory,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return read(State::default()),
             Err(error) => return Err(context(error)),
         };
         let mut file = match open(&directory, STATE_FILE, Open::Existing) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return read(State::default()),
             Err(error) => return Err(context(error)),
         };
         lock_state(&file, STATE_LOCK_TIMEOUT, true).map_err(context)?;
-        read_state(&mut file).map(|state| state.unwrap_or_default())
+        read(read_state(&mut file)?.unwrap_or_default())
     }
 
     /// A fixed inode is locked while reading and updating. A torn write after a
@@ -322,7 +329,7 @@ impl Store {
             let metadata = directory.metadata()?;
             if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
                 return Err(io::Error::other(
-                    "foreground input directory must belong to this OS user with private permissions",
+                    "computer-use directory must belong to this OS user with private permissions",
                 ));
             }
             Ok(directory)
@@ -353,7 +360,7 @@ impl Drop for Store {
 }
 
 fn context(error: io::Error) -> String {
-    format!("foreground input state unavailable: {error}")
+    format!("computer-use state unavailable: {error}")
 }
 
 fn lock_busy(error: &io::Error) -> bool {
@@ -388,7 +395,7 @@ fn lock_state(file: &File, timeout: Duration, shared: bool) -> io::Result<()> {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!(
-                        "timed out waiting for foreground input state lock after {} ms: {error}",
+                        "timed out waiting for computer-use state lock after {} ms: {error}",
                         timeout.as_millis()
                     ),
                 ));
@@ -400,7 +407,7 @@ fn lock_state(file: &File, timeout: Duration, shared: bool) -> io::Result<()> {
 
 fn read_state(file: &mut File) -> Result<Option<State>, String> {
     if file.metadata().map_err(context)?.len() > MAX_STATE_BYTES {
-        return Err("foreground input state exceeds its size limit".into());
+        return Err("computer-use state exceeds its size limit".into());
     }
     file.seek(SeekFrom::Start(0)).map_err(context)?;
     let mut data = Vec::new();
@@ -411,12 +418,12 @@ fn read_state(file: &mut File) -> Result<Option<State>, String> {
         return Ok(None);
     }
     if data.len() as u64 > MAX_STATE_BYTES {
-        return Err("foreground input state exceeds its size limit".into());
+        return Err("computer-use state exceeds its size limit".into());
     }
     let state: State = serde_json::from_slice(&data)
-        .map_err(|_| "invalid foreground input state; use /computer off to reset it".to_owned())?;
+        .map_err(|_| "invalid computer-use state; use /computer off to reset it".to_owned())?;
     if state.schema_version != 1 || (state.enabled && state.generation == [0; 16]) {
-        return Err("invalid foreground input state; use /computer off to reset it".into());
+        return Err("invalid computer-use state; use /computer off to reset it".into());
     }
     Ok(Some(state))
 }
@@ -459,7 +466,7 @@ fn open(directory: &Directory, name: &str, access: Open) -> io::Result<File> {
             || metadata.nlink() != 1
         {
             return Err(io::Error::other(
-                "foreground input state must be a private, singly linked regular file",
+                "computer-use state must be a private, singly linked regular file",
             ));
         }
         Ok(file)
@@ -666,7 +673,7 @@ mod tests {
                 blocked_status["error"]
                     .as_str()
                     .unwrap()
-                    .contains("timed out waiting for foreground input state lock")
+                    .contains("timed out waiting for computer-use state lock")
             );
             assert!(
                 !old_ticket_valid,
@@ -712,7 +719,7 @@ mod tests {
             .unwrap_err();
         drop(competing);
         drop(held);
-        assert!(failure.contains("timed out waiting for foreground input state lock"));
+        assert!(failure.contains("timed out waiting for computer-use state lock"));
         assert_eq!(
             store.read().unwrap(),
             before,

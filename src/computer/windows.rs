@@ -409,10 +409,12 @@ async fn focus(id: &str) -> Result<(), String> {
     {
         let _dpi = DpiScope::new()?;
         let hwnd = validate_window(handle, pid)?;
+        super::host_control::Permit::check_current()?;
         if unsafe { IsIconic(hwnd) } != 0 {
             unsafe { ShowWindowAsync(hwnd, SW_RESTORE) };
         }
         // Windows foreground policy is respected; no AttachThreadInput bypass.
+        super::host_control::Permit::check_current()?;
         unsafe { SetForegroundWindow(hwnd) };
     }
     let until = tokio::time::Instant::now() + Duration::from_millis(500);
@@ -451,6 +453,7 @@ fn move_pointer(p: Point) -> Result<(), String> {
     interactive_desktop()?;
     validate_point(p)?;
     let _dpi = DpiScope::new()?;
+    super::host_control::Permit::check_current()?;
     if unsafe { SetCursorPos(p.x, p.y) } == 0 {
         return Err(format!(
             "{}; {INPUT_LIMITS}",
@@ -562,6 +565,7 @@ fn send_raw(inputs: &[INPUT]) -> Result<(), String> {
 }
 fn send(inputs: &[INPUT]) -> Result<(), String> {
     interactive_desktop()?;
+    super::host_control::Permit::check_current()?;
     send_raw(inputs)
 }
 fn send_guarded(inputs: &[INPUT], release: &mut ReleaseGuard) -> Result<(), String> {
@@ -569,6 +573,7 @@ fn send_guarded(inputs: &[INPUT], release: &mut ReleaseGuard) -> Result<(), Stri
     // denied/UIPI-zero calls usable without inventing pending cleanup state.
     release.armed = false;
     interactive_desktop()?;
+    super::host_control::Permit::check_current()?;
     match inject(inputs) {
         Ok(()) => {
             release.armed = true;

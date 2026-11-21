@@ -61,12 +61,39 @@ impl ClientSettings {
     }
 }
 
-/// Browser defaults are local to this client; no credentials are stored here.
+/// Browser presentation settings, independent of the Computer Use switch.
 #[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(from = "SavedBrowserSettings")]
 pub(crate) struct BrowserSettings {
     pub playwright_mcp: Option<PathBuf>,
     pub background: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct SavedBrowserSettings {
+    playwright_mcp: Option<PathBuf>,
+    background: Option<bool>,
+    focus_policy: Option<LegacyFocusPolicy>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LegacyFocusPolicy {
+    BackgroundAfterNativePairing,
+    ExplicitForeground,
+}
+
+impl From<SavedBrowserSettings> for BrowserSettings {
+    fn from(settings: SavedBrowserSettings) -> Self {
+        Self {
+            playwright_mcp: settings.playwright_mcp,
+            background: settings.background.unwrap_or(!matches!(
+                settings.focus_policy,
+                Some(LegacyFocusPolicy::ExplicitForeground)
+            )),
+        }
+    }
 }
 
 impl Default for BrowserSettings {
@@ -375,6 +402,16 @@ pub(super) fn normalize_args(args: &mut Vec<OsString>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_browser_presentation_settings_remain_readable() {
+        let old: BrowserSettings = toml::from_str("focus_policy = 'explicit_foreground'").unwrap();
+        assert!(!old.background);
+        let explicit: BrowserSettings =
+            toml::from_str("focus_policy = 'explicit_foreground'\nbackground = true").unwrap();
+        assert!(explicit.background);
+        assert!(toml::from_str::<BrowserSettings>("allow_input = true").is_err());
+    }
 
     fn directory() -> PathBuf {
         let mut random = [0u8; 8];

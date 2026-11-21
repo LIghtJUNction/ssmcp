@@ -308,7 +308,7 @@ impl Runtime {
             output: output.clone(),
         };
         let files = Files::new(&constructor)?;
-        let desktop = Desktop::new(&constructor)?;
+        let desktop = Desktop::new(&constructor, backend.computer_use())?;
         let time = time::Clock::new()?;
         let native = NativeHost::new(
             registry.clone(),

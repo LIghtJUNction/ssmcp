@@ -2,7 +2,7 @@
 use crate::{
     backend,
     browser::Browser,
-    computer::Computer,
+    computer::{Computer, host_control::HostControl},
     omarchy::Omarchy,
     registry::{Provider, Registry},
     runtime::native_host::{Call, ConstructorContext, NativePlugin, PluginFuture},
@@ -18,11 +18,14 @@ pub(crate) struct Desktop {
 }
 
 impl Desktop {
-    pub(crate) fn new(context: &ConstructorContext) -> Result<Arc<Self>, String> {
+    pub(crate) fn new(
+        context: &ConstructorContext,
+        control: Arc<HostControl>,
+    ) -> Result<Arc<Self>, String> {
         Ok(Arc::new(Self {
-            browser: Browser::new(context.root.clone())?,
-            computer: Computer::new(context.root.clone())?,
-            omarchy: Omarchy::new(context.root.clone())?,
+            browser: Browser::with_control(context.root.clone(), control.clone())?,
+            computer: Computer::with_control(context.root.clone(), control.clone())?,
+            omarchy: Omarchy::with_control(context.root.clone(), control)?,
             registry: context.registry.clone(),
         }))
     }

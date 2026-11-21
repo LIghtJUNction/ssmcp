@@ -24,7 +24,10 @@ fn a_fresh_store_starts_on_and_explicit_off_persists_across_connections() {
     assert_eq!(enabled, peer(&control).status());
     assert_eq!(control.set_local(true).unwrap(), enabled);
     assert_eq!(control.set_local(false).unwrap()["enabled"], false);
-    assert_eq!(peer(&control).status()["enabled"], false);
+    let off = peer(&control).status();
+    assert_eq!(off["enabled"], false);
+    assert_eq!(off["background_enabled"], false);
+    assert_eq!(off["os_permission_boundary"], false);
     assert_eq!(control.ticket().unwrap_err(), LOCKED);
 }
 
@@ -112,6 +115,27 @@ fn off_and_fresh_on_never_rearm_old_tickets() {
     assert_ne!(current.generation, old.generation);
 }
 
+#[test]
+fn permit_publication_shares_dispatch_lock_and_rejects_revoked_generation() {
+    let control = Arc::new(HostControl::default());
+    control.set_local(true).unwrap();
+    let permit = control.permit().unwrap();
+    let ticket = permit.worker_ticket().unwrap();
+    let dispatch = ticket.acquire_input_dispatch().unwrap();
+    // Publishing a handle and sending input are readers of the same generation.
+    // Neither may mistake the other's shared lock for a revocation.
+    assert_eq!(permit.commit(|| 7), Ok(7));
+    drop(dispatch);
+    control.set_local(false).unwrap();
+    control.set_local(true).unwrap();
+    let published = AtomicBool::new(false);
+    assert_eq!(
+        permit.commit(|| published.store(true, Ordering::Release)),
+        Err(ENDED.into())
+    );
+    assert!(!published.load(Ordering::Acquire));
+}
+
 #[tokio::test]
 async fn closing_one_connection_keeps_other_connections_enabled() {
     let control = HostControl::default();
@@ -149,19 +173,27 @@ fn each_pointer_keyboard_and_focus_operation_requires_the_switch() {
         "scroll",
         "watch_until_click",
     ] {
-        assert!(input_tool(&format!("ssmcp.computer.{suffix}")));
+        let name = format!("ssmcp.computer.{suffix}");
+        assert!(input_tool(&name));
+        assert!(mutation_tool(&name));
+    }
+    for suffix in ["desktop_start", "app_launch"] {
+        let name = format!("ssmcp.computer.{suffix}");
+        assert!(!input_tool(&name));
+        assert!(mutation_tool(&name));
     }
     for suffix in [
         "status",
         "keyboard_state",
+        "monitors",
         "windows",
         "screenshot",
-        "desktop_start",
         "desktop_status",
         "desktop_stop",
-        "app_launch",
     ] {
-        assert!(!input_tool(&format!("ssmcp.computer.{suffix}")));
+        let name = format!("ssmcp.computer.{suffix}");
+        assert!(!input_tool(&name));
+        assert!(!mutation_tool(&name));
     }
 }
 

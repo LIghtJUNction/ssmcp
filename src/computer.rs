@@ -1,5 +1,5 @@
 //! Computer-use desktop primitives with native Linux, Windows and macOS adapters.
-mod host_control;
+pub(crate) mod host_control;
 mod isolated;
 mod routing;
 mod windows_identity;
@@ -136,7 +136,7 @@ pub struct Computer {
     releases: Arc<ReleaseTasks>,
     environment: Option<isolated::Environment>,
     isolated: Mutex<Option<isolated::Desktop>>,
-    host_control: host_control::HostControl,
+    host_control: Arc<host_control::HostControl>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -360,6 +360,13 @@ fn capability(ready: bool, backend: &str, detail: Option<&str>) -> Value {
 }
 impl Computer {
     pub fn new(root: PathBuf) -> Result<Self, String> {
+        Self::with_control(root, Arc::new(host_control::HostControl::default()))
+    }
+
+    pub(crate) fn with_control(
+        root: PathBuf,
+        host_control: Arc<host_control::HostControl>,
+    ) -> Result<Self, String> {
         let root = root.canonicalize().map_err(|e| e.to_string())?;
         let session = if !cfg!(target_os = "linux") {
             Session::Unavailable
@@ -382,7 +389,7 @@ impl Computer {
             releases: Arc::new(ReleaseTasks::default()),
             environment: None,
             isolated: Mutex::new(None),
-            host_control: host_control::HostControl::default(),
+            host_control,
         })
     }
 
@@ -407,7 +414,7 @@ impl Computer {
             ),
             tool(
                 "desktop_stop",
-                "Stop only this connection's private desktop and its owned applications. The shared foreground on/off switch is unchanged.",
+                "Stop only this connection's private desktop and its owned applications. The Computer Use switch is unchanged.",
                 json!({}),
                 &[],
                 false,
@@ -573,7 +580,7 @@ impl Computer {
             ) {
                 descriptor["inputSchema"]["properties"]["desktop"] = json!({
                     "type":"string", "enum":["isolated","host"], "default":"isolated",
-                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host observation requires explicit host selection. Host input uses this machine's OS-user switch: new local state starts on, explicit /computer off persists, and /computer on or Super+Alt+C changes it locally. Remote tool arguments cannot change the switch; isolated desktop and background browser control remain enabled."
+                    "description":"All observation and input defaults to isolated. Without a private desktop, status reports readiness and other operations require app_launch or desktop_start; read-only calls never start one. Host observation requires explicit host selection. Computer Use controls mutations on both targets, starts On for new local state, and persists an explicit Off. Use /computer on or Super+Alt+C locally. This setting is scoped to SSMCP tools."
                 });
             }
         }
@@ -582,7 +589,7 @@ impl Computer {
             .find(|tool| tool["name"] == "ssmcp.computer.watch_until_click")
         {
             watch["inputSchema"]["properties"]["desktop"] = json!({
-                "type":"string","enum":["host"],"description":"Existing browser input uses the shared local host-input switch. This operation does not move the OS pointer."
+                "type":"string","enum":["host"],"description":"Existing browser input requires Computer Use On. This operation does not move the OS pointer."
             });
             watch["inputSchema"]["required"]
                 .as_array_mut()
@@ -593,6 +600,9 @@ impl Computer {
     }
 
     pub async fn perform(&self, name: &str, args: Value) -> Result<Value, String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("computer connection is closed".into());
+        }
         if !cfg!(target_os = "linux")
             && matches!(
                 name,
@@ -603,7 +613,16 @@ impl Computer {
         {
             return Err("this operation currently requires a Linux client".into());
         }
-        isolated::dispatch(self, name, args).await
+        let response = if host_control::mutation_tool(name) {
+            let permit = self.host_control.permit()?;
+            permit.scope(isolated::dispatch(self, name, args)).await?
+        } else {
+            isolated::dispatch(self, name, args).await?
+        };
+        Ok(isolated::control_status(
+            response,
+            self.host_control.status(),
+        ))
     }
 
     pub(crate) fn set_host_input_local(&self, enabled: bool) -> Result<Value, String> {
@@ -637,7 +656,9 @@ impl Computer {
 
     async fn perform_host(&self, name: &str, args: Value) -> Result<Value, String> {
         let mut response = if host_control::input_tool(name) {
-            let ticket = self.host_control.ticket()?;
+            let ticket = host_control::Permit::current()
+                .ok_or("missing computer-use permit")?
+                .ticket();
             let serial = tokio::select! {
                 biased;
                 _ = self.host_control.cancelled(ticket) => return Err(host_control::ENDED.into()),
@@ -686,6 +707,7 @@ impl Computer {
             return Err("computer connection is closed".into());
         }
         self.releases.wait(RELEASE_WAIT_TIMEOUT).await?;
+        host_control::Permit::check_current()?;
         let operation_timeout = if name == "ssmcp.computer.watch_until_click" {
             zuse_backend::watch_operation_timeout(&args)?
         } else {
@@ -1641,6 +1663,7 @@ async fn run_helper_in(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    host_control::Permit::check_current()?;
     let mut process = Managed::spawn(&mut command).map_err(|e| format!("{program}: {e}"))?;
     let mut stdout = process
         .child
@@ -1945,15 +1968,21 @@ mod tests {
     }
     #[tokio::test]
     async fn shutdown_revokes_input_before_dispatch() {
-        let computer = Computer::new(std::env::temp_dir()).unwrap();
-        computer.shutdown().await.unwrap();
-        assert!(
-            computer
-                .perform("ssmcp.computer.move", json!({"x":0,"y":0}))
-                .await
-                .unwrap_err()
-                .contains("closed")
-        );
+        for enabled in [true, false] {
+            let computer = Computer::new(std::env::temp_dir()).unwrap();
+            computer.host_control.set_local(enabled).unwrap();
+            computer.shutdown().await.unwrap();
+            for args in [json!({"x":0,"y":0}), json!({"desktop":"host","x":0,"y":0})] {
+                assert_eq!(
+                    computer
+                        .perform("ssmcp.computer.move", args)
+                        .await
+                        .unwrap_err(),
+                    "computer connection is closed"
+                );
+            }
+            assert_eq!(computer.host_input_status()["enabled"], enabled);
+        }
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -2036,7 +2065,7 @@ mod tests {
             releases: Arc::new(ReleaseTasks::default()),
             environment: None,
             isolated: Mutex::new(None),
-            host_control: host_control::HostControl::default(),
+            host_control: Arc::new(host_control::HostControl::default()),
         };
         assert!(
             computer
@@ -2334,7 +2363,7 @@ if root.exists():
             releases: Arc::new(ReleaseTasks::default()),
             environment: None,
             isolated: Mutex::new(None),
-            host_control: host_control::HostControl::default(),
+            host_control: Arc::new(host_control::HostControl::default()),
         };
         // Exercise the same readback used after zuse focus, without granting
         // host input or connecting a native desktop inside this unit fixture.
@@ -2612,7 +2641,7 @@ mod host_handoff_tests {
     }
 
     #[tokio::test]
-    async fn foreground_switch_does_not_change_default_isolated_routing() {
+    async fn computer_use_switch_does_not_change_default_isolated_routing() {
         let computer = computer();
         for enabled in [false, true, false] {
             computer.set_host_input_local(enabled).unwrap();
@@ -2622,9 +2651,47 @@ mod host_handoff_tests {
                 .unwrap();
             assert_eq!(status["structuredContent"]["desktop"], "isolated");
             assert_eq!(status["structuredContent"]["moves_host_pointer"], false);
-            assert_eq!(status["structuredContent"]["background_enabled"], true);
+            assert_eq!(
+                status["structuredContent"]["computer_use"]["enabled"],
+                enabled
+            );
             assert_eq!(computer.host_input_status()["enabled"], enabled);
         }
+    }
+
+    #[tokio::test]
+    async fn off_blocks_both_desktops_before_input_or_startup() {
+        let computer = computer();
+        computer.set_host_input_local(false).unwrap();
+        for (name, args) in [
+            ("ssmcp.computer.move", json!({"x":2,"y":3})),
+            ("ssmcp.computer.move", json!({"desktop":"host","x":2,"y":3})),
+            ("ssmcp.computer.desktop_start", json!({})),
+            (
+                "ssmcp.computer.app_launch",
+                json!({"command":["fixture-not-to-be-started"]}),
+            ),
+        ] {
+            assert_eq!(
+                computer.perform(name, args).await.unwrap_err(),
+                host_control::LOCKED
+            );
+        }
+        assert!(computer.isolated.lock().await.is_none());
+        let status = computer
+            .perform("ssmcp.computer.desktop_status", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            status["structuredContent"]["computer_use"]["enabled"],
+            false
+        );
+        assert_eq!(status["structuredContent"]["running"], false);
+        let stopped = computer
+            .perform("ssmcp.computer.desktop_stop", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(stopped["structuredContent"]["stopped"], false);
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 -- A consuming, non-repeating binding prevents a second toggle in the terminal.
 -- Do not set locked=true: this switch should not enable input from the lockscreen.
 hl.bind("SUPER + ALT + C", hl.dsp.exec_cmd("ssmcp computer toggle"), {
-    description = "ssmcp foreground computer use",
+    description = "ssmcp Computer Use",
     bypass = true,
     submap_universal = true,
 })

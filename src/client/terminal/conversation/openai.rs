@@ -52,7 +52,10 @@ fn link_command(owner: Option<&HistoryOwner>, arguments: &str) -> Result<LinkOut
             let action = if verb == "copy" {
                 WebAction::Copy(url)
             } else {
-                WebAction::Open(store::validate_chatgpt_url(&url)?)
+                WebAction::Open(
+                    store::validate_chatgpt_url(&url)?,
+                    "Use /chatgpt copy to open it manually",
+                )
             };
             Ok(LinkOutcome::Effect(action))
         }
@@ -110,7 +113,7 @@ impl State {
                     return Err("Use /plugin-docs without arguments".into());
                 }
                 let url = reqwest::Url::parse(DOCS).map_err(|_| "Invalid plugin reference URL")?;
-                self.chat_start_input(attachments::Source::Web(WebAction::Open(url)), true)?;
+                self.chat_start_input(attachments::Source::Web(WebAction::Open(url, DOCS)), true)?;
             }
             _ => {
                 if !args.is_empty() {
@@ -230,7 +233,7 @@ mod tests {
             for command in ["", "open"] {
                 assert!(matches!(
                     link_command(Some(&a), command),
-                    Ok(LinkOutcome::Effect(WebAction::Open(parsed))) if parsed.as_str() == url
+                    Ok(LinkOutcome::Effect(WebAction::Open(parsed, fallback))) if parsed.as_str() == url && fallback.contains("/chatgpt copy")
                 ));
             }
             assert!(matches!(

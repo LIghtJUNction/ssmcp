@@ -198,7 +198,7 @@ def badge(session):
     # Read the current input divider, not a retained command receipt in the footer.
     return {"on" if state in ("开启", "开") else "off"
             for line in session.screen.splitlines() if "─" in line
-            for state in re.findall(r"(?:电脑控制：|键鼠：)(开启|关闭|开|关)", line)}
+            for state in re.findall(r"(?:电脑控制：|电脑：)(开启|关闭|开|关)", line)}
 
 
 def inside(args):
@@ -220,7 +220,8 @@ def inside(args):
         result = subprocess.run([str(args.binary), "computer", action, "--json"],
                                 capture_output=True, text=True, check=True, timeout=10)
         value = json.loads(result.stdout)
-        assert value["background_enabled"] is True, value
+        assert value["background_enabled"] is value["enabled"], value
+        assert value["os_permission_boundary"] is False, value
         assert value["scope"] == "machine_os_user", value
         assert re.fullmatch(r"[0-9a-f]{32}", value["generation"]), value
         return value
@@ -245,7 +246,7 @@ def inside(args):
     try:
         initial = cli()
         assert initial["enabled"] is True
-        check("default_foreground_and_background_on")
+        check("default_computer_use_on")
         off = cli("off")
         assert off["enabled"] is False and cli()["generation"] == off["generation"]
         check("cli_off_persists_between_processes", generation=off["generation"])
@@ -278,7 +279,7 @@ def inside(args):
             draft = first.conversation(sessions)
             assert draft["draft"]["text"] == "keep this draft", draft
             assert cli()["generation"] == on["generation"]
-            check("ordinary_typing_preserves_enabled_foreground")
+            check("ordinary_typing_preserves_computer_use_on")
             first.write(b"\x1b[99;11u")
             shortcut_off = badges(False)
             assert first.conversation(sessions)["draft"] == draft["draft"]

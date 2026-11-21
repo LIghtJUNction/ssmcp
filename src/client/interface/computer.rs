@@ -45,7 +45,7 @@ pub(crate) fn describe(status: &Value) -> String {
         return format!("电脑控制：关闭 · 无法读取开关状态：{error}");
     }
     format!(
-        "电脑控制：{} · 当前桌面的鼠标和键盘 · Super+Alt+C 切换 · 同一系统用户的会话共用",
+        "电脑控制：{} · SSMCP 的电脑、浏览器与系统界面 · Super+Alt+C 切换 · 同一系统用户的会话共用",
         if status["enabled"] == true {
             "开启"
         } else {
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn computer_status_describes_desktop_control_in_plain_language() {
         let on = describe(&json!({"enabled":true,"background_enabled":true}));
-        assert!(on.contains("电脑控制：开启") && on.contains("鼠标和键盘"));
+        assert!(on.contains("电脑控制：开启") && on.contains("电脑、浏览器与系统界面"));
         assert!(on.contains("同一系统用户") && on.contains("Super+Alt+C"));
         assert!(!on.contains("seconds") && !on.contains("any input"));
         let failed = describe(&json!({"enabled":false,"error":"cannot read state"}));
