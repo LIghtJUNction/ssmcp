@@ -15,14 +15,16 @@ const MAX_METADATA: usize = 1024 * 1024;
 const HELP: &str = "\
 Usage: ssmcp update [--check]
 
-Update this installed client to the latest stable GitHub Release.
-  --check     Check for updates without downloading or changing files
+Update this installed client and check its independent official tool repository.
+  --check     Check releases and fetch tool metadata without replacing the client
   -h, --help  Show this help
 
 Downloads use the bundled installer, official SHA256SUMS and a version check.
 Older releases never replace a newer client. Package-manager installations
 must be updated with their original package manager.
 Existing sessions keep their current executable until restarted.
+Tool checks may initialize the offline Git seed and fetch objects/refs. Tool updates
+only fast-forward a clean checkout; local edits and override repositories remain.
 ";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -280,6 +282,12 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
         print!("{HELP}");
         return Ok(());
     }
+    println!("Checking the official SSMCP tool repository…");
+    let tool_update = crate::tool_repository::update(&std::env::current_dir()?, mode == Mode::Install).await;
+    match &tool_update {
+        Ok(report) => println!("Tool repository: {}", serde_json::to_string(report)?),
+        Err(error) => eprintln!("Tool repository check failed: {error}"),
+    }
     let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
     println!("Checking the latest stable ssmcp release…");
     let client = crate::http_client::builder()
@@ -321,7 +329,7 @@ pub(super) async fn run(args: Vec<OsString>) -> crate::Result<()> {
             latest.tag()
         ),
     }
-    Ok(())
+    tool_update.map(|_| ()).map_err(Into::into)
 }
 
 #[cfg(test)]

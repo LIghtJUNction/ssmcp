@@ -44,6 +44,7 @@ pub mod session;
 #[cfg(target_os = "linux")]
 mod steering;
 pub mod terminals;
+pub(crate) mod tool_repository;
 pub mod wire;
 pub(crate) mod worker;
 pub mod workspace;
