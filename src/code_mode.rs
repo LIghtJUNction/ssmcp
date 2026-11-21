@@ -1352,7 +1352,11 @@ mod tests {
         assert!(run.targets().is_empty());
         assert!(run.steering_targets().is_empty());
 
-        for tool in ["ssmcp.ui.get", "ssmcp.ui.questions", "ssmcp.ui.tool_summary"] {
+        for tool in [
+            "ssmcp.ui.get",
+            "ssmcp.ui.questions",
+            "ssmcp.ui.tool_summary",
+        ] {
             run.native_dispatched("display", Some(tool));
             run.bind_identity("display", "owner", "agent_one", "private-token")
                 .unwrap();

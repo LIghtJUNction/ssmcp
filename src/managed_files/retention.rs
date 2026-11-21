@@ -1,7 +1,7 @@
 //! Bounded maintenance of completed registry metadata, never workspace data.
 use super::{
-    CleanupIssue, CleanupRecovery, FileIdentity, LockedFile, ManagedFiles, Record,
-    RemovalOutcome, record_name,
+    CleanupIssue, CleanupRecovery, FileIdentity, LockedFile, ManagedFiles, Record, RemovalOutcome,
+    record_name,
 };
 use serde::Serialize;
 use std::io;
@@ -78,7 +78,10 @@ impl RetentionSummary {
     }
 
     fn issue(&mut self, path: String, error: impl std::fmt::Display) {
-        self.errors.push(CleanupIssue { path, error: error.to_string() });
+        self.errors.push(CleanupIssue {
+            path,
+            error: error.to_string(),
+        });
     }
 }
 
@@ -131,7 +134,12 @@ fn scan_with_limits(
                 } else {
                     summary.active_records += 1;
                 }
-                entries.push(Entry { name: name.to_owned(), record, metadata_identity, pruned: false });
+                entries.push(Entry {
+                    name: name.to_owned(),
+                    record,
+                    metadata_identity,
+                    pruned: false,
+                });
             }
             Err(error) => {
                 summary.invalid_records += 1;
@@ -141,10 +149,14 @@ fn scan_with_limits(
     }
     // Unreadable/unparseable record-shaped entries consume the active budget;
     // calling them completed would silently bypass the original safety limit.
-    summary.active_limit_exceeded = summary.active_records
-        .saturating_add(summary.invalid_records) > limits.active_records;
+    summary.active_limit_exceeded = summary
+        .active_records
+        .saturating_add(summary.invalid_records)
+        > limits.active_records;
 
-    let mut completed: Vec<usize> = entries.iter().enumerate()
+    let mut completed: Vec<usize> = entries
+        .iter()
+        .enumerate()
         .filter_map(|(index, entry)| entry.record.removed_at_unix.map(|_| index))
         .collect();
     // Timestamp ties use record ID, so bulk cleanup in one second still has a
@@ -152,7 +164,10 @@ fn scan_with_limits(
     completed.sort_by(|left, right| {
         let left = &entries[*left].record;
         let right = &entries[*right].record;
-        right.removed_at_unix.cmp(&left.removed_at_unix).then(right.id.cmp(&left.id))
+        right
+            .removed_at_unix
+            .cmp(&left.removed_at_unix)
+            .then(right.id.cmp(&left.id))
     });
     let eligible = completed.len().saturating_sub(limits.retain_completed);
     if let Err(error) = store.check_lock(lock) {
@@ -162,7 +177,11 @@ fn scan_with_limits(
     if prune_completed && !summary.state_changed {
         // Even a truncated sample can prove an entry is outside the global
         // newest-N: it contains N strictly higher (timestamp, ID) witnesses.
-        for index in completed.into_iter().skip(limits.retain_completed).take(limits.prune_records) {
+        for index in completed
+            .into_iter()
+            .skip(limits.retain_completed)
+            .take(limits.prune_records)
+        {
             if let Err(error) = store.check_lock(lock) {
                 summary.state_changed = true;
                 summary.issue(metadata_path(""), error);
@@ -178,26 +197,41 @@ fn scan_with_limits(
                     }
                 }
                 Ok(RemovalOutcome::Preserved(recovery)) => {
-                    summary.issue(metadata_path(&entry.name), "metadata preserved; see recovery details");
+                    summary.issue(
+                        metadata_path(&entry.name),
+                        "metadata preserved; see recovery details",
+                    );
                     summary.recoveries.push(recovery);
                 }
                 Ok(RemovalOutcome::Eligible) => {
-                    summary.issue(metadata_path(&entry.name), "metadata removal was not confirmed");
+                    summary.issue(
+                        metadata_path(&entry.name),
+                        "metadata removal was not confirmed",
+                    );
                 }
                 Err(error) => summary.issue(metadata_path(&entry.name), error),
             }
         }
     }
     summary.pending_completed_records = eligible.saturating_sub(summary.pruned_records);
-    if !summary.state_changed && let Err(error) = store.check_lock(lock) {
+    if !summary.state_changed
+        && let Err(error) = store.check_lock(lock)
+    {
         summary.state_changed = true;
         summary.issue(metadata_path(""), error);
     }
-    let records = if summary.raw_scan_truncated || summary.active_limit_exceeded || summary.state_changed {
-        None
-    } else {
-        Some(entries.into_iter().filter(|entry| !entry.pruned).map(|entry| entry.record).collect())
-    };
+    let records =
+        if summary.raw_scan_truncated || summary.active_limit_exceeded || summary.state_changed {
+            None
+        } else {
+            Some(
+                entries
+                    .into_iter()
+                    .filter(|entry| !entry.pruned)
+                    .map(|entry| entry.record)
+                    .collect(),
+            )
+        };
     Ok(Scan { records, summary })
 }
 
@@ -211,10 +245,14 @@ fn metadata_path(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{Category, json_bytes};
-    use std::{fs, io::Write, path::{Path, PathBuf}};
+    use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        fs,
+        io::Write,
+        path::{Path, PathBuf},
+    };
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -222,9 +260,14 @@ mod tests {
     impl Scratch {
         fn new() -> Self {
             let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-            let path = std::env::temp_dir().join(format!("ssmcp-retention-{}-{stamp}-{}",
-                std::process::id(), NEXT_ROOT.fetch_add(1, Ordering::Relaxed)));
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "ssmcp-retention-{}-{stamp}-{}",
+                std::process::id(),
+                NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
+            ));
             crate::platform::private_directory(&path).unwrap();
             Self(path)
         }
@@ -244,13 +287,22 @@ mod tests {
             file.sync_all().unwrap();
             drop(file); // Finalize Windows last-write metadata before registration.
             let file = fs::File::open(path).unwrap();
-            let registered = store.register_created(Path::new(&relative), &file, category,
-                "retention fixture", "unit owner").unwrap();
+            let registered = store
+                .register_created(
+                    Path::new(&relative),
+                    &file,
+                    category,
+                    "retention fixture",
+                    "unit owner",
+                )
+                .unwrap();
             registered.record().clone()
         }
     }
     impl Drop for Scratch {
-        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
     fn fixture(root: &Scratch) -> (ManagedFiles, Record, Record, Record) {
@@ -261,20 +313,45 @@ mod tests {
         store.set_config(&config).unwrap();
         let old = root.register(&store, "old.txt", Category::Temporary);
         let first_time = old.created_at_unix.max(old.identity.modified_at_unix) + 1;
-        assert_eq!(store.cleanup_at(false, "retention-fixture", first_time).unwrap().removed_files, 1);
+        assert_eq!(
+            store
+                .cleanup_at(false, "retention-fixture", first_time)
+                .unwrap()
+                .removed_files,
+            1
+        );
         let newer = root.register(&store, "newer.txt", Category::Temporary);
-        let second_time = first_time.max(newer.created_at_unix.max(newer.identity.modified_at_unix)) + 1;
-        assert_eq!(store.cleanup_at(false, "retention-fixture", second_time).unwrap().removed_files, 1);
+        let second_time =
+            first_time.max(newer.created_at_unix.max(newer.identity.modified_at_unix)) + 1;
+        assert_eq!(
+            store
+                .cleanup_at(false, "retention-fixture", second_time)
+                .unwrap()
+                .removed_files,
+            1
+        );
         let active = root.register(&store, "active.txt", Category::UserFile);
         (store, old, newer, active)
     }
 
     fn small_limits() -> Limits {
-        Limits { retain_completed: 1, raw_entries: 16, active_records: 4, prune_records: 1 }
+        Limits {
+            retain_completed: 1,
+            raw_entries: 16,
+            active_records: 4,
+            prune_records: 1,
+        }
     }
 
     fn metadata_bytes(store: &ManagedFiles, record: &Record) -> Vec<u8> {
-        store.registry.read(&format!("{}.json", record.id), super::super::RECORD_BYTES_LIMIT, true).unwrap()
+        store
+            .registry
+            .read(
+                &format!("{}.json", record.id),
+                super::super::RECORD_BYTES_LIMIT,
+                true,
+            )
+            .unwrap()
     }
 
     #[test]
@@ -283,7 +360,10 @@ mod tests {
         let (store, old, newer, active) = fixture(&root);
         let bad_name = format!("{}.json", "f".repeat(64));
         store.registry.write_new(&bad_name, b"{bad JSON").unwrap();
-        store.registry.write_new("unknown.keep", b"unknown metadata").unwrap();
+        store
+            .registry
+            .write_new("unknown.keep", b"unknown metadata")
+            .unwrap();
         // Reusing a completed record's data path does not make that new file
         // part of metadata retention. It must remain byte-for-byte intact.
         fs::write(root.0.join(&old.relative_path), b"new unregistered data").unwrap();
@@ -298,27 +378,77 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records.iter().any(|record| record.id == newer.id));
         assert!(records.iter().any(|record| record.id == active.id));
-        assert_eq!(store.read_record(&format!("{}.json", old.id)).unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert!(store.read_record(&format!("{}.json", newer.id)).unwrap().removed_at_unix.is_some());
-        assert!(store.read_record(&format!("{}.json", active.id)).unwrap().removed_at_unix.is_none());
-        assert_eq!(store.registry.read(&bad_name, 64, true).unwrap(), b"{bad JSON");
-        assert_eq!(store.registry.read("unknown.keep", 64, true).unwrap(), b"unknown metadata");
-        assert_eq!(fs::read(root.0.join(&old.relative_path)).unwrap(), b"new unregistered data");
-        assert_eq!(fs::read(root.0.join(&active.relative_path)).unwrap(), b"active.txt");
+        assert_eq!(
+            store
+                .read_record(&format!("{}.json", old.id))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(
+            store
+                .read_record(&format!("{}.json", newer.id))
+                .unwrap()
+                .removed_at_unix
+                .is_some()
+        );
+        assert!(
+            store
+                .read_record(&format!("{}.json", active.id))
+                .unwrap()
+                .removed_at_unix
+                .is_none()
+        );
+        assert_eq!(
+            store.registry.read(&bad_name, 64, true).unwrap(),
+            b"{bad JSON"
+        );
+        assert_eq!(
+            store.registry.read("unknown.keep", 64, true).unwrap(),
+            b"unknown metadata"
+        );
+        assert_eq!(
+            fs::read(root.0.join(&old.relative_path)).unwrap(),
+            b"new unregistered data"
+        );
+        assert_eq!(
+            fs::read(root.0.join(&active.relative_path)).unwrap(),
+            b"active.txt"
+        );
     }
 
     #[test]
     fn retention_preview_is_read_only_and_limits_never_return_a_partial_view() {
         let root = Scratch::new();
         let (store, old, newer, active) = fixture(&root);
-        let before = [metadata_bytes(&store, &old), metadata_bytes(&store, &newer), metadata_bytes(&store, &active)];
+        let before = [
+            metadata_bytes(&store, &old),
+            metadata_bytes(&store, &newer),
+            metadata_bytes(&store, &active),
+        ];
         let lock = store.lock().unwrap();
         let preview = scan_with_limits(&store, &lock, false, small_limits()).unwrap();
         assert_eq!(preview.summary.pruned_records, 0);
         assert_eq!(preview.summary.pending_completed_records, 1);
         assert_eq!(preview.records.unwrap().len(), 3);
-        assert_eq!(before, [metadata_bytes(&store, &old), metadata_bytes(&store, &newer), metadata_bytes(&store, &active)]);
-        let short = scan_with_limits(&store, &lock, false, Limits { raw_entries: 1, ..small_limits() }).unwrap();
+        assert_eq!(
+            before,
+            [
+                metadata_bytes(&store, &old),
+                metadata_bytes(&store, &newer),
+                metadata_bytes(&store, &active)
+            ]
+        );
+        let short = scan_with_limits(
+            &store,
+            &lock,
+            false,
+            Limits {
+                raw_entries: 1,
+                ..small_limits()
+            },
+        )
+        .unwrap();
         assert!(short.summary.raw_scan_truncated);
         assert!(short.records.is_none());
         assert_eq!(short.summary.pruned_records, 0);
@@ -326,13 +456,28 @@ mod tests {
         // budget instead of being discarded as a completed/unknown record.
         let bad_name = format!("{}.json", "e".repeat(64));
         store.registry.write_new(&bad_name, b"not JSON").unwrap();
-        let capped = scan_with_limits(&store, &lock, false,
-            Limits { active_records: 1, ..small_limits() }).unwrap();
+        let capped = scan_with_limits(
+            &store,
+            &lock,
+            false,
+            Limits {
+                active_records: 1,
+                ..small_limits()
+            },
+        )
+        .unwrap();
         assert_eq!(capped.summary.active_records, 1);
         assert_eq!(capped.summary.invalid_records, 1);
         assert!(capped.summary.active_limit_exceeded);
         assert!(capped.records.is_none());
-        assert_eq!(before, [metadata_bytes(&store, &old), metadata_bytes(&store, &newer), metadata_bytes(&store, &active)]);
+        assert_eq!(
+            before,
+            [
+                metadata_bytes(&store, &old),
+                metadata_bytes(&store, &newer),
+                metadata_bytes(&store, &active)
+            ]
+        );
     }
 
     #[test]
@@ -340,19 +485,31 @@ mod tests {
         let root = Scratch::new();
         let (store, old, newer, active) = fixture(&root);
         let lock = store.lock().unwrap();
-        let completed_at = store.read_record(&format!("{}.json", newer.id)).unwrap()
-            .removed_at_unix.unwrap();
+        let completed_at = store
+            .read_record(&format!("{}.json", newer.id))
+            .unwrap()
+            .removed_at_unix
+            .unwrap();
         for record in [&old, &newer] {
             let name = format!("{}.json", record.id);
             let mut completed = store.read_record(&name).unwrap();
             completed.removed_at_unix = Some(completed_at);
-            store.registry.write_atomic(&name, &json_bytes(&completed).unwrap()).unwrap();
+            store
+                .registry
+                .write_atomic(&name, &json_bytes(&completed).unwrap())
+                .unwrap();
         }
         let scanned = scan_with_limits(&store, &lock, true, small_limits()).unwrap();
         assert_eq!(scanned.summary.pruned_records, 1);
         let records = scanned.records.unwrap();
         let retained = old.id.max(newer.id);
-        assert_eq!(records.iter().filter(|record| record.removed_at_unix.is_some()).count(), 1);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.removed_at_unix.is_some())
+                .count(),
+            1
+        );
         assert!(records.iter().any(|record| record.id == retained));
         assert!(records.iter().any(|record| record.id == active.id));
     }

@@ -4,10 +4,10 @@
 //! No external metadata fetching: DCR is the advertised registration mechanism.
 mod grants;
 mod registry;
-pub mod transfer;
 #[cfg(test)]
 #[path = "oauth/registry_tests.rs"]
 mod registry_tests;
+pub mod transfer;
 
 use crate::{
     broker::{Authorization, Broker, Session, valid_username},
@@ -3511,4 +3511,3 @@ mod tests {
         assert!(!html.contains("login_code"));
     }
 }
-

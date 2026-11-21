@@ -369,4 +369,3 @@ pub(super) fn write_atomic(dir: &File, filename: &CString, bytes: &[u8]) -> crat
     }
     result
 }
-

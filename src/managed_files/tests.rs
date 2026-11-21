@@ -598,7 +598,8 @@ fn captured_replacement_is_restored_instead_of_deleted_using_the_old_record() {
     let parent_identity = parent.identity().unwrap();
     let captured = parent.capture(&name).unwrap();
     assert!(!root.join(relative).exists());
-    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None) else {
+    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None)
+    else {
         panic!("a captured replacement must never be reported as removed");
     };
 
@@ -610,14 +611,21 @@ fn captured_replacement_is_restored_instead_of_deleted_using_the_old_record() {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", windows))]
     assert!(recovery.restored_path.is_some());
     if let Some(reported) = recovery.restored_path.as_deref() {
-        assert_eq!(fs::canonicalize(reported).unwrap(), fs::canonicalize(root.join(relative)).unwrap());
+        assert_eq!(
+            fs::canonicalize(reported).unwrap(),
+            fs::canonicalize(root.join(relative)).unwrap()
+        );
     }
     assert_eq!(fs::read(root.join(relative)).unwrap(), bytes);
-    assert_eq!(FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(),
-               replacement_identity);
+    assert_eq!(
+        FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(),
+        replacement_identity
+    );
     assert_eq!(fs::read(root.join(original)).unwrap(), bytes);
-    assert_eq!(FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(),
-               record.identity);
+    assert_eq!(
+        FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(),
+        record.identity
+    );
 }
 
 #[test]
@@ -626,7 +634,13 @@ fn captured_replacement_recovery_never_overwrites_a_new_occupant_and_reports_its
     let manager = ManagedFiles::open(root.path()).unwrap();
     let relative = ".ssmcp/temporary/candidate.bin";
     let original = ".ssmcp/temporary/original.bin";
-    register(&manager, &root, relative, b"registered X", Category::Temporary);
+    register(
+        &manager,
+        &root,
+        relative,
+        b"registered X",
+        Category::Temporary,
+    );
     let record = manager.list().unwrap().pop().unwrap();
     fs::rename(root.join(relative), root.join(original)).unwrap();
     let replacement = root.create(relative, b"unregistered replacement Y");
@@ -642,7 +656,8 @@ fn captured_replacement_recovery_never_overwrites_a_new_occupant_and_reports_its
     let occupant_identity = FileIdentity::from_file(&occupant).unwrap();
     assert!(!occupant_identity.same_file(&replacement_identity));
     drop(occupant);
-    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None) else {
+    let RemovalOutcome::Preserved(recovery) = manager.finish_capture(&record, captured, None)
+    else {
         panic!("a recovery conflict must preserve both the captured object and the new occupant");
     };
 
@@ -651,18 +666,37 @@ fn captured_replacement_recovery_never_overwrites_a_new_occupant_and_reports_its
     assert!(recovery.restored_path.is_none());
     assert_eq!(recovery.parent_identity, Some(parent_identity));
     assert!(!recovery.error.is_empty());
-    assert_eq!(Path::new(&recovery.recovery_directory).components().count(), 1);
-    let retained = root.join(relative).parent().unwrap()
-        .join(&recovery.recovery_directory).join("captured");
+    assert_eq!(
+        Path::new(&recovery.recovery_directory).components().count(),
+        1
+    );
+    let retained = root
+        .join(relative)
+        .parent()
+        .unwrap()
+        .join(&recovery.recovery_directory)
+        .join("captured");
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", windows))]
     assert!(recovery.recovery_path.is_some());
     if let Some(reported) = recovery.recovery_path.as_deref() {
-        assert_eq!(fs::canonicalize(reported).unwrap(), fs::canonicalize(&retained).unwrap());
+        assert_eq!(
+            fs::canonicalize(reported).unwrap(),
+            fs::canonicalize(&retained).unwrap()
+        );
     }
     assert_eq!(fs::read(&retained).unwrap(), b"unregistered replacement Y");
-    assert_eq!(FileIdentity::from_file(&File::open(&retained).unwrap()).unwrap(), replacement_identity);
+    assert_eq!(
+        FileIdentity::from_file(&File::open(&retained).unwrap()).unwrap(),
+        replacement_identity
+    );
     assert_eq!(fs::read(root.join(relative)).unwrap(), b"newer occupant Z");
-    assert_eq!(FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(), occupant_identity);
+    assert_eq!(
+        FileIdentity::from_file(&File::open(root.join(relative)).unwrap()).unwrap(),
+        occupant_identity
+    );
     assert_eq!(fs::read(root.join(original)).unwrap(), b"registered X");
-    assert_eq!(FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(), record.identity);
+    assert_eq!(
+        FileIdentity::from_file(&File::open(root.join(original)).unwrap()).unwrap(),
+        record.identity
+    );
 }

@@ -11,7 +11,10 @@ use std::{
     ffi::{CStr, CString},
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd},
-        unix::{ffi::OsStringExt, fs::{MetadataExt, OpenOptionsExt}},
+        unix::{
+            ffi::OsStringExt,
+            fs::{MetadataExt, OpenOptionsExt},
+        },
     },
 };
 
@@ -245,11 +248,15 @@ impl Directory {
     }
 
     pub(super) fn read(&self, name: &str, limit: usize, private: bool) -> io::Result<Vec<u8>> {
-        self.read_identified(name, limit, private).map(|(bytes, _)| bytes)
+        self.read_identified(name, limit, private)
+            .map(|(bytes, _)| bytes)
     }
 
     pub(super) fn read_identified(
-        &self, name: &str, limit: usize, private: bool,
+        &self,
+        name: &str,
+        limit: usize,
+        private: bool,
     ) -> io::Result<(Vec<u8>, FileIdentity)> {
         let mut file = self.open(name, Access::Read, private)?;
         let before = FileIdentity::from_file(&file)?;
@@ -323,7 +330,9 @@ impl Directory {
             Ok(())
         }
         #[cfg(windows)]
-        { self.dir.remove_file(name) }
+        {
+            self.dir.remove_file(name)
+        }
     }
 
     fn private_child_new(&self, name: &str) -> io::Result<Self> {
@@ -348,15 +357,22 @@ impl Directory {
             let from = CString::new(from).map_err(io::Error::other)?;
             let to = CString::new(to).map_err(io::Error::other)?;
             if unsafe {
-                libc::renameat(self.file.as_raw_fd(), from.as_ptr(),
-                    to_directory.file.as_raw_fd(), to.as_ptr())
-            } != 0 {
+                libc::renameat(
+                    self.file.as_raw_fd(),
+                    from.as_ptr(),
+                    to_directory.file.as_raw_fd(),
+                    to.as_ptr(),
+                )
+            } != 0
+            {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
         }
         #[cfg(windows)]
-        { self.dir.rename(from, &to_directory.dir, to) }
+        {
+            self.dir.rename(from, &to_directory.dir, to)
+        }
     }
 
     fn remove_directory(&self, name: &str) -> io::Result<()> {
@@ -364,28 +380,36 @@ impl Directory {
         #[cfg(unix)]
         {
             let name = CString::new(name).map_err(io::Error::other)?;
-            if unsafe {
-                libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR)
-            } != 0 {
+            if unsafe { libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) }
+                != 0
+            {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
         }
         #[cfg(windows)]
-        { self.dir.remove_dir(name) }
+        {
+            self.dir.remove_dir(name)
+        }
     }
 
     /// Used only for a recovery receipt, never as authority for a file mutation.
     fn actual_path(&self) -> io::Result<PathBuf> {
         #[cfg(target_os = "linux")]
-        { std::fs::read_link(format!("/proc/self/fd/{}", self.file.as_raw_fd())) }
+        {
+            std::fs::read_link(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+        }
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             let mut bytes = [0u8; libc::PATH_MAX as usize];
-            if unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETPATH, bytes.as_mut_ptr()) } < 0 {
+            if unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETPATH, bytes.as_mut_ptr()) }
+                < 0
+            {
                 return Err(io::Error::last_os_error());
             }
-            let end = bytes.iter().position(|byte| *byte == 0)
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
                 .ok_or_else(|| invalid("directory recovery path was not terminated"))?;
             Ok(PathBuf::from(OsString::from_vec(bytes[..end].to_vec())))
         }
@@ -396,14 +420,30 @@ impl Directory {
             let file = self.dir.try_clone()?.into_std_file();
             let mut text = vec![0u16; 32_768];
             let length = unsafe {
-                GetFinalPathNameByHandleW(file.as_raw_handle(), text.as_mut_ptr(), text.len() as u32, 0)
+                GetFinalPathNameByHandleW(
+                    file.as_raw_handle(),
+                    text.as_mut_ptr(),
+                    text.len() as u32,
+                    0,
+                )
             };
-            if length == 0 { return Err(io::Error::last_os_error()); }
-            if length as usize >= text.len() { return Err(invalid("directory recovery path is too long")); }
-            Ok(PathBuf::from(String::from_utf16(&text[..length as usize]).map_err(io::Error::other)?))
+            if length == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if length as usize >= text.len() {
+                return Err(invalid("directory recovery path is too long"));
+            }
+            Ok(PathBuf::from(
+                String::from_utf16(&text[..length as usize]).map_err(io::Error::other)?,
+            ))
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", windows)))]
-        { Err(io::Error::new(io::ErrorKind::Unsupported, "directory handle path unavailable")) }
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "directory handle path unavailable",
+            ))
+        }
     }
 
     pub(super) fn capture(self, name: &str) -> io::Result<Captured> {
@@ -411,7 +451,10 @@ impl Directory {
         let directory_name = format!("{}{}", super::RECOVERY_PREFIX, super::random_id()?);
         let directory = self.private_child_new(&directory_name)?;
         let capture = Captured {
-            parent: self, directory, directory_name, original_name: name.to_owned(),
+            parent: self,
+            directory,
+            directory_name,
+            original_name: name.to_owned(),
         };
         // The destination is inside a new EXCL-created, private, empty directory.
         // rename is atomic and both directories are on the same filesystem.
@@ -496,7 +539,9 @@ impl Captured {
         if FileIdentity::from_file(&file)? != *expected
             || !same_at(&self.directory, "captured", expected)?
         {
-            return Err(invalid("isolated object does not match the registered file"));
+            return Err(invalid(
+                "isolated object does not match the registered file",
+            ));
         }
         // Only the verified object in the private isolation directory is unlinked.
         // A new file at original_name is never touched.
@@ -511,7 +556,9 @@ impl Captured {
         Ok(self.parent.actual_path()?.join(&self.original_name))
     }
 
-    pub(super) fn directory_name(&self) -> &str { &self.directory_name }
+    pub(super) fn directory_name(&self) -> &str {
+        &self.directory_name
+    }
 
     pub(super) fn parent_identity(&self) -> io::Result<ObjectIdentity> {
         self.parent.identity()
@@ -523,20 +570,39 @@ impl Captured {
             let from = c"captured";
             let to = CString::new(self.original_name.as_str()).expect("checked single component");
             let result = unsafe {
-                libc::syscall(libc::SYS_renameat2, self.directory.file.as_raw_fd(), from.as_ptr(),
-                    self.parent.file.as_raw_fd(), to.as_ptr(), libc::RENAME_NOREPLACE)
+                libc::syscall(
+                    libc::SYS_renameat2,
+                    self.directory.file.as_raw_fd(),
+                    from.as_ptr(),
+                    self.parent.file.as_raw_fd(),
+                    to.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
             };
-            if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
         };
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         let result = {
             let from = c"captured";
             let to = CString::new(self.original_name.as_str()).expect("checked single component");
             let result = unsafe {
-                libc::renameatx_np(self.directory.file.as_raw_fd(), from.as_ptr(),
-                    self.parent.file.as_raw_fd(), to.as_ptr(), libc::RENAME_EXCL)
+                libc::renameatx_np(
+                    self.directory.file.as_raw_fd(),
+                    from.as_ptr(),
+                    self.parent.file.as_raw_fd(),
+                    to.as_ptr(),
+                    libc::RENAME_EXCL,
+                )
             };
-            if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
         {
@@ -546,22 +612,35 @@ impl Captured {
             let linked = self.restore_link();
             return match linked {
                 Ok(()) => match self.directory.remove("captured") {
-                    Ok(()) => RestoreOutcome { restored: true, recovery_remains: false, error: None },
+                    Ok(()) => RestoreOutcome {
+                        restored: true,
+                        recovery_remains: false,
+                        error: None,
+                    },
                     Err(error) => RestoreOutcome {
-                        restored: true, recovery_remains: true,
+                        restored: true,
+                        recovery_remains: true,
                         error: Some(format!("restored link; isolated link remains: {error}")),
                     },
                 },
                 Err(error) => RestoreOutcome {
-                    restored: false, recovery_remains: true, error: Some(error.to_string()),
+                    restored: false,
+                    recovery_remains: true,
+                    error: Some(error.to_string()),
                 },
             };
         }
         #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
         match result {
-            Ok(()) => RestoreOutcome { restored: true, recovery_remains: false, error: None },
+            Ok(()) => RestoreOutcome {
+                restored: true,
+                recovery_remains: false,
+                error: None,
+            },
             Err(error) => RestoreOutcome {
-                restored: false, recovery_remains: true, error: Some(error.to_string()),
+                restored: false,
+                recovery_remains: true,
+                error: Some(error.to_string()),
             },
         }
     }
@@ -571,14 +650,26 @@ impl Captured {
         // This refuses symlinks and special files; their recovery copy stays put.
         let _file = self.directory.open("captured", Access::Read, false)?;
         #[cfg(windows)]
-        { self.directory.dir.hard_link("captured", &self.parent.dir, &self.original_name) }
+        {
+            self.directory
+                .dir
+                .hard_link("captured", &self.parent.dir, &self.original_name)
+        }
         #[cfg(unix)]
         {
             let to = CString::new(self.original_name.as_str()).expect("checked single component");
             if unsafe {
-                libc::linkat(self.directory.file.as_raw_fd(), c"captured".as_ptr(),
-                    self.parent.file.as_raw_fd(), to.as_ptr(), 0)
-            } != 0 { return Err(io::Error::last_os_error()); }
+                libc::linkat(
+                    self.directory.file.as_raw_fd(),
+                    c"captured".as_ptr(),
+                    self.parent.file.as_raw_fd(),
+                    to.as_ptr(),
+                    0,
+                )
+            } != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
             Ok(())
         }
     }
@@ -586,7 +677,9 @@ impl Captured {
     pub(super) fn remove_empty(self) -> io::Result<()> {
         let expected = self.directory.identity()?;
         let current = self.parent.child(&self.directory_name, false, true)?;
-        if current.identity()? != expected { return Err(invalid("recovery directory identity changed")); }
+        if current.identity()? != expected {
+            return Err(invalid("recovery directory identity changed"));
+        }
         drop(current);
         drop(self.directory);
         // On Windows the open directory handle must be closed before rmdir.

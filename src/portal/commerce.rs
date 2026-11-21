@@ -130,11 +130,15 @@ fn state(order: &Order) -> &'static str {
 // Presentation only: these messages follow persisted order states.
 fn state_help(order: &Order) -> &'static str {
     match order.state {
-        OrderState::Reserved => "尚未收到已验证的支付通知。若已付款，请等待通知或联系管理员核对，避免重复付款。",
+        OrderState::Reserved => {
+            "尚未收到已验证的支付通知。若已付款，请等待通知或联系管理员核对，避免重复付款。"
+        }
         OrderState::Cancelled => "支付方已确认取消，订单预留的库存已释放。",
         OrderState::Paid => "付款已经核验，流量尚待入账。请稍后查看；状态长时间不变时联系管理员。",
         OrderState::Granted => "本订单流量已记入所属自然月额度。到期时未用完的部分不结转。",
-        OrderState::PaidExpired => "付款跨月到达，未授予当前月份流量。请联系管理员核对退款；此状态不代表退款已完成。",
+        OrderState::PaidExpired => {
+            "付款跨月到达，未授予当前月份流量。请联系管理员核对退款；此状态不代表退款已完成。"
+        }
     }
 }
 
@@ -186,7 +190,9 @@ async fn traffic(
         available
     ));
     if commerce.config.environment == "test" {
-        body.push_str("<p class=payment-test-notice role=note>支付测试环境：此入口仅用于测试。</p>");
+        body.push_str(
+            "<p class=payment-test-notice role=note>支付测试环境：此入口仅用于测试。</p>",
+        );
     }
     body.push_str("<p class=billing-note>收银台如计税，会在付款前显示税额及含税应付金额。</p>");
     if let Some((minimum, maximum)) = commerce.config.quantity_range(available)
@@ -398,7 +404,10 @@ async fn order(
         view::escape(&order.currency),
         view::escape(&order.period)
     );
-    body.push_str(&format!("<p class=order-state-help>{}</p>", state_help(&order)));
+    body.push_str(&format!(
+        "<p class=order-state-help>{}</p>",
+        state_help(&order)
+    ));
     if let Some(receipt) = &order.receipt {
         body.push_str(&format!(
             "<dl class=verified-payment><div><dt>已核验税额</dt><dd>{} {}</dd></div><div><dt>含税实收</dt><dd>{} {}</dd></div></dl>",
@@ -426,7 +435,9 @@ async fn order(
         body.push_str(&format!("<form method=post action=\"/account/traffic/orders/{}/reconcile\"><input type=hidden name=csrf value=\"{}\"><button type=submit>核对已取消订单并释放库存</button></form><p>仅在支付方确认取消且没有待付或成功付款时释放库存。查询失败或信息不足会保留订单。</p>",
             view::escape(&order.id), view::escape(&csrf)));
     }
-    body.push_str("<div class=order-return><a href=/account/traffic>返回流量与订单</a></div></section>");
+    body.push_str(
+        "<div class=order-return><a href=/account/traffic>返回流量与订单</a></div></section>",
+    );
     Ok(Html(view::page("流量订单", &body)).into_response())
 }
 async fn grant(broker: &Broker, commerce: &Commerce, order: Order) -> Result<(), Problem> {

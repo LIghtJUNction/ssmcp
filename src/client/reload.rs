@@ -189,7 +189,8 @@ impl Restart {
                     "summary": summary,
                 }));
                 let mut capture = output.capture("managed-files:reload:json");
-                let saved = capture.spill()
+                let saved = capture
+                    .spill()
                     .and_then(|()| capture.push(diagnostic.to_string().as_bytes()));
                 let saved = saved.and(capture.finish());
                 let mut details = capture.metadata().map_or_else(

@@ -66,7 +66,11 @@ impl State {
         if self.conversation.view != View::Activity || self.help || self.selection {
             return None;
         }
-        let count = self.question_views().iter().filter(|view| editable(view)).count();
+        let count = self
+            .question_views()
+            .iter()
+            .filter(|view| editable(view))
+            .count();
         if count == 0 {
             return None;
         }
@@ -896,9 +900,15 @@ mod tests {
                 answered.question.state = QuestionState::Answered;
                 let mut invalidated = fixture("invalidated", true);
                 invalidated.finish.as_mut().unwrap().status = FinishStatus::Invalidated;
-                let mut state = state(columns, vec![
-                    fixture("question", false), fixture("finish", true), answered, invalidated,
-                ]);
+                let mut state = state(
+                    columns,
+                    vec![
+                        fixture("question", false),
+                        fixture("finish", true),
+                        answered,
+                        invalidated,
+                    ],
+                );
                 state.chat_change_view(View::Activity);
                 state.ui.color = color;
                 state.notice = Some("Keep the existing action notice".into());
@@ -922,23 +932,33 @@ mod tests {
                     parser.process(&frame.diff(None));
                     let visible = parser.screen().contents();
                     let header = visible.lines().next().unwrap_or_default();
-                    assert!(header.contains("问题待答") && header.contains('2')
-                        && header.contains("Shift+↑"), "{columns}: {visible}");
+                    assert!(
+                        header.contains("问题待答")
+                            && header.contains('2')
+                            && header.contains("Shift+↑"),
+                        "{columns}: {visible}"
+                    );
                     assert!(!visible.contains("剩余") && !visible.contains("等待你的输入"));
                     let cell = parser.screen().cell(0, 1).unwrap();
                     assert_eq!(cell.contents(), "!");
-                    assert_eq!(cell.fgcolor(), if color {
-                        vt100::Color::Rgb(242, 139, 130)
-                    } else {
-                        vt100::Color::Default
-                    });
-                    assert_eq!((
-                        state.conversation.composer.text().to_owned(),
-                        state.conversation.composer.cursor(),
-                        state.conversation.target.clone(),
-                        state.conversation.native_recipient.clone(),
-                        state.conversation.send_to_group,
-                    ), before);
+                    assert_eq!(
+                        cell.fgcolor(),
+                        if color {
+                            vt100::Color::Rgb(242, 139, 130)
+                        } else {
+                            vt100::Color::Default
+                        }
+                    );
+                    assert_eq!(
+                        (
+                            state.conversation.composer.text().to_owned(),
+                            state.conversation.composer.cursor(),
+                            state.conversation.target.clone(),
+                            state.conversation.native_recipient.clone(),
+                            state.conversation.send_to_group,
+                        ),
+                        before
+                    );
                     assert!(state.actions.is_empty());
                 }
             }
@@ -953,8 +973,17 @@ mod tests {
             let draft = state.conversation.composer.text().to_owned();
             let cursor = state.conversation.composer.cursor();
             let target = state.conversation.target.clone();
-            assert!(state.chat_question_attention(columns).unwrap().contains("问题待答"));
-            assert!(state.chat_keyboard(b"\x1b[1;2A", Instant::now(), false).is_empty());
+            assert!(
+                state
+                    .chat_question_attention(columns)
+                    .unwrap()
+                    .contains("问题待答")
+            );
+            assert!(
+                state
+                    .chat_keyboard(b"\x1b[1;2A", Instant::now(), false)
+                    .is_empty()
+            );
             assert_eq!(state.conversation.view, View::Questions);
             assert_eq!(state.conversation.question_id.as_deref(), Some("pending"));
             assert!(state.conversation.detail);
@@ -964,13 +993,23 @@ mod tests {
             assert_eq!(state.conversation.composer.text(), draft);
             assert_eq!(state.conversation.composer.cursor(), cursor);
             assert_eq!(state.conversation.target, target);
-            assert_eq!(state.conversation.question_fixture.as_ref().unwrap()[0].question.state,
-                QuestionState::Pending);
-            state.conversation.question_fixture.as_mut().unwrap()[0].question.state =
-                QuestionState::Answered;
+            assert_eq!(
+                state.conversation.question_fixture.as_ref().unwrap()[0]
+                    .question
+                    .state,
+                QuestionState::Pending
+            );
+            state.conversation.question_fixture.as_mut().unwrap()[0]
+                .question
+                .state = QuestionState::Answered;
             assert!(state.chat_question_attention(columns).is_none());
             assert!(!screen(&mut state, "answered-no-badge").contains("问题待答"));
-            state.conversation.question_fixture.as_mut().unwrap().clear();
+            state
+                .conversation
+                .question_fixture
+                .as_mut()
+                .unwrap()
+                .clear();
             assert!(state.chat_question_attention(columns).is_none());
             assert!(!screen(&mut state, "empty-no-badge").contains("问题待答"));
             assert!(state.actions.is_empty());
