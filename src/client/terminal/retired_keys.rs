@@ -1,10 +1,9 @@
-//! Decode only Super+Alt+C from the Kitty/CSI-u enhanced keyboard protocol.
-//! Legacy Alt+C remains copy mode. Unknown sequences retain the existing path.
+//! Consume the retired Super+Alt+C chord without running any control action.
+//! Legacy Alt+C remains copy mode; unknown CSI-u sequences keep their old path.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Decoded {
     Pending,
-    Press,
     Ignore,
     Other,
 }
@@ -73,7 +72,7 @@ pub(super) fn decode(bytes: &[u8]) -> Decoded {
         return Decoded::Other;
     };
     // Kitty modifier bits: Alt=2, Super=8, CapsLock=64, NumLock=128.
-    // Never turn Shift/Control/Hyper/Meta or plain Alt+C into this shortcut.
+    // Never swallow Shift/Control/Hyper/Meta or plain Alt+C as the old chord.
     if bits & !(64 | 128) != (2 | 8) {
         return Decoded::Other;
     }
@@ -88,46 +87,7 @@ pub(super) fn decode(bytes: &[u8]) -> Decoded {
         return Decoded::Other;
     }
     match event {
-        1 => Decoded::Press,
-        2 | 3 => Decoded::Ignore,
+        1..=3 => Decoded::Ignore,
         _ => Decoded::Other,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn super_alt_c_requires_both_modifiers_and_only_fires_on_press() {
-        for sequence in [
-            b"\x1b[99;11u".as_slice(),
-            b"\x1b[99;11:1u",
-            b"\x1b[67;75u",
-            b"\x1b[99::99;203:1u",
-        ] {
-            assert_eq!(decode(sequence), Decoded::Press, "{sequence:?}");
-            for prefix in 0..sequence.len() {
-                assert_eq!(
-                    decode(&sequence[..prefix]),
-                    Decoded::Pending,
-                    "{sequence:?} at {prefix}"
-                );
-            }
-        }
-        for sequence in [b"\x1b[99;11:2u".as_slice(), b"\x1b[99;11:3u"] {
-            assert_eq!(decode(sequence), Decoded::Ignore);
-        }
-        for sequence in [
-            b"\t".as_slice(),
-            b"\x1bc",
-            b"\x1b[99;3u",
-            b"\x1b[99;12u",
-            b"\x1b[99;15u",
-            b"\x1b[99;11:0u",
-            b"\x1b[99;11;1;2u",
-        ] {
-            assert_eq!(decode(sequence), Decoded::Other, "{sequence:?}");
-        }
     }
 }

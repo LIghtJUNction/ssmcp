@@ -15,9 +15,7 @@ pub enum Provider {
     Ui,
     Exec,
     Time,
-    Browser,
     Computer,
-    Omarchy,
     Harnesses,
     Plugins,
     Workspace,
@@ -31,17 +29,15 @@ pub enum Provider {
     Claude,
     Pi,
     OpenCode,
-    Playwright,
     #[serde(rename = "ssmcp")]
     Peer,
 }
 
-pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 6] = [
+pub(crate) const OPTIONAL_PROVIDERS: [(Provider, &str); 5] = [
     (Provider::Codex, "codex"),
     (Provider::Claude, "claude"),
     (Provider::Pi, "pi"),
     (Provider::OpenCode, "opencode"),
-    (Provider::Playwright, "playwright"),
     (Provider::Peer, "ssmcp"),
 ];
 impl Provider {
@@ -52,9 +48,7 @@ impl Provider {
             Self::Ui => "ui",
             Self::Exec => "exec",
             Self::Time => "time",
-            Self::Browser => "browser",
             Self::Computer => "computer",
-            Self::Omarchy => "omarchy",
             Self::Harnesses => "harnesses",
             Self::Plugins => "plugins",
             Self::Workspace => "workspace",
@@ -68,7 +62,6 @@ impl Provider {
             Self::Claude => "claude",
             Self::Pi => "pi",
             Self::OpenCode => "opencode",
-            Self::Playwright => "playwright",
             Self::Peer => "ssmcp",
         }
     }
@@ -119,9 +112,7 @@ impl StoredTool {
             description: descriptor["description"].as_str().map(str::to_owned),
             input_schema: descriptor["inputSchema"].clone(),
             output_schema: descriptor.get("outputSchema").cloned(),
-            approval: if self.provider.is_harness()
-                || matches!(self.provider, Provider::Playwright | Provider::Peer)
-            {
+            approval: if self.provider.is_harness() || self.provider == Provider::Peer {
                 ApprovalPolicy::Native
             } else {
                 ApprovalPolicy::AuthorizedConnection
@@ -313,28 +304,6 @@ impl Registry {
         }
         Ok(())
     }
-    /// Bounded cached route names, without materializing or changing native schemas.
-    pub(crate) fn provider_catalog_summary(&self, provider: Provider) -> Result<Value, String> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
-        if state.closed {
-            return Err("client connection is closed".into());
-        }
-        let mut names = Vec::new();
-        let mut count = 0usize;
-        for (name, tool) in &state.tools {
-            if tool.provider == provider {
-                count += 1;
-                if names.len() < 32 {
-                    names.push(name.clone());
-                }
-            }
-        }
-        Ok(serde_json::json!({
-            "provider":provider.label(), "generation":state.generation,
-            "tool_count":count, "truncated":count>names.len(), "tool_names":names
-        }))
-    }
-
     /// Small, atomic capability summary; native schemas remain on the client.
     pub fn capabilities(&self) -> Result<Value, String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
@@ -393,9 +362,13 @@ fn prepare(
             Provider::Ui => id.starts_with("ssmcp.ui."),
             Provider::Exec => id.starts_with("ssmcp.exec."),
             Provider::Time => id.starts_with("ssmcp.time."),
-            Provider::Browser => id.starts_with("ssmcp.browser."),
-            Provider::Computer => id.starts_with("ssmcp.computer."),
-            Provider::Omarchy => id.starts_with("ssmcp.omarchy."),
+            Provider::Computer => matches!(
+                id.as_str(),
+                "ssmcp.computer.version"
+                    | "ssmcp.computer.download"
+                    | "ssmcp.computer.install"
+                    | "ssmcp.computer.uninstall"
+            ),
             Provider::Harnesses => {
                 matches!(id.as_str(), "ssmcp.harnesses.list" | "ssmcp.harnesses.load")
             }
@@ -428,9 +401,6 @@ fn prepare(
             Provider::Claude => true,
             Provider::Pi => id.starts_with("pi.") || id.starts_with("ssmcp.pi."),
             Provider::OpenCode => id.starts_with("opencode."),
-            Provider::Playwright => {
-                id.starts_with("playwright.") || id.starts_with("ssmcp.playwright.")
-            }
             Provider::Peer => id.starts_with("peer."),
         };
         if !allowed

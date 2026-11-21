@@ -248,8 +248,6 @@ mod tests {
         tree.append(&mut out, root, "").unwrap();
         assert_eq!(tree.expanded, independent);
         let rendered = render(Request::Dependencies).unwrap();
-        assert!(rendered.contains("zuse-computer "));
-        assert!(rendered.contains("git+https://github.com/LIghtJUNction/zuse.git#"));
         assert!(rendered.ends_with(&out));
         assert!(dependencies(LOCK, "0.0.0-incorrect").is_err());
     }

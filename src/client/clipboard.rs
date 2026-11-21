@@ -11,7 +11,7 @@ pub(super) enum Content {
     Files(Vec<std::path::PathBuf>),
 }
 async fn helper(program: &str, arguments: &[&str], limit: usize) -> Result<Vec<u8>, String> {
-    crate::computer::run_helper(
+    crate::backend::run_helper(
         Path::new("."),
         program,
         &arguments

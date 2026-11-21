@@ -200,9 +200,7 @@ validate 检查 tag、manifest、lockfile、main ancestry、工作区与子模�
 
 checks 在各原生 runner 上先显式构建 native_plugin_fixture 动态库，再单独执行精确的 native_plugin_runtime_contract ignored 测试。测试本身不会启动 Cargo，缺少预构建制品不会被当作通过。
 
-Windows 官方 build job 另运行 `scripts/test_windows_browser_bootstrap.ps1`，使用该 runner 的原生 PowerShell 和隔离 helper fixtures，并上传独立 JSON 证据。这检查下载、版本、哈希与错误路径，不安装真实浏览器依赖，也不等同于所有用户桌面环境的实机验收。报告放在 out，不混入发行附件集合。
-
-同一 Windows 正式发布矩阵还运行 [`scripts/smoke_windows_browser.ps1`](../scripts/smoke_windows_browser.ps1)：只导入生产安装器的依赖函数，在隔离临时目录真实安装官方 Node 24 LTS、Playwright 1.65.1 与 Chromium，再执行一次复用安装。它使用本 job 新构建的客户端核对 `setup browser --native --check --json` 的精确路径，并让 Chromium 无窗口渲染本地页面。父进程以 Windows Job Object 收口自有进程树，结束后恢复用户环境、删除临时依赖；失败、超时或清理异常都阻止该平台通过。独立 JSON 仅记录版本、摘要、架构与检查状态，不记录原环境或 npm 输出。Windows ARM64 的客户端和 Node 必须匹配 ARM64；Chromium 按 Playwright 实际产物运行并记录其 PE 架构，不能把系统支持的 x64 仿真写成原生 ARM64 浏览器。只有对应 Windows runner 的成功报告才算这项真实验证完成；本机语法检查和 Linux fixtures 不替代它。[Playwright 1.65.1 Chromium 下载映射](https://github.com/microsoft/playwright/blob/v1.65.1/packages/playwright-core/src/server/registry/index.ts)
+Windows 正式 build job 继续执行 SSMCP 安装、更新和下载失败恢复检查。安装器只安装 SSMCP；旧浏览器依赖 bootstrap/smoke 与对应证据步骤已退役，不再下载安装 Node.js、Playwright 或 Chromium。Zuse CLI 的下载、安装与卸载由独立生命周期工具管理，具体权限与资产合同见[Zuse CLI 指南](computer-use.md)。六个平台构建、源码与依赖验证及 16 件公开附件的完整性要求继续保留。[实际工作流](../.github/workflows/release.yml)
 
 GitHub 发布任务从固定源码重新核对 verified-source 与所有附件。它先创建或找回 draft，读取实际附件大小和摘要，全部一致后才公开。重跑只复用相同内容的附件，发现不同内容时保留 draft 或既有发布。release-manifest.json 记录实际源码、依赖图、附件摘要，以及 registry 发布决策。已冻结的旧标签仍可从 main 显式指定标签重试，使用其原有验证协议。[发布流程](../.github/workflows/release.yml) · [发布校验与回归](../scripts/test_release.py)
 

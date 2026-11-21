@@ -166,33 +166,20 @@ fn native_limits(chat_enabled: bool) -> Value {
             "failure_retry":"explicit load with refresh:true",
             "native_tools_require_harness":false
         },
-        "computer_use":{
-            "computer_namespace":"ssmcp.computer.*",
-            "omarchy_namespace":"ssmcp.omarchy.*",
-            "desktop_platforms":["linux","windows","macos"],
-            "browser_namespace":"ssmcp.browser.*",
-            "browser_extension_namespace":"playwright.* only after explicit optional harness loading succeeds",
-            "browser_discovery":"ssmcp.browser.discover reads metadata; installation is not a connection",
-            "model_invocation":false,
-            "control_switch":{"name":"Computer Use On / Off","scope":"machine_os_user",
-                "mutation_gate":["computer","browser","omarchy","playwright"],
-                "observation_and_owned_cleanup_available":true,
-                "os_permission_boundary":false,
-                "note":"Native developer shell and standalone OS programs retain their existing permissions."},
-            "input_scope":"all desktop observation and input defaults to isolated; host access requires explicit desktop:host",
-            "isolated_desktop_platforms":["linux"],
-            "automatic_desktop_start":{"tool":"ssmcp.computer.app_launch","width":1280,"height":800},
-            "read_only_startup":false,
-            "inactive_desktop":"status reports readiness; other observation/input returns an explicit startup requirement without host fallback",
-            "desktop_coordinates":"read coordinate_space: Linux/macOS logical, Windows physical virtual-desktop pixels; use image_to_desktop mapping",
-            "browser_transport":"native Chromium CDP at explicit loopback endpoints; optional installed Playwright MCP in --extension mode",
-            "browser_batch":{"tool":"ssmcp.browser.act","max_actions":16,"deadline_ms":25000,
-                "failure":"stops at first error; reports acknowledged steps; no automatic replay"},
-            "browser_wait":{"tool":"ssmcp.browser.wait","timeout_ms":[1,10000],
-                "states":["visible","hidden","attached","detached"],"includes_target_queue":true},
-            "image_max_decoded_bytes":400*1024,
-            "image_formats":["image/png","image/jpeg","image/gif","image/webp"],
-            "lifetime":"client connection; owned private desktops, apps and browser processes stop on disconnect; attached browsers remain running"
+        "zuse_cli":{
+            "namespace":"ssmcp.computer",
+            "operations":["version","download","install","uninstall"],
+            "embedded_desktop_or_browser_control":false,
+            "version":"reports the external Zuse CLI on PATH first, otherwise a recorded managed installation",
+            "download":"official release for the current platform; returns a download_id without executing it",
+            "install":"requires a managed download_id; validates and installs to an owned private directory",
+            "uninstall":"requires an installation_id; removes only the matching managed installation",
+            "modifies_path":false,
+            "control":"invoke the standalone Zuse CLI directly; no SSMCP action proxy or fallback"
+        },
+        "image_output":{
+            "max_decoded_bytes":400*1024,
+            "formats":["image/png","image/jpeg","image/gif","image/webp"]
         },
         "command_jobs":{
             "default_wait_ms":5000,
@@ -346,7 +333,7 @@ impl Runtime {
         manifest["code_mode"] = json!({
             "call":"call(clientId, nativeToolName, arguments)",
             "discovery":"tools.search(clientId, {query, name_prefix, include_schemas:true})",
-            "dynamic_api":"native(clientId).ssmcp.browser.snapshot(arguments)",
+            "dynamic_api":"native(clientId).ssmcp.computer.version({})",
             "routing":"client_registry","server_provider_catalog":false
         });
         bounded(manifest)
@@ -476,25 +463,16 @@ and receive with wait_ms up to 30000. Receive is non-destructive; ack through ne
 processing the returned messages. Direct waits do not occupy code_mode workers. The collab.* helpers \
 inside code_mode accept clientId first and limit receive waits to 1000ms. Read ssmcp://collaboration \
 for identity binding, retry deduplication, queue bounds and the connection lifetime.\n\n\
-Use tools.search(clientId,{query:'browser',limit:20}) in code_mode for a focused lookup. Add name_prefix:'ssmcp.browser.' to match registered names only; the optional prefix is case-insensitive and combines with query. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. exec.run is a JavaScript helper composing ssmcp.exec.start/wait/read, not a registered tool. Continue with the same client, query, name_prefix, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
+Use tools.search(clientId,{query:'computer',limit:20}) in code_mode for a focused lookup. Add name_prefix:'ssmcp.computer.' to match registered names only; the optional prefix is case-insensitive and combines with query. It returns registered names, routing namespaces, short descriptions and nextCursor. Set include_schemas:true for complete native descriptors unchanged. exec.run is a JavaScript helper composing ssmcp.exec.start/wait/read, not a registered tool. Continue with the same client, query, name_prefix, limit and schema mode; restart if a cursor expires or a resumed page changes. Search retains native catalog snapshot semantics and checks authorization on every page. It reduces model-visible output and manual pagination, not the first native page scan.\n\n\
 New clients provide native ssmcp tools without requiring another harness. Codex, Claude Code, \
-Pi, OpenCode and Playwright MCP are optional and start unloaded. Prefer native tools. ssmcp.harnesses.list reads cached status without probing executables. Only when an optional capability is needed, explicitly call ssmcp.harnesses.load with its provider name; inspect the resulting registered catalog before calling its actual tools. Concurrent requests share initialization, failed attempts stay cached, and refresh:true explicitly retries only that provider. Startup, ordinary catalog reads and native calls never load external harnesses.\n\n\
+Pi and OpenCode are optional and start unloaded. Prefer native tools. ssmcp.harnesses.list reads cached status without probing executables. Only when an optional capability is needed, explicitly call ssmcp.harnesses.load with its provider name; inspect the resulting registered catalog before calling its actual tools. Concurrent requests share initialization, failed attempts stay cached, and refresh:true explicitly retries only that provider. Startup, ordinary catalog reads and native calls never load external harnesses.\n\n\
 Use code_mode with clients, await call(clientId, toolName, arguments), \
 await tools(clientId, cursor), print/console.log and an explicit return. \
 Short native results are returned unchanged. Long backend output returns artifact metadata in \
 structuredContent; inspect isError, spilled and capture completeness before claiming success. \
 Use outputs.read for raw PTY bytes or the saved MCP JSON of other oversized backend results.\n\n\
-For web apps, prefer scoped browser CDP or a discovered Playwright extension provider: page input does not move the system mouse. All native desktop observation and input defaults to isolated. On Linux, computer.app_launch(clientId,{command:[existingExecutable,...args]}) validates argv and automatically starts a private 1280x800 Xvfb desktop when needed; desktop_start is only required for a custom size. Without a private desktop, status reports readiness and missing helpers; monitors/windows/screenshot/input return an explicit startup requirement. Read-only calls never start a desktop or fall back to the host. Use desktop_status/desktop_stop to inspect or release owned state. Host observation and input both require explicit desktop: 'host'. Private desktops are Linux-only; other platforms report unsupported rather than selecting the host. New operations are also callable through native(clientId).ssmcp.computer after schema discovery.\n\n\
-Use cua.status(clientId) to inspect native desktop capabilities. cua aliases computer and cua.browser aliases browser. computer.screenshot, \
-move/click/drag/key/type/scroll and windows/focus operate the client desktop. Browser control \
-uses native Chromium CDP: browser.launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/\
-evaluate/screenshot/close/disconnect. Neither provider invokes a model. Both convenience \
-namespaces return complete native MCP results; inspect isError and structuredContent. \
-After app_launch has started a private desktop, use image(await computer.screenshot(clientId)); for a selected browser page use image(await browser.screenshot(clientId,\
-{target_id})) for visible MCP image content, then return only metadata. Do not print image \
-base64. Use screenshot image_to_desktop mapping for scaled desktop coordinates. Browser \
-element refs come from the current snapshot and expire on navigation or replacement.\n\n\
-Prefer ssmcp's native browser tools for ordinary browser work. If the user specifically requests an existing ChatGPT Browser session, use its authorized plugin only when the calling application actually exposes that requested session. Its native API is outside ssmcp code_mode; the client cannot invoke the public ChatGPT browser JavaScript API. Otherwise call ssmcp.browser.discover for read-only metadata and cached registered routes, and ssmcp.harnesses.list for provider readiness. Keep optional Playwright extension tools unloaded unless they are needed for the explicitly requested existing browser; native CDP remains available without that harness. Extension files alone do not prove an active connection. Playwright MCP remains unloaded by default. If its extension capabilities are explicitly needed, call ssmcp.harnesses.load with provider:'playwright'; that selected bridge starts in native --extension mode and is registered only after version, handshake and enumeration checks; select actual playwright.* names with tools.search and preserve native approvals. Missing server packages remain unavailable; discovery never runs npx or installs dependencies. ChatGPT requires its own originating browser context, and Claude browser tools are usable only if actually enumerated. Do not invoke a model or replace existing Chrome with an isolated browser. Use browser.connect only with an observed loopback CDP endpoint. Different CDP pages can run concurrently; keep dependent actions on one page ordered. Use browser.wait_for for page text to appear or disappear, and keep snapshot references scoped to their target and generation; opening a target defaults to the background. browser.act holds one target lock for up to 16 ordered actions and an optional final snapshot within 25 seconds; inspect completed_count, phase and failed_index on error before continuing, and do not replay the whole batch. browser.wait polls an observed selector and/or literal text for visible, hidden, attached or detached content with a 1–10000 ms deadline including the target queue.\n\n\
+SSMCP does not embed desktop or browser control. Use the standalone Zuse CLI directly for those operations. The computer namespace only manages that CLI: computer.version(clientId), computer.download(clientId,{version}), computer.install(clientId,{download_id}) and computer.uninstall(clientId,{installation_id}). Omit version to download the latest stable release for the client's platform. Downloading does not execute or install it. Installation uses only an opaque managed download_id and returns its exact path; it does not replace an external Zuse executable or add itself to PATH. Version queries prefer an existing Zuse CLI on PATH. Uninstall requires the installation_id and removes only an unchanged managed installation. These helpers return complete native MCP results; inspect isError and structuredContent. There is no browser, cua or omarchy convenience facade and no automatic control fallback.\n\n\
+Use image(nativeResult) for visible MCP image content from a registered tool, then return only metadata. Do not print image base64. Generic image output and ui.present remain available independently of Zuse installation.\n\n\
 Use exec.run(clientId,{command:[\"cargo\",\"test\"],wait_ms:5000}) for an independent \
 command with bounded waiting and output. It returns job_id, running, exit_code, stdout, stderr, \
 incremental cursors and a snapshot containing output artifact metadata. wait_ms is 0..60000 \

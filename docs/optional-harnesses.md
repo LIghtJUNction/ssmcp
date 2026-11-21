@@ -1,12 +1,12 @@
 # 原生工具与按需 harness
 
-ssmcp 默认只启用自己的原生工具。命令执行、文件、会话、用户交互和工具目录不要求用户安装 Claude Code、Codex、Pi、OpenCode 或 Playwright MCP。优先使用已注册的 `ssmcp.exec.*`、`ssmcp.fs.*`、`ssmcp.browser.*` 等原生接口。
+ssmcp 默认启用命令执行、文件、会话、用户交互、工具目录和 Zuse CLI 管理，不要求安装 Claude Code、Codex、Pi 或 OpenCode。按任务使用实际注册的 `ssmcp.exec.*`、`ssmcp.fs.*` 和四个 `ssmcp.computer.*` 生命周期工具。
 
-浏览器、桌面功能仍需要对应系统的实际运行组件，例如 Chromium 或 Linux 私有桌面的 Xvfb。这些运行组件与可选的外部 Agent/MCP harness 不同。Windows 浏览器组件准备见[安装说明](windows-browser-setup.md)。
+桌面和浏览器程序直接由独立 Zuse CLI 执行，经通用 exec 管理进程。SSMCP 不加载内置浏览器、桌面或 Playwright 专用后端，也不自动安装它们的运行组件。[Zuse CLI 管理](computer-use.md) · [Windows 安装范围](windows-browser-setup.md)
 
 ## 默认启动做什么
 
-客户端启动时不扫描或启动上述五个外部 harness，不运行它们的 `--version`，也没有定时后台探测。工具目录只包含当前真实注册的能力；读目录、执行原生命令和读写文件不会顺带加载外部 harness。
+客户端启动时不扫描或启动上述四个外部 harness，不运行它们的 `--version`，也没有定时后台探测。工具目录只包含当前真实注册的能力；读目录、执行原生命令和读写文件不会顺带加载外部 harness。
 
 `ssmcp.harnesses.list` 只读取缓存状态：
 
@@ -34,14 +34,14 @@ return status;
 
 ```js
 const loaded = await call(clientId, "ssmcp.harnesses.load", {
-  provider: "playwright"
+  provider: "codex"
 });
 return loaded;
 ```
 
-provider 接受 `codex`、`claude`、`pi`、`opencode`、`playwright`，以及启动时已明确配置 endpoint 和认证变量的 `ssmcp` peer。加载只处理选中的一项，不安装软件，不扫描其他 provider。成功后，再使用 `tools.search` 或客户端工具目录读取实际名称和完整 schema；不要预先编造工具名。
+provider 接受 `codex`、`claude`、`pi`、`opencode`，以及启动时已明确配置 endpoint 和认证变量的 `ssmcp` peer。加载只处理选中的一项，不安装软件，不扫描其他 provider。成功后，再使用 `tools.search` 或客户端工具目录读取实际名称和完整 schema；不要预先编造工具名。
 
-普通浏览器任务应先使用原生 `ssmcp.browser.*`。只有需要已明确选定的浏览器扩展会话等外部能力时，才加载 Playwright MCP；加载、原生审批与浏览器配对分别按该工具的真实协议进行。
+桌面与浏览器操作使用所选 Zuse CLI 的真实接口。已授权的外部 MCP 通用转发仍保留实际目录与原生审批；它不恢复已撤去的 SSMCP 浏览器工具。
 
 本机输入 `/cc`、`/codex` 或 `/pi` 也是明确使用该 harness 的请求。这些命令异步走同一个原生 load 入口，然后显示所选 provider 的真实目录、schema 或执行显式 JSON 调用。`ssmcp.ui.harness` 保持只读，它不会因查询而加载任何 provider。
 

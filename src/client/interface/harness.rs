@@ -34,12 +34,6 @@ pub(crate) fn bind(runtime: &Arc<Runtime>) {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    if let Some(previous) = binding
-        .as_ref()
-        .and_then(|binding| binding.runtime.upgrade())
-    {
-        previous.cancel_host_input();
-    }
     *binding = Some(Binding {
         runtime: Arc::downgrade(runtime),
         handle: tokio::runtime::Handle::try_current().ok(),

@@ -2,9 +2,8 @@
 //! Owns provider state, registration, native dispatch and cleanup.
 mod lazy;
 use super::super::native_host::{Call, NativePlugin, PluginFuture};
-use crate::backend::{cc, codex, opencode, peer, pi, playwright, process, result, shell};
+use crate::backend::{cc, codex, opencode, peer, pi, process, result, shell};
 use crate::{
-    computer::host_control::{ENDED, HostControl, Permit},
     output::OutputStore,
     pty::Terminal,
     registry::{Provider, RegisteredTool, Registry},
@@ -29,7 +28,6 @@ enum Driver {
     Claude(Arc<cc::Claude>),
     Pi(Arc<pi::Pi>),
     OpenCode(Arc<opencode::OpenCode>),
-    Playwright(Arc<playwright::Playwright>, Permit),
     Peer(Arc<peer::Peer>),
 }
 impl Driver {
@@ -39,7 +37,6 @@ impl Driver {
             Self::Claude(d) => return d.compact_tools().await,
             Self::Pi(d) => d.tools().await,
             Self::OpenCode(d) => return d.compact_tools().await,
-            Self::Playwright(d, _) => return d.compact_tools().await,
             Self::Peer(d) => return d.compact_tools().await,
         }?;
         crate::catalog::compact(tools)
@@ -50,7 +47,6 @@ impl Driver {
             Self::Claude(d) => d.call(name, args).await,
             Self::Pi(d) => d.call(name, args).await,
             Self::OpenCode(d) => d.call(name, args).await,
-            Self::Playwright(d, _) => d.call(name, args).await,
             Self::Peer(d) => d.call(name, args).await,
         }
     }
@@ -60,7 +56,6 @@ impl Driver {
             Self::Claude(d) => d.shutdown().await,
             Self::Pi(d) => d.shutdown().await,
             Self::OpenCode(d) => d.shutdown().await,
-            Self::Playwright(d, _) => d.shutdown().await,
             Self::Peer(d) => d.shutdown().await,
         }
     }
@@ -70,7 +65,6 @@ impl Driver {
             Self::Pi(d) => d.diagnostics().await,
             Self::Claude(_) => json!({"scope":"native MCP tools"}),
             Self::OpenCode(_) => json!({"scope":"native OpenAPI operations"}),
-            Self::Playwright(d, _) => d.diagnostics(),
             Self::Peer(d) => d.details(),
         }
     }
@@ -115,7 +109,6 @@ pub struct Process {
     installed: StdMutex<BTreeMap<Provider, Installed>>,
     closed: AtomicBool,
     chat_enabled: AtomicBool,
-    computer_use: Arc<HostControl>,
     harness: Option<crate::client::agent::Selection>,
 }
 impl Process {
@@ -189,7 +182,6 @@ impl Process {
             installed: StdMutex::new(BTreeMap::new()),
             closed: AtomicBool::new(false),
             chat_enabled: AtomicBool::new(true),
-            computer_use: Arc::new(HostControl::default()),
             harness,
         });
         Ok(backend)
@@ -224,10 +216,6 @@ impl Process {
         self.shell.observe_projection()
     }
 
-    pub(crate) fn computer_use(&self) -> Arc<HostControl> {
-        self.computer_use.clone()
-    }
-
     pub fn output(&self) -> Arc<OutputStore> {
         self.output.clone()
     }
@@ -241,9 +229,6 @@ impl Process {
 
     async fn load(self: &Arc<Self>, provider: Provider, refresh: bool) -> Result<Value, String> {
         self.registry.ensure_open()?;
-        let permit = (provider == Provider::Playwright)
-            .then(|| self.computer_use.permit())
-            .transpose()?;
         let backend = Arc::clone(self);
         let pending = self.loads.request(provider, refresh, async move {
             backend.registry.ensure_open()?;
@@ -259,12 +244,7 @@ impl Process {
                 diagnostic["activation"] = json!("explicit");
             }
             let mut installed = backend.installed.lock().unwrap().get(&provider).cloned();
-            let refresh = backend.refresh(provider, name, &mut installed);
-            let result = if let Some(permit) = &permit {
-                permit.scope(refresh).await
-            } else {
-                refresh.await
-            };
+            let result = backend.refresh(provider, name, &mut installed).await;
             {
                 let mut known = backend.installed.lock().unwrap();
                 match installed {
@@ -300,10 +280,9 @@ impl Process {
             if provider == Provider::Peer {
                 return self.refresh_peer().await;
             }
-            Permit::check_current()?;
             let arguments = self.harness.as_ref().filter(|agent| agent.provider == provider)
                 .map_or(&[][..], |agent| agent.arguments.as_slice());
-            let program = if provider == Provider::Playwright { playwright::installed()? } else { crate::program::executable(name)? };
+            let program = crate::program::executable(name)?;
             reject_self_program(&program)?;
             let metadata = std::fs::metadata(&program).map_err(|e| e.to_string())?;
             detected_program = Some(program.clone());
@@ -315,28 +294,12 @@ impl Process {
                 *installed = None;
             }
             let mut driver = self.drivers.lock().unwrap().get(&provider).cloned();
-            if let Some(Driver::Playwright(playwright, previous)) = &driver
-                && previous.check().is_err()
-            {
-                self.revoke_playwright(playwright).await;
-                driver = None;
-            }
             let new_driver = driver.is_none();
             if new_driver {
-                let permit = Permit::current();
-                detected_version = Some(if let Some(permit) = &permit {
-                    permit.run(async { probe_command(playwright::command(&program).await?).await }).await?
-                } else {
-                    probe_version(&program).await?
-                });
+                detected_version = Some(probe_version(&program).await?);
                 let output = self.output.clone();
                 let future = async {
                     match provider {
-                        Provider::Playwright => {
-                            let permit = Permit::current().ok_or("missing computer-use permit")?;
-                            let driver = playwright::Playwright::start_with_output(&program, output).await?;
-                            Ok(Driver::Playwright(driver, permit))
-                        },
                         Provider::Codex => codex::Codex::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Codex),
                         Provider::Claude => cc::Claude::start_with_output(program.as_os_str(), arguments, output).await.map(Driver::Claude),
                         Provider::Pi => pi::Pi::start_discovered_with_output(program.as_os_str(), &[], output).await.map(Driver::Pi),
@@ -353,19 +316,14 @@ impl Process {
                         .map_err(|_| "native protocol handshake timed out".to_owned())?
                         .map_err(|e| e.to_string())
                 };
-                driver = Some(if let Some(permit) = &permit { permit.run(opening).await? } else { opening.await? });
+                driver = Some(opening.await?);
             } else {
                 detected_version = self.diagnostics.lock().unwrap().get(&provider)
                     .and_then(|d| d["version"].as_str().map(str::to_owned));
             }
             let driver = driver.unwrap();
             let listing = tokio::time::timeout(Duration::from_secs(75), driver.tools());
-            let listed = if let Some(permit) = Permit::current() {
-                tokio::select! {
-                    result = listing => result,
-                    _ = permit.cancelled() => Ok(Err(ENDED.into())),
-                }
-            } else { listing.await };
+            let listed = listing.await;
             let catalog = match listed {
                 Ok(Ok(catalog)) => catalog,
                 result => {
@@ -386,21 +344,8 @@ impl Process {
                 if published.is_err() { drivers.remove(&provider); }
                 published
             };
-            let published = if let Some(permit) = Permit::current() {
-                permit.commit(publish).and_then(|published| published)
-            } else { publish() };
+            let published = publish();
             if let Err(error) = published { driver.shutdown().await; return Err(error); }
-            if new_driver && let Driver::Playwright(playwright, permit) = &driver {
-                let backend = Arc::downgrade(self);
-                let playwright = Arc::downgrade(playwright);
-                let permit = permit.clone();
-                tokio::spawn(async move {
-                    permit.cancelled().await;
-                    if let (Some(backend), Some(playwright)) = (backend.upgrade(), playwright.upgrade()) {
-                        backend.revoke_playwright(&playwright).await;
-                    }
-                });
-            }
             *installed = Some(identity);
             Ok(json!({"provider":name,"status":"ready","executable":program,"version":detected_version,"tools":count,"details":details}))
         }.await;
@@ -581,14 +526,7 @@ impl Process {
                 }
                 _ => Err("unknown optional harness primitive".into()),
             },
-            provider
-                if provider.is_harness()
-                    || matches!(provider, Provider::Playwright | Provider::Peer) =>
-            {
-                let permit = (provider == Provider::Playwright
-                    && playwright::requires_computer_use(&native_name))
-                .then(|| self.computer_use.permit())
-                .transpose()?;
+            provider if provider.is_harness() || provider == Provider::Peer => {
                 let driver = self
                     .drivers
                     .lock()
@@ -605,26 +543,7 @@ impl Process {
                     }
                     None => None,
                 };
-                let result = match (permit, &driver) {
-                    (Some(permit), Driver::Playwright(playwright, issued)) => {
-                        async {
-                            issued.check()?;
-                            if !permit.same_generation(issued) {
-                                return Err(ENDED.into());
-                            }
-                            self.registry.validate_route(
-                                &id,
-                                provider,
-                                generation,
-                                &native_name,
-                            )?;
-                            self.control_playwright(playwright, permit, &native_name, arguments)
-                                .await
-                        }
-                        .await
-                    }
-                    _ => driver.call(&native_name, arguments).await,
-                };
+                let result = driver.call(&native_name, arguments).await;
                 if let (Some(pool), Some(lease)) = (&self.observer, observation) {
                     pool.native_finish(lease, &result);
                 }
@@ -633,63 +552,8 @@ impl Process {
             _ => Err("provider belongs to the workspace runtime".into()),
         }
     }
-    async fn control_playwright(
-        &self,
-        driver: &Arc<playwright::Playwright>,
-        permit: Permit,
-        name: &str,
-        arguments: Value,
-    ) -> Result<Value, String> {
-        permit.check()?;
-        let progress = crate::backend::rpc::ControlDispatch::default();
-        let native = tokio::select! {
-            biased;
-            result = permit.scope(progress.scope(driver.call(name, arguments))) => Some(result),
-            _ = permit.cancelled() => None,
-        };
-        // Preserve definitive native replies, including native isError and
-        // JSON-RPC errors. Only a write without a reply has an unknown outcome.
-        let cancelled = native.is_none() || permit.check().is_err();
-        let reason = match native {
-            Some(Ok(value)) => return Ok(value),
-            Some(Err(error)) => error,
-            None => ENDED.into(),
-        };
-        if !progress.unanswered_write() {
-            return Err(reason);
-        }
-        self.revoke_playwright(driver).await;
-        // The generation watcher may have removed this route first. The
-        // driver's OnceCell joins the cleanup for this exact owned peer.
-        driver.shutdown().await;
-        let mut value = result(json!({
-            "status":if cancelled {"cancelled"} else {"failed"},
-            "outcome":"unknown_or_partially_executed","reason":reason,"replay_safe":false
-        }));
-        value["isError"] = json!(true);
-        Ok(value)
-    }
-
-    async fn revoke_playwright(&self, driver: &Arc<playwright::Playwright>) {
-        let removed = {
-            let mut drivers = self.drivers.lock().unwrap();
-            if matches!(drivers.get(&Provider::Playwright),
-                Some(Driver::Playwright(current, _)) if Arc::ptr_eq(current, driver))
-            {
-                self.registry.invalidate(Provider::Playwright);
-                drivers.remove(&Provider::Playwright)
-            } else {
-                None
-            }
-        };
-        if let Some(removed) = removed {
-            removed.shutdown().await;
-        }
-    }
-
     pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
-        self.computer_use.close();
         self.registry.close();
         self.loads.shutdown().await;
         let drivers = std::mem::take(&mut *self.drivers.lock().unwrap());
@@ -708,165 +572,8 @@ impl Process {
 }
 impl Drop for Process {
     fn drop(&mut self) {
-        self.computer_use.close();
         self.registry.close();
         self.loads.abort();
-    }
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn on_playwright_lost_reply_revokes_the_driver_without_inventing_results() {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            const DRIVER: &str = r#"
-import json,sys
-for line in sys.stdin:
- r=json.loads(line)
- method=r.get('method')
- if method=='initialize':
-  reply={'result':{'protocolVersion':'2025-11-25','capabilities':{'tools':{}}}}
- elif method=='tools/call':
-  name=r['params']['name']
-  if name=='reported_failure':
-   reply={'result':{'isError':True,'structuredContent':{'native':'kept'}}}
-  elif name=='rpc_failure':
-   reply={'error':{'code':-32000,'message':'known RPC refusal'}}
-  else:
-   assert name=='lose_reply'
-   print('!', flush=True)
-   # Stay alive on stdin until the owning driver actually shuts down.
-   continue
- else:
-  continue
- print(json.dumps({'jsonrpc':'2.0','id':r['id'],**reply}),flush=True)
-"#;
-            let backend = Process::start(Path::new("/bin/sh")).await.unwrap();
-            let permit = backend.computer_use.permit().unwrap();
-            let driver = playwright::fixture_peer(DRIVER).await;
-            backend.drivers.lock().unwrap().insert(
-                Provider::Playwright,
-                Driver::Playwright(driver.clone(), permit.clone()),
-            );
-            let refused = backend
-                .control_playwright(
-                    &driver,
-                    permit.clone(),
-                    "ssmcp.playwright.respond",
-                    json!({}),
-                )
-                .await
-                .unwrap_err();
-            assert!(refused.contains("id must identify"));
-            let reported = backend
-                .control_playwright(
-                    &driver,
-                    permit.clone(),
-                    "playwright.reported_failure",
-                    json!({}),
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                reported,
-                json!({"isError":true,"structuredContent":{"native":"kept"}})
-            );
-            let rpc_error = backend
-                .control_playwright(&driver, permit.clone(), "playwright.rpc_failure", json!({}))
-                .await
-                .unwrap_err();
-            assert!(rpc_error.contains("known RPC refusal"));
-            assert!(
-                backend
-                    .drivers
-                    .lock()
-                    .unwrap()
-                    .contains_key(&Provider::Playwright)
-            );
-
-            let reply = backend
-                .control_playwright(&driver, permit.clone(), "playwright.lose_reply", json!({}))
-                .await
-                .unwrap();
-            assert!(permit.check().is_ok(), "the switch is still On");
-            assert_eq!(reply["isError"], true);
-            let data = &reply["structuredContent"];
-            assert_eq!(data["status"], "failed");
-            assert_eq!(data["outcome"], "unknown_or_partially_executed");
-            assert_eq!(data["replay_safe"], false);
-            assert_eq!(
-                data["reason"],
-                "native JSON stream failed: expected value at line 1 column 1"
-            );
-            assert!(data.get("completed_count").is_none() && data.get("failed_index").is_none());
-            assert!(
-                !backend
-                    .drivers
-                    .lock()
-                    .unwrap()
-                    .contains_key(&Provider::Playwright)
-            );
-            assert!(driver.shutdown_complete_for_test());
-            Process::shutdown(&backend).await;
-        })
-        .await
-        .expect("bounded Playwright invalid JSON fixture");
-    }
-
-    #[tokio::test]
-    async fn off_revokes_only_the_owned_playwright_driver_and_preserves_uncertain_outcome() {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            const DRIVER: &str = r#"
-import json,sys
-for line in sys.stdin:
- r=json.loads(line)
- if r.get('method')=='initialize':
-  print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{'protocolVersion':'2025-11-25','capabilities':{'tools':{}}}}),flush=True)
- elif r.get('method')=='tools/call':
-  print(json.dumps({'jsonrpc':'2.0','id':'approval','method':'elicitation/create','params':{'mode':'form','message':'Fixture','requestedSchema':{'type':'object','properties':{}}}}),flush=True)
-"#;
-            let backend = Process::start(Path::new("/bin/sh")).await.unwrap();
-            backend.computer_use.set_local(false).unwrap();
-            assert_eq!(backend.load(Provider::Playwright, true).await.unwrap_err(),
-                crate::computer::host_control::LOCKED);
-            assert!(backend.drivers.lock().unwrap().is_empty());
-            backend.computer_use.set_local(true).unwrap();
-            let permit = backend.computer_use.permit().unwrap();
-            let old = playwright::fixture_peer(DRIVER).await;
-            let successor = playwright::fixture_peer(DRIVER).await;
-            backend.drivers.lock().unwrap().insert(Provider::Playwright,
-                Driver::Playwright(old.clone(), permit.clone()));
-            let running = tokio::spawn({
-                let backend = backend.clone();
-                let old = old.clone();
-                async move { backend.control_playwright(&old, permit, "playwright.native_test", json!({})).await }
-            });
-            loop {
-                let pending = old.call("ssmcp.playwright.requests", json!({})).await.unwrap();
-                if pending["structuredContent"]["requests"].as_array().unwrap().len() == 1 {
-                    break;
-                }
-                assert!(!running.is_finished(), "request must reach the owned process");
-                tokio::task::yield_now().await;
-            }
-            backend.computer_use.set_local(false).unwrap();
-            let reply = running.await.unwrap().unwrap();
-            assert_eq!(reply["isError"], true);
-            assert_eq!(reply["structuredContent"]["outcome"], "unknown_or_partially_executed");
-            assert_eq!(reply["structuredContent"]["replay_safe"], false);
-            assert!(reply["structuredContent"].get("completed_count").is_none());
-            assert!(backend.drivers.lock().unwrap().is_empty());
-            assert!(old.call("playwright.native_test", json!({})).await.is_err());
-            backend.computer_use.set_local(true).unwrap();
-            backend.drivers.lock().unwrap().insert(Provider::Playwright,
-                Driver::Playwright(successor.clone(), backend.computer_use.permit().unwrap()));
-            backend.revoke_playwright(&old).await;
-            assert!(matches!(backend.drivers.lock().unwrap().get(&Provider::Playwright),
-                Some(Driver::Playwright(current, _)) if Arc::ptr_eq(current, &successor)));
-            Process::shutdown(&backend).await;
-        }).await.expect("bounded fake Playwright cancellation");
     }
 }
 
@@ -888,7 +595,6 @@ async fn probe_version(program: &Path) -> Result<String, String> {
 }
 
 async fn probe_command(mut command: tokio::process::Command) -> Result<String, String> {
-    Permit::check_current()?;
     use std::process::Stdio;
     crate::program::configure(&mut command);
     command
@@ -1004,7 +710,6 @@ impl NativePlugin for Process {
             Provider::Claude,
             Provider::Pi,
             Provider::OpenCode,
-            Provider::Playwright,
             Provider::Peer,
         ]
     }

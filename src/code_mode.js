@@ -269,19 +269,9 @@ const bootstrap = `(() => {
       if (!reply.ok) throw new Failure(reply.error);
     }
   };
-  const browser = freeze(Object.fromEntries(
-    ['discover','status','launch','connect','tabs','open','navigate','snapshot','wait_for','click','fill','key','scroll','act','wait','evaluate','screenshot','close','disconnect']
-      .map(name => [name, (id, args = {}) => call(id, 'ssmcp.browser.' + name, args)])
-  ));
   const computer = freeze(Object.fromEntries(
-    ['status','desktop_start','desktop_status','desktop_stop','app_launch','monitors','windows','focus','screenshot','move','click','drag','key','type','scroll']
+    ['version','download','install','uninstall']
       .map(name => [name, (id, args = {}) => call(id, 'ssmcp.computer.' + name, args)])
-  ));
-  // CUA reuses native desktop and browser calls, preserving complete MCP results.
-  const cua = freeze({...computer, browser});
-  const omarchy = freeze(Object.fromEntries(
-    ["status","themes","theme_set","backgrounds","background_set","fonts","font_set","audio","audio_set","brightness","brightness_set","toggles","toggle_set","workspaces","workspace_switch","window_action","apps","app_launch","menu","battery","network"]
-      .map(name => [name, (id, args = {}) => call(id, 'ssmcp.omarchy.' + name, args)])
   ));
   const tools = async (id, cursor = null) => {
     if (cursor !== null && typeof cursor !== 'string') {
@@ -794,10 +784,7 @@ const bootstrap = `(() => {
     capabilities: { value: capabilities, enumerable: true },
     tools: { value: tools, enumerable: true },
     image: { value: image, enumerable: true },
-    browser: { value: browser, enumerable: true },
     computer: { value: computer, enumerable: true },
-    cua: { value: cua, enumerable: true },
-    omarchy: { value: omarchy, enumerable: true },
     reload: { value: reload, enumerable: true },
     say: { value: say, enumerable: true },
     ui: { value: ui, enumerable: true },

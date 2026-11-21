@@ -1,6 +1,6 @@
 # 等待用户输入
 
-`ui.wait` 让外部程序暂停一小段时间，等待当前已认证会话中的新用户消息。终端显示等待目标和原因，用户可取消某一个等待；系统通知可提醒用户返回终端。超时表示本轮没有交付消息，不表示用户同意结束会话。该能力不调用模型，也不注册 `/send` 的监听程序。
+`ui.wait` 在当前已认证会话中有两种用途：`need_user` 等待真实用户输入；`finish` 在准备结束对话时请求本机用户明确选择 No 或 Yes。每次调用都有截止时间，终端显示真实剩余时间，用户可取消活动等待。超时、普通消息和唤醒画面都不表示同意结束。该能力不调用模型，也不注册 `/send` 的监听程序。
 
 ## 发起一次等待
 
@@ -21,7 +21,46 @@ return await ui.wait(client.id, {
 
 同一轮 `code_mode` 对同一客户端只能调用一次 `ui.wait`；重复调用会返回运行错误，不会返回结构化的 `busy`。下一轮等待应放在新的外层调用中。
 
-程序应在每次外层响应后检查真实等待结果。`timed_out` 携带兼容字段 `continue_wait: true`，表示本次截止前没有可交付输入；是否再次等待由调用者根据任务决定。服务不再附加续做、结束同意或会话催答提示。[回执实现](../src/code_mode/user_wait.rs)
+程序应在每次外层响应后检查真实等待结果。`timed_out` 携带 `continue_wait: true`，只表示这次有界等待到期，没有批准结束。需要输入时可以在新的外层调用中继续等待；结束确认的重试应使用返回的精确 `finish_request_id`。[回执实现](../src/code_mode/user_wait.rs)
+
+## 结束前取得真实用户决定
+
+准备结束对话前，先使用已存在参与者的真实 ID 和私有 token 绑定提问线程，再调用 `ui.wait`。下面的 `participant` 必须来自实际协作登记；绑定不会启动模型，显示名称或手写身份字段不能代替它。
+
+```javascript
+await collab.bind(client.id, {
+  agent_id: participant.agent_id,
+  token: participant.token,
+});
+return await ui.wait(client.id, {
+  intent: 'finish',
+  reason: '本轮工作已完成，请决定现在结束还是继续。',
+  timeout_ms: 20000,
+  notify: false,
+});
+```
+
+没有已验证线程绑定时，结束等待返回错误。如果已有可交付的普通用户输入，服务先按原来的预约、权限复核和最终 `received` 流程交付这些输入，不创建新的结束申请，也不把文本中的“yes”视为批准。没有已排队输入时，同一次原生等待会同步创建或续接真实的 No/Yes 问题，并登记取消清理；不会先创建一份脱离等待生命周期的申请。[服务端分流](../src/http/user_wait.rs) · [本机等待](../src/client/interface/user_wait.rs)
+
+外层响应的 `structuredContent.user_wait` 包含 `finish_request_id`、`finish_decision` 和 `may_finish`。应找到本次客户端及 `wait_id` 对应的条目，检查以下完整条件：
+
+| 字段 | 本轮允许结束时的值 |
+| --- | --- |
+| `intent` / `status` | `finish` / `decided` |
+| `may_finish` | `true` |
+| `finish_request_id` | 与 `finish_decision.request_id` 完全相同的实际申请 ID |
+| `finish_decision.status` / `choice` | `completed` / `yes` |
+| `finish_decision.actor` | `{"origin":"human"}` |
+| `finish_decision.revision` | 大于零的真实决定修订号 |
+| `finish_decision.consumed` / `invalidation_reason` | `true` / `null` |
+
+脚本内部取得的对象可能只有 `status: "decision_ready"`、`may_finish: false`。本机已经记录 Yes 也不等于最终外层响应批准：服务器还要复核账户权限、原连接、原提问线程和相关输入 episode，再提交 `decided`。必须读取最终外层回执，不能只检查 JavaScript 返回值或问题列表中的 `approved`。[最终回执](../src/code_mode/user_wait.rs) · [Human 判定与精确消费](../src/client/interface/questions/requests.rs)
+
+真实用户选择 No 时，决定保留 `status: "denied"`、`choice: "no"`、Human 来源和修订号，`consumed` 与 `may_finish` 都为 `false`。Yes 只由原提问线程按精确申请和修订号消费一次；以后读取或续等已完成的申请会得到 `consumed: false`，不能再次取得结束许可。其他 agent 不能代替用户批准 Yes。
+
+超时不是 No，也不是 Yes。保留响应中实际返回的 `finish_request_id`，在新的 `code_mode` 调用中重新绑定同一线程，并将该 ID 传给 `ui.wait(..., {intent: 'finish', finish_request_id, ...})` 续等；不要猜测申请 ID。此参数仅适用于 `finish`，必须是 1–128 字节的可见 ASCII 精确 ID。取消、新的相关用户输入、断线或重连、撤权、绑定失效都不能批准结束；应处理实际回执或新的用户要求，而不是重放旧许可。[续等与清理](../src/client/interface/questions/workflow.rs)
+
+普通进度、`ui.message` / `ui.present` 的 `kind: "answer"`、`ui.reply` 以及代码执行完成通知仍可正常提交。这是结束前取得真实用户决定的协议；MCP 不能拦截任意外部模型自行停止或发送最终发言，也不会从模型参数推断用户同意。
 
 ## 判断消息是否已经交付
 
@@ -31,7 +70,9 @@ return await ui.wait(client.id, {
 | --- | --- | --- |
 | `waiting` | 等待仍在进行。 | 不宣称收到消息。 |
 | `ready` | 消息已预约，等待外层响应提交。 | 等待最终响应；不能仅凭这个状态处理消息。 |
-| `received` | 服务器重新检查权限并提交了响应中对应的用户消息。 | 按精确消息记录处理新要求。 |
+| `received` | 服务器重新检查权限并提交了响应中对应的用户消息。 | 按精确消息记录处理新要求；不据此结束。 |
+| `decision_ready` | 已取得本机决定回执，尚未通过最终外层复核。 | 不当作结束许可。 |
+| `decided` | 外层已提交结束决定的回执，可能是 Yes、No 或不可用的旧决定。 | 仍须检查上表全部许可字段；只有 `may_finish: true` 的匹配 Human Yes 允许本轮结束。 |
 | `timed_out` | 本轮等待结束，没有完成交付。 | 需要用户输入时再次等待。 |
 | `cancelled` | 用户或调用生命周期取消了等待。 | 停止这一轮等待；不把取消当成会话结束许可。 |
 | `disconnected` | 原连接已结束。 | 重新选择当前授权连接，不能把旧等待搬到新连接。 |
@@ -40,11 +81,13 @@ return await ui.wait(client.id, {
 | `busy` | 当前等待容量已满，或原生等待编号重复。 | 保留已有等待，稍后再尝试。 |
 | `unavailable` | 该客户端不能提供需要的原生等待能力。 | 明确报告不可用，不伪造等待或成功结果。 |
 
-`ui.wait` 在脚本内返回的对象可能仍为 `ready`；最终 `received` 是外层响应提交阶段生成的结果。直接调用原生 `ssmcp.ui.wait` 只能改变本地等待展示，不能读取用户正文或取得交付权限。原生协议不接受 `received` 作为完成状态。
+`ui.wait` 在脚本内返回的对象可能仍为 `ready`；最终 `received` 是外层响应提交阶段生成的结果。原生 `ssmcp.ui.wait` 管理本机展示、取消及真实结束问题，不读取服务端用户队列正文，也不能替代最终外层交付或结束许可回执。原生 `op: "finish"` 只结束精确等待的生命周期；调用者不能用它提交 `received` 或 `decided`。
 
 ## 用户在终端中能做什么
 
-等待进行时，输入框下方显示简短提示；同一等待 episode 的重入不会不断增加对话消息。存在结束确认时，提示会明确显示这一意图。
+真实人工等待仍在进行时，输入框下方显示红色提示，例如 `! 等待你的输入 · 剩余 00:13 · /wait`。多个独立 episode 显示 `! N 项等待你的输入 · 剩余 mm:ss · /wait`；倒计时取活动等待中最短的实际剩余时间，并向上取整到秒。它表示本轮有界调用还可等待多久，不是用户已经等待的累计时长。
+
+同一 episode 的重入不会不断增加对话消息。普通后台任务和计时器不显示红色人工等待提醒；具体错误、补全和浏览提示仍按界面优先级显示。关闭终端颜色时保留文字提示，不依赖颜色表达状态。
 
 - `/wait` 查看当前目标、原因、完整等待编号、本轮剩余时间和通知状态。
 - `/wait cancel <完整编号>` 取消这一条活动等待。
@@ -52,7 +95,7 @@ return await ui.wait(client.id, {
 
 每个客户端最多同时展示四个独立等待，满额时返回 `busy`，不会替换先到的等待。 `code_mode` 自身当前也有四个并发执行的总上限；外层执行容量已满时，新的调用可能先收到 `code_mode is busy`，而不是结构化的等待回执。本地 `/wait` 取消不占用外层执行名额。取消会唤醒真实的等待调用；它不退出会话、不提交新消息，也不修改草稿、普通 Queue 或 `/send` 的投递。
 
-多个等待即使属于同一个 episode，仍有独立的 `wait_id` 和取消入口。混合的输入请求与结束确认会逐项区分，结束确认不会被较早的输入请求遮住。
+多个等待即使属于同一个 episode，仍有独立的 `wait_id` 和取消入口。结束申请另外使用 `finish_request_id` 续接同一问题；它不是 `/wait cancel` 所需的等待编号。收到本机结束结果时，`/wait` 的近期记录显示中性的“本轮结束决策已返回”，不把 No 或未通过服务端复核的结果显示为批准。
 
 ## 系统通知的范围
 
@@ -72,13 +115,13 @@ return await ui.wait(client.id, {
 
 | 原生操作 | 输入 | 返回 |
 | --- | --- | --- |
-| `wait` | `wait_id`、`episode_id`、`recipient`、`intent`、`reason`、`timeout_ms`、`notify` | 阻塞至完成；返回相同 `wait_id`、本机状态及可选通知回执，不返回用户正文。 |
-| `finish` | 精确 `wait_id` 与 `outcome` | `wait_id`、`finished`、已知最终 `status` 及可选 `notification`。未知编号的 `status` 为 `null`。 |
+| `wait` | `wait_id`、`episode_id`、`recipient`、`intent`、`reason`、`timeout_ms`、`notify`；结束续等可带 `finish_request_id`。 | 阻塞至完成；返回相同 `wait_id`、本机状态、可选通知与结束决定回执，不返回用户正文。 |
+| `finish` | 精确 `wait_id`、`outcome`，以及已知时的 `finish_request_id`。 | `wait_id`、`finished`、已知最终 `status`、通知及结束决定回执。未知等待的 `status` 为 `null`；非超时关闭会取消所属未完成申请。 |
 | `status` | 无额外字段。 | 当前活动等待和有界的最近完成记录；只观察。 |
 
-`wait_id` 是最多 128 字节的可见 ASCII 编号。`episode_id` 是 64 位十六进制摘要，用于聚合与通知去重，不是访问令牌。`recipient` 是服务器已验证的精确 agent 编号或 `next`；本地仅展示它，不按显示名称授权。原生 `reason` 同时接受省略和 `null`。
+`wait_id` 是最多 128 字节的可见 ASCII 编号。`episode_id` 是 64 位十六进制摘要，用于聚合与通知去重，不是访问令牌。普通输入等待的 `recipient` 可以是服务器已验证的精确 agent 编号或 `next`；结束等待必须属于已验证的提问线程，不能使用 `next`。本机结束申请按真实调用范围核对账户、连接和线程，不按显示名称授权。原生 `reason` 同时接受省略和 `null`。
 
-控制台提示可以提醒外部程序继续等待并请求结束确认，但 MCP 无法观察所有外部模型的最终回答。因此这套能力不会声称能硬性拦截任意外部 `final`，也不会从模型生成的参数推断用户同意。
+旧 `request_finish`、`ssmcp.ui.finish`、`ssmcp.ui.answer` 及公共 `await` 的 `finish` 目标继续退役。当前结束确认只从已验证线程的 `ui.wait(intent: 'finish')` 发起，不恢复 agent 代用户作答的工具。[结束与问题协议](finish-and-questions.md)
 
 ## 源码与验收入口
 
@@ -88,11 +131,11 @@ return await ui.wait(client.id, {
 
 ## 等待时的休眠画面
 
-已连接的终端在收到有效的用户等待状态后，会压暗整帧并显示居中的 ASCII 休眠图案。背景内容仍可辨认；终端字符没有 alpha 通道，低亮度文字与背景色形成半透明的视觉效果。窄窗口会缩小图案，原生图片会暂时隐藏，唤醒后恢复。
+已连接的终端在收到有效的用户等待状态后，会压暗背景并显示居中的 ASCII 休眠图案。真实活动等待的倒计时在最后一行以红色粗体保留，不随背景压暗；关闭颜色时仍保留粗体。背景内容仍可辨认；终端字符没有 alpha 通道，低亮度文字与背景色形成半透明的视觉效果。窄窗口会缩小图案和提示，原生图片会暂时隐藏，唤醒后恢复。
 
 鼠标按下会解除遮罩；这一整次按下、拖动和抬起只用于唤醒，不会选中消息、滚动命令窗口或打开其他视图。滚轮和鼠标移动不会唤醒。键盘输入也会解除遮罩，并保留首次输入、Unicode 字节和粘贴内容。草稿、待发队列、浏览位置及 Copy 模式继续保留。
 
-唤醒只改变画面，不会提交消息、取消等待或替用户同意结束。真实发送的消息、现有取消操作、连接/授权变化和超时仍按原协议处理。客户端按连接和逻辑 episode 记录最近 32 次视觉唤醒；同一 episode 在超时后换 wait_id 重试，不会再次压暗。新 episode 或新连接可再次进入休眠。
+唤醒只改变画面，不会提交消息、取消等待或替用户同意结束。只要真实等待仍在进行，正常输入界面仍保留红色倒计时；遮罩消失不等于等待完成。真实发送的消息、现有取消操作、连接/授权变化和超时仍按原协议处理。客户端按连接和逻辑 episode 记录最近 64 个已唤醒 episode；同一 episode 在超时后换 wait_id 重试，不会再次压暗。新 episode 或新连接可再次进入休眠。
 
 这里的休眠画面与有界等待循环分工明确：服务端已有 1–25 秒（默认 20 秒）的异步等待，在消息到达时唤醒，并检查授权心跳；超时返回 continue_wait 后，调用方可查看结果并继续下一轮等待。画面不新增轮询协议，也不改变预约、提交和最终回执。
 

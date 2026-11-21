@@ -7,19 +7,16 @@ render the independently decoded live PTY cells; they are not desktop captures.
 Pillow is needed only when --preview-dir is supplied. Nothing is installed.
 """
 import argparse
-import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
-from urllib.parse import quote
 
 from e2e_dashboard import Dashboard, Frontend, sha256, text
 
@@ -114,7 +111,6 @@ class TerminalControl(Dashboard):
         self.snapshot_dir = snapshots
         self.preview_dir = previews
         self.captures = []
-        self.browser_evidence = {"status": "not_run"}
 
     def native(self, name, arguments=None, *, reported=True):
         options = {"code": "return await call(%s,%s,%s);" % (
@@ -152,70 +148,6 @@ class TerminalControl(Dashboard):
             front.pump(.05)
         self.check(path.is_file(), description)
         return path
-
-    def browser_check(self):
-        program = next((shutil.which(name) for name in ("chromium", "chromium-browser", "google-chrome")
-                        if shutil.which(name)), None)
-        if not program:
-            self.browser_evidence = {"status": "unavailable", "reason": "no installed Chromium executable in the acceptance environment"}
-            print("SKIP real CUA browser image: no installed Chromium", flush=True)
-            return
-        program = str(Path(program).resolve())
-
-        def browser(method, arguments=None):
-            return self.public_call("code_mode", {"controller": CONTROLLER, "code":
-                "return await cua.browser.%s(%s,%s);" % (
-                    method, json.dumps(self.client_id), json.dumps(arguments or {}))})["result"]
-
-        launched = browser("launch", {"executable": program, "headless": True, "width": 960, "height": 600})
-        if launched.get("isError"):
-            self.browser_evidence = {"status": "unavailable", "executable": program,
-                                     "reason": launched.get("content", [])}
-            print("SKIP real CUA browser image: native launch reported an unavailable browser", flush=True)
-            return
-        try:
-            self.check(launched["structuredContent"]["owned"] is True,
-                       "CUA launches only an owned headless Chromium with an isolated profile")
-            page = '<!doctype html><meta charset="utf-8"><title>ssmcp CUA acceptance</title><style>body{background:#101214;color:#e1e5eb;font:22px system-ui;padding:72px}small{color:#9aa3af}</style><h1>CUA_IMAGE_FIXTURE</h1><p>Native Chromium screenshot through code_mode.</p><small>Acceptance fixture — no model invoked.</small>'
-            opened = browser("open", {"url": "data:text/html;charset=utf-8," + quote(page)})
-            self.check(not opened.get("isError"), "CUA opens the locally supplied fixture page")
-            target = opened["structuredContent"]["target_id"]
-            observed = browser("snapshot", {"target_id": target})
-            self.check(not observed.get("isError") and "CUA_IMAGE_FIXTURE" in json.dumps(observed["structuredContent"]),
-                       "CUA observes the real fixture document before capturing it")
-            code = "const shot=await cua.browser.screenshot(%s,{target_id:%s,max_width:960}); image(shot); return {target_id:%s,metadata:shot.structuredContent};" % (
-                json.dumps(self.client_id), json.dumps(target), json.dumps(target))
-            status, response, _ = self.rpc("tools/call", {"name": "code_mode", "arguments": {
-                "controller": CONTROLLER, "code": code}}, modern=True)
-            self.check(status == 200 and "error" not in response and not response["result"].get("isError"),
-                       "real CUA screenshot completes through the public code_mode endpoint")
-            result = response["result"]
-            images = [item for item in result["content"] if item["type"] == "image"]
-            self.check(len(images) == 1, "code_mode image() returns one actual MCP image content block")
-            image = images[0]
-            data = base64.b64decode(image["data"], validate=True)
-            self.check((image["mimeType"] == "image/jpeg" and data.startswith(b"\xff\xd8\xff"))
-                       or (image["mimeType"] == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n")),
-                       "MCP image data contains real JPEG or PNG bytes matching its MIME type")
-            metadata = result["structuredContent"]["result"]
-            self.check(isinstance(metadata["metadata"], dict) and bool(metadata["metadata"]),
-                       "CUA screenshot metadata arrives separately from its image bytes")
-            logs = "\n".join(item["text"] for item in result["content"] if item["type"] == "text")
-            self.check(image["data"] not in logs, "image Base64 is not copied into code_mode text logs")
-            self.browser_evidence = {"status": "passed", "executable": program,
-                "mime_type": image["mimeType"], "bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(), "result": metadata,
-                "model_invoked": False, "owned_browser_disconnected": False}
-            if self.preview_dir:
-                path = self.preview_dir / ("cua-browser.jpg" if image["mimeType"] == "image/jpeg" else "cua-browser.png")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-                self.browser_evidence["image"] = path.name
-        finally:
-            disconnected = browser("disconnect")
-            self.check(not disconnected.get("isError") and disconnected["structuredContent"]["connected"] is False,
-                       "CUA disconnect closes only the isolated browser it owns")
-            self.browser_evidence["owned_browser_disconnected"] = True
 
     def run(self):
         self.prepare()
@@ -320,17 +252,11 @@ class TerminalControl(Dashboard):
                    "exited PTY input failure keeps F7 working and never replays failed text to main")
         self.native("terminal.close", {"terminal_id": exited})
 
-        cua = self.public_call("code_mode", {"controller": CONTROLLER, "code":
-            "const status=await cua.status(%s); return {status,shared:cua.screenshot===computer.screenshot&&cua.browser===browser};" % json.dumps(self.client_id)})["result"]
-        self.check(cua["shared"] and not cua["status"].get("isError"),
-                   "live code_mode CUA facade reaches native capability status without a model")
-
         release.write_text("finish")
         for job in jobs:
             done = self.native("ssmcp.exec.wait", {"job_id": job["job_id"], "wait_ms": 5000})
             self.check(not done["running"] and done["exit_code"] == 0,
                        "background command survives code_mode calls and exits successfully when released")
-        self.browser_check()
         final, restored = front.disconnect()
         self.check(not final["alternate_screen"] and not final["hide_cursor"] and restored == front.original_termios,
                    "disconnect restores the owned physical terminal and its input mode")
@@ -371,7 +297,7 @@ def main():
         finally:
             harness.close_frontends()
             harness.cleanup()
-            report.update(checks=harness.checks, captures=harness.captures, cua_browser=harness.browser_evidence,
+            report.update(checks=harness.checks, captures=harness.captures,
                           script_sha256=sha256(Path(__file__)),
                           duration_seconds=round(time.monotonic() - started, 3))
             if args.report:

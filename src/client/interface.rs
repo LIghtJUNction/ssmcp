@@ -12,7 +12,6 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-pub(crate) mod computer;
 pub(crate) mod harness;
 pub(crate) mod history;
 pub(crate) mod listener;

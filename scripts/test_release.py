@@ -1088,30 +1088,30 @@ class ReleaseTests(unittest.TestCase):
                 else:
                     self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
 
-    def test_zuse_alias_requires_initialized_source_and_exact_registry_package(self):
+    def test_three_direct_sources_keep_gitlink_lock_and_export_identity(self):
+        self.add_registry_dependencies()
         manifest = self.root / "Cargo.toml"
-        original = manifest.read_text() + '\n[dependencies]\nzuse = { package = "zuse-computer", git = "https://github.com/LIghtJUNction/zuse.git", default-features = false, features = ["std"] }\n'
-        manifest.write_text(original)
-        with self.assertRaisesRegex(ValueError, "source is missing"):
-            release.development_dependencies(self.root)
-        source = self.root / "crates/zuse/Cargo.toml"
+        manifest.write_text(manifest.read_text().replace(
+            "[dependencies]\n",
+            '[dependencies]\nztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }\n',
+            1))
+        source = self.root / "crates/ztuio/Cargo.toml"
         source.parent.mkdir(parents=True)
-        source.write_text('[package]\nname = "zuse-computer"\nversion = "0.1.0"\n')
-        self.stub_gitlinks("zuse")
+        source.write_text('[package]\nname = "ztuio"\nversion = "0.1.0"\n')
         with (self.root / "Cargo.lock").open("a") as stream:
-            stream.write('\n[[package]]\nname = "zuse-computer"\nversion = "0.1.0"\n'
-                         f'source = "git+{release.project_z_url("zuse-computer")}#{"1"*40}"\n')
-        self.assertEqual(release.development_dependencies(self.root), [("zuse-computer", "0.1.0")])
-        self.assertEqual(tomllib.loads(release.registry_export_manifest(self.root).decode())["dependencies"]["zuse"],
-                         {"package": "zuse-computer", "version": "=0.1.0",
-                          "default-features": False, "features": ["std"]})
-        for changed in (original.replace('package = "zuse-computer"', 'package = "zuse"'),
-                        original.replace('zuse = {', 'zuse = { version = "0.1.0",'),
-                        original.replace('zuse = {', 'zuse = { version = "=0.1.1",')):
-            with self.subTest(manifest=changed):
-                manifest.write_text(changed)
-                with self.assertRaises(ValueError):
-                    release.development_dependencies(self.root)
+            stream.write('\n[[package]]\nname = "ztuio"\nversion = "0.1.0"\n'
+                         f'source = "git+{release.project_z_url("ztuio")}#{"1"*40}"\n')
+        self.stub_gitlinks("zplugin", "zharness", "ztuio")
+        expected = [("zplugin", "0.3.0"), ("zharness", "0.5.0"), ("ztuio", "0.1.0")]
+        self.assertEqual(release.development_dependencies(self.root), expected)
+        exported = tomllib.loads(release.registry_export_manifest(self.root).decode())["dependencies"]
+        for name, version in expected:
+            with self.subTest(name=name):
+                self.assertEqual(exported[name], {"version": "=" + version})
+                modules = {row["path"]: dict(row) for row in release.source_submodules(self.root)}
+                modules["crates/" + name]["commit"] = "3" * 40
+                with self.assertRaisesRegex(ValueError, "source, gitlink and locked dependency version/commit differ"):
+                    release.development_dependencies(self.root, modules=modules)
 
     def submodule_fixture(self, nested=False):
         temporary = tempfile.TemporaryDirectory(prefix="ssmcp-source-module-")

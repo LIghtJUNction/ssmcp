@@ -83,8 +83,7 @@ if ($parseErrors.Count) { throw 'Installer has PowerShell syntax errors.' }
 $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-BoundedDownload' }, $false)
 if (-not $function) { throw 'Installer network boundary is missing.' }
 $source = $source.Remove($function.Extent.StartOffset, $function.Extent.EndOffset - $function.Extent.StartOffset)
-# Browser dependency installation is isolated in test_windows_browser_bootstrap.ps1.
-& ([ScriptBlock]::Create($source)) -Version $env:SSMCP_TEST_VERSION -InstallDir $env:SSMCP_TEST_INSTALL_DIR -NoModifyPath -SkipBrowserDependencies
+& ([ScriptBlock]::Create($source)) -Version $env:SSMCP_TEST_VERSION -InstallDir $env:SSMCP_TEST_INSTALL_DIR -NoModifyPath
 """,
                 encoding="utf-8",
             )

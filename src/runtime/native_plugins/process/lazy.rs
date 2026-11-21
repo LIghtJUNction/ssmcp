@@ -61,7 +61,7 @@ pub(super) fn parse(arguments: Value) -> Result<(Provider, bool), String> {
         .iter()
         .find(|(_, name)| *name == request.provider)
         .map(|(provider, _)| *provider)
-        .ok_or("optional harness provider must be codex, claude, pi, opencode, playwright or a configured ssmcp peer")?;
+        .ok_or("optional harness provider must be codex, claude, pi, opencode or a configured ssmcp peer")?;
     Ok((provider, request.refresh))
 }
 
@@ -193,12 +193,13 @@ mod tests {
             (Provider::Claude, false)
         );
         assert_eq!(
-            parse(json!({"provider":"playwright","refresh":true})).unwrap(),
-            (Provider::Playwright, true)
+            parse(json!({"provider":"codex","refresh":true})).unwrap(),
+            (Provider::Codex, true)
         );
         for arguments in [
             json!({}),
             json!({"provider":"native"}),
+            json!({"provider":"playwright"}),
             json!({"provider":"codex","refresh":"true"}),
             json!({"provider":"codex","command":["other-program"]}),
             json!({"provider":"codex","token":"not-accepted"}),
@@ -348,7 +349,7 @@ mod tests {
         let entered = Arc::new(Notify::new());
         let dropped = Arc::new(AtomicBool::new(false));
         let pending = loads
-            .request(Provider::Playwright, false, {
+            .request(Provider::Claude, false, {
                 let entered = entered.clone();
                 let dropped = dropped.clone();
                 async move {

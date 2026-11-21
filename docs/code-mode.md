@@ -141,15 +141,9 @@ Use print(value) or console.log(value) for logs; return a JSON-serializable valu
 
 ### computer
 
-Read client schemas and capabilities for desktop control. computer.desktop_start/status/stop and app_launch manage an isolated desktop; input defaults to it, and shared host input requires desktop:host. Browser-target controls are preferred for browser tasks. New primitives remain available through native(clientId).
+Use only computer.version/download/install/uninstall(clientId, args). These manage the independent Zuse CLI; they do not execute desktop or browser programs. version runs the selected executable's bounded --version, preferring PATH before a managed installation. download accepts an optional stable version and verifies the official GitHub release asset's identity, size and SHA-256; it returns download_id without executing or installing. install accepts that download_id and returns a private installation_id and path without changing PATH. uninstall accepts only the exact owned installation_id and verifies its receipt, file identity and bytes before removal. External installations are never replaced or removed.
 
-### omarchy
-
-Native Omarchy system primitives: omarchy.status, themes/theme_set, backgrounds/background_set, fonts/font_set, audio/audio_set, brightness/brightness_set, toggles/toggle_set, workspaces/workspace_switch, window_action, apps/app_launch, menu, battery and network. Inspect schemas and current state before changes.
-
-### browser
-
-Prefer the authorized ChatGPT Browser plugin when it is actually available in the caller for the requested browser; call its native API outside ssmcp code_mode. The client cannot invoke that public browser JavaScript API. Otherwise call ssmcp.browser.discover for cached routing metadata and ssmcp.harnesses.list for provider status. Search actual registered playwright.* tools and keep their native schemas and approvals. Use explicitly selected CDP only after these available extension routes. CDP controls remain browser.status/launch/connect/tabs/open/navigate/snapshot/click/fill/key/scroll/act/wait/wait_for/evaluate/screenshot/close/disconnect. Use connect only with an observed loopback endpoint. Do not replace requested existing Chrome with launch or another browser family. No model is invoked.
+Check isError and structuredContent. Use the returned executable path with exec.run/start for desktop or browser tasks, and preserve the job's actual output, status and ownership. Read that Zuse version's --help and schema before writing its program. There is no built-in browser, cua or omarchy helper, Playwright action bridge, private-desktop fallback or internal worker. General external MCP forwarding and OAuth browser login remain available. [Lifecycle commands and examples](computer-use.md) · [Standalone CLI workflow](browser-desktop.md)
 
 ### fs
 
@@ -185,7 +179,7 @@ resources.list(cursor?), resources.templates(), resources.read(uri) discover rel
 
 ### native
 
-native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.browser.snapshot(args). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.
+native(clientId) builds dynamic names for discovered client tools, e.g. native(id).ssmcp.computer.version({}). capabilities(clientId) reads the client-owned manifest. Future client primitives need no server helper update; call(id,name,args) remains compatible with older relays.
 
 ### workspace
 
@@ -222,13 +216,36 @@ return await ui.wait(clientId, {
 });
 ```
 
-`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client. After `timed_out`, another `code_mode` call can wait again if the task needs it.
+`ui.wait(clientId, options)` accepts `timeout_ms` from 1000 to 25000 milliseconds (default 20000), `intent: "need_user" | "finish"` (default `"need_user"`), an optional or null `reason`, and `notify` (default true). A supplied reason must be nonblank, at most 512 UTF-8 bytes, and contain no control characters. `finish_request_id` is optional or null and is accepted only for `finish`; use the exact returned visible ASCII ID, at most 128 bytes. Keep the outer `code_mode` timeout above the requested wait. Each run allows one wait per client; resume in a new outer call.
 
-The server binds the wait to the authenticated owner and live client connection. An existing valid `collab.bind` or `agent` binding also permits messages addressed to that exact agent; an unbound caller can receive only next-caller messages. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notification delivery is best effort and deduplicated for the same waiting episode; `sent` means the system accepted a notification request, not that the user saw it.
+The server binds the wait to the authenticated owner and live client connection. A valid `collab.bind` or `agent` binding permits ordinary messages addressed to that exact agent; an unbound caller can receive only next-caller messages. A finish wait requires the verified asking thread. Controller names and caller-supplied consent fields grant no authority. Waiting does not start a model. Native notifications are best effort and deduplicated for the same episode; `sent` means the system accepted a notification request, not that the user saw it.
 
-The helper's `ready` status reserves input but does not deliver its body. Inspect the outer response: only a `structuredContent.user_wait` array entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. The final response rechecks authorization and the reserved revisions before attaching those messages. Cancellation, timeout, disconnection, revoked access, invalid binding, and superseded input have distinct receipts and do not confirm delivery. Read the actual user messages before continuing; receipt metadata cannot substitute for their contents.
+For ordinary messages, the helper's `ready` status reserves input but does not deliver its body. Only an outer `structuredContent.user_wait` entry with `status: "received"` and matching message IDs and revisions in the same response's `structuredContent.user_messages` confirms delivery. Final response assembly rechecks authorization, recipient binding and reserved revisions. Read those actual messages; receipt metadata is not their content.
 
-The legacy `intent: "finish"` value remains accepted as an ordinary bounded user wait. It creates no completion request, continuation prompt or consent field. Only outer `user_wait.status: "received"` with matching `user_messages` confirms delivery. [Wait receipts](../src/code_mode/user_wait.rs) · [User waiting](user-wait.md)
+### Before ending the conversation
+
+Bind an existing participant with its real ID and private token, then request the local user's decision:
+
+```js
+await collab.bind(clientId, {
+  agent_id: participant.agent_id,
+  token: participant.token,
+});
+return await ui.wait(clientId, {
+  intent: "finish",
+  reason: "The work is ready. Should this conversation end now?",
+  timeout_ms: 20000,
+  notify: false,
+});
+```
+
+If ordinary input is already queued for this recipient, the server delivers it through the normal reservation and final `received` path. It does not create a new finish request or interpret the message as approval. Otherwise, the same native wait creates or resumes a real Human No/Yes question and owns its cancellation cleanup. Preserve the returned `finish_request_id`; after a timeout, pass it in a new `ui.wait` call with the same verified thread. Timeout, ordinary text, cancellation, new relevant input, disconnection, reconnection and revoked authority never approve ending. [Server routing](../src/http/user_wait.rs) · [Native lifecycle](../src/client/interface/user_wait.rs)
+
+Read the **final outer** `structuredContent.user_wait` entry for this client and wait. End only when it has `intent: "finish"`, `status: "decided"` and `may_finish: true`, with the same exact `finish_request_id` and `finish_decision.request_id`. The decision must have `status: "completed"`, `choice: "yes"`, `actor: {origin: "human"}`, a positive `revision`, `consumed: true`, and `invalidation_reason: null`. An inner JavaScript result may still say `decision_ready` with `may_finish: false`; it is not the final permission receipt. [Receipt commit](../src/code_mode/user_wait.rs)
+
+Human No returns a denied decision and `may_finish: false`. Only the original asking thread can consume the exact Human Yes once; reading or resuming an already completed request returns `consumed: false` and grants no new permission. Other agents cannot approve Yes for the user. Local question state such as `approved` is insufficient until the final outer response rechecks authority, connection, thread and input episode. [Decision rules](../src/client/interface/questions/requests.rs)
+
+Progress, ordinary `answer` messages, `ui.reply` and code-run completion remain available. They do not themselves grant permission to end, and MCP cannot force an arbitrary external model to keep running or intercept every external final reply. Follow the decision protocol before ending; do not claim a global enforcement boundary. The retired `request_finish`, `ssmcp.ui.finish`, `ssmcp.ui.answer` and public `await` finish target stay retired. See [user waiting](user-wait.md) for the live red countdown, local cancellation and complete receipt fields.
 
 ### Requirements and context
 
@@ -247,7 +264,7 @@ Call exact native names and preserve their schemas and approval requirements. He
 
 # 下一轮交互接口
 
-公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`，最终回复不再需要结束许可。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
+公共工具目录包含 `list`、`code_mode`、`collab`、`await` 和 `messages` 五项。`request_finish`、原生 `ssmcp.ui.finish` 和 `ssmcp.ui.answer` 已退役；旧名称直调返回 `tool_retired`。普通 `answer` 消息仍可提交；准备真正结束对话前，必须通过已验证线程的 `ui.wait(intent: "finish")` 取得最终外层确认的 Human 决定，只有匹配的已消费 Human Yes 和 `may_finish: true` 才允许本轮结束。[公共目录](../src/http.rs) · [原生校验](../src/wire.rs)
 
 `ssmcp.ui.ask` 立即返回，终端 Shift+Up 打开真实用户的问题队列。已验证提问线程通过 `question_answers` 接收答案；历史 `human/agent` 来源保留，agent 代答入口已关闭。未绑定线程只提供手动读取，显式 `ssmcp.ui.questions` 不消费答案。[问题队列](../src/client/interface/questions.rs) · [交付规则](finish-and-questions.md#异步问题与答案)
 

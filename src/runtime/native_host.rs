@@ -35,7 +35,6 @@ use tokio::{
 pub(crate) struct ConstructorContext {
     pub root: PathBuf,
     pub context_roots: Vec<PathBuf>,
-    pub registry: Arc<Registry>,
     pub output: Arc<OutputStore>,
 }
 

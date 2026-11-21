@@ -34,27 +34,6 @@ type NativeWriter = Box<dyn AsyncWrite + Unpin + Send>;
 
 tokio::task_local! {
     static HARNESS_CALL: HarnessCall;
-    static CONTROL_DISPATCH: ControlDispatch;
-}
-
-/// Native wire progress tracked only by the Playwright control caller.
-#[derive(Clone, Default)]
-pub(crate) struct ControlDispatch(Arc<DispatchState>);
-
-#[derive(Default)]
-struct DispatchState {
-    writing: AtomicBool,
-    answered: AtomicBool,
-}
-
-impl ControlDispatch {
-    pub(crate) async fn scope<F: std::future::Future>(&self, request: F) -> F::Output {
-        CONTROL_DISPATCH.scope(self.clone(), request).await
-    }
-
-    pub(crate) fn unanswered_write(&self) -> bool {
-        self.0.writing.load(Ordering::Acquire) && !self.0.answered.load(Ordering::Acquire)
-    }
 }
 
 struct CallObservation {
@@ -109,7 +88,6 @@ struct Waiting {
     method: String,
     internal_discovery: bool,
     harness_call: Option<HarnessCall>,
-    control_dispatch: Option<ControlDispatch>,
     reply: oneshot::Sender<Response>,
 }
 
@@ -336,7 +314,6 @@ impl Peer {
         if encoded.len() > MAX_NATIVE_FRAME {
             return Err("native request exceeds 16 MiB".into());
         }
-        let mut refused = None;
         let outcome = timeout(Duration::from_secs(10), async {
             let mut guard = self.writer.lock().await;
             // A queued sender can wake after another write poisoned this pipe.
@@ -346,12 +323,6 @@ impl Peer {
             let writer = guard
                 .as_mut()
                 .ok_or_else(|| io::Error::other("native stdin closed"))?;
-            // Only Playwright control enters this permit scope. Check again
-            // after the writer wait, before arming partial-frame cleanup.
-            if let Err(error) = crate::computer::host_control::Permit::check_current() {
-                refused = Some(error);
-                return Ok(());
-            }
             struct IncompleteFrame<'a> {
                 peer: &'a Peer,
                 armed: bool,
@@ -369,9 +340,6 @@ impl Peer {
                 peer: self,
                 armed: true,
             };
-            let _ = CONTROL_DISPATCH.try_with(|dispatch| {
-                dispatch.0.writing.store(true, Ordering::Release);
-            });
             writer.write_all(&encoded).await?;
             writer.flush().await?;
             frame.armed = false;
@@ -380,9 +348,6 @@ impl Peer {
         .await
         .map_err(|_| "native stdin write timed out".to_string())
         .and_then(|result| result.map_err(|e| e.to_string()));
-        if let Some(error) = refused {
-            return Err(error);
-        }
         if let Err(error) = &outcome {
             // A cancelled/failed write may leave half a JSON frame in the pipe.
             // Never reuse it for a subsequent request or retry a mutating call.
@@ -457,7 +422,6 @@ impl Peer {
                     method: method.into(),
                     internal_discovery,
                     harness_call: harness_call.clone(),
-                    control_dispatch: CONTROL_DISPATCH.try_with(Clone::clone).ok(),
                     reply,
                 },
             );
@@ -656,9 +620,6 @@ impl Peer {
                 } else {
                     Ok(message["result"].take())
                 };
-                if let Some(dispatch) = waiting.control_dispatch {
-                    dispatch.0.answered.store(true, Ordering::Release);
-                }
                 let _ = waiting.reply.send(result);
             } else {
                 let mut audit = message;
@@ -1237,73 +1198,6 @@ time.sleep(60)
                 .is_err()
         );
         peer.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn revoked_writer_wait_sends_no_bytes_and_preserves_healthy_successor() {
-        use crate::computer::host_control::{ENDED, HostControl};
-        use std::{
-            future::{Future, poll_fn},
-            task::{Context, Poll, Waker},
-        };
-
-        for reopen in [false, true] {
-            let (client, server) = tokio::io::duplex(4096);
-            let (read, write) = tokio::io::split(client);
-            let peer = Peer::from_transport(
-                read,
-                Box::new(write),
-                None,
-                "control-writer-fixture",
-                Dialect::JsonRpc,
-                crate::output::OutputStore::new_connection().unwrap(),
-                AuditMode::default(),
-            )
-            .unwrap();
-            let (read, _write) = tokio::io::split(server);
-            let mut reader = BufReader::new(read);
-            let control = Arc::new(HostControl::default());
-            let permit = control.permit().unwrap();
-            let dispatch = ControlDispatch::default();
-            let occupied = peer.writer.lock().await;
-            let old = permit.scope(dispatch.scope(peer.send(json!({"method":"must-not-send"}))));
-            tokio::pin!(old);
-            assert!(
-                poll_fn(|_| Poll::Ready(
-                    old.as_mut().poll(&mut Context::from_waker(Waker::noop()))
-                ))
-                .await
-                .is_pending()
-            );
-            control.set_local(false).unwrap();
-            if reopen {
-                control.set_local(true).unwrap();
-            }
-            drop(occupied);
-            assert_eq!(old.await.unwrap_err(), ENDED);
-            assert!(!dispatch.unanswered_write());
-            assert!(peer.alive.load(Ordering::Acquire));
-            let next = json!({"method":"healthy-peer"});
-            if reopen {
-                control
-                    .permit()
-                    .unwrap()
-                    .scope(peer.send(next.clone()))
-                    .await
-                    .unwrap();
-            } else {
-                peer.send(next.clone()).await.unwrap();
-            }
-            // Check exact stream bytes, including the newline. Even a
-            // truncated prefix from the revoked frame would fail here.
-            let mut line = String::new();
-            timeout(Duration::from_secs(5), reader.read_line(&mut line))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(line, format!("{next}\n"));
-            peer.shutdown().await;
-        }
     }
 
     #[tokio::test]
