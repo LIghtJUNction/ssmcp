@@ -512,7 +512,7 @@ class Composer(Dashboard):
                    and held["draft"] == {"text": retargeted["text"], "cursor": 0},
                    "Left preserves the held request, exact recipient and original text during retargeting")
         front.send(HOME + ENTER)
-        front.until(lambda shot: editing_queue(shot, "next caller")
+        front.until(lambda shot: editing_queue(shot, "Next caller")
                                  and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
