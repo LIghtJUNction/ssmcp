@@ -30,6 +30,7 @@ mod footer;
 mod guide;
 mod images;
 pub(crate) mod markdown;
+mod retired_keys;
 mod sleep;
 mod update_notice;
 
@@ -1336,6 +1337,22 @@ impl Keyboard {
                 continue;
             }
             self.pending.push(byte);
+            if !self.pasting {
+                match retired_keys::decode(&self.pending) {
+                    retired_keys::Decoded::Ignore => {
+                        // The old control chord has no action. Consume its
+                        // entire press/repeat/release, never Escape plus text.
+                        self.pending.clear();
+                        self.since = None;
+                        continue;
+                    }
+                    retired_keys::Decoded::Pending => {
+                        self.since.get_or_insert(now);
+                        continue;
+                    }
+                    retired_keys::Decoded::Other => {}
+                }
+            }
             if !self.pasting && self.pending.starts_with(b"\x1b[<") {
                 if matches!(byte, b'M' | b'm') {
                     let values = std::str::from_utf8(&self.pending[3..self.pending.len() - 1])
@@ -3056,8 +3073,59 @@ mod tests {
     }
 
     #[test]
+    fn retired_control_chord_is_ignored_at_every_split_without_editing_the_draft() {
+        let now = Instant::now();
+        let mut state = State::new(28, 48, &Ui::default());
+        state.preview = true;
+        state.conversation.composer.set_text("keep @missing $skill draft");
+        state.conversation.content_focus = true;
+        let before = state.conversation.snapshot();
+        for sequence in [
+            b"\x1b[99;11u".as_slice(),
+            b"\x1b[99;11:1u",
+            b"\x1b[99;11:2u",
+            b"\x1b[99;11:3u",
+            b"\x1b[67;75u",
+            b"\x1b[99::99;203:1u",
+        ] {
+            for split in 0..=sequence.len() {
+                let mut keyboard = Keyboard {
+                    logs: true,
+                    ..Keyboard::default()
+                };
+                for part in [&sequence[..split], &sequence[split..]] {
+                    let (text, keys) = keyboard.feed(part, now, false, true, false);
+                    assert!(text.is_empty() && keys.is_empty(), "{sequence:?} at {split}");
+                }
+                let (text, keys) =
+                    keyboard.feed(&[], now + Duration::from_millis(80), true, true, false);
+                assert!(text.is_empty() && keys.is_empty());
+                assert!(keyboard.pending.is_empty());
+                assert!(keyboard.logs, "ignoring a retired key must not change focus");
+            }
+            for byte in sequence {
+                assert!(state.keyboard(&[*byte], now, false).is_empty());
+            }
+            assert_eq!(state.conversation.snapshot(), before);
+            assert!(state.actions.is_empty());
+        }
+        for sequence in [
+            b"\x1b[99;3u".as_slice(),
+            b"\x1b[99;12u",
+            b"\x1b[99;15u",
+            b"\x1b[99;11:0u",
+            b"\x1b[99;11;1;2u",
+        ] {
+            let (text, keys) =
+                Keyboard::default().feed(sequence, now, false, true, false);
+            assert_eq!(text, sequence);
+            assert!(keys.is_empty());
+        }
+    }
+
+    #[test]
     fn control_sequences_are_literal_inside_bracketed_paste_at_every_split() {
-        let bytes = b"\x1b[200~\x1b[99;11u\t\x1bc\x1b[201~";
+        let bytes = b"\x1b[200~\x1b[99;11u\x1b[99;11:2u\x1b[99;11:3u\t\x1bc\x1b[201~";
         for split in 0..=bytes.len() {
             let mut keyboard = Keyboard::default();
             let now = Instant::now();
