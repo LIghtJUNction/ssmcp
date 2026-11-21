@@ -52,30 +52,42 @@ fn binary(target: &str) -> Vec<u8> {
 }
 
 fn release(target: &str, bytes: &[u8]) -> release::Release {
+    release_version("0.3.0", target, bytes)
+}
+
+fn release_version(version: &str, target: &str, bytes: &[u8]) -> release::Release {
     let suffix = if target.ends_with("-windows-msvc") {
         ".zip"
     } else {
         ".tar.gz"
     };
-    let name = format!("zuse-v0.3.0-{target}{suffix}");
+    let name = format!("zuse-v{version}-{target}{suffix}");
     release::Release {
-        version: "0.3.0".into(),
-        tag: "v0.3.0".into(),
+        version: version.into(),
+        tag: format!("v{version}"),
         target: target.into(),
         release_id: 1,
         asset_id: 2,
         asset_name: name.clone(),
         size: bytes.len() as u64,
         sha256: release::digest(bytes),
-        url: format!("https://github.com/LIghtJUNction/zuse/releases/download/v0.3.0/{name}"),
+        url: format!("https://github.com/LIghtJUNction/zuse/releases/download/v{version}/{name}"),
     }
 }
 
 fn tar_members(target: &str, entries: &[(&str, &[u8], u32, tar::EntryType)]) -> Vec<u8> {
+    tar_members_version("0.3.0", target, entries)
+}
+
+fn tar_members_version(
+    version: &str,
+    target: &str,
+    entries: &[(&str, &[u8], u32, tar::EntryType)],
+) -> Vec<u8> {
     let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     let mut archive = tar::Builder::new(encoder);
     for (name, bytes, mode, kind) in entries {
-        let name = format!("zuse-v0.3.0-{target}/{name}");
+        let name = format!("zuse-v{version}-{target}/{name}");
         let mut header = tar::Header::new_ustar();
         header.set_size(bytes.len() as u64);
         header.set_mode(*mode);
@@ -89,13 +101,17 @@ fn tar_members(target: &str, entries: &[(&str, &[u8], u32, tar::EntryType)]) -> 
 }
 
 fn zip_members(target: &str, entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    zip_members_version("0.3.0", target, entries)
+}
+
+fn zip_members_version(version: &str, target: &str, entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes, mode) in entries {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .unix_permissions(*mode);
         archive
-            .start_file(format!("zuse-v0.3.0-{target}/{name}"), options)
+            .start_file(format!("zuse-v{version}-{target}/{name}"), options)
             .unwrap();
         archive.write_all(bytes).unwrap();
     }
@@ -294,6 +310,157 @@ fn archives_extract_only_the_expected_regular_platform_executable() {
             archive::executable(&bytes, &receipt, target).unwrap(),
             executable
         );
+    }
+}
+
+// Actual additional producer inputs at Zuse f8fb142 (0.6.0). The release script
+// packages these as 0644 sources, alongside the single native executable.
+const ZUSE_06_SOURCE_MEMBERS: &[&str] = &[
+    "examples/session_client.py",
+    "skills/zuse/SKILL.md",
+    "skills/zuse/agents/openai.yaml",
+    "skills/zuse/assets/appearance-click.zuse",
+    "skills/zuse/assets/chatgpt-desktop.zuse",
+    "skills/zuse/assets/functions.zuse",
+    "skills/zuse/assets/import-and-eval.zuse",
+    "skills/zuse/assets/observe-and-time.zuse",
+    "skills/zuse/assets/wechat.zuse",
+    "skills/zuse/references/runtime.md",
+    "skills/zuse/references/scripts.md",
+    "skills/zuse/scripts/check_examples.py",
+    "skills/zuse-find-package/SKILL.md",
+    "skills/zuse-find-package/agents/openai.yaml",
+    "skills/zuse-publish-package/SKILL.md",
+    "skills/zuse-publish-package/agents/openai.yaml",
+];
+
+fn zuse_06_archive(target: &str, sources: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let executable = binary(target);
+    let mut entries = vec![(release::executable_name(target), &executable[..], 0o755)];
+    entries.extend_from_slice(sources);
+    if target.ends_with("-windows-msvc") {
+        zip_members_version("0.6.0", target, &entries)
+    } else {
+        let entries = entries
+            .into_iter()
+            .map(|(name, bytes, mode)| (name, bytes, mode, tar::EntryType::Regular))
+            .collect::<Vec<_>>();
+        tar_members_version("0.6.0", target, &entries)
+    }
+}
+
+#[test]
+fn zuse_06_archives_accept_published_source_members() {
+    let sources = ZUSE_06_SOURCE_MEMBERS
+        .iter()
+        .map(|&name| (name, &b"# release source\n"[..], 0o644))
+        .collect::<Vec<_>>();
+    for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+        let bytes = zuse_06_archive(target, &sources);
+        let receipt = release_version("0.6.0", target, &bytes);
+        assert_eq!(
+            archive::executable(&bytes, &receipt, target).unwrap(),
+            binary(target),
+            "metadata must not become another installed executable: {target}"
+        );
+    }
+}
+
+#[test]
+fn zuse_06_archives_reject_unknown_or_executable_source_members() {
+    for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+        for name in [
+            "session_client.py",
+            "examples/session_client.sh",
+            "examples/nested/session_client.py",
+            "skills/unknown/SKILL.md",
+            "skills/zuse/agents/unknown.yaml",
+            "skills/zuse/agents/openai.json",
+            "skills/zuse/assets/second.exe",
+            "skills/zuse/assets/unknown.zuse",
+            "skills/zuse/references/unknown.md",
+            "skills/zuse/scripts/unknown.py",
+            "skills/zuse/scripts/check_examples.sh",
+            "skills/zuse/SKILL.md/extra",
+        ] {
+            let bytes = zuse_06_archive(target, &[(name, b"unwanted", 0o644)]);
+            let error =
+                archive::executable(&bytes, &release_version("0.6.0", target, &bytes), target)
+                    .unwrap_err();
+            assert!(
+                error.contains("Unexpected member"),
+                "{target}: {name}: {error}"
+            );
+        }
+        for &name in ZUSE_06_SOURCE_MEMBERS {
+            let bytes = zuse_06_archive(target, &[(name, b"executable metadata", 0o755)]);
+            let error =
+                archive::executable(&bytes, &release_version("0.6.0", target, &bytes), target)
+                    .unwrap_err();
+            assert!(
+                error.contains("Unexpected member"),
+                "{target}: {name}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zuse_06_tar_rejects_links_for_allowed_source_members() {
+    let target = "x86_64-unknown-linux-gnu";
+    let executable = binary(target);
+    for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+        let bytes = tar_members_version(
+            "0.6.0",
+            target,
+            &[
+                ("zuse", &executable, 0o755, tar::EntryType::Regular),
+                ("skills/zuse/scripts/check_examples.py", b"", 0o644, kind),
+            ],
+        );
+        let error = archive::executable(&bytes, &release_version("0.6.0", target, &bytes), target)
+            .unwrap_err();
+        assert!(error.contains("non-regular"), "{error}");
+    }
+}
+
+#[test]
+fn zuse_06_zip_rejects_links_for_allowed_source_members() {
+    let target = "x86_64-pc-windows-msvc";
+    let executable = binary(target);
+    let mut bytes = zip_members_version(
+        "0.6.0",
+        target,
+        &[
+            ("skills/zuse/scripts/check_examples.py", b"target", 0o644),
+            ("zuse.exe", &executable, 0o755),
+        ],
+    );
+    let directory = zip::ZipArchive::new(Cursor::new(&bytes))
+        .unwrap()
+        .central_directory_start() as usize;
+    // Mark the first central-directory member as a Unix symlink. ZIP external
+    // attributes start at byte 38; the upper 16 bits contain the Unix file mode.
+    bytes[directory + 5] = 3;
+    bytes[directory + 38..directory + 42].copy_from_slice(&(0o120644_u32 << 16).to_le_bytes());
+    let error =
+        archive::executable(&bytes, &release_version("0.6.0", target, &bytes), target).unwrap_err();
+    assert!(error.contains("non-regular"), "{error}");
+}
+
+#[test]
+fn zuse_06_zip_rejects_unsafe_source_paths() {
+    let target = "x86_64-pc-windows-msvc";
+    for name in [
+        "examples/../session_client.py",
+        "skills/zuse/../../zuse/SKILL.md",
+        "skills\\zuse\\SKILL.md",
+        "skills/zuse/agents/openai.yaml:stream",
+    ] {
+        let bytes = zuse_06_archive(target, &[(name, b"unsafe source", 0o644)]);
+        let error = archive::executable(&bytes, &release_version("0.6.0", target, &bytes), target)
+            .unwrap_err();
+        assert!(error.contains("unsafe member path"), "{name}: {error}");
     }
 }
 
