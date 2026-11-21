@@ -424,7 +424,6 @@ fn remote_value_bounded(reply: Value, limit: usize) -> Result<Value, String> {
 }
 
 impl Browser {
-    #[cfg(test)]
     pub fn new(root: PathBuf) -> Result<Self, String> {
         Self::with_control(root, Arc::new(HostControl::default()))
     }

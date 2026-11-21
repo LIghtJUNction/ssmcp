@@ -314,6 +314,7 @@ impl Peer {
         if encoded.len() > MAX_NATIVE_FRAME {
             return Err("native request exceeds 16 MiB".into());
         }
+        let mut refused = None;
         let outcome = timeout(Duration::from_secs(10), async {
             let mut guard = self.writer.lock().await;
             // A queued sender can wake after another write poisoned this pipe.
@@ -323,6 +324,12 @@ impl Peer {
             let writer = guard
                 .as_mut()
                 .ok_or_else(|| io::Error::other("native stdin closed"))?;
+            // Only Playwright control enters this permit scope. Check again
+            // after the writer wait, before arming partial-frame cleanup.
+            if let Err(error) = crate::computer::host_control::Permit::check_current() {
+                refused = Some(error);
+                return Ok(());
+            }
             struct IncompleteFrame<'a> {
                 peer: &'a Peer,
                 armed: bool,
@@ -348,6 +355,9 @@ impl Peer {
         .await
         .map_err(|_| "native stdin write timed out".to_string())
         .and_then(|result| result.map_err(|e| e.to_string()));
+        if let Some(error) = refused {
+            return Err(error);
+        }
         if let Err(error) = &outcome {
             // A cancelled/failed write may leave half a JSON frame in the pipe.
             // Never reuse it for a subsequent request or retry a mutating call.

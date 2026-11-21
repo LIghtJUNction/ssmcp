@@ -125,7 +125,6 @@ struct App {
 }
 
 impl Omarchy {
-    #[cfg(test)]
     pub fn new(root: PathBuf) -> Result<Self, String> {
         Self::with_control(root, Arc::new(HostControl::default()))
     }
