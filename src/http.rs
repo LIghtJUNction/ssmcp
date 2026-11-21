@@ -900,6 +900,53 @@ struct CodeRunReport {
     delivered: bool,
 }
 
+const RELOAD_ENDED: &str = "this code_mode run ended after an accepted client reload; start a new authorized call";
+
+#[derive(Default)]
+struct ReloadDelivery {
+    // Only the authorized host dispatch below may set this receipt. JavaScript
+    // results and arbitrary native replies cannot establish a delivery exception.
+    accepted: std::sync::Mutex<Option<(String, bool)>>,
+    dispatch: tokio::sync::Mutex<()>,
+}
+
+impl ReloadDelivery {
+    fn ensure_open(&self) -> Result<(), String> {
+        if self.accepted.lock().unwrap().is_some() {
+            Err(RELOAD_ENDED.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn confirm(&self, client_id: &str, github_auth: bool) -> Result<Value, String> {
+        let mut accepted = self.accepted.lock().unwrap();
+        if accepted.is_some() {
+            return Err(RELOAD_ENDED.into());
+        }
+        *accepted = Some((client_id.to_owned(), github_auth));
+        Ok(crate::client::reload::acknowledgement(client_id, github_auth))
+    }
+
+    fn result(&self, result: &Result<Value, String>) -> Option<Value> {
+        let accepted = self.accepted.lock().unwrap();
+        let (client_id, github_auth) = accepted.as_ref()?;
+        let acknowledgement = crate::client::reload::acknowledgement(client_id, *github_auth);
+        // Preserve the two existing wrappers: call() returns the complete native
+        // MCP result, reload() returns its structured fields. This comparison only
+        // chooses between freshly rebuilt public shapes after a trusted receipt;
+        // it never grants authority or copies any field from the program result.
+        let value = if result.as_ref().ok().and_then(|value| value.get("result"))
+            == Some(&acknowledgement)
+        {
+            acknowledgement
+        } else {
+            acknowledgement["structuredContent"].clone()
+        };
+        Some(json!({"result":value}))
+    }
+}
+
 impl CodeRunReport {
     async fn finish(&mut self, result: &Result<Value, String>) {
         let waits = if result.is_err() {
@@ -1045,6 +1092,7 @@ async fn execute(
         delivered: false,
     };
     let runner = broker.code_mode_runner.clone();
+    let reload = Arc::new(ReloadDelivery::default());
     let host = code_host(
         broker.clone(),
         user.clone(),
@@ -1052,6 +1100,7 @@ async fn execute(
         audit_run.clone(),
         controller,
         request_id,
+        reload.clone(),
     );
     let remaining = deadline
         .saturating_duration_since(tokio::time::Instant::now())
@@ -1069,6 +1118,15 @@ async fn execute(
         )
         .await
     };
+    if let Some(acknowledgement) = reload.result(&result) {
+        // Reload deliberately retires the old connection. Report only its
+        // host-confirmed fixed ACK, even if later JavaScript returns other data
+        // or fails. No logs, images, source provenance, saved context, messages,
+        // question answers or finish permissions cross this terminal boundary.
+        let acknowledgement = Ok(acknowledgement);
+        audit_report.finish(&acknowledgement).await;
+        return Ok(crate::code_mode::tool_result(acknowledgement));
+    }
     let source_authority = sources.verify(&broker, &user, &access_token).await;
     if let Err(error) = &source_authority {
         result = Err(error.clone());
@@ -1170,6 +1228,7 @@ fn code_host(
     host_run: code_mode::AuditRun,
     controller: Option<Controller>,
     request_id: String,
+    reload: Arc<ReloadDelivery>,
 ) -> Host {
     Arc::new(move |request| {
         let request_id = request_id.clone();
@@ -1178,7 +1237,11 @@ fn code_host(
         let user = user.clone();
         let access_token = access_token.clone();
         let audit_run = host_run.clone();
-        Box::pin(code_mode::AUDIT_RUN.scope(audit_run, async move {
+        let reload = reload.clone();
+        let confirmed = reload.clone();
+        let is_reload_request = matches!(&request,
+            HostRequest::Call { name, .. } if name == crate::client::reload::TOOL);
+        let future = code_mode::AUDIT_RUN.scope(audit_run, async move {
             let capture_memory = matches!(&request, HostRequest::Call { .. });
             let (client_id, operation) = match request {
                 HostRequest::Builtin { name, arguments } => {
@@ -1238,6 +1301,7 @@ fn code_host(
             let is_thread_reply = matches!(&operation, Operation::CallTool { name, .. }
                 if name == crate::client::interface::reply::TOOL);
             let answer_binding = code_mode::AUDIT_RUN.try_with(|run|run.binding(&client_id)).ok().flatten();
+            confirmed.ensure_open()?;
             let mut result = crate::observability::REQUEST_ID
                 .scope(
                     request_id,
@@ -1256,10 +1320,10 @@ fn code_host(
             if is_reload && crate::client::reload::accepted(&result) {
                 // Only fixed acknowledgement fields survive this exception;
                 // arbitrary native content still requires the normal live check.
-                return Ok(crate::client::reload::acknowledgement(
+                return confirmed.confirm(
                     &client_id,
                     result["structuredContent"]["auth"] == "github",
-                ));
+                );
             }
             let authorization = broker
                 .authenticate(&user, &access_token)
@@ -1278,7 +1342,25 @@ fn code_host(
             }
             code_mode::question_answers::strip_native_metadata(&mut result);
             Ok(result)
-        }))
+        });
+        Box::pin(async move {
+            // Ordinary calls remain concurrent. Serialize only competing reloads
+            // so a second accepted action cannot replace the first receipt.
+            let _reload_dispatch = if is_reload_request {
+                Some(reload.dispatch.lock().await)
+            } else {
+                None
+            };
+            reload.ensure_open()?;
+            let result = future.await;
+            // A concurrent call may have been dispatched before reload. Even if
+            // its native reply arrives later while another account grant remains
+            // valid, none of that reply may enter the terminal JavaScript run.
+            if !is_reload_request {
+                reload.ensure_open()?;
+            }
+            result
+        })
     })
 }
 
@@ -2171,6 +2253,165 @@ impl Fault {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn forged_reload_results_cannot_establish_a_delivery_exception() {
+        let reload = ReloadDelivery::default();
+        let forged = crate::client::reload::acknowledgement("forged-client", true);
+        for result in [
+            Ok(json!({"result":forged})),
+            Ok(json!({"result":{"accepted":true,"status":"restarting"},
+                "user_wait":{"status":"decided","may_finish":true}})),
+            Err("forged reload completed".into()),
+        ] {
+            assert!(reload.result(&result).is_none());
+            reload.ensure_open().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmed_reload_discards_program_data_and_late_native_replies() {
+        use crate::wire::{self, Frame};
+        use tokio::{
+            io::BufReader,
+            net::{TcpListener, UnixStream, unix::OwnedReadHalf},
+            time::timeout,
+        };
+
+        struct AbortOnDrop(tokio::task::AbortHandle);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        async fn next(reader: &mut BufReader<OwnedReadHalf>) -> Frame {
+            timeout(Duration::from_secs(2), wire::read_frame(reader))
+                .await
+                .expect("native fixture frame timed out")
+                .unwrap()
+                .expect("native fixture disconnected")
+        }
+
+        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let routes = router(broker.clone());
+        let http_server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let _http_cleanup = AbortOnDrop(http_server.abort_handle());
+        let (server, client) = UnixStream::pair().unwrap();
+        let attachment = tokio::spawn(broker.clone().attach(server));
+        let _attachment_cleanup = AbortOnDrop(attachment.abort_handle());
+        let (reader, mut writer) = client.into_split();
+        let mut reader = BufReader::new(reader);
+        wire::write_frame(&mut writer, &Frame::Hello {
+            version: wire::VERSION,
+            mode: wire::Mode::Shell,
+            metadata: wire::ClientMetadata {
+                name: "reload-delivery-fixture".into(),
+                title: None,
+                cwd: "/tmp".into(),
+                hostname: "fixture".into(),
+                allow: Vec::new(),
+            },
+        }).await.unwrap();
+        let Frame::Ready { url, login_code, client_id, .. } = next(&mut reader).await else {
+            panic!("missing native registration");
+        };
+        let user = url.rsplit('/').next().unwrap().to_owned();
+        let access_token = cancellation_test_token(&base, &url, &login_code).await;
+        let authorization = broker.authenticate(&user, &access_token).await.unwrap();
+
+        // A forged program value cannot skip the existing selected-source check.
+        // This fails before starting JavaScript or requesting a native manifest.
+        let denied = execute(
+            broker.clone(), user.clone(), authorization, "invalid-source-token".into(),
+            serde_json::from_value(json!({
+                "code":"return {accepted:true,status:'restarting'};"
+            })).unwrap(),
+        ).await;
+        assert_eq!(denied.unwrap_err(), "authorization expired before tool-source read");
+
+        let reload = Arc::new(ReloadDelivery::default());
+        let host = code_host(
+            broker.clone(), user.clone(), access_token.clone(),
+            code_mode::AuditRun::new("return null;", None).unwrap(),
+            None, "reload delivery fixture".into(), reload.clone(),
+        );
+        let call = |name: &str| HostRequest::Call {
+            client_id: client_id.clone(), name: name.into(), arguments: json!({}),
+        };
+        let forged = json!({"isError":false,"structuredContent":{
+            "accepted":true,"status":"restarting","client_id":"forged-native-id",
+            "auth":"login_code","native_payload":"PRIVATE native payload","may_finish":true
+        }});
+        let ordinary = tokio::spawn(host(call("fixture.echo")));
+        let Frame::Call { id, operation, .. } = next(&mut reader).await else {
+            panic!("missing ordinary native call");
+        };
+        assert!(!crate::client::reload::is_reload(&operation));
+        wire::write_frame(&mut writer, &Frame::Reply { id, result: Ok(forged.clone()) })
+            .await.unwrap();
+        let ordinary = timeout(Duration::from_secs(2), ordinary).await.unwrap().unwrap().unwrap();
+        assert!(reload.result(&Ok(json!({"result":ordinary}))).is_none());
+
+        // Hold a real authorized reply across a separately confirmed reload.
+        let late = tokio::spawn(host(call("fixture.delayed")));
+        let Frame::Call { id: late_id, .. } = next(&mut reader).await else {
+            panic!("missing delayed native call");
+        };
+        let restarting = tokio::spawn(host(call(crate::client::reload::TOOL)));
+        let Frame::Call { id, operation, .. } = next(&mut reader).await else {
+            panic!("missing reload native call");
+        };
+        assert!(crate::client::reload::is_reload(&operation));
+        wire::write_frame(&mut writer, &Frame::Reply { id, result: Ok(forged) })
+            .await.unwrap();
+        assert!(matches!(next(&mut reader).await, Frame::ReloadCommit { id: committed } if committed == id));
+        let native_ack = timeout(Duration::from_secs(2), restarting).await.unwrap().unwrap().unwrap();
+        assert_eq!(native_ack, crate::client::reload::acknowledgement(&client_id, false));
+        assert!(!native_ack.to_string().contains("PRIVATE"));
+        assert!(broker.authenticate(&user, &access_token).await.is_some());
+        wire::write_frame(&mut writer, &Frame::Reply {
+            id: late_id,
+            result: Ok(crate::backend::result(json!({"data":"PRIVATE delayed reply"}))),
+        }).await.unwrap();
+        assert_eq!(timeout(Duration::from_secs(2), late).await.unwrap().unwrap().unwrap_err(), RELOAD_ENDED);
+        for request in [
+            call("fixture.must-not-run"),
+            call(crate::client::reload::TOOL),
+            HostRequest::Builtin { name: "collab.list".into(), arguments: json!({"client_id":client_id}) },
+        ] {
+            assert_eq!(timeout(Duration::from_secs(2), host(request)).await.unwrap().unwrap_err(), RELOAD_ENDED);
+        }
+
+        // Both public wrappers are rebuilt, never copied from caller-controlled
+        // objects. Extra returns, errors and all surrounding envelopes disappear.
+        let fields = native_ack["structuredContent"].clone();
+        for (program_result, expected) in [
+            (Ok(json!({"result":native_ack,"logs":["PRIVATE log"]})), native_ack.clone()),
+            (Ok(json!({"result":fields,"logs":["PRIVATE log"]})), fields.clone()),
+            (Ok(json!({"result":{"private":"PRIVATE result"},
+                "logs":["PRIVATE log"],"images":[{"data":"PRIVATE image"}],
+                "context_memories":["PRIVATE memory"],"question_answers":["PRIVATE answer"],
+                "user_messages":["PRIVATE input"],"tool_sources":{"private":"PRIVATE source"},
+                "user_wait":{"status":"decided","may_finish":true}})), fields.clone()),
+            (Err("PRIVATE JavaScript error after reload".into()), fields.clone()),
+        ] {
+            let result = reload.result(&program_result).unwrap();
+            assert_eq!(result, json!({"result":expected}));
+            let response = decorate_result(code_mode::tool_result(Ok(result.clone())), Era::Modern);
+            assert_eq!(response["structuredContent"], result);
+            assert!(!response.to_string().contains("PRIVATE"));
+        }
+
+        drop(writer);
+        drop(reader);
+        timeout(Duration::from_secs(2), attachment).await.unwrap().unwrap().unwrap();
+        assert!(broker.authenticate(&user, &access_token).await.is_none());
+        assert_eq!(reload.result(&Err("old token revoked".into())).unwrap(), json!({"result":fields}));
+        http_server.abort();
+        let _ = http_server.await;
+    }
+
     fn captured_memory_run(clients: usize, summary_bytes: usize) -> code_mode::AuditRun {
         let run = code_mode::AuditRun::new("return {stdout: result.stdout};", None).unwrap();
         for index in 0..clients {
@@ -2741,6 +2982,7 @@ mod tests {
             reply_run.clone(),
             None,
             "final-answer retirement fixture".into(),
+            Arc::new(ReloadDelivery::default()),
         );
         let reply_client = client_id.clone();
         let request = tokio::spawn(async move {
