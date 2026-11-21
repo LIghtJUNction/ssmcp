@@ -235,6 +235,18 @@ struct AllocationLock {
     path: PathBuf,
 }
 
+impl Drop for AllocationLock {
+    fn drop(&mut self) {
+        // A concurrent fork may retain this open file description until exec.
+        // Release the allocation lease before closing our own descriptor.
+        while let Err(error) = self.file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 impl AllocationLock {
     async fn acquire_in(root: &Path) -> Result<Self, String> {
         let lock = Self::open(root)?;
