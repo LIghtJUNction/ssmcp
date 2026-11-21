@@ -2426,7 +2426,7 @@ source = "git+https://github.com/LIghtJUNction/z64.git#7e9cff67beae2c484f8b9749b
 [[package]]
 name = "zcall"
 version = "0.4.0"
-source = "git+https://github.com/LIghtJUNction/zcall.git#317c52f101f112c6af671a629d8406305a168e4a"
+source = "git+https://github.com/LIghtJUNction/zcall.git#199678d08104bed588e5d10b2c0634a47d7c8417"
 dependencies = [
  "zconv",
 ]
@@ -2545,7 +2545,7 @@ checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 [[package]]
 name = "zmcpio"
 version = "0.4.0"
-source = "git+https://github.com/LIghtJUNction/zmcpio.git#84fc4978a248c2a3e2dd110f4f26fa52dd8b6890"
+source = "git+https://github.com/LIghtJUNction/zmcpio.git#04bb6cd05c5295ab41a892a76cbef10b8ac07402"
 dependencies = [
  "zcall",
 ]
@@ -2603,7 +2603,7 @@ dependencies = [
 [[package]]
 name = "zuse-computer"
 version = "0.3.0"
-source = "git+https://github.com/LIghtJUNction/zuse.git#830fcefd2277cbba46536c67d206f29058ba7fb3"
+source = "git+https://github.com/LIghtJUNction/zuse.git#ac5713c2bfc3cc4848e89107cc1a6929ec48e2dc"
 dependencies = [
  "z64",
  "zclap",

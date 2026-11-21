@@ -137,11 +137,23 @@ async fn closing_one_connection_keeps_other_connections_enabled() {
 
 #[test]
 fn each_pointer_keyboard_and_focus_operation_requires_the_switch() {
-    for suffix in ["focus", "move", "click", "drag", "key", "type", "scroll"] {
+    for suffix in [
+        "focus",
+        "move",
+        "move_path",
+        "click",
+        "drag",
+        "key",
+        "num_lock",
+        "type",
+        "scroll",
+        "watch_until_click",
+    ] {
         assert!(input_tool(&format!("ssmcp.computer.{suffix}")));
     }
     for suffix in [
         "status",
+        "keyboard_state",
         "windows",
         "screenshot",
         "desktop_start",

@@ -181,15 +181,22 @@ fn surface(mut response: Value, desktop: &str) -> Value {
         .and_then(Value::as_object_mut)
     {
         metadata.insert("desktop".into(), json!(desktop));
+        let browser_watch =
+            metadata.get("action").and_then(Value::as_str) == Some("watch_until_click");
         metadata.insert(
             "input_scope".into(),
-            json!(if desktop == "isolated" {
+            json!(if browser_watch {
+                "browser_page"
+            } else if desktop == "isolated" {
                 "private_display"
             } else {
                 "host_desktop"
             }),
         );
-        metadata.insert("moves_host_pointer".into(), json!(desktop == "host"));
+        metadata.insert(
+            "moves_host_pointer".into(),
+            json!(desktop == "host" && !browser_watch),
+        );
         metadata.insert("host_input_requires_explicit_target".into(), json!(true));
         metadata.insert("host_input_requires_local_handoff".into(), json!(false));
         metadata.insert("host_input_gate".into(), json!("shared_local_switch"));
@@ -342,6 +349,9 @@ pub(super) async fn dispatch(
                 }
                 _ => return Err("desktop must be isolated or host".into()),
             };
+            if name == "ssmcp.computer.watch_until_click" && target != "host" {
+                return Err("watch_until_click requires explicit desktop: host and the local host-input switch; an external CDP endpoint cannot use isolated-desktop permission".into());
+            }
             if target == "host" {
                 return computer
                     .perform_host(name, args)
@@ -353,7 +363,7 @@ pub(super) async fn dispatch(
                 desktop.ensure_running()?;
                 return desktop
                     .computer
-                    .perform_local(name, args)
+                    .perform_local(name, args, None)
                     .await
                     .map(|r| surface(r, "isolated"));
             }

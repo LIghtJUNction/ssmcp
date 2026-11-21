@@ -8,12 +8,13 @@
 use super::*;
 use std::{
     io::{BufRead, Write},
-    sync::{Condvar, mpsc},
+    sync::{Condvar, OnceLock, mpsc},
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const WORKER_FLAG: &str = "--internal-zuse-worker";
 const WORKER_READY: &[u8] = b"ssmcp-zuse-worker-v1\n";
+const WORKER_START_TIMEOUT: Duration = Duration::from_secs(3);
 static WORKER_ENTRY_REGISTERED: AtomicBool = AtomicBool::new(false);
 // JSON escaping can expand each of the 16,384 allowed text bytes sixfold.
 const REQUEST_LIMIT: usize = 128 * 1024;
@@ -27,6 +28,8 @@ struct Request {
     arguments: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_ticket: Option<host_control::WorkerTicket>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -137,7 +140,12 @@ impl Drop for WorkerGuard {
     }
 }
 
-async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<Value, String> {
+async fn call(
+    computer: &Computer,
+    operation: &str,
+    arguments: Value,
+    host_ticket: Option<host_control::Ticket>,
+) -> Result<Value, String> {
     #[cfg(not(test))]
     if !WORKER_ENTRY_REGISTERED.load(Ordering::Acquire) {
         return Err("the embedding executable must call computer::worker_entry() before starting its runtime; no worker was started".into());
@@ -153,12 +161,15 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
         capture_path: capture_directory
             .as_ref()
             .map(|directory| directory.0.join("capture.png")),
+        host_ticket: host_ticket
+            .map(|ticket| computer.host_control.worker_ticket(ticket))
+            .transpose()?,
     })
     .map_err(|error| error.to_string())?;
     if request.len() > REQUEST_LIMIT {
         return Err("zuse request exceeds 128 KiB".into());
     }
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = worker_executable()?;
     let mut command = tokio::process::Command::new(executable);
     #[cfg(not(test))]
     command.arg(WORKER_FLAG);
@@ -210,7 +221,10 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
         .output
         .as_mut()
         .ok_or("zuse worker stdout unavailable")?;
-    let ready = read_line(output, 256).await.map_err(|error| format!("zuse worker startup failed; the embedding executable must call computer::worker_entry(): {error}"))?;
+    let ready = tokio::time::timeout(WORKER_START_TIMEOUT, read_line(output, 256))
+        .await
+        .map_err(|_| "zuse worker did not complete its startup handshake within three seconds; no input was sent; restart this ssmcp session".to_owned())?
+        .map_err(|error| format!("zuse worker startup failed before input; restart this ssmcp session or ensure the embedding executable calls computer::worker_entry(): {error}"))?;
     #[cfg(test)]
     let ready = {
         let mut ready = ready;
@@ -226,7 +240,10 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
     if ready != WORKER_READY {
         return Err("current executable does not implement the zuse worker entry; call computer::worker_entry() before starting the application runtime".into());
     }
-    worker.input_pending = matches!(operation, "click" | "drag" | "key" | "type" | "scroll");
+    worker.input_pending = matches!(
+        operation,
+        "click" | "drag" | "key" | "type" | "scroll" | "num_lock" | "watch_until_click"
+    );
     let input = worker
         .input
         .as_mut()
@@ -244,9 +261,13 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
     let reply: Reply = serde_json::from_slice(&response)
         .map_err(|error| format!("invalid zuse worker response: {error}"))?;
     if !reply.cleanup_ok {
-        computer
-            .releases
-            .fail("zuse reported an input-release failure".into());
+        computer.releases.fail(format!(
+            "zuse reported an input-release failure: {}",
+            reply
+                .error
+                .as_deref()
+                .unwrap_or("worker returned no error detail")
+        ));
     } else {
         worker.input_pending = false;
     }
@@ -260,6 +281,26 @@ async fn call(computer: &Computer, operation: &str, arguments: Value) -> Result<
         (None, Some(error)) => Err(error),
         _ => Err("zuse worker returned an inconsistent response".into()),
     }
+}
+
+fn worker_executable() -> Result<PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    {
+        // Resolve the running image, including an inode unlinked by an upgrade.
+        // Never select an arbitrary same-named executable from PATH, and never
+        // retry an action through a different binary after input has begun.
+        let running = PathBuf::from("/proc/self/exe");
+        if running.is_file() {
+            return Ok(running);
+        }
+    }
+    let executable = std::env::current_exe().map_err(|error| {
+        format!("cannot locate the current zuse worker before input: {error}; restart this ssmcp session")
+    })?;
+    if !executable.is_file() {
+        return Err("the running executable was replaced and its worker image is unavailable; no input was sent; restart this ssmcp session".into());
+    }
+    Ok(executable)
 }
 
 async fn read_line(
@@ -297,7 +338,7 @@ pub(super) async fn status(computer: &Computer) -> Value {
         return json!({"platform":std::env::consts::OS,"session":session,"available":false,
             "engine":"zuse","engine_version":zuse::VERSION,"reason":"No graphical desktop session is available"});
     }
-    let native = call(computer, "capabilities", json!({})).await;
+    let native = call(computer, "capabilities", json!({}), None).await;
     let geometry = monitors(computer).await;
     match native {
         Ok(native) => {
@@ -314,9 +355,12 @@ pub(super) async fn status(computer: &Computer) -> Value {
                 "windows":capability(caps["windows"]==true,backend,Some("Native window enumeration is unavailable")),
                 "screenshot":capability(caps["capture"]==true&&geometry.is_ok(),backend,reason.or(Some("Native capture is unavailable"))),
                 "move":capability(pointer&&geometry.is_ok(),backend,reason.or(Some("Native pointer input is unavailable"))),
+                "move_path":capability(cfg!(target_os="linux")&&pointer&&geometry.is_ok(),backend,reason.or(Some("Continuous pointer paths require a Linux pointer backend"))),
                 "click":capability(pointer,backend,Some("Native pointer input is unavailable")),
                 "drag":capability(pointer&&geometry.is_ok(),backend,reason.or(Some("Native pointer input is unavailable"))),
                 "key":capability(keyboard,backend,Some("Native keyboard input is unavailable")),
+                "keyboard_state":capability(caps["keyboard_state"]==true,backend,Some("Keyboard-state inspection requires a supported Hyprland session")),
+                "num_lock":capability(caps["num_lock"]==true,backend,Some("Explicit Num Lock control requires a supported Hyprland session")),
                 "type":capability(keyboard,backend,Some("Native keyboard input is unavailable")),
                 "scroll":capability(pointer,backend,Some("Native pointer input is unavailable"))
             }})
@@ -355,12 +399,27 @@ fn validate_point(point: Point, monitors: &[Monitor]) -> Result<(), String> {
     }
 }
 
-pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Result<Value, String> {
+pub(super) async fn perform(
+    computer: &Computer,
+    name: &str,
+    args: Value,
+    host_ticket: Option<host_control::Ticket>,
+) -> Result<Value, String> {
     // Do not connect a native library for invalid/unknown operations.
     let (operation, arguments, metadata) = match name {
         "ssmcp.computer.windows" => {
             parse::<Empty>(args)?;
             ("windows", json!({}), None)
+        }
+        "ssmcp.computer.watch_until_click" => {
+            if host_ticket.is_none() || computer.environment.is_some() {
+                return Err(
+                    "watch_until_click requires the original host-input authorization".into(),
+                );
+            }
+            let value: WatchUntilClick = parse(args)?;
+            value.validate()?;
+            ("watch_until_click", json!(value), None)
         }
         "ssmcp.computer.focus" => {
             let value: Focus = parse(args)?;
@@ -397,13 +456,19 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
                 return Err("count must be between 1 and 3".into());
             }
             let point = optional_point(value.x, value.y)?;
-            if let Some(point) = point {
+            #[cfg(target_os = "linux")]
+            let binding = click_window_binding(&value, point)?;
+            #[cfg(not(target_os = "linux"))]
+            let binding: Option<WindowBinding> = None;
+            if let Some(point) = point
+                && !binding.as_ref().is_some_and(|binding| binding.relative)
+            {
                 validate_point(point, &monitors(computer).await?)?;
             }
             (
                 "click",
-                json!({"point":point,"button":button_name(value.button),"count":value.count}),
-                Some(json!({"clicked":true,"count":value.count})),
+                json!({"point":point,"button":button_name(value.button),"count":value.count,"window":binding}),
+                None,
             )
         }
         "ssmcp.computer.drag" => {
@@ -429,6 +494,17 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
                 json!({"key":value.key,"modifiers":value.modifiers}),
                 Some(json!({"pressed":true,"released":true})),
             )
+        }
+        #[cfg(target_os = "linux")]
+        "ssmcp.computer.keyboard_state" => {
+            parse::<Empty>(args)?;
+            ("keyboard_state", json!({}), None)
+        }
+        #[cfg(target_os = "linux")]
+        "ssmcp.computer.num_lock" => {
+            let value: NumLock = parse(args)?;
+            validate_num_lock(&value.state)?;
+            ("num_lock", json!({"state":value.state}), None)
         }
         "ssmcp.computer.type" => {
             let value: TypeText = parse(args)?;
@@ -476,7 +552,7 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
         }
         _ => return Err(format!("unknown computer tool: {name}")),
     };
-    let native = call(computer, operation, arguments).await?;
+    let native = call(computer, operation, arguments, host_ticket).await?;
     if operation == "focus" && computer.session == Session::Hyprland {
         let id = native["result"]["focused"]
             .as_str()
@@ -503,7 +579,114 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
         object.insert("engine_version".into(), json!(zuse::VERSION));
         object.insert("backend".into(), native["backend"].clone());
     }
-    Ok(result(metadata))
+    let failed_watch = operation == "watch_until_click" && metadata["status"] != "completed";
+    let mut response = result(metadata);
+    if failed_watch {
+        response["isError"] = json!(true);
+    }
+    Ok(response)
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WatchUntilClick {
+    endpoint: String,
+    tab_id: String,
+    scope: String,
+    selector: String,
+    expected_origin: String,
+    max_clicks: u32,
+    timeout_ms: u64,
+}
+
+impl WatchUntilClick {
+    fn options(&self) -> zuse::observation::ClickWatchOptions {
+        zuse::observation::ClickWatchOptions {
+            scope: self.scope.clone(),
+            selector: self.selector.clone(),
+            expected_origin: Some(self.expected_origin.clone()),
+            max_clicks: self.max_clicks,
+            timeout_ms: self.timeout_ms,
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        self.options().validate()?;
+        validate_browser_endpoint(&self.endpoint)?;
+        if self.tab_id.trim().is_empty()
+            || self.tab_id.len() > 1024
+            || self.tab_id.chars().any(char::is_control)
+        {
+            return Err(
+                "tab_id must identify an existing browser page using 1..1024 non-control bytes"
+                    .into(),
+            );
+        }
+        let origin = self
+            .expected_origin
+            .strip_prefix("https://")
+            .or_else(|| self.expected_origin.strip_prefix("http://"))
+            .ok_or("expected_origin must be an exact observed http(s) origin")?;
+        if origin.is_empty()
+            || origin.contains(['/', '?', '#', '@'])
+            || origin.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return Err(
+                "expected_origin must contain only the observed scheme, host and optional port"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+fn validate_browser_endpoint(endpoint: &str) -> Result<(), String> {
+    if endpoint.len() > 8192
+        || endpoint
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+        || endpoint.contains(['@', '#', '?'])
+    {
+        return Err("invalid explicit browser debugging endpoint".into());
+    }
+    let authority = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("ws://"))
+        .ok_or("browser endpoint must use http:// or ws:// on loopback")?
+        .split('/')
+        .next()
+        .unwrap_or("");
+    let (host, port) = if let Some(authority) = authority.strip_prefix('[') {
+        authority
+            .split_once("]:")
+            .ok_or("browser endpoint requires an explicit port")?
+    } else {
+        authority
+            .rsplit_once(':')
+            .ok_or("browser endpoint requires an explicit port")?
+    };
+    if !port.parse::<u16>().is_ok_and(|port| port > 0) {
+        return Err("browser endpoint requires a nonzero valid port".into());
+    }
+    if !host.eq_ignore_ascii_case("localhost")
+        && !host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    {
+        return Err("browser endpoint must use localhost or a literal loopback IP".into());
+    }
+    if endpoint.contains("/devtools/page/") {
+        return Err("use the browser debugging endpoint and an explicit existing tab_id".into());
+    }
+    Ok(())
+}
+
+pub(super) fn watch_operation_timeout(args: &Value) -> Result<Duration, String> {
+    let value: WatchUntilClick = parse(args.clone())?;
+    value.validate()?;
+    // The requested duration bounds the watch itself. Connection and bounded
+    // observer cleanup have separate limits and must fit before this deadline.
+    Ok(Duration::from_millis(value.timeout_ms + 20_000))
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
@@ -511,6 +694,150 @@ pub(super) async fn perform(computer: &Computer, name: &str, args: Value) -> Res
 struct PointerFrame {
     point: Point,
     at_ms: u32,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WindowBinding {
+    window_id: String,
+    relative: bool,
+    expected: Option<WindowGeometry>,
+}
+
+#[derive(Debug, PartialEq)]
+struct WindowGuard {
+    window_id: String,
+    pid: u64,
+    geometry: WindowGeometry,
+}
+
+#[cfg(target_os = "linux")]
+fn click_window_binding(
+    value: &Click,
+    point: Option<Point>,
+) -> Result<Option<WindowBinding>, String> {
+    let space = value.coordinate_space.as_deref().unwrap_or("desktop");
+    if !matches!(space, "desktop" | "window") {
+        return Err("click coordinate_space must be desktop or window".into());
+    }
+    let Some(id) = &value.window_id else {
+        if space == "window" || value.expected_window.is_some() {
+            return Err("window-relative coordinates and expected_window require window_id".into());
+        }
+        return Ok(None);
+    };
+    if !valid_window_id(id) || point.is_none() {
+        return Err("a window-bound click requires a valid window_id and both x and y".into());
+    }
+    if let Some(expected) = &value.expected_window {
+        expected.region()?;
+    }
+    Ok(Some(WindowBinding {
+        window_id: id.clone(),
+        relative: space == "window",
+        expected: value.expected_window.clone(),
+    }))
+}
+
+fn read_window_guard(desktop: &zuse::platform::Desktop, id: &str) -> Result<WindowGuard, String> {
+    window_guard(&windows_value(desktop)?, id)
+}
+
+fn window_guard(windows: &Value, id: &str) -> Result<WindowGuard, String> {
+    let windows = windows["windows"]
+        .as_array()
+        .ok_or("window metadata is unavailable")?;
+    let mut matches = windows.iter().filter(|window| window["window_id"] == id);
+    let window = matches
+        .next()
+        .ok_or("target window is unavailable; refresh computer.windows")?;
+    if matches.next().is_some() {
+        return Err("target window identity is ambiguous".into());
+    }
+    if window["focused"] != true || window["mapped"] != true {
+        return Err(
+            "target window must be mapped and currently focused; no button input was sent".into(),
+        );
+    }
+    let pid = window["pid"]
+        .as_u64()
+        .filter(|pid| *pid != 0)
+        .ok_or("window-bound clicks require an observed native process identity")?;
+    let geometry: WindowGeometry = serde_json::from_value(json!({
+        "x":window["x"],"y":window["y"],"width":window["width"],"height":window["height"],"scale":window["scale"]
+    }))
+    .map_err(|_| "window-bound clicks require native geometry and scale metadata".to_owned())?;
+    geometry.region()?;
+    Ok(WindowGuard {
+        window_id: id.into(),
+        pid,
+        geometry,
+    })
+}
+
+fn resolve_window_point(
+    binding: &WindowBinding,
+    point: Point,
+    window: &WindowGuard,
+) -> Result<Point, String> {
+    if binding
+        .expected
+        .as_ref()
+        .is_some_and(|expected| expected != &window.geometry)
+    {
+        return Err(
+            "target window geometry or scale changed since observation; locate the target again"
+                .into(),
+        );
+    }
+    let point = if binding.relative {
+        // Desktop and window coordinates are logical. The observed scale is
+        // retained as a guard, never multiplied into logical coordinates again.
+        if point.x < 0 || point.y < 0 {
+            return Err("window-local coordinates must be inside the target window".into());
+        }
+        Point {
+            x: window
+                .geometry
+                .x
+                .checked_add(point.x)
+                .ok_or("window x overflow")?,
+            y: window
+                .geometry
+                .y
+                .checked_add(point.y)
+                .ok_or("window y overflow")?,
+        }
+        .validate()?
+    } else {
+        point.validate()?
+    };
+    if !window.geometry.region()?.contains(point) {
+        return Err("click point is outside the target window".into());
+    }
+    Ok(point)
+}
+
+fn verify_window_guard(
+    desktop: &zuse::platform::Desktop,
+    expected: &WindowGuard,
+) -> Result<(), String> {
+    if read_window_guard(desktop, &expected.window_id)? != *expected {
+        return Err(
+            "target window identity, geometry or scale changed; no further button input was sent"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_num_lock(state: &str) -> Result<(), String> {
+    if matches!(state, "on" | "off" | "toggle") {
+        Ok(())
+    } else {
+        Err("Num Lock state must be on, off or toggle".into())
+    }
 }
 
 fn timed_path(value: &MovePath) -> Result<Vec<PointerFrame>, String> {
@@ -624,8 +951,7 @@ fn play_timed_path(
         if let Some(delay) = due.checked_sub(elapsed) {
             cancellation.delay(delay)?;
         }
-        cancellation.check()?;
-        move_to(frame.point)?;
+        cancellation.submit(|| move_to(frame.point))?;
         delivered += 1;
     }
     Ok(delivered)
@@ -684,6 +1010,8 @@ fn button_name(button: Button) -> &'static str {
 struct Cancellation {
     cancelled: StdMutex<bool>,
     changed: Condvar,
+    host_ticket: OnceLock<host_control::WorkerTicket>,
+    observation: OnceLock<zuse::observation::Cancellation>,
 }
 
 impl Cancellation {
@@ -693,6 +1021,9 @@ impl Cancellation {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = true;
         self.changed.notify_all();
+        if let Some(observation) = self.observation.get() {
+            observation.cancel();
+        }
     }
     fn check(&self) -> Result<(), String> {
         if *self
@@ -705,6 +1036,22 @@ impl Cancellation {
             Ok(())
         }
     }
+    fn submit<T>(&self, operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let cancelled = self
+            .cancelled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *cancelled {
+            return Err(CANCELLED.into());
+        }
+        // Cancellation and native submission share this lock. Once cancel()
+        // returns, no later frame can pass this boundary, including an endpoint.
+        if let Some(ticket) = self.host_ticket.get() {
+            ticket.submit(operation)
+        } else {
+            operation()
+        }
+    }
     fn delay(&self, duration: Duration) -> Result<(), String> {
         let lock = self
             .cancelled
@@ -715,6 +1062,27 @@ impl Cancellation {
             .wait_timeout_while(lock, duration, |cancelled| !*cancelled)
             .unwrap_or_else(|error| error.into_inner());
         if *lock { Err(CANCELLED.into()) } else { Ok(()) }
+    }
+
+    fn watch_token(&self) -> Result<zuse::observation::Cancellation, String> {
+        let ticket = self
+            .host_ticket
+            .get()
+            .cloned()
+            .ok_or("watch_until_click worker requires the original host-input ticket")?;
+        let token = zuse::observation::Cancellation::with_dispatch_guard(move || {
+            Ok(Box::new(ticket.acquire_input_dispatch()?) as Box<dyn Send>)
+        });
+        self.observation
+            .set(token.clone())
+            .map_err(|_| "worker observation cancellation was already bound".to_owned())?;
+        // Covers EOF arriving before the token was registered. A later EOF
+        // calls cancel() on this exact token and drains its dispatch gate.
+        if let Err(error) = self.check() {
+            token.cancel();
+            return Err(error);
+        }
+        Ok(token)
     }
 }
 
@@ -794,11 +1162,44 @@ fn worker_main() -> Result<(), String> {
 }
 
 fn execute(
-    request: Request,
+    mut request: Request,
     cancellation: &Cancellation,
     cleanup_ok: &mut bool,
 ) -> Result<Value, String> {
+    if let Some(ticket) = request.host_ticket.take() {
+        cancellation
+            .host_ticket
+            .set(ticket)
+            .map_err(|_| "worker input ticket was already bound".to_owned())?;
+    }
     cancellation.check()?;
+    if request.operation == "watch_until_click" {
+        let value: WatchUntilClick = parse(request.arguments)?;
+        value.validate()?;
+        let token = cancellation.watch_token()?;
+        let mut browser = zuse::browser::Browser::connect_existing_cancellable(
+            &value.endpoint,
+            &value.tab_id,
+            &token,
+        )?;
+        let outcome = browser.watch_until_click(&value.options(), &token);
+        // The attached browser owns no user tab. Its short, bounded close only
+        // unregisters observers and disconnects, including after cancellation.
+        let close_error = browser.close().err();
+        let mut receipt = click_watch_receipt(outcome, cleanup_ok)?;
+        if !*cleanup_ok {
+            return Err(format!(
+                "browser click-watch input release is unconfirmed; no action was replayed: {receipt}"
+            ));
+        }
+        if let Some(error) = close_error {
+            receipt["connection_cleanup_error"] = json!(error);
+            if receipt["status"] == "completed" {
+                receipt["status"] = json!("cleanup_failed");
+            }
+        }
+        return Ok(json!({"result":receipt,"backend":"cdp"}));
+    }
     #[cfg(windows)]
     windows::interactive_desktop()?;
     let mut desktop = zuse::platform::Desktop::connect()?;
@@ -827,15 +1228,13 @@ fn execute(
                     "window is not in the current window list; refresh computer.windows".into(),
                 );
             }
-            cancellation.check()?;
-            desktop.focus(&value.window_id)?;
+            cancellation.submit(|| desktop.focus(&value.window_id))?;
             json!({"focused":value.window_id})
         }
         "move" => {
             let value: Point = parse(args)?;
             value.validate()?;
-            cancellation.check()?;
-            desktop.move_to(value.x, value.y)?;
+            cancellation.submit(|| desktop.move_to(value.x, value.y))?;
             json!({})
         }
         "move_path" if cfg!(target_os = "linux") => {
@@ -843,7 +1242,8 @@ fn execute(
             let delivered = play_timed_path(&frames, cancellation, |point| {
                 desktop.move_to(point.x, point.y)
             })?;
-            json!({"samples":frames.len(),"delivered":delivered,"coordinate_space":coordinate_space()})
+            let endpoint = frames.last().ok_or("trajectory has no endpoint")?;
+            json!({"samples":frames.len(),"delivered":delivered,"x":endpoint.point.x,"y":endpoint.point.y,"duration_ms":endpoint.at_ms,"coordinate_space":coordinate_space()})
         }
         "click" => {
             #[derive(Deserialize)]
@@ -852,26 +1252,59 @@ fn execute(
                 point: Option<Point>,
                 button: Button,
                 count: u8,
+                window: Option<WindowBinding>,
             }
             let value: ClickRequest = parse(args)?;
             if !(1..=3).contains(&value.count) {
                 return Err("invalid click count".into());
             }
-            if let Some(point) = value.point {
+            let guard = value
+                .window
+                .as_ref()
+                .map(|binding| {
+                    if !valid_window_id(&binding.window_id) {
+                        return Err("invalid native window ID".into());
+                    }
+                    read_window_guard(&desktop, &binding.window_id)
+                })
+                .transpose()?;
+            let point = if let Some(binding) = &value.window {
+                let point = value
+                    .point
+                    .ok_or("a window-bound click requires coordinates")?;
+                Some(resolve_window_point(
+                    binding,
+                    point,
+                    guard.as_ref().ok_or("window guard unavailable")?,
+                )?)
+            } else {
+                value.point
+            };
+            if let Some(point) = point {
                 point.validate()?;
-                cancellation.check()?;
-                desktop.move_to(point.x, point.y)?;
+                cancellation.submit(|| desktop.move_to(point.x, point.y))?;
             }
             for index in 0..value.count {
-                cancellation.check()?;
-                with_button(&mut desktop, button_name(value.button), cleanup_ok, |_| {
-                    Ok(())
-                })?;
+                with_button(
+                    &mut desktop,
+                    button_name(value.button),
+                    cleanup_ok,
+                    cancellation,
+                    |desktop| {
+                        if let Some(guard) = &guard {
+                            verify_window_guard(desktop, guard).map_err(|error| {
+                                format!("{error}; {index} click(s) completed; do not retry automatically")
+                            })?;
+                        }
+                        Ok(())
+                    },
+                    |_| Ok(()),
+                )?;
                 if index + 1 < value.count {
                     cancellation.delay(Duration::from_millis(40))?;
                 }
             }
-            json!({})
+            json!({"clicked":true,"count":value.count,"point":point,"window_id":guard.as_ref().map(|guard| &guard.window_id),"coordinate_space":coordinate_space()})
         }
         "drag" => {
             let value: Drag = parse(args)?;
@@ -881,19 +1314,23 @@ fn execute(
             for point in &value.path {
                 point.validate()?;
             }
-            cancellation.check()?;
-            desktop.move_to(value.path[0].x, value.path[0].y)?;
-            cancellation.check()?;
+            cancellation.submit(|| desktop.move_to(value.path[0].x, value.path[0].y))?;
             with_button(
                 &mut desktop,
                 button_name(value.button),
                 cleanup_ok,
+                cancellation,
+                |_| Ok(()),
                 |desktop| {
-                    for point in &value.path[1..] {
-                        cancellation.delay(Duration::from_millis(
-                            value.duration_ms / (value.path.len() - 1) as u64,
-                        ))?;
-                        desktop.move_to(point.x, point.y)?;
+                    let start = std::time::Instant::now();
+                    for (index, point) in value.path[1..].iter().enumerate() {
+                        let due = Duration::from_millis(
+                            value.duration_ms * (index + 1) as u64 / (value.path.len() - 1) as u64,
+                        );
+                        if let Some(delay) = due.checked_sub(start.elapsed()) {
+                            cancellation.delay(delay)?;
+                        }
+                        cancellation.submit(|| desktop.move_to(point.x, point.y))?;
                     }
                     Ok(())
                 },
@@ -905,12 +1342,26 @@ fn execute(
             validate_key(&value)?;
             let mut parts = value.modifiers;
             parts.push(value.key);
-            cancellation.check()?;
-            if let Err(error) = desktop.key(&parts.join("+")) {
-                *cleanup_ok = input_error_precedes_effect(backend, &error, false);
+            if let Err(error) = cancellation.submit(|| desktop.key(&parts.join("+"))) {
+                *cleanup_ok = clean_cancellation(&error)
+                    || input_error_precedes_effect(backend, &error, false);
                 return Err(error);
             }
             json!({})
+        }
+        #[cfg(target_os = "linux")]
+        "keyboard_state" => {
+            parse::<Empty>(args)?;
+            serde_json::from_str(&desktop.keyboard_status()?)
+                .map_err(|error| format!("invalid native keyboard state: {error}"))?
+        }
+        #[cfg(target_os = "linux")]
+        "num_lock" => {
+            let value: NumLock = parse(args)?;
+            validate_num_lock(&value.state)?;
+            let status = cancellation.submit(|| desktop.num_lock(&value.state))?;
+            serde_json::from_str(&status)
+                .map_err(|error| format!("invalid native Num Lock readback: {error}"))?
         }
         "type" => {
             let value: TypeText = parse(args)?;
@@ -919,9 +1370,9 @@ fn execute(
                 // The pinned zuse adapter chooses keys or confirmed AT-SPI
                 // delivery for the entire string before any input. Splitting
                 // here could type a prefix before a later scalar is refused.
-                cancellation.check()?;
-                if let Err(error) = desktop.type_text(&value.text) {
-                    *cleanup_ok = input_error_precedes_effect(backend, &error, true);
+                if let Err(error) = cancellation.submit(|| desktop.type_text(&value.text)) {
+                    *cleanup_ok = clean_cancellation(&error)
+                        || input_error_precedes_effect(backend, &error, true);
                     return Err(error);
                 }
                 if cancellation.check().is_err() {
@@ -930,9 +1381,11 @@ fn execute(
             } else {
                 let mut buffer = [0u8; 4];
                 for character in value.text.chars() {
-                    cancellation.check()?;
-                    if let Err(error) = desktop.type_text(character.encode_utf8(&mut buffer)) {
-                        *cleanup_ok = input_error_precedes_effect(backend, &error, true);
+                    if let Err(error) = cancellation
+                        .submit(|| desktop.type_text(character.encode_utf8(&mut buffer)))
+                    {
+                        *cleanup_ok = clean_cancellation(&error)
+                            || input_error_precedes_effect(backend, &error, true);
                         return Err(error);
                     }
                 }
@@ -955,12 +1408,10 @@ fn execute(
             }
             if let Some(point) = value.point {
                 point.validate()?;
-                cancellation.check()?;
-                desktop.move_to(point.x, point.y)?;
+                cancellation.submit(|| desktop.move_to(point.x, point.y))?;
             }
             for _ in 0..value.steps {
-                cancellation.check()?;
-                desktop.scroll(value.dx, value.dy)?;
+                cancellation.submit(|| desktop.scroll(value.dx, value.dy))?;
             }
             json!({})
         }
@@ -977,6 +1428,57 @@ fn execute(
         _ => return Err("unknown zuse worker operation".into()),
     };
     Ok(json!({"result":result,"backend":backend}))
+}
+
+fn click_watch_receipt(
+    outcome: Result<String, String>,
+    cleanup_ok: &mut bool,
+) -> Result<Value, String> {
+    let text = match outcome {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let Some((status, receipt)) = error.split_once(": ") else {
+                return Err(error);
+            };
+            if !matches!(
+                status,
+                "cancelled" | "timeout" | "stopped" | "cleanup_failed"
+            ) || !receipt.starts_with('{')
+            {
+                // These are preflight failures before the watch can dispatch.
+                return Err(error);
+            }
+            receipt.to_owned()
+        }
+    };
+    *cleanup_ok = false;
+    if text.len() > RESPONSE_LIMIT / 2 {
+        return Err("browser click-watch receipt exceeds its bounded transport limit; input state is unconfirmed".into());
+    }
+    let receipt: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("invalid browser click-watch receipt: {error}"))?;
+    if receipt["action"] != "watch_until_click"
+        || !matches!(
+            receipt["status"].as_str(),
+            Some("completed" | "cancelled" | "timeout" | "stopped" | "cleanup_failed")
+        )
+    {
+        return Err("browser click-watch receipt has an unknown action or status".into());
+    }
+    let clicks = receipt["clicks"]
+        .as_array()
+        .ok_or("browser click-watch receipt has no dispatch list")?;
+    if clicks.len() > 64 || receipt["dispatch_attempts"].as_u64() != Some(clicks.len() as u64) {
+        return Err("browser click-watch receipt has inconsistent dispatch counts".into());
+    }
+    // An attempted frame can have reached the socket only partially even when
+    // no complete write was reported. Only an acknowledged matching release
+    // proves that a dispatch is finished; an empty dispatch list is also clean.
+    *cleanup_ok = clicks.iter().all(|click| {
+        click["dispatch"]["sent_mouse_events"].as_u64() == Some(2)
+            && click["dispatch"]["release_confirmed"] == true
+    });
+    Ok(receipt)
 }
 
 fn validate_literal_text(backend: &str, text: &str) -> Result<(), String> {
@@ -1050,6 +1552,7 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
                 | "unsupported_state: Num Lock state is unavailable"
                 | "unsupported_state: Num Lock differs between the active and other keyboards"
                 | "unsupported_state: cannot restore the same active keyboard after a Num Lock chord"
+                | "unsupported_state: cannot restore the same active keyboard after virtual input"
                 | "unsupported_state: keyboard layout group must be 0 before input"
                 | "unsupported_state: keyboard layout group is unavailable"
                 | "unsupported_state: a unique main keyboard is required"
@@ -1065,10 +1568,16 @@ fn input_error_precedes_effect(backend: &str, error: &str, typing: bool) -> bool
     false
 }
 
+fn clean_cancellation(error: &str) -> bool {
+    matches!(error, CANCELLED | host_control::ENDED)
+}
+
 fn with_button<T>(
     desktop: &mut zuse::platform::Desktop,
     button: &str,
     cleanup_ok: &mut bool,
+    cancellation: &Cancellation,
+    before_down: impl FnOnce(&zuse::platform::Desktop) -> Result<(), String>,
     operation: impl FnOnce(&mut zuse::platform::Desktop) -> Result<T, String>,
 ) -> Result<T, String> {
     struct Release<'a> {
@@ -1086,9 +1595,16 @@ fn with_button<T>(
     let mut release = Release {
         desktop,
         button,
-        armed: true,
+        armed: false,
     };
-    let down = release.desktop.button(button, "down");
+    let down = cancellation.submit(|| {
+        before_down(release.desktop)?;
+        release.armed = true;
+        release.desktop.button(button, "down")
+    });
+    if !release.armed {
+        return Err(down.unwrap_err());
+    }
     if let Err(error) = &down
         && input_error_precedes_effect(release.desktop.backend(), error, false)
     {
@@ -1133,7 +1649,8 @@ fn windows_value(desktop: &zuse::platform::Desktop) -> Result<Value, String> {
         "window_id":window["id"],"title":bounded(window["title"].as_str().unwrap_or(""),512),
         "app":bounded(window["class"].as_str().unwrap_or(""),128),"pid":window["pid"],
         "x":window["x"],"y":window["y"],"width":window["width"],"height":window["height"],
-        "workspace":window["workspace"],"wine":window["wine"]
+        "workspace":window["workspace"],"wine":window["wine"],
+        "scale":window["scale"],"focused":window["focused"],"mapped":window["mapped"]
     })).collect();
     Ok(
         json!({"windows":mapped,"truncated":windows.len()>100,"coordinate_space":coordinate_space()}),
@@ -1275,11 +1792,329 @@ fn encode_capture(
 }
 
 #[cfg(all(test, target_os = "linux"))]
+mod browser_tests;
+#[cfg(all(test, target_os = "linux"))]
 mod wayland_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn click_watch_arguments(endpoint: &str) -> Value {
+        json!({"endpoint":endpoint,"tab_id":"owned-existing-page","scope":"#owned-scope",
+            "selector":"button.ready","expected_origin":"https://example.test",
+            "max_clicks":1,"timeout_ms":10000})
+    }
+
+    #[test]
+    fn click_watch_rejects_remote_endpoints_and_requires_explicit_bounds() {
+        for endpoint in [
+            "http://localhost:9222",
+            "ws://127.0.0.1:9222/devtools/browser/owned",
+            "http://[::1]:9222",
+        ] {
+            let args: WatchUntilClick = parse(click_watch_arguments(endpoint)).unwrap();
+            args.validate().unwrap();
+        }
+        for endpoint in [
+            "http://example.test:9222",
+            "ws://192.0.2.1:9222",
+            "http://127.0.0.1:0",
+            "http://localhost",
+            "ws://127.0.0.1:9222/devtools/page/other",
+            "http://user@127.0.0.1:9222",
+            "ws://127.0.0.1:9222/\r\ninjected",
+        ] {
+            let args: WatchUntilClick = parse(click_watch_arguments(endpoint)).unwrap();
+            assert!(args.validate().is_err(), "{endpoint}");
+        }
+        for field in [
+            "tab_id",
+            "scope",
+            "selector",
+            "expected_origin",
+            "max_clicks",
+            "timeout_ms",
+        ] {
+            let mut args = click_watch_arguments("http://127.0.0.1:9222");
+            args.as_object_mut().unwrap().remove(field);
+            assert!(parse::<WatchUntilClick>(args).is_err(), "missing {field}");
+        }
+        let tools = Computer::tools();
+        let schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "ssmcp.computer.watch_until_click")
+            .unwrap();
+        assert_eq!(
+            schema["inputSchema"]["properties"]["desktop"]["enum"],
+            json!(["host"])
+        );
+        assert!(
+            schema["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("desktop"))
+        );
+        assert!(!routing::platform_input(
+            "windows",
+            "ssmcp.computer.watch_until_click"
+        ));
+        assert!(!routing::platform_input(
+            "macos",
+            "ssmcp.computer.watch_until_click"
+        ));
+    }
+
+    #[test]
+    fn click_watch_cleanup_requires_the_original_release_acknowledgement() {
+        for (sent, confirmed, expected) in [
+            (0, false, false),
+            (1, false, false),
+            (2, false, false),
+            (2, true, true),
+        ] {
+            let receipt = json!({"action":"watch_until_click","status":"cancelled","dispatch_attempts":1,
+                "clicks":[{"dispatch":{"sent_mouse_events":sent,"release_confirmed":confirmed},"received":null}]});
+            let mut clean = true;
+            let returned =
+                click_watch_receipt(Err(format!("cancelled: {receipt}")), &mut clean).unwrap();
+            assert_eq!(returned, receipt);
+            assert_eq!(clean, expected);
+        }
+        let receipt = json!({"action":"watch_until_click","status":"cancelled","dispatch_attempts":0,"clicks":[]});
+        let mut clean = false;
+        click_watch_receipt(Err(format!("cancelled: {receipt}")), &mut clean).unwrap();
+        assert!(
+            clean,
+            "cancellation before any dispatch leaves no input to release"
+        );
+        let mut clean = true;
+        assert!(
+            click_watch_receipt(
+                Err("cancelled: {\"action\":\"watch_until_click\"}".into()),
+                &mut clean
+            )
+            .is_err()
+        );
+        assert!(
+            !clean,
+            "malformed receipts cannot acknowledge input cleanup"
+        );
+    }
+
+    #[test]
+    fn click_watch_cancellation_is_bound_even_when_eof_arrives_before_registration() {
+        let control = host_control::HostControl::default();
+        let ticket = control.worker_ticket(control.ticket().unwrap()).unwrap();
+        let before = Cancellation::default();
+        assert!(before.host_ticket.set(ticket.clone()).is_ok());
+        before.cancel();
+        assert!(before.watch_token().is_err());
+        let after = Cancellation::default();
+        assert!(after.host_ticket.set(ticket).is_ok());
+        let token = after.watch_token().unwrap();
+        after.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn click_watch_host_off_cancels_the_owned_worker_during_attachment() {
+        let directory = CaptureDirectory::new().unwrap();
+        let computer = Computer::new(directory.0.clone()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/devtools/browser/owned",
+            listener.local_addr().unwrap()
+        );
+        let mut args = click_watch_arguments(&endpoint);
+        let isolated = computer
+            .perform("ssmcp.computer.watch_until_click", args.clone())
+            .await
+            .unwrap_err();
+        assert!(isolated.contains("explicit desktop: host"));
+        args["desktop"] = json!("host");
+        computer.set_host_input_local(false).unwrap();
+        assert_eq!(
+            computer
+                .perform("ssmcp.computer.watch_until_click", args.clone())
+                .await
+                .unwrap_err(),
+            host_control::LOCKED
+        );
+        computer.set_host_input_local(true).unwrap();
+        let mut operation = Box::pin(computer.perform("ssmcp.computer.watch_until_click", args));
+        let (mut peer, _) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                accepted = listener.accept() => accepted.unwrap(),
+                result = &mut operation => panic!("watch ended before owned attachment: {result:?}"),
+            }
+        }).await.unwrap();
+        let mut handshake = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !handshake.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                peer.read_exact(&mut byte).await.unwrap();
+                handshake.push(byte[0]);
+                assert!(handshake.len() < 16384);
+            }
+        })
+        .await
+        .unwrap();
+        computer.set_host_input_local(false).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(4), operation)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error, host_control::ENDED);
+        assert!(!HOST_INPUT_CLEANUP_FAILED.load(Ordering::Acquire));
+        let mut remainder = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), peer.read_to_end(&mut remainder))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            remainder.is_empty(),
+            "revocation must not continue CDP attachment or dispatch input"
+        );
+        computer.shutdown().await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_starts_after_the_running_executable_is_unlinked() {
+        let executable = std::env::current_exe().unwrap();
+        let link =
+            executable.with_file_name(format!("ssmcp-unlinked-worker-test-{}", std::process::id()));
+        std::fs::hard_link(&executable, &link).unwrap();
+        let output = std::process::Command::new(&link)
+            .args([
+                "--exact",
+                "computer::zuse_backend::tests::unlinked_worker_fixture",
+                "--ignored",
+                "--nocapture",
+                "--quiet",
+            ])
+            .env("SSMCP_UNLINKED_WORKER_FIXTURE", &link)
+            .stdin(Stdio::null())
+            .output();
+        let _ = std::fs::remove_file(&link);
+        let output = output.unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "selected by the unlinked-executable regression"]
+    fn unlinked_worker_fixture() {
+        let Some(path) = std::env::var_os("SSMCP_UNLINKED_WORKER_FIXTURE") else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        assert_eq!(std::env::current_exe().unwrap(), path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(!std::env::current_exe().unwrap().is_file());
+        let mut worker = std::process::Command::new(worker_executable().unwrap())
+            .args([
+                "--exact",
+                "computer::zuse_backend::tests::subprocess_worker",
+                "--ignored",
+                "--nocapture",
+                "--quiet",
+            ])
+            .env("SSMCP_ZUSE_WORKER_FIXTURE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = std::io::BufReader::new(worker.stdout.take().unwrap());
+        let mut ready = String::new();
+        for _ in 0..4 {
+            ready.clear();
+            std::io::BufRead::read_line(&mut output, &mut ready).unwrap();
+            if ready.as_bytes() == WORKER_READY {
+                break;
+            }
+        }
+        worker.stdin.take();
+        let status = worker.wait().unwrap();
+        assert_eq!(
+            ready.as_bytes(),
+            WORKER_READY,
+            "worker handshake after upgrade: {status}"
+        );
+    }
+
+    fn window_snapshot() -> Value {
+        json!({"windows":[{"window_id":"0x123","pid":42,"x":100,"y":200,"width":400,"height":300,"scale":1.25,"focused":true,"mapped":true}]})
+    }
+
+    #[test]
+    fn window_click_maps_logical_coordinates_once_and_rejects_changed_geometry() {
+        let snapshot = window_snapshot();
+        let window = window_guard(&snapshot, "0x123").unwrap();
+        let binding = WindowBinding {
+            window_id: "0x123".into(),
+            relative: true,
+            expected: Some(window.geometry.clone()),
+        };
+        assert_eq!(
+            resolve_window_point(&binding, Point { x: 10, y: 20 }, &window).unwrap(),
+            Point { x: 110, y: 220 }
+        );
+        assert!(resolve_window_point(&binding, Point { x: 400, y: 20 }, &window).is_err());
+        for (field, value) in [("x", json!(101)), ("scale", json!(1.5))] {
+            let mut changed = snapshot.clone();
+            changed["windows"][0][field] = value;
+            let current = window_guard(&changed, "0x123").unwrap();
+            assert!(resolve_window_point(&binding, Point { x: 10, y: 20 }, &current).is_err());
+        }
+    }
+
+    #[test]
+    fn window_click_rejects_lost_focus_unmapped_or_ambiguous_targets() {
+        let snapshot = window_snapshot();
+        for field in ["focused", "mapped"] {
+            let mut changed = snapshot.clone();
+            changed["windows"][0][field] = json!(false);
+            assert!(window_guard(&changed, "0x123").is_err());
+        }
+        let mut missing_scale = snapshot.clone();
+        missing_scale["windows"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("scale");
+        assert!(window_guard(&missing_scale, "0x123").is_err());
+        let mut ambiguous = snapshot.clone();
+        ambiguous["windows"]
+            .as_array_mut()
+            .unwrap()
+            .push(snapshot["windows"][0].clone());
+        assert!(window_guard(&ambiguous, "0x123").is_err());
+        assert!(window_guard(&snapshot, "0x999").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn window_coordinates_require_explicit_identity_and_coordinate_space() {
+        let click: Click = parse(json!({"x":10,"y":20,"coordinate_space":"window"})).unwrap();
+        assert!(click_window_binding(&click, Some(Point { x: 10, y: 20 })).is_err());
+        let click: Click = parse(json!({"x":10,"y":20,"window_id":"0x123"})).unwrap();
+        assert!(
+            !click_window_binding(&click, Some(Point { x: 10, y: 20 }))
+                .unwrap()
+                .unwrap()
+                .relative
+        );
+        assert!(validate_num_lock("on").is_ok());
+        assert!(validate_num_lock("toggle").is_ok());
+        assert!(validate_num_lock("auto").is_err());
+    }
 
     #[test]
     fn timed_path_preserves_endpoints_and_bounds() {
@@ -1308,16 +2143,53 @@ mod tests {
             PointerFrame { point, at_ms: 250 },
             PointerFrame { point, at_ms: 500 },
         ];
-        let cancellation = Cancellation::default();
+        let cancellation = Arc::new(Cancellation::default());
+        let (first, observed) = mpsc::sync_channel(1);
+        let cancelling = cancellation.clone();
+        let cancelled = std::thread::spawn(move || {
+            observed.recv().unwrap();
+            cancelling.cancel();
+        });
         let mut sent = 0;
         let error = play_timed_path(&frames, &cancellation, |_| {
             sent += 1;
-            cancellation.cancel();
+            if sent == 1 {
+                first.send(()).unwrap();
+            }
             Ok(())
         })
         .unwrap_err();
+        cancelled.join().unwrap();
         assert_eq!(error, CANCELLED);
         assert_eq!(sent, 1);
+    }
+
+    #[test]
+    fn timed_worker_keeps_the_exact_endpoint_after_a_slow_native_frame() {
+        let frames = [
+            PointerFrame {
+                point: Point { x: 1, y: 2 },
+                at_ms: 0,
+            },
+            PointerFrame {
+                point: Point { x: 5, y: 6 },
+                at_ms: 10,
+            },
+            PointerFrame {
+                point: Point { x: 10, y: 12 },
+                at_ms: 20,
+            },
+        ];
+        let mut sent = Vec::new();
+        play_timed_path(&frames, &Cancellation::default(), |point| {
+            sent.push(point);
+            if sent.len() == 1 {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sent, vec![frames[0].point, frames[2].point]);
     }
 
     #[test]
@@ -1373,6 +2245,7 @@ mod tests {
             operation: "type".into(),
             arguments: json!({"text":"\u{1}".repeat(16384)}),
             capture_path: None,
+            host_ticket: None,
         })
         .unwrap();
         request.push(b'\n');

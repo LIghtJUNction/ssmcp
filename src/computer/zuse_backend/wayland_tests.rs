@@ -124,7 +124,7 @@ async fn wayland_preflight_recovery_fixture() {
             true,
             0,
             false,
-            "unsupported_state: cannot restore the same active keyboard after a Num Lock chord",
+            "unsupported_state: cannot restore the same active keyboard after virtual input",
         ),
         (
             false,
@@ -223,6 +223,7 @@ fn uncertain_wayland_errors_are_not_preflight_refusals() {
         "Wayland display disconnected",
         "input completed but keyboard keymap restoration failed: Wayland write failed",
         "unsupported_state: Caps Lock is enabled; disable it before input; keyboard keymap restoration failed: Wayland write failed",
+        "unsupported_state: cannot restore the same active keyboard after virtual input; keyboard keymap restoration failed: Wayland write failed",
         "unsupported_state: unrecognized keyboard state",
     ] {
         for typing in [false, true] {

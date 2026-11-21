@@ -15,6 +15,7 @@ use storage::Store;
 use tokio::sync::Notify;
 
 pub(super) use storage::InputLease;
+pub(super) use storage::WorkerTicket;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 pub(super) const LOCKED: &str = "host input is off; the local operator can use /computer on or Super+Alt+C. Isolated desktop and background browser control remain enabled";
@@ -80,6 +81,8 @@ pub(super) fn input_tool(name: &str) -> bool {
             | "ssmcp.computer.click"
             | "ssmcp.computer.drag"
             | "ssmcp.computer.key"
+            | "ssmcp.computer.num_lock"
+            | "ssmcp.computer.watch_until_click"
             | "ssmcp.computer.type"
             | "ssmcp.computer.scroll"
     )
@@ -152,6 +155,13 @@ impl HostControl {
         Ok(Ticket {
             generation: state.generation,
         })
+    }
+
+    pub(super) fn worker_ticket(&self, ticket: Ticket) -> Result<WorkerTicket, String> {
+        if !self.valid(ticket) {
+            return Err(ENDED.into());
+        }
+        Ok(self.store()?.worker_ticket(ticket.generation))
     }
 
     fn valid(&self, ticket: Ticket) -> bool {
