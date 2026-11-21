@@ -42,7 +42,10 @@ fn member(name: &str, release: &Release, mode: u32) -> Result<bool, String> {
     }
     let executable = relative == release::executable_name(&release.target);
     if executable {
-        if mode & 0o111 == 0 {
+        // Python zipfile on the official Windows runner records a DOS
+        // creator. ZIP readers synthesize ordinary 0664 permissions for it;
+        // Windows executability comes from the exact .exe name and PE header.
+        if !release.target.ends_with("-windows-msvc") && mode & 0o111 == 0 {
             return Err("Zuse archive executable has no executable permission".into());
         }
         return Ok(true);

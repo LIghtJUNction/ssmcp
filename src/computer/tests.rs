@@ -143,6 +143,23 @@ fn archives_extract_only_the_expected_regular_platform_executable() {
 }
 
 #[test]
+fn windows_zip_accepts_the_official_dos_creator_without_posix_execute_bits() {
+    let target = "x86_64-pc-windows-msvc";
+    let executable = binary(target);
+    let mut bytes = zip_members(target, &[("zuse.exe", &executable, 0o755)]);
+    let directory = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap()
+        .central_directory_start() as usize;
+    // The high byte of "version made by" is the creator OS. This reproduces
+    // Python ZipInfo on Windows: DOS creator, with Unix bits in external_attr.
+    // The archive library still reads and validates all headers and payloads.
+    bytes[directory + 5] = 0;
+    let mut parsed = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    assert_eq!(parsed.by_index(0).unwrap().unix_mode().unwrap() & 0o111, 0);
+    let receipt = release(target, &bytes);
+    assert_eq!(archive::executable(&bytes, &receipt, target).unwrap(), executable);
+}
+
+#[test]
 fn tar_rejects_links_duplicate_executables_extra_commands_and_wrong_architecture() {
     let target = "x86_64-unknown-linux-gnu";
     let exe = binary(target);
