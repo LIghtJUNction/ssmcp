@@ -95,6 +95,23 @@ struct InputWork {
     completion_input_bytes: usize,
 }
 
+#[derive(Clone)]
+struct SidebarAgentIdentity {
+    key: String,
+    run_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct SidebarAgentHit {
+    rect: panel::Rect,
+    row: u16,
+    view: View,
+    process_generation: u64,
+    identity: SidebarAgentIdentity,
+}
+
+type SidebarAgentRow = (String, PanelTone, Option<SidebarAgentIdentity>);
+
 #[derive(Default)]
 pub(super) struct Conversation {
     pub(super) composer: Composer,
@@ -116,6 +133,7 @@ pub(super) struct Conversation {
     selected: usize,
     selected_agent: Option<String>,
     drawn_agents: Vec<String>,
+    sidebar_agents: Vec<SidebarAgentHit>,
     list_start: usize,
     list_count: usize,
     queue_hit_rows: Vec<Option<String>>,
@@ -1282,15 +1300,7 @@ impl State {
                         return;
                     }
                     if field(&agent, "kind") == "observed" {
-                        if self.audit.open_run(field(&agent, "run_id")) {
-                            self.conversation.detail = true;
-                            self.conversation.content_focus = true;
-                            self.notice =
-                                Some("Observed call · Esc / left click returns to agents".into());
-                        } else {
-                            self.notice =
-                                Some("This call is no longer in the retained audit history".into());
-                        }
+                        self.chat_observed_history(field(&agent, "run_id"));
                         return;
                     }
                     if field(&agent, "kind") == "native" {
@@ -1552,6 +1562,16 @@ impl State {
             release: false,
         } = key
             && self.chat_reference_mouse(x, y)
+        {
+            return;
+        }
+        if let Key::Mouse {
+            button,
+            x,
+            y,
+            release: false,
+        } = key
+            && self.chat_sidebar_agent_mouse(button, x, y)
         {
             return;
         }
@@ -2055,6 +2075,10 @@ impl State {
                 }
                 'i' | 'I' => {
                     self.chat_session_info();
+                    true
+                }
+                'h' | 'H' => {
+                    self.chat_session_history();
                     true
                 }
                 _ => false,
@@ -2751,7 +2775,7 @@ impl State {
                 ("".into(), PanelTone::Normal),
                 ("Latest tool".into(), PanelTone::Heading),
                 (field(selected, "tool").into(), PanelTone::Normal),
-                ("Enter / → inspect latest call".into(), PanelTone::Muted),
+                ("Enter / h · inspect latest call".into(), PanelTone::Muted),
                 ("".into(), PanelTone::Normal),
                 ("Messages".into(), PanelTone::Heading),
                 ("No direct message address".into(), PanelTone::Normal),
@@ -2928,6 +2952,7 @@ impl State {
     }
 
     pub(super) fn chat_frame(&mut self, now: Instant) -> Frame {
+        self.conversation.sidebar_agents.clear();
         self.rendered_update_notice = None;
         self.events.set_scope(events::EventScope::Conversation);
         self.conversation.logs_open = self.conversation.view == View::Logs;
@@ -3102,7 +3127,7 @@ impl State {
                     }
                     if self.conversation.view == View::History {
                         if let Some(history)=&self.conversation.scoped_history {
-                            return format!("{} · live records · PgUp/PgDn · Esc Agents",history.lock().unwrap_or_else(|error|error.into_inner()).title());
+                            return format!("{} · live records · PgUp/PgDn · Esc Sessions",history.lock().unwrap_or_else(|error|error.into_inner()).title());
                         }
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
                             else { "↑↓ select · Enter resume · Esc back".into() };
@@ -3112,12 +3137,12 @@ impl State {
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
-                            "← / Esc  back to agents".into()
+                            "Esc · back to Sessions · ←/→ panels".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
-                                "Esc back · ↑↓ select · Enter latest call · ←/→ panels".into()
+                                "Enter / h · call history · Esc back · ←/→ panels".into()
                             } else {
-                                format!("{} selected · Esc back · Space select · g group · i IDs · Enter message",
+                                format!("Enter recipient · h history · Esc back · {} selected · Space/g group · i IDs",
                                     self.conversation.groups.selected.len())
                             }
                         };
@@ -3246,10 +3271,10 @@ impl State {
             let footer = self.guide_rows(rect.width, limit as u16, 0, rect.col);
             let footer_start = limit.saturating_sub(footer.len());
             let agent_view = self.conversation.view == View::Agents;
-            let mut sidebar = if agent_view {
+            let mut sidebar: Vec<SidebarAgentRow> = if agent_view {
                 self.chat_agent_details(selected_agent.as_ref(), &data)
                     .into_iter()
-                    .map(|(text, tone)| (format!(" {text}"), tone))
+                    .map(|(text, tone)| (format!(" {text}"), tone, None))
                     .collect()
             } else {
                 Vec::new()
@@ -3258,19 +3283,25 @@ impl State {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
                         let mut section =
-                            vec![(format!(" Members · {}", agents.len()), PanelTone::Heading)];
-                        section.push((" ← choose agent".into(), PanelTone::Muted));
+                            vec![(format!(" Members · {}", agents.len()), PanelTone::Heading, None)];
+                        section.push((" Click select · right-click history".into(), PanelTone::Muted, None));
                         for agent in agents.iter().take(4) {
-                            section.push((format!(" {}", field(agent, "name")), PanelTone::Accent));
+                            let identity = SidebarAgentIdentity {
+                                key: agent_key(agent),
+                                run_id: None,
+                            };
+                            section.push((format!(" {}", field(agent, "name")), PanelTone::Accent, Some(identity.clone())));
                             section.push((
                                 format!("   reported {}", field(agent, "status")),
                                 PanelTone::Muted,
+                                Some(identity),
                             ));
                         }
                         if !grouped_callers.is_empty() {
                             section.push((
                                 format!(" Observed callers · {}", grouped_callers.len()),
                                 PanelTone::Heading,
+                                None,
                             ));
                             for controller in grouped_callers.iter().take(3) {
                                 let tone = if controller.running > 0 {
@@ -3280,24 +3311,29 @@ impl State {
                                 } else {
                                     PanelTone::Muted
                                 };
-                                section.push((format!(" ↳ {}", controller.name), tone));
+                                let identity = SidebarAgentIdentity {
+                                    key: format!("caller:{}", controller.key),
+                                    run_id: Some(controller.run_id.clone()),
+                                };
+                                section.push((format!(" ↳ {}", controller.name), tone, Some(identity.clone())));
                                 section.push((
                                     format!(
                                         "   {} · {} calls · {}",
                                         controller.model, controller.calls, controller.status
                                     ),
                                     tone,
+                                    Some(identity),
                                 ));
                             }
                         }
                         if agents.is_empty() && observed.is_empty() {
-                            section.push((" Waiting for agent activity".into(), PanelTone::Muted));
+                            section.push((" Waiting for member or caller activity".into(), PanelTone::Muted, None));
                         }
                         section
                     }
                     crate::client::ui::Panel::Queue => vec![
-                        (format!(" Queue · {pending} pending"), PanelTone::Heading),
-                        (" /queue to review and edit".into(), PanelTone::Muted),
+                        (format!(" Queue · {pending} pending"), PanelTone::Heading, None),
+                        (" /queue to review and edit".into(), PanelTone::Muted, None),
                     ],
                     _ => {
                         let mut ui = self.ui.clone();
@@ -3317,13 +3353,13 @@ impl State {
                         }
                         section
                             .into_iter()
-                            .map(|row| (format!(" {}", row.text), row.tone))
+                            .map(|row| (format!(" {}", row.text), row.tone, None))
                             .collect()
                     }
                 };
                 if !section.is_empty() {
                     if !sidebar.is_empty() {
-                        sidebar.push((String::new(), PanelTone::Normal));
+                        sidebar.push((String::new(), PanelTone::Normal, None));
                     }
                     sidebar.append(&mut section);
                 }
@@ -3333,11 +3369,20 @@ impl State {
                 if index >= footer_start {
                     line.push_str(&footer[index - footer_start]);
                 } else {
-                    let (text, tone) = sidebar
+                    let (text, tone, identity) = sidebar
                         .get(index)
                         .cloned()
-                        .unwrap_or((String::new(), PanelTone::Normal));
+                        .unwrap_or((String::new(), PanelTone::Normal, None));
                     line.push_str(&self.chat_line(&text, tone, rect.width));
+                    if !self.help && let Some(identity) = identity {
+                        self.conversation.sidebar_agents.push(SidebarAgentHit {
+                            rect,
+                            row: index as u16,
+                            view: self.conversation.view,
+                            process_generation: self.conversation.process_generation,
+                            identity,
+                        });
+                    }
                 }
             }
         }
@@ -4252,7 +4297,9 @@ mod tests {
             y: body_top(state.geometry.rows) + 1 + index as u16 * 2,
             release: false,
         });
-        state.chat_key(Key::Open);
+        state.chat_character('\r');
+        assert_eq!(state.conversation.view, View::Agents);
+        assert!(state.conversation.detail);
         assert_eq!(state.audit.snapshot()["selected"]["run_id"], "drawn");
         assert!(state.conversation.target.is_none());
     }
