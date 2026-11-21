@@ -9,7 +9,6 @@ pub mod code_mode;
 #[cfg(target_os = "linux")]
 mod collab;
 pub mod computer;
-pub(crate) mod computer_control;
 pub mod context;
 pub(crate) mod hex;
 #[cfg(target_os = "linux")]
