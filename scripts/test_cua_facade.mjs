@@ -57,38 +57,18 @@ function run(code, reply) {
 const result = record => record.frames.find(frame => frame.type === 'result')?.value;
 const error = record => record.frames.find(frame => frame.type === 'error')?.message;
 
-test('CUA routes desktop and browser operations through the existing native bridge', async () => {
+test('computer routes only Zuse lifecycle operations through the native bridge', async () => {
   const commands = [
-    ['status', {}],
-    ['monitors', {}],
-    ['windows', {}],
-    ['focus', { window_id: '0x1234' }],
-    ['screenshot', { region: { x: -100, y: 20, width: 400, height: 300 } }],
-    ['move', { x: -10, y: 50 }],
-    ['click', { x: 20, y: 30, button: 'right', count: 2 }],
-    ['drag', { path: [{ x: 1, y: 2 }, { x: 30, y: 40 }], duration_ms: 100 }],
-    ['key', { key: 'Return', modifiers: ['ctrl'] }],
-    ['type', { text: '中文 ` $() \\ Unicode' }],
-    ['scroll', { direction: 'down', steps: 2 }],
-  ];
-  const browserCommands = [
-    ['launch', {}],
-    ['open', { url: 'about:blank' }],
-    ['navigate', { target_id: 't', url: 'about:blank' }],
-    ['act', { target_id: 't', actions: [
-      { type: 'fill', ref: 's1e1', text: '中文表单' },
-      { type: 'click', ref: 's1e2' },
-      { type: 'wait', selector: '#result', text: 'Ready', timeout_ms: 5000 },
-    ] }],
-    ['wait', { target_id: 't', selector: '#result', state: 'visible' }],
+    ['version', {}],
+    ['download', {}],
+    ['download', { version: 'v0.3.0' }],
+    ['install', { download_id: 'download-fixture' }],
+    ['uninstall', { installation_id: 'installation-fixture' }],
   ];
   const record = await run(`
     const answers = [];
     for (const [name, args] of ${JSON.stringify(commands)}) {
-      answers.push(await cua[name]('one', args));
-    }
-    for (const [name, args] of ${JSON.stringify(browserCommands)}) {
-      answers.push(await cua.browser[name]('one', args));
+      answers.push(await computer[name]('one', args));
     }
     return answers;
   `, request => ({
@@ -100,18 +80,12 @@ test('CUA routes desktop and browser operations through the existing native brid
     },
   }));
   assert.equal(record.exitCode, 0, record.stderr || error(record));
-  const expectedNames = [
-    ...commands.map(([name]) => 'ssmcp.computer.' + name),
-    ...browserCommands.map(([name]) => 'ssmcp.browser.' + name),
-  ];
-  assert.deepEqual(record.requests.map(request => request.name), expectedNames);
-  record.requests.forEach(request => {
+  assert.deepEqual(record.requests.map(request => request.name),
+    commands.map(([name]) => 'ssmcp.computer.' + name));
+  record.requests.forEach((request, index) => {
     assert.equal(request.op, 'call');
     assert.equal(request.client_id, 'one');
-  });
-  commands.forEach(([, args], index) => assert.deepEqual(record.requests[index].arguments, args));
-  browserCommands.forEach(([, args], index) => {
-    assert.deepEqual(record.requests[commands.length + index].arguments, args);
+    assert.deepEqual(request.arguments, commands[index][1]);
   });
   result(record).forEach(value => {
     assert.equal(value.isError, false);
@@ -120,104 +94,93 @@ test('CUA routes desktop and browser operations through the existing native brid
   });
 });
 
-test('CUA preserves partial browser batch errors without replay or desktop fallback', async () => {
-  const native = {
-    isError: true,
-    content: [{ type: 'text', text: 'ref is not from the latest snapshot' }],
-    structuredContent: {
-      target_id: 't', completed_count: 1,
-      completed: [{ index: 0, type: 'click', result: { clicked: true } }],
-      phase: 'actions', failed_index: 1, replay_safe: false,
-    },
-  };
-  const actions = [
-    { type: 'click', ref: 's1e1' },
-    { type: 'click', ref: 'stale-ref' },
-    { type: 'click', ref: 's1e2' },
-  ];
+test('retired embedded control facades are absent and cannot dispatch a fallback', async () => {
   const record = await run(`
-    return await cua.browser.act('one', {target_id:'t', actions:${JSON.stringify(actions)}});
-  `, request => {
-    assert.equal(request.name, 'ssmcp.browser.act');
-    return { ok: true, value: native };
-  });
+    return {
+      methods: Object.keys(computer).sort(),
+      frozen: Object.isFrozen(computer),
+      browser: typeof browser,
+      cua: typeof cua,
+      omarchy: typeof omarchy,
+      actions: ['status', 'toggle', 'desktop_start', 'screenshot', 'click', 'key', 'type']
+        .map(name => typeof computer[name]),
+      hidden: typeof __ssmcp_host
+    };
+  `, () => { throw new Error('retired facades must not send a native request'); });
   assert.equal(record.exitCode, 0, record.stderr || error(record));
-  assert.deepEqual(result(record), native);
-  assert.deepEqual(record.requests.map(request => request.name), ['ssmcp.browser.act']);
-  assert.deepEqual(record.requests[0].arguments, { target_id: 't', actions });
+  assert.deepEqual(result(record), {
+    methods: ['download', 'install', 'uninstall', 'version'],
+    frozen: true,
+    browser: 'undefined',
+    cua: 'undefined',
+    omarchy: 'undefined',
+    actions: Array(7).fill('undefined'),
+    hidden: 'undefined',
+  });
+  assert.deepEqual(record.requests, []);
 });
 
-test('CUA screenshots keep image bytes out of text logs and preserve coordinate metadata', async () => {
-  const metadata = {
-    image_to_desktop: { origin_x: -100, origin_y: 20, scale_x: 2, scale_y: 2 },
-    width: 1, height: 1,
-  };
+test('native images keep bytes out of text logs and preserve metadata', async () => {
+  const metadata = { width: 1, height: 1, source: 'fixture.png' };
   const record = await run(`
-    const shot = await cua.screenshot('one', {max_width:800});
-    image(shot);
-    print('screenshot captured');
-    return shot.structuredContent;
+    const picture = await call('one', 'ssmcp.fs.read_image', {path:'fixture.png'});
+    image(picture);
+    print('image read');
+    return picture.structuredContent;
   `, request => {
-    assert.equal(request.name, 'ssmcp.computer.screenshot');
+    assert.equal(request.name, 'ssmcp.fs.read_image');
     return { ok: true, value: { isError: false, content: [png], structuredContent: metadata } };
   });
   assert.equal(record.exitCode, 0, record.stderr || error(record));
   assert.deepEqual(result(record), metadata);
   assert.deepEqual(record.frames.filter(frame => frame.type === 'image').map(frame => frame.content), [png]);
-  assert.deepEqual(record.frames.filter(frame => frame.type === 'log').map(frame => frame.line), ['screenshot captured']);
+  assert.deepEqual(record.frames.filter(frame => frame.type === 'log').map(frame => frame.line), ['image read']);
   assert(!JSON.stringify(record.frames.filter(frame => frame.type !== 'image')).includes(png.data));
 });
 
-test('native CUA errors remain observable and failed screenshots are not displayed', async () => {
+test('native errors remain observable and failed images are not displayed', async () => {
   const native = {
-    isError: true, content: [{ type: 'text', text: 'desktop permission unavailable' }, png],
-    structuredContent: { permissions: { screenshot: false } }, _meta: { native: 'error' },
+    isError: true, content: [{ type: 'text', text: 'file permission unavailable' }, png],
+    structuredContent: { readable: false }, _meta: { native: 'error' },
   };
   const record = await run(`
-    const failed = await cua.screenshot('one');
+    const failed = await call('one', 'ssmcp.fs.read_image', {path:'fixture.png'});
     let displayError;
     try { image(failed); } catch (error) { displayError = error.message; }
     return {failed, displayError};
   `, () => ({ ok: true, value: native }));
   assert.equal(record.exitCode, 0, record.stderr || error(record));
   assert.deepEqual(result(record).failed, native);
-  assert.match(result(record).displayError, /failed native.*desktop permission unavailable/);
+  assert.match(result(record).displayError, /failed native.*file permission unavailable/);
   assert(!record.frames.some(frame => frame.type === 'image'));
 });
 
-test('CUA preserves transport failures without starting any fallback model', async () => {
+test('computer preserves transport failures without starting any fallback', async () => {
   const record = await run(`
-    try { await cua.click('one', {x:1,y:2}); }
+    try { await computer.install('one', {download_id:'download-fixture'}); }
     catch (error) { return {reason:error.message}; }
     throw new Error('expected a native transport error');
   `, () => ({ ok: false, error: 'client disconnected' }));
   assert.equal(record.exitCode, 0, record.stderr || error(record));
   assert.deepEqual(result(record), { reason: 'client disconnected' });
-  assert.deepEqual(record.requests.map(request => request.name), ['ssmcp.computer.click']);
+  assert.deepEqual(record.requests.map(request => request.name), ['ssmcp.computer.install']);
 });
 
-test('CUA shares existing implementations and does not alter discovered Codex MCP results', async () => {
+test('generic calls do not alter discovered MCP results or native images', async () => {
   const native = {
-    content: [png], structuredContent: { provider: 'fixture-cua', nativeShape: ['untouched'] },
+    content: [png], structuredContent: { provider: 'fixture-images', nativeShape: ['untouched'] },
     isError: false, _meta: { untouched: true },
   };
   const record = await run(`
-    const response = await call('one','codex.mcp.fixture-cua.screenshot',{screen:0});
+    const response = await call('one','codex.mcp.fixture-images.read',{path:'fixture.png'});
     image(response);
-    return {
-      response,
-      same:cua.screenshot===computer.screenshot && cua.browser===browser,
-      frozen:Object.isFrozen(cua) && Object.isFrozen(cua.browser),
-      hidden:typeof __ssmcp_host
-    };
+    return {response, hidden:typeof __ssmcp_host};
   `, request => {
-    assert.equal(request.name, 'codex.mcp.fixture-cua.screenshot');
+    assert.equal(request.name, 'codex.mcp.fixture-images.read');
     return { ok: true, value: native };
   });
   assert.equal(record.exitCode, 0, record.stderr || error(record));
   assert.deepEqual(result(record).response, native);
-  assert.equal(result(record).same, true);
-  assert.equal(result(record).frozen, true);
   assert.equal(result(record).hidden, 'undefined');
   assert.deepEqual(record.frames.filter(frame => frame.type === 'image').map(frame => frame.content), [png]);
 });
