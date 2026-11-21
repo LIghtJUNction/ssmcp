@@ -51,6 +51,19 @@ pub(in crate::computer) struct InputLease {
     store: Arc<Store>,
 }
 
+#[cfg(unix)]
+impl Drop for InputLease {
+    fn drop(&mut self) {
+        // A concurrent fork may retain this open file description until exec.
+        // Release the input lease before closing our own descriptor.
+        while let Err(error) = self._file.unlock() {
+            if error.kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+    }
+}
+
 impl InputLease {
     pub(in crate::computer) fn revoke(&self) {
         let _ = self
@@ -401,6 +414,31 @@ fn open(directory: &Directory, name: &str, access: Open) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn input_lease_drop_unlocks_while_an_inherited_descriptor_stays_open() {
+        let control = super::super::HostControl::default();
+        let store = control.store().unwrap();
+        let lease = store.try_input().unwrap().unwrap();
+        // A concurrent fork retains the same open file description until exec.
+        // A duplicate makes that lifetime deterministic without a subprocess.
+        let inherited = lease._file.try_clone().unwrap();
+        assert!(store.try_input().unwrap().is_none());
+
+        drop(lease);
+        let next = store
+            .try_input()
+            .unwrap()
+            .expect("the lease must unlock before inherited descriptors close");
+        drop(inherited);
+        assert!(
+            store.try_input().unwrap().is_none(),
+            "closing an old descriptor must not release the next input lease"
+        );
+        drop(next);
+        assert!(store.try_input().unwrap().is_some());
+    }
 
     #[test]
     fn explicit_switch_waits_while_observation_and_revocation_fail_closed() {

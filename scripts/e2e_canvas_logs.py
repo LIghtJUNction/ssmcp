@@ -175,12 +175,31 @@ def run(binary, decoder, output, checks):
             )
             check(body(retained) == selected_body, "agent selection is retained independently in its logical column")
 
-            preview.send(mouse(2))
-            preview.until(logs_open, "diagnostic logs opened from the agents column")
-            preview.send(mouse(2, release=True) + ESCAPE)
+            # Sessions reserves right-click for the clicked thread's history.
+            # Preview members use synthetic IDs, so this must report unavailable
+            # without falling back to diagnostics or another selected member.
+            builder_row = next(index for index, row in enumerate(retained["rows"])
+                               if "›" in row and "Builder" in row)
+            preview.send(mouse(2, y=builder_row + 1))
+            history_unavailable = preview.until(
+                lambda shot: view(shot, "sessions") and not logs_open(shot)
+                and "Thread history unavailable" in text(shot),
+                "right-click routing to the selected preview thread's history",
+            )
+            check(body(history_unavailable) == selected_body
+                  and draft in prompt_text(history_unavailable),
+                  "unavailable preview thread history preserves selection and the shared draft")
+            preview.send(mouse(2, release=True, y=builder_row + 1))
+            check(view(snapshot(preview), "sessions"),
+                  "right-button release does not open diagnostics after a thread-history request")
+            preview.send(b"\x1b[20~")
+            logs = preview.until(logs_open, "F9 opening diagnostic logs from the Sessions column")
+            check(draft in prompt_text(logs) and not logs["hide_cursor"],
+                  "F9 restores Logs' saved editing focus while preserving the shared draft")
+            preview.send(ESCAPE)
             restored = preview.until(
                 lambda shot: view(shot, "sessions") and not logs_open(shot),
-                "Escape restoring the agents column",
+                "Escape restoring the Sessions column",
             )
             check(body(restored) == selected_body and draft in prompt_text(restored),
                   "Escape closes logs and preserves the original column selection and shared draft")
