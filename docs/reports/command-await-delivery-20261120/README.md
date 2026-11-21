@@ -2,7 +2,27 @@
 
 > 工作稿：发布验收和实际发布结果尚待填写，不能作为已经发布的证明。
 
-## 当前状态（截至 2026-11-21 00:24 UTC）
+## 当前状态（截至 2026-11-21 01:01 UTC）
+
+B 的最终绑定执行与发布已暂停，正在协调版本意图和既有验证任务的占用。根据源码作者与协调者的只读观测，另一条既有发布链正在本机验证 0.10.24，并持有共享构建目标锁；主审尚未独立读取该进程细节，因此此项保留转述限定。本组没有启动或排队新的重任务。原生会话进度已提出本功能链顺延 0.10.25 的计划，但最终版本与后续冻结源码尚未确认。
+
+[`be6da5bf`](https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1) 于 00:43:00 UTC 按 0.10.24 公开冻结的事实保持有效，[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍为开放 draft；该历史源码身份不等于当前版本协调已经完成。B 的构建和运行验收尚未启动，最终 P1 与正式发布均无通过结论。[冻结源码记录](frozen-source-0047.json)分别保留冻结事实与后续协调状态，原 FC/781 编译和 A/B 证据继续按原源码归属。
+
+主审于 00:50:52 UTC 仅通过 Git 对象读取，确认另一条本地 0.10.24 分支的当时 HEAD 为 `35de95d2924184daf994710b6f54a5c2a89b1218`、tree 为 `8731180414b41beb63220acf43a22957ad457127`。公开 f33 是其祖先，24c 与 B 均不是；读取前后 HEAD 相同。这项证据只确认源码身份和继承关系，没有证明运行中的 validator 绑定该 HEAD，也没有独立确认进程归属或锁持有者，不能把两条链的运行成绩互相替代。01:01 UTC 的 GitHub 回读仍确认 PR #159 头为 B、公开 main 为 f33。
+
+## 历史状态（截至 2026-11-21 00:48 UTC）
+
+候选 B 已公开并冻结为 [`be6da5bf`](https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1)，tree 为 `5e8ea273c8f8bd8b0e7b1f87ccc0d19fd594601b`，实际 Cargo 版本现为 **0.10.24**。[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍开放、draft、未合并。普通推送于 00:42:08 UTC 退出 0，远端与 GitHub head 相等；00:43:00 UTC 的冻结回执记录工作树干净。
+
+本次进度是源码冻结。24c 与 B 之间已审 CLI、粘贴和回复相关的 18 个源码 Git blob 完全相同，可复用对应静态结论；FC/781 的编译、测试状态和 A/B 数字继续保留原归属。B 的构建和运行尚未开始，等待既有共享计算窗口明确交接，没有启动或排队新的重任务。最终 P1 与正式发布仍待完成，**0.10.24 当前是候选版本，尚非发布完成记录**。见[冻结源码记录](frozen-source-0047.json)；[24c 记录](source-union-0038.json)作为本次增量的历史检查点保留。
+
+## 历史状态（截至 2026-11-21 00:39 UTC）
+
+[PR #159](https://github.com/LIghtJUNction/ssmcp/pull/159) 仍开放且为 draft，公开头为中间合流 [`24c32869`](https://github.com/LIghtJUNction/ssmcp/commit/24c32869ba730f4a91406ebd6b05e18a462bec80)。它合入固定 fc 与 f208，随后调整一条 Composer 测试预期；当前 Cargo 版本仍为 **0.10.22**。普通推送退出 0，远端回读一致，未使用 force。该源码只完成静态检查，没有针对 24c 的构建、测试或性能执行。
+
+粘贴核心路径和七个新增测试在已审范围内保留，CLI 与回复边界静态审阅未见确定阻断。FC 测试已编译、FC/781 A/B 已完成的历史证据均保留原归属，不能记为 24c 通过。后续目标版本已选定 **0.10.24**，同一作者将继续纳入公开 f33；当前尚无最终源码冻结、构建、运行验收、P1 或发布结果。详见[本次源码记录](source-union-0038.json)；下方“版本未选”等表述保留其原观察时间。
+
+## 历史状态（截至 2026-11-21 00:24 UTC）
 
 本次补正文档事实与分段指标，没有新增测试或测量执行。新增七个 Rust 测试已完成静态审阅，并随成功的 `cargo test --lib --no-run` 编入库测试产物；尚未执行。原 [91f 检查点](https://github.com/LIghtJUNction/ssmcp/blob/91f98f84e9320042e382b93e22f7e256df3282b9/docs/reports/command-await-delivery-20261120/README.md)“仅静态”的表述遗漏了编译成功事实，现已注明更正。
 
@@ -627,3 +647,67 @@ busy 的首次可见由 5.377071 增至 29.151625 ms，超限场景写完后等�
 Ctrl-V 的触发写入耗时为 **0.006661 → 0.006834 ms**；整个 Ctrl-V 夹具 step 的墙钟耗时为 **3.975164 → 5.381131 s**，后者包括整步夹具工作，不是纯粘贴延迟。原 ready 观测仍为 **50.066292 → 46.399351 ms**。
 
 Preparing 字段为 `null` 表示未观察到，不能填成 0 ms，也不证明该阶段被消除。VT 采样含解码与观察成本；这些单次结果不支持统计或因果泛化。四份原报告的完整 SHA、所有分段值、计数和保留的 `null` 均见[分段指标 JSON](candidate-ab-submetrics-0021.json)。本次没有重测、执行新增 Rust 测试或新增验收门禁。
+
+
+## 2026-11-21 00:39 源码检查点：固定 24c 中间合流
+
+### 源码身份与检查过程
+
+合并提交 [`b87d8d0f`](https://github.com/LIghtJUNction/ssmcp/commit/b87d8d0f1c47684da9574610f1279d40aefa2f96) 的两个父提交分别为固定 fc 和 f208；其后 [`24c32869`](https://github.com/LIghtJUNction/ssmcp/commit/24c32869ba730f4a91406ebd6b05e18a462bec80) 只调整一条 Composer 预期，tree 为 `d8cb76cefa139d4809edba45f2b701d45e2a59e0`。普通推送于 00:29:31.980906 UTC 退出 0，远端回读相等且工作树干净。它仍是未合并的 draft PR，尚未包含后续公开 f33；[Cargo.toml](https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/Cargo.toml) 的实际版本是 0.10.22。
+
+检查过程包含两类退出 1，不能概括为从始至终全部成功。最初三方合并遇到冲突，随后解决并提交；初始 TOML probe 把两个父提交已有的 include 重复项当成新问题，修正为检查“不新增重复”后通过。最终 rustfmt、Python AST/静态契约及合并和 Composer 差异检查退出 0。这些结果属于源码检查，没有运行 Cargo 构建、产品测试或性能测量；原回执的字节数与完整 SHA256 见[结构化记录](source-union-0038.json)。
+
+### 已审保留范围与限制
+
+粘贴核心在已审差异中保持不变。[`paste_literal_prefix`](https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/src/client/terminal.rs#L1218-L1233) 仍批量消费首个 ESC 前的字节，将 ESC/分段标记交回原解码路径；[`chat_output` 与批处理](https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/src/client/terminal/conversation.rs#L2463-L2589) 保留 UTF-8 暂存、大小限制和输出/按键顺序。InputStamp、异步完成与补全刷新选定区段和 FC 原文逐字节相同。远程 finish/answer 的退役检查按工具名精确匹配，本地 `chat_finish_input` 及其草稿变化保护仍保留。
+
+[七个粘贴测试](https://github.com/LIghtJUNction/ssmcp/blob/24c32869ba730f4a91406ebd6b05e18a462bec80/src/client/terminal/conversation/tests/paste_batch.rs)及其模块注册保留，文件仍为 8,620 B，SHA256 为 `68511f539518cd13a8067598cf660734eefed4436fbeeb24d579a0f9215ef6e9`，与 FC 相同。其静态覆盖仍包括批量工作计数、补全刷新、分段 UTF-8、CR/LF/Tab/ESC 顺序、PNG 不透明缓冲及超限保护；不能据此宣称真实异步完成或 pending 输入竞态已运行通过。**FC 的七个测试已编译不等于 24c 已编译。** 本轮没有重新核验全部传递依赖或性能 driver，也没有把既有 A/B 结果迁移到本次合流。
+
+另行完成的 CLI 接收者/加载参数边界、保存/重载数据路径和回复守卫静态审阅未见确定阻断；provider 运行时 argv 仍未实证。后续由同一作者继续纳入 [`f33ed8f1`](https://github.com/LIghtJUNction/ssmcp/commit/f33ed8f14fc14aff05a2e4098743eb07e8527c06)，目标版本现已选定 0.10.24，属于后续源码计划。最终冻结、构建、定向运行验收、P1 和正式发布继续待完成。
+
+### 独立版本观察
+
+另一发布线的 [v0.10.23 运行 44843331041](https://github.com/LIghtJUNction/ssmcp/actions/runs/44843331041) 已为 completed/failure，更新时间 00:33:03 UTC，工作流来源为 f33。当前最新正式发布仍为 [v0.10.20](https://github.com/LIghtJUNction/ssmcp/releases/tag/v0.10.20)，共 16 个 assets。这些观察不构成本组发布成绩，也不改变中间源码版本 0.10.22 与后续目标 0.10.24 的区别。
+
+
+## 2026-11-21 00:48 源码冻结检查点：候选 B / 0.10.24
+
+### 冻结身份与静态结论归属
+
+本次通过三个提交从 24c 推进至 B，主审已核对公开 Git 对象链、PR head 与 Cargo 版本。
+
+| 提交 | 作用 |
+| --- | --- |
+| [`10645530`](https://github.com/LIghtJUNction/ssmcp/commit/106455301ebf7bd35a72c0074eb9507be74778db) | 正常合并，两个父提交为 24c 与公开 f33。 |
+| [`c8f5d1ec`](https://github.com/LIghtJUNction/ssmcp/commit/c8f5d1ecc25721937f6ebc585247c67cfa75a932) | 准备 0.10.24 源码版本元数据。 |
+| [`be6da5bf`](https://github.com/LIghtJUNction/ssmcp/commit/be6da5bf1d9da74e8fd0c19576e63e8aacf4c1c1) | 只修正 dashboard 夹具的判据，形成当前冻结候选 B。 |
+
+冻结记录从此前 FC 推进到 B，工作树为 clean，四个 gitlink 保持不变；版本准备中的 Cargo.lock 修改仅为本包版本。冻结 Cargo.lock 为 66,476 B，SHA256 为 `e8578cea449acae5281fc723f30bbaba56774cc3f460dd4e449b8381c21be53b`。普通推送未使用 force，完成于 00:42:08.446246 UTC；冻结完成于 00:43:00.589512 UTC。完整四个 gitlink 与提交/tree 绑定见[冻结事实](frozen-source-0047.json)。
+
+已审 CLI、粘贴和回复相关的 18/18 个源码 Git blob 在 24c→B 之间完全相同，因此[24c 的窄范围静态结论](source-union-0038.json)可按对应代码字节复用。这不能迁移任何编译、测试或 A/B 结果：七个新增 Rust 测试在 FC 中已编译但未执行的更正保持不变，B 尚无构建通过结论。原 A/B Git 对象、导出产物与回执未改动，历史性能表继续只描述固定 781 与 FC 的每侧单次观测。
+
+### dashboard 判据修正的依据与边界
+
+旧夹具要求底栏出现 Wheel 且物理光标隐藏。已有失败日志显示 Wheel 缺失、客户端仍存活，但没有打印最终 hide_cursor 或 focus 值；源码中连接版本 notice 的底栏优先级高于 Wheel 提示。因此不能把该失败认定为 ARM 慢，也不能只归因于裁剪。
+
+B 的夹具改为要求 Enter Apply 从底栏消失、物理光标隐藏，并实际读取 `/display/focus` 为 `audit`；产品底栏和超时不变，保留 End 后 scrollback 为零、同批 PageUp 加 x 及后续输入/resize 检查。该修正目前只有源码证据，实际运行效果仍待验证。
+
+### 原件身份与复核层级
+
+下表区分主审完整实读的回执与仅由静态回执登记的源变更原件，避免把哈希登记写成全文独立复核。
+
+| 原件 | 字节数 | SHA256 | 本次证据层级 |
+| --- | ---: | --- | --- |
+| 源码变更回执 | 47,820 | `df0eb4f02aee4b2bf3b57cf16c495b4d2a390a489e284b0006f2149a26e9f173` | 静态审阅回执登记；主审尚未独立全文读取该原件。 |
+| root-static-review.json | 2,528 | `968ec96e5d02ac60dd897b1fe36ca7d1f3a8c4cdaf7c8c08a89ad7a64159cca8` | 主审完整实读。 |
+| root-normal-push-receipt.json | 1,072 | `efc4e85ce78aa3a62c750d0d0cb87c87bd2756e8a5afca3ccb2198bfaeb673f0` | 主审完整实读。 |
+| source-freeze-be6da5b.json | 2,862 | `518f21c2afe0c148f4d653ce861e8cd6ab0e590b899e21414c91f85eedc597c1` | 主审完整实读。 |
+
+B 构建、运行验收、最终 P1 与正式发布均未完成。执行安排仍等待既有共享计算窗口明确交接，本次没有启动或排队新的重任务。上一节关于其他发布线 v0.10.23 失败和 v0.10.20 正式版的观察保留原截止时间，不作为 B 的发布成绩；本次也未刷新或改写该历史观察。
+
+
+## 2026-11-21 00:50 后续协调：候选版本需重新确认
+
+源码作者与协调者随后报告，另一条既有发布链已在本机进行 0.10.24 验证并持有共享构建目标锁；原计划共享窗口内的计算任务自身尚未启动。主审尚未独立读取该进程细节，本报告不把转述升级为独立进程核验。源码作者已明确暂停 B 的最终绑定执行和发布，先协调既有验证任务的所有者与版本意图；B 的验收流程未启动，也没有排队新的重任务。
+
+B 的公开提交、普通推送、0.10.24 冻结回执及既有静态审阅仍作为历史事实保留。后续最终源码版本需要重新确认，尚无替代版本的确定选择；本次未改写源码、历史性能结果或任何发布成绩。
