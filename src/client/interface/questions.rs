@@ -8,7 +8,9 @@ pub(crate) use history::tests::{enqueue_for_test, with_test_queue};
 mod human_finish_tests;
 mod requests;
 mod workflow;
-pub(super) use workflow::{FinishWait, prepare_finish, cancel_finish};
+pub(super) use workflow::{
+    FinishWait, cancel_finish, prepare_finish, validate_finish, validate_finish_owner,
+};
 pub(crate) use delivery::attach as attach_answers;
 #[cfg(test)]
 pub(crate) use requests::{AgentActor, FinishDecision, FinishView};

@@ -63,6 +63,37 @@ pub(crate) fn prepare_finish(
     FinishReceipt::from_view(view, false)
 }
 
+/// Read-only authorization before the wait hub changes any terminal state.
+pub(crate) fn validate_finish(id: Option<&str>, recipient: Option<&str>) -> Result<(), String> {
+    let scope = RequestScope::current()?;
+    if recipient.is_some_and(|recipient| scope.requester.thread_id != recipient) {
+        return Err("finish_scope_mismatch: this wait belongs to another asking thread".into());
+    }
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.validate_scope(&scope)?;
+    if let Some(id) = id {
+        queue.finish_view_for(&scope, id)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_finish_owner(
+    original: &crate::runtime::call_scope::CallScope,
+    request_id: Option<&str>,
+) -> Result<(), String> {
+    let original = RequestScope::from_call(original)?;
+    let current = RequestScope::current()?;
+    if !original.same_thread(&current) {
+        return Err("finish_scope_mismatch: this wait belongs to another thread, account or connection".into());
+    }
+    let queue = state().lock().unwrap_or_else(|error| error.into_inner());
+    queue.validate_scope(&current)?;
+    if let Some(id) = request_id {
+        queue.finish_view_for(&current, id)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn cancel_finish(id: &str, reason: &str) -> Result<FinishReceipt, String> {
     let scope = RequestScope::current()?;
     let view = state().lock().unwrap_or_else(|error| error.into_inner())

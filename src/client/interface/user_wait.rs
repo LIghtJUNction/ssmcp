@@ -1,6 +1,7 @@
 //! Local presentation and cancellation for authenticated server-owned waits.
 //! This module never reads, reserves, or delivers the ordinary user queue.
 use crate::client::notification::{Notifier, Report};
+use crate::runtime::call_scope::CallScope;
 use super::questions::{self, FinishReceipt, FinishWait};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -149,6 +150,13 @@ struct Active {
     deadline: Instant,
     reply: watch::Sender<Option<Completion>>,
     finish_decision: Option<FinishReceipt>,
+    finish_scope: Option<Arc<CallScope>>,
+}
+
+struct Completed {
+    result: Completion,
+    intent: Intent,
+    finish_scope: Option<Arc<CallScope>>,
 }
 
 #[derive(Default)]
@@ -156,7 +164,7 @@ struct State {
     connection_id: Option<String>,
     generation: u64,
     active: BTreeMap<String, Active>,
-    completed: VecDeque<Completion>,
+    completed: VecDeque<Completed>,
 }
 
 impl State {
@@ -177,7 +185,11 @@ impl State {
             finish_decision: pending.finish_decision,
         };
         let _ = pending.reply.send_replace(Some(result.clone()));
-        self.completed.push_back(result);
+        self.completed.push_back(Completed {
+            result,
+            intent: pending.entry.intent,
+            finish_scope: pending.finish_scope,
+        });
         while self.completed.len() > MAX_COMPLETED {
             self.completed.pop_front();
         }
@@ -251,7 +263,7 @@ impl Hub {
             || state
                 .completed
                 .iter()
-                .any(|value| value.wait_id == spec.wait_id)
+                .any(|value| value.result.wait_id == spec.wait_id)
             || state.active.len() == MAX_ACTIVE
         {
             Err(BeginError::Busy)
@@ -270,6 +282,8 @@ impl Hub {
                     deadline,
                     reply,
                     finish_decision: None,
+                    finish_scope: (spec.intent == Intent::Finish)
+                        .then(crate::runtime::call_scope::current).flatten(),
                     entry: Entry {
                         wait_id: key.id.clone(),
                         episode_id: spec.episode_id.clone(),
@@ -310,11 +324,45 @@ impl Hub {
         finished
     }
 
-    fn finish(&self, id: &str, outcome: Outcome) -> Result<Finish, String> {
+    fn finish(
+        &self,
+        id: &str,
+        outcome: Outcome,
+        supplied_request_id: Option<&str>,
+    ) -> Result<Finish, String> {
         if !valid_id(id) {
             return Err("invalid wait_id".into());
         }
+        let target = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.active.get(id).map(|active| (
+                Some(active.key.clone()), active.entry.intent,
+                active.entry.finish_request_id.clone(), active.finish_scope.clone(),
+            )).or_else(|| state.completed.iter().rev()
+                .find(|entry| entry.result.wait_id == id)
+                .map(|entry| (
+                    None, entry.intent, entry.result.finish_request_id.clone(),
+                    entry.finish_scope.clone(),
+                )))
+        };
+        if let Some((_, intent, request_id, owner)) = &target {
+            if supplied_request_id.is_some() && supplied_request_id != request_id.as_deref() {
+                return Err("finish_scope_mismatch: request ID does not match the exact wait".into());
+            }
+            if *intent == Intent::Finish {
+                let owner = owner.as_ref().ok_or("finish_scope_missing: no captured asking thread")?;
+                questions::validate_finish_owner(owner, request_id.as_deref())?;
+            }
+        } else if let Some(request_id) = supplied_request_id {
+            questions::validate_finish(Some(request_id), None)?;
+        }
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.active.get(id).is_some_and(|active| {
+            target.as_ref().and_then(|(key, _, _, _)| key.as_ref())
+                .is_none_or(|key| active.key.generation != key.generation)
+        }) {
+            return Err("user wait changed during finish authorization".into());
+        }
         let expired = state.expire(Instant::now());
         let key = state.active.get(id).map(|value| value.key.clone());
         let finished = key.is_some_and(|key| state.finish(&key, outcome));
@@ -322,11 +370,15 @@ impl Hub {
             .completed
             .iter()
             .rev()
-            .find(|value| value.wait_id == id);
+            .find(|value| value.result.wait_id == id)
+            .map(|value| &value.result);
         let status = completed.map(|value| value.status);
         let notification = completed.and_then(|value| value.notification);
         let finish_request_id = completed.and_then(|value| value.finish_request_id.clone());
-        let finish_decision = completed.and_then(|value| value.finish_decision.clone());
+        let finish_decision = completed.and_then(|value| value.finish_decision.clone()).map(|mut receipt| {
+            receipt.consumed = false;
+            receipt
+        });
         drop(state);
         if expired || finished {
             changed();
@@ -348,6 +400,17 @@ impl Hub {
         {
             active.entry.finish_request_id = Some(receipt.request_id.clone());
             active.finish_decision = Some(receipt);
+        }
+    }
+
+    fn completion_decision(&self, id: &str, receipt: &FinishReceipt) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = state.completed.iter_mut().rev()
+            .find(|entry| entry.result.wait_id == id
+                && entry.result.finish_request_id.as_deref() == Some(receipt.request_id.as_str()))
+            && entry.result.status != Outcome::Decided
+        {
+            entry.result.finish_decision = Some(receipt.clone());
         }
     }
 
@@ -380,7 +443,45 @@ impl Hub {
                     entry
                 })
                 .collect(),
-            recent: state.completed.iter().cloned().collect(),
+            recent: state.completed.iter().map(|entry| entry.result.clone()).collect(),
+        }
+    }
+
+    fn remote_snapshot(&self) -> Snapshot {
+        // Copy the same private generation/owner proof as the visible rows, then
+        // release the hub mutex before examining the question queue.
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let now = Instant::now();
+        let mut active = Vec::new();
+        let mut recent = Vec::new();
+        for entry in state.active.values() {
+            let mut visible = entry.entry.clone();
+            visible.remaining_ms = entry.deadline.saturating_duration_since(now).as_millis() as u64;
+            active.push((visible, entry.finish_scope.clone()));
+        }
+        for entry in &state.completed {
+            recent.push((entry.result.clone(), entry.intent, entry.finish_scope.clone()));
+        }
+        let connected = state.connection_id.is_some();
+        let connection_id = state.connection_id.clone();
+        drop(state);
+        Snapshot {
+            connected,
+            connection_id,
+            active: active.into_iter().filter_map(|(entry, owner)| {
+                (entry.intent != Intent::Finish || owner.as_ref().is_some_and(|owner| {
+                    questions::validate_finish_owner(owner, entry.finish_request_id.as_deref()).is_ok()
+                })).then_some(entry)
+            }).collect(),
+            recent: recent.into_iter().filter_map(|(mut entry, intent, owner)| {
+                let visible = intent != Intent::Finish || owner.as_ref().is_some_and(|owner| {
+                    questions::validate_finish_owner(owner, entry.finish_request_id.as_deref()).is_ok()
+                });
+                if let Some(receipt) = &mut entry.finish_decision {
+                    receipt.consumed = false;
+                }
+                visible.then_some(entry)
+            }).collect(),
         }
     }
 
@@ -412,6 +513,9 @@ impl Hub {
 
     async fn wait(self: &Arc<Self>, spec: Spec) -> Result<Value, String> {
         let spec = spec.validate()?;
+        if spec.intent == Intent::Finish {
+            questions::validate_finish(spec.finish_request_id.as_deref(), Some(&spec.recipient))?;
+        }
         let (registration, mut receiver, deadline) = match self.begin(&spec) {
             Ok(started) => started,
             Err(BeginError::Busy) => return Ok(json!({"wait_id":spec.wait_id,"status":"busy"})),
@@ -456,6 +560,9 @@ impl Hub {
                     && let Some(finish) = &mut finish
                 {
                     result.finish_decision = finish.end(result.status == Outcome::TimedOut).ok();
+                    if let Some(receipt) = &result.finish_decision {
+                        self.completion_decision(&result.wait_id, receipt);
+                    }
                 }
                 return serde_json::to_value(result)
                     .map_err(|_| "cannot encode user wait result".into());
@@ -559,6 +666,10 @@ pub(crate) fn cancel(prefix: &str) -> Result<String, String> {
 }
 
 pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
+    call_on(global(), arguments).await
+}
+
+async fn call_on(hub: &Arc<Hub>, arguments: Value) -> Result<Value, String> {
     let request: Request = serde_json::from_value(arguments)
         .map_err(|_| "user wait requires a valid wait/finish/status request")?;
     match request {
@@ -572,35 +683,36 @@ pub(crate) async fn call(arguments: Value) -> Result<Value, String> {
             timeout_ms,
             notify,
         } => {
-            global()
-                .wait(Spec {
-                    wait_id,
-                    episode_id,
-                    intent,
-                    recipient,
-                    reason,
-                    finish_request_id,
-                    timeout_ms,
-                    notify,
-                })
-                .await
+            hub.wait(Spec {
+                wait_id,
+                episode_id,
+                intent,
+                recipient,
+                reason,
+                finish_request_id,
+                timeout_ms,
+                notify,
+            })
+            .await
         }
         Request::Finish { wait_id, outcome, finish_request_id } => {
-            let mut result = global().finish(&wait_id, outcome)?;
+            let mut result = hub.finish(&wait_id, outcome, finish_request_id.as_deref())?;
             if let Some(id) = result.finish_request_id.clone().or(finish_request_id) {
                 result.finish_request_id = Some(id.clone());
                 if outcome != Outcome::TimedOut {
-                    result.finish_decision = Some(questions::cancel_finish(&id, "wait_cancelled")?);
+                    let receipt = questions::cancel_finish(&id, "wait_cancelled")?;
+                    hub.completion_decision(&wait_id, &receipt);
+                    result.finish_decision = Some(receipt);
                 }
             }
             serde_json::to_value(result).map_err(|_| "cannot encode user wait completion".into())
         }
-        Request::Status {} => Ok(json!({"schema_version":1,"state":snapshot()})),
+        Request::Status {} => Ok(json!({"schema_version":1,"state":hub.remote_snapshot()})),
     }
 }
 
 pub(crate) fn tool() -> Value {
-    json!({"name":"ssmcp.ui.wait","description":"Internal client presentation and local cancellation for the authenticated server ui.wait helper. A finish wait synchronously creates or resumes a real verified-thread Human Yes/No request and consumes an exact Human Yes once. Text, reads, timeout and cancellation never grant completion permission. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. status is observational. This is independent of the force-send listener and invokes no model.",
+    json!({"name":"ssmcp.ui.wait","description":"Internal client presentation and local cancellation for the authenticated server ui.wait helper. A finish wait synchronously creates or resumes a real verified-thread Human Yes/No request and consumes an exact Human Yes once. Text, reads, timeout and cancellation never grant completion permission. wait blocks without reading user text or claiming any queue; finish only wakes the exact wait. Native ready means a message is reserved for possible outer delivery, never received. Only the final server HTTP receipt with its user_messages can establish delivery. At most four active waits; connection loss and local deadlines clear them. Remote status is observational and exposes finish waits only to their original verified thread; the local user retains the complete view. This is independent of the force-send listener and invokes no model.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["op"],"properties":{
             "op":{"enum":["wait","finish","status"]},"wait_id":{"type":"string","minLength":1,"maxLength":128},
             "finish_request_id":{"type":["string","null"],"minLength":1,"maxLength":128},
@@ -683,7 +795,7 @@ mod tests {
         assert!(alpha.borrow().is_none() && alpine.borrow().is_none());
         assert_eq!(hub.cancel("wait-b").unwrap(), "wait-beta");
         assert_eq!(result(&beta).status, Outcome::Cancelled);
-        let finish = hub.finish("wait-beta", Outcome::Ready).unwrap();
+        let finish = hub.finish("wait-beta", Outcome::Ready, None).unwrap();
         assert!(!finish.finished);
         assert_eq!(finish.wait_id, "wait-beta");
         assert_eq!(finish.status, Some(Outcome::Cancelled));
@@ -697,11 +809,11 @@ mod tests {
         assert_eq!(hub.cancel("wait-alpha").unwrap(), "wait-alpha");
         assert_eq!(result(&alpha).status, Outcome::Cancelled);
         assert!(alpine.borrow().is_none());
-        let ready = hub.finish("wait-alpine", Outcome::Ready).unwrap();
+        let ready = hub.finish("wait-alpine", Outcome::Ready, None).unwrap();
         assert!(ready.finished);
         assert_eq!(result(&alpine).status, Outcome::Ready);
         assert!(hub.cancel("wait-alpine").is_err());
-        let unknown = hub.finish("never-registered", Outcome::Ready).unwrap();
+        let unknown = hub.finish("never-registered", Outcome::Ready, None).unwrap();
         assert!(!unknown.finished);
         assert_eq!(unknown.status, None);
     }
@@ -735,25 +847,25 @@ mod tests {
             .get_mut("expired")
             .unwrap()
             .deadline = Instant::now() - Duration::from_millis(1);
-        let late = hub.finish("expired", Outcome::Ready).unwrap();
+        let late = hub.finish("expired", Outcome::Ready, None).unwrap();
         assert!(!late.finished);
         assert_eq!(late.status, Some(Outcome::TimedOut));
         assert_eq!(result(&receiver).status, Outcome::TimedOut);
         assert!(matches!(hub.begin(&spec("expired")), Err(BeginError::Busy)));
         assert_eq!(
-            hub.finish("expired", Outcome::Cancelled).unwrap().status,
+            hub.finish("expired", Outcome::Cancelled, None).unwrap().status,
             Some(Outcome::TimedOut)
         );
         for index in 0..MAX_COMPLETED + 3 {
             let id = format!("completed-{index}");
             let (_registration, receiver, _) = hub.begin(&spec(&id)).unwrap();
-            assert!(hub.finish(&id, Outcome::Ready).unwrap().finished);
+            assert!(hub.finish(&id, Outcome::Ready, None).unwrap().finished);
             assert_eq!(result(&receiver).status, Outcome::Ready);
         }
         assert_eq!(hub.snapshot().recent.len(), MAX_COMPLETED);
-        assert_eq!(hub.finish("expired", Outcome::Ready).unwrap().status, None);
+        assert_eq!(hub.finish("expired", Outcome::Ready, None).unwrap().status, None);
         assert_eq!(
-            hub.finish("completed-0", Outcome::Ready).unwrap().status,
+            hub.finish("completed-0", Outcome::Ready, None).unwrap().status,
             None
         );
     }
@@ -767,7 +879,7 @@ mod tests {
         let ready_barrier = barrier.clone();
         let ready = std::thread::spawn(move || {
             ready_barrier.wait();
-            ready_hub.finish("racing-wait", Outcome::Ready).unwrap()
+            ready_hub.finish("racing-wait", Outcome::Ready, None).unwrap()
         });
         let cancel_hub = hub.clone();
         let cancel_barrier = barrier.clone();
@@ -783,7 +895,7 @@ mod tests {
         assert_eq!(ready.finished, outcome == Outcome::Ready);
         assert_eq!(cancel.is_ok(), outcome == Outcome::Cancelled);
         assert_eq!(
-            hub.finish("racing-wait", Outcome::Ready).unwrap().status,
+            hub.finish("racing-wait", Outcome::Ready, None).unwrap().status,
             Some(outcome)
         );
         assert_eq!(hub.snapshot().recent.len(), 1);
@@ -805,7 +917,7 @@ mod tests {
         assert!(worker.await.unwrap_err().is_cancelled());
         assert!(hub.snapshot().active.is_empty());
         assert_eq!(
-            hub.finish("aborted-future", Outcome::Ready).unwrap().status,
+            hub.finish("aborted-future", Outcome::Ready, None).unwrap().status,
             Some(Outcome::Cancelled)
         );
         let mut short = spec("local-deadline");
@@ -851,4 +963,118 @@ mod tests {
         invalid.timeout_ms = 999;
         assert!(invalid.validate().is_err());
     }
+    #[test]
+    fn native_finish_json_cannot_forge_a_decided_outcome_or_human_actor() {
+        assert!(serde_json::from_value::<Request>(json!({
+            "op":"finish","wait_id":"wait_exact","outcome":"decided"
+        })).is_err());
+        assert!(serde_json::from_value::<Request>(json!({
+            "op":"wait","wait_id":"wait_exact","episode_id":"a".repeat(64),
+            "intent":"finish","recipient":"asking-agent","reason":null,
+            "timeout_ms":1000,"notify":false,"actor":{"origin":"human"},"choice":"yes"
+        })).is_err());
+        let ordinary = Spec { finish_request_id: Some("question_exact".into()), ..spec("wait_exact") };
+        assert!(ordinary.validate().is_err());
+    }
+
+    fn finish_call_scope(subject: &str, suffix: char) -> Arc<CallScope> {
+        let agent_id = format!("agent_{}", suffix.to_string().repeat(32));
+        CallScope::from_relay_for_client(
+            7, Some("question-history-fixture"), 1,
+            Some(&crate::wire::ControlAttribution {
+                account: crate::wire::ControlAccount {
+                    provider: "github".into(), subject: subject.into(), login: "fixture".into(),
+                },
+                owner: None,
+                agent: Some(crate::wire::ControlAgent { id: agent_id.clone(), name: "fixture".into() }),
+            }),
+            Some(&crate::wire::CodeContext {
+                run_id: "a".repeat(32), code: "return await ui.wait(client);".into(),
+                timestamp_ms: 1, session_id: Some("question-history-fixture".into()),
+                thread_id: Some(agent_id),
+            }),
+        ).unwrap()
+    }
+
+    #[tokio::test]
+    async fn remote_finish_checks_captured_scope_before_hub_mutation_and_filters_status() {
+        let mut random = [0u8; 16];
+        crate::platform::random_bytes(&mut random).unwrap();
+        let directory = std::env::temp_dir().canonicalize().unwrap()
+            .join(format!("ssmcp-user-wait-scope-{}", crate::hex::encode(random)));
+        crate::platform::private_directory(&directory).unwrap();
+        crate::client::interface::history::with_test_history(
+            directory.join("history"),
+            questions::with_test_queue(async {
+                crate::client::interface::history::record("user", "Owned finish scope fixture").unwrap();
+                let asking = finish_call_scope("42", 'a');
+                let other_thread = finish_call_scope("42", 'b');
+                let other_account = finish_call_scope("99", 'a');
+                let hub = hub();
+                let recipient = asking.thread().unwrap().thread_id().to_owned();
+                let (registration, receiver, _) = asking.scope(async {
+                    hub.begin(&Spec {
+                        intent: Intent::Finish, recipient: recipient.clone(),
+                        ..spec("wait_scope_exact")
+                    }).unwrap()
+                }).await;
+                // The real request ID has not been attached yet. The immutable
+                // original scope must already protect this short creation window.
+                for caller in [&other_thread, &other_account] {
+                    let before = hub.state.lock().unwrap().generation;
+                    let (rejected, visible) = caller.scope(async {
+                        (
+                            call_on(&hub, json!({"op":"finish","wait_id":"wait_scope_exact","outcome":"ready"})).await,
+                            call_on(&hub, json!({"op":"status"})).await.unwrap(),
+                        )
+                    }).await;
+                    assert!(rejected.is_err());
+                    assert!(visible["state"]["active"].as_array().unwrap().is_empty());
+                    assert_eq!(hub.state.lock().unwrap().generation, before);
+                    assert!(receiver.borrow().is_none());
+                    assert_eq!(hub.snapshot().active.len(), 1, "the local user retains the complete view");
+                }
+                let (receipt, mut guard) = asking.scope(async {
+                    let receipt = questions::prepare_finish(Some("May this fixture end?"), None, &recipient).unwrap();
+                    let guard = FinishWait::begin(&receipt.request_id, &recipient).unwrap();
+                    hub.decision(&registration.key, receipt.clone());
+                    (receipt, guard)
+                }).await;
+                let before_question = questions::get_view(&receipt.request_id).unwrap();
+                for caller in [&other_thread, &other_account] {
+                    let denied = caller.scope(call_on(&hub, json!({
+                        "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                        "finish_request_id":receipt.request_id
+                    }))).await;
+                    assert!(denied.is_err());
+                    assert!(receiver.borrow().is_none());
+                    assert_eq!(hub.snapshot().active.len(), 1);
+                    assert!(hub.snapshot().recent.is_empty());
+                    assert_eq!(questions::get_view(&receipt.request_id).unwrap(), before_question);
+                }
+                let mismatched = asking.scope(call_on(&hub, json!({
+                    "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                    "finish_request_id":"question_unrelated"
+                }))).await;
+                assert!(mismatched.is_err());
+                assert!(receiver.borrow().is_none());
+                assert_eq!(questions::get_view(&receipt.request_id).unwrap(), before_question);
+                let visible = asking.scope(call_on(&hub, json!({"op":"status"}))).await.unwrap();
+                assert_eq!(visible["state"]["active"].as_array().unwrap().len(), 1);
+                let cancelled = asking.scope(call_on(&hub, json!({
+                    "op":"finish","wait_id":"wait_scope_exact","outcome":"cancelled",
+                    "finish_request_id":receipt.request_id
+                }))).await.unwrap();
+                assert_eq!(cancelled["status"], "cancelled");
+                assert_eq!(result(&receiver).status, Outcome::Cancelled);
+                assert_eq!(guard.end(false).unwrap().status, questions::FinishStatus::Cancelled);
+                assert_eq!(questions::get_view(&receipt.request_id).unwrap().finish.unwrap().decision, None);
+                let hidden = other_thread.scope(call_on(&hub, json!({"op":"status"}))).await.unwrap();
+                assert!(hidden["state"]["recent"].as_array().unwrap().is_empty());
+                assert_eq!(hub.snapshot().recent.len(), 1, "local completed records remain visible");
+            }),
+        ).await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
 }

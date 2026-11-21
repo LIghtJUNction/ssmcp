@@ -183,6 +183,21 @@ pub(super) async fn wait_observed(
                 run.wait_notification(&client_id, &data);
                 let decision = arguments.intent == Intent::Finish
                     && run.capture_finish_wait(&client_id, &data);
+                if decision && data["status"] == "decided" {
+                    // A new ordinary input may invalidate the native request
+                    // before the queue watch wins this select. It still follows
+                    // the original reservation/outer-commit delivery path.
+                    match session.steering.reserve(
+                        &client_id, &run.context.run_id, recipient.agent_id(),
+                    ) {
+                        Ok(Some(reservation)) => {
+                            run.reserve_user_wait(&client_id, reservation);
+                            break Outcome::Ready;
+                        }
+                        Err(_) => break Outcome::Disconnected,
+                        Ok(None) => {}
+                    }
+                }
                 break match data["status"].as_str() {
                     Some("decided") if decision && run.finish_decision_ready(&client_id) => {
                         Outcome::DecisionReady
@@ -267,6 +282,8 @@ pub(super) async fn wait_observed(
             let status = data.as_ref().and_then(|data| data["status"].as_str());
             let negative = match status {
                 Some("ready") => None,
+                Some("decided") if arguments.intent == Intent::Finish
+                    && data.as_ref().is_some_and(|data| run.capture_finish_wait(&client_id, data)) => None,
                 Some("cancelled") => Some(Outcome::Cancelled),
                 Some("timed_out") => Some(Outcome::TimedOut),
                 Some("disconnected") => Some(Outcome::Disconnected),
