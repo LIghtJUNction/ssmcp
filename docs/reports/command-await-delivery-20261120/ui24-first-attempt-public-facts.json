@@ -1,0 +1,338 @@
+{
+  "schema": "ssmcp-U-ui24-stage-public-facts-v1",
+  "observation_cutoff_utc": "2026-11-21T03:45:43Z",
+  "source": {
+    "commit": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "version": "0.10.25",
+    "url": "https://github.com/LIghtJUNction/ssmcp/commit/784370b5fe1b817c788273a5f7b1ab826c743965"
+  },
+  "status": "partial_ui_progress_overall_attempt_failed",
+  "attempt": {
+    "started_utc": "2026-11-21T03:33:38Z",
+    "finished_utc": "2026-11-21T03:34:34Z",
+    "seconds": 56.619,
+    "status": "failed",
+    "controller_exit": {
+      "exit_code": 1,
+      "evidence_level": "Parent supplied actual completed controller receipt; this child read the acceptance report and two small originals."
+    },
+    "planned_independent_suites": 24,
+    "logical_suites_including_alias": 25,
+    "started_suites": 4,
+    "passed_suites": 3,
+    "failed_suites": 1,
+    "unstarted_suites": 20,
+    "alias_coverage_count": 0
+  },
+  "executed_suites": [
+    {
+      "name": "message_references",
+      "status": "passed",
+      "exit_code": 0,
+      "outer_controller_seconds": 14.579,
+      "report_check_records": 53,
+      "report_check_field_present": true,
+      "passed_check_records_observed": 53,
+      "inputs_before_unchanged": true,
+      "inputs_after_unchanged": true,
+      "owned_child_reaped": true,
+      "internal_cleanup_summary": null,
+      "recorded_ui_snapshots": 8,
+      "recorded_artifacts": 17,
+      "suite_report_sha256": "b43813538a04807a6eccb672ab78cf60a2288b10a7a14bbe5e50c0bd33d272ba",
+      "suite_report_status": "passed"
+    },
+    {
+      "name": "force_send",
+      "status": "passed",
+      "exit_code": 0,
+      "outer_controller_seconds": 19.987,
+      "report_check_records": 137,
+      "report_check_field_present": true,
+      "passed_check_records_observed": 137,
+      "inputs_before_unchanged": true,
+      "inputs_after_unchanged": true,
+      "owned_child_reaped": true,
+      "internal_cleanup_summary": {
+        "all_exited": true,
+        "owned_process_count": 2
+      },
+      "recorded_ui_snapshots": 8,
+      "recorded_artifacts": 17,
+      "suite_report_sha256": "25295578d076f861242d21916ce6e8624f51dbaf7b96cdf6f0fc835e73dcd413",
+      "suite_report_status": "passed"
+    },
+    {
+      "name": "listener_transports",
+      "status": "passed",
+      "exit_code": 0,
+      "outer_controller_seconds": 7.669,
+      "report_check_records": 74,
+      "report_check_field_present": true,
+      "passed_check_records_observed": 74,
+      "inputs_before_unchanged": true,
+      "inputs_after_unchanged": true,
+      "owned_child_reaped": true,
+      "internal_cleanup_summary": {
+        "all_exited": true,
+        "owned_process_count": 4
+      },
+      "recorded_ui_snapshots": 1,
+      "recorded_artifacts": 3,
+      "suite_report_sha256": "2b935d04edca9728db697371deaa3deb46ac5275fb0880336e77b30becf07345",
+      "suite_report_status": "passed"
+    },
+    {
+      "name": "zuse_worker",
+      "status": "failed",
+      "exit_code": 1,
+      "outer_controller_seconds": 1.552,
+      "report_check_records": null,
+      "report_check_field_present": false,
+      "passed_check_records_observed": 0,
+      "inputs_before_unchanged": true,
+      "inputs_after_unchanged": true,
+      "owned_child_reaped": true,
+      "internal_cleanup_summary": null,
+      "recorded_ui_snapshots": 0,
+      "recorded_artifacts": 0,
+      "suite_report_sha256": null,
+      "suite_report_status": null
+    }
+  ],
+  "unstarted_suites": [
+    {
+      "name": "interactions",
+      "status": "not_run"
+    },
+    {
+      "name": "private_desktop",
+      "status": "not_run"
+    },
+    {
+      "name": "account_compat",
+      "status": "not_run"
+    },
+    {
+      "name": "input_history",
+      "status": "not_run"
+    },
+    {
+      "name": "reload_state",
+      "status": "not_run"
+    },
+    {
+      "name": "session_groups",
+      "status": "not_run"
+    },
+    {
+      "name": "client_ui",
+      "status": "not_run"
+    },
+    {
+      "name": "canvas_logs",
+      "status": "not_run"
+    },
+    {
+      "name": "composer",
+      "status": "not_run"
+    },
+    {
+      "name": "questions",
+      "status": "not_run"
+    },
+    {
+      "name": "presentations",
+      "status": "not_run"
+    },
+    {
+      "name": "context_memory",
+      "status": "not_run"
+    },
+    {
+      "name": "file_paste",
+      "status": "not_run"
+    },
+    {
+      "name": "relay_composer",
+      "status": "not_run"
+    },
+    {
+      "name": "goal_startup",
+      "status": "not_run"
+    },
+    {
+      "name": "tool_summaries",
+      "status": "not_run"
+    },
+    {
+      "name": "readable_commands",
+      "status": "not_run"
+    },
+    {
+      "name": "summary_commands",
+      "status": "not_run"
+    },
+    {
+      "name": "physical_latency",
+      "status": "not_run"
+    },
+    {
+      "name": "time_wait",
+      "status": "not_run"
+    }
+  ],
+  "aliases": [
+    {
+      "name": "human_finish",
+      "status": "not_covered",
+      "covered_by": "interactions",
+      "independently_executed": false,
+      "independent_pass": false
+    }
+  ],
+  "failure": {
+    "suite": "zuse_worker",
+    "phase": "private Xvfb display preparation",
+    "observed_error": "AssertionError: private Xvfb exited without readiness",
+    "traceback_source_locations": [
+      "scripts/e2e_zuse_worker.py:152",
+      "scripts/private_xvfb.py:158",
+      "scripts/private_xvfb.py:109"
+    ],
+    "concrete_xvfb_exit_cause": "unknown",
+    "no_completed_suite_report": true,
+    "checks_field_absent": true,
+    "root_cause_investigation_performed_by_this_review": false,
+    "no_product_regression_cause_assigned": true
+  },
+  "guards_and_cleanup": {
+    "all_four_started_suite_children_reaped": true,
+    "each_started_suite_inputs_unchanged": true,
+    "final_inputs_unchanged": true,
+    "changed_inputs": [],
+    "before_input_set_sha256": "be46a3aac70149c9831471115dadb79ca70e17fb00e6ea432104c31693133bb8",
+    "after_input_set_sha256": "be46a3aac70149c9831471115dadb79ca70e17fb00e6ea432104c31693133bb8",
+    "cleanup_scope": "Controller child-reaping records, plus the explicitly present internal cleanup summaries; no claim that absent cleanup fields were independently verified."
+  },
+  "message_reference_ui_evidence": {
+    "status": "passed",
+    "source_revision": "784370b5fe1b817c788273a5f7b1ab826c743965",
+    "report_check_record_count": 53,
+    "check_counts_are_not_independent_test_totals": true,
+    "suite_internal_elapsed_seconds": 12.557,
+    "suite_outer_controller_seconds": 14.579,
+    "inputs_unchanged": true,
+    "recorded_binary_hashes_before_after_equal": true,
+    "transport": "real account router, authenticated WebSocket, native queue and owned PTY",
+    "upstream_provider": "synthetic GitHub fixture",
+    "models_started": false,
+    "real_user_credentials_used": false,
+    "behaviors": [
+      {
+        "case": "missing_file_no_match",
+        "behavior": "文件搜索无匹配后按 Enter，仍递送原文并提供一条警告；不创建缺失文件、不伪造内容。",
+        "report_check_numbers": [
+          25,
+          26
+        ]
+      },
+      {
+        "case": "mixed_file_skill_references",
+        "behavior": "中文标点分隔的有效/无效文件与技能可同时处理；不可用引用没有附件内容或读取动作，有效引用的读取动作取得真实完整内容。",
+        "report_check_numbers": [
+          34,
+          35,
+          36
+        ]
+      },
+      {
+        "case": "completion_then_explicit_send",
+        "behavior": "第一次 Enter 只接受选中的技能；第二次 Enter 才将其精确发送一次。",
+        "report_check_numbers": [
+          37,
+          44
+        ]
+      },
+      {
+        "case": "full_budget_delivery",
+        "behavior": "完整保留并递送 16384 个原始字节；警告元数据无法放入传输载荷时，仍保留本地警告。",
+        "report_check_numbers": [
+          45,
+          46,
+          47,
+          51,
+          52,
+          53
+        ],
+        "payload_bytes": 16384,
+        "wire_metadata_omitted": true
+      },
+      {
+        "case": "exact_queue_and_recipient",
+        "behavior": "接收结果与预期队列身份、已认证接收者及修订后的正文对应。",
+        "report_check_numbers": [
+          19,
+          20,
+          21,
+          28,
+          29,
+          30
+        ]
+      }
+    ],
+    "review_scope": "Full report text and hash read. Reported checks/receipt states reviewed; linked frames and queue artifacts were not separately opened by this review."
+  },
+  "prior_confirmed_results": {
+    "gate": {
+      "status": "passed",
+      "stages": 35,
+      "source": "784370b5fe1b817c788273a5f7b1ab826c743965",
+      "receipt_sha256": "cf17822a03c045fff67b2015e196fee0e1edaf45df55b0761331080eac496000",
+      "evidence_level": "Previously independently reviewed; this acceptance also binds the same receipt."
+    },
+    "runtime18": {
+      "status": "passed",
+      "private_client_checks": 12,
+      "transport_checks": 6,
+      "source": "784370b5fe1b817c788273a5f7b1ab826c743965",
+      "evidence_level": "Prior parent-confirmed clean1 result, not a new independent read in this task."
+    },
+    "unchanged_by_this_partial_ui_result": true
+  },
+  "pending": {
+    "remaining_ui_suites": 20,
+    "failed_suite_diagnosis": true,
+    "alias_coverage": true,
+    "p1": true,
+    "formal_publication": true,
+    "installation_acceptance": true
+  },
+  "evidence": [
+    {
+      "label": "acceptance",
+      "bytes": 792541,
+      "sha256": "ce8a1613666c1a796310d20b32368c44d72634b7af19b8873a54fbf23a75a208",
+      "scope": "Full-file hash; selected identity, four executed suites, twenty not-run states, alias, input guards and cleanup. No full word-by-word review of the 792 KB receipt."
+    },
+    {
+      "label": "zuse_worker_run_log",
+      "bytes": 1517,
+      "sha256": "13928db4a2e0f25aa81fe45325fb57643ec23b12f6bdc4997e59d924593de389",
+      "scope": "Complete small original log read and hash verified."
+    },
+    {
+      "label": "message_references_report",
+      "bytes": 13879,
+      "sha256": "b43813538a04807a6eccb672ab78cf60a2288b10a7a14bbe5e50c0bd33d272ba",
+      "scope": "Complete small original report read and hash verified; public facts omit fixture bodies, private paths and identifiers."
+    }
+  ],
+  "review_actions": {
+    "reports_read": true,
+    "product_or_test_execution": false,
+    "root_cause_investigation": false,
+    "source_changes": false,
+    "publication": false
+  }
+}
