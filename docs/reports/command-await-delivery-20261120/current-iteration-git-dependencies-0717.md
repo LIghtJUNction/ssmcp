@@ -66,15 +66,22 @@ Git 声明决定更新时从哪里获取源码，锁文件记录这次实际解�
 
 官方文档中的 session、subject 是匿名关联标识；本实现把它们与真实网页地址分别保存，不从匿名标识拼接对话 URL。浏览器启动请求、实际网页加载和用户在网页发送“继续”也分别处理。新启动诊断提交还补充了打开失败时的复制或手动打开提示。[官方字段说明](https://developers.openai.com/plugins/reference#_meta-fields-the-client-provides) · [固定命令说明](https://github.com/LIghtJUNction/ssmcp/blob/1a2f7591ad0abb53907c048dcaed028434e17c47/docs/commands.md) · [已合并源码事实](source-openai-caller-C-C2-public-facts.json)
 
-## 用户提供的现场 socket
+## 原现场 socket 与独立的受控实测
 
-用户要求测试的原 socket 路径在 **06:59:32 UTC** 实际预检时不存在，记录为 `FileNotFoundError / ENOENT`，应用发送字节为 0；没有启动产品或模型，也没有替换或删除 socket。因此该原会话的交付测试尚未完成。后续受控会话的输入检查将单列实际程序与执行身份，不回填为测试了原会话。[原预检事实](live-input-socket-preflight-public-facts.json)
+用户要求测试的原 socket 路径在 **06:59:32 UTC** 实际预检时不存在，记录为 `FileNotFoundError / ENOENT`，应用发送字节为 0。因此原会话的交付测试尚未完成。[原预检事实](live-input-socket-preflight-public-facts.json)
+
+随后，原执行者在新建的隔离本地会话中实际完成一次 socket 实测，完成回执观察时间为 **07:25:28 UTC**。使用的是当前 PATH 入口报告的 `ssmcp 0.10.25`，大小为 15,751,344 字节，前后 SHA256 均为 `54651b3fd9611210a838ffa5ddc1e032dc40d7b71ea2cf163487e4b32085c7b9`；该二进制尚未绑定到 W 或最终候选源码。
+
+本次有 **1 次产品启动、1 次 socket 发送、1 次确定性 Python fixture 调用、0 次模型调用**。76 字节原文完整保留，缺失的 file 和 skill 各返回一条 unavailable 警告；写端半关闭后收到 1 条 JSON、EOF 和 `status=completed`。客户端及外层进程均退出 0、已回收，清理无错误，端点已不存在。[实测结果与四份原件摘要](current-entry-socket-smoke-public-facts.json)
+
+这是该隔离本地入口的一次真实通过结果，不表示测到了先前已消失的在线 socket，也不计入 W 的 18 项运行检查、UI、P1 或最终源码验收。报告只提取四份结构化原件；原始认证日志没有读取或公开。
 
 ## 已有验收与当前未执行范围
 
 | 范围 | 实际对应源码 | 结果 |
 |---|---|---|
 | 本轮源码与依赖解析 | 1a2f759 | 源码阶段退出 0；解析、格式和差异检查按回执记录；未编译或执行产品测试 |
+| 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
 | 首轮完整界面流程 | W | 24 套中启动 7 套：6 通过、1 失败、17 未执行；通过套件共 503 条记录 |
