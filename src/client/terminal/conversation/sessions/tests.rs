@@ -253,9 +253,14 @@ fn history_key_keeps_same_name_threads_and_the_composition_separate() {
         "recipients":[wire(native(&own, Some(&first), "Same name")),
             wire(native(&own, Some(&second), "Same name"))]
     }));
-    state.chat_group_command(&format!("add agent:{own}:{first}")).unwrap();
+    state
+        .chat_group_command(&format!("add agent:{own}:{first}"))
+        .unwrap();
     state.conversation.send_to_group = true;
-    state.conversation.composer.set_text("Keep this unsent draft");
+    state
+        .conversation
+        .composer
+        .set_text("Keep this unsent draft");
     state.conversation.composer.left();
     state.conversation.target = Some("example-reviewer".into());
     state.conversation.native_recipient = Some(format!("agent:{own}:{second}"));
@@ -274,9 +279,15 @@ fn history_key_keeps_same_name_threads_and_the_composition_separate() {
         assert_eq!(state.conversation.view, View::History);
         let snapshot = state.conversation.snapshot();
         assert_eq!(snapshot["thread_history"]["scope"]["client_id"], own);
-        assert_eq!(snapshot["thread_history"]["scope"]["agent_id"], agent.as_str());
+        assert_eq!(
+            snapshot["thread_history"]["scope"]["agent_id"],
+            agent.as_str()
+        );
         assert_eq!(snapshot["thread_history"]["scope"]["kind"], "thread");
-        assert_eq!(snapshot["thread_history"]["scope"]["provenance"], "authenticated_call_scope");
+        assert_eq!(
+            snapshot["thread_history"]["scope"]["provenance"],
+            "authenticated_call_scope"
+        );
         assert_eq!(snapshot["thread_history"]["read_only"], true);
         assert_eq!(state.chat_saved_draft(), before);
         assert_eq!(snapshot["group_selected"], group);
@@ -295,17 +306,25 @@ fn history_key_keeps_same_name_threads_and_the_composition_separate() {
     assert_eq!(state.conversation.composer.text(), "h");
     state.chat_change_view(View::Agents);
     state.conversation.content_focus = true;
-    assert!(state.chat_keyboard(b"\x1b[200~h\x1b[201~", Instant::now(), false).is_empty());
+    assert!(
+        state
+            .chat_keyboard(b"\x1b[200~h\x1b[201~", Instant::now(), false)
+            .is_empty()
+    );
     assert_eq!(state.conversation.view, View::Activity);
     assert_eq!(state.conversation.composer.text(), "hh");
 }
 
 fn sidebar_state() -> State {
-    let mut state = preview_state(32, 160, &Ui {
-        sidebar: true,
-        panels: vec![crate::client::ui::Panel::Agents],
-        ..Ui::default()
-    });
+    let mut state = preview_state(
+        32,
+        160,
+        &Ui {
+            sidebar: true,
+            panels: vec![crate::client::ui::Panel::Agents],
+            ..Ui::default()
+        },
+    );
     state.audit = Default::default();
     state.conversation.composer.set_text("Keep sidebar draft");
     state.conversation.composer.left();
@@ -327,25 +346,44 @@ fn sidebar_mouse_uses_painted_identity_and_the_exact_drawn_call() {
     let mut state = sidebar_state();
     caller(&mut state, "drawn", "Original");
     state.chat_frame(Instant::now());
-    let hit = state.conversation.sidebar_agents.iter()
-        .find(|hit| hit.identity.run_id.as_deref() == Some("drawn")).unwrap().clone();
+    let hit = state
+        .conversation
+        .sidebar_agents
+        .iter()
+        .find(|hit| hit.identity.run_id.as_deref() == Some("drawn"))
+        .unwrap()
+        .clone();
     let before = state.chat_saved_draft();
     caller(&mut state, "reordered", "Another caller");
     state.chat_key(Key::Mouse {
-        button: 0, x: hit.rect.col + 2, y: hit.row, release: false,
+        button: 0,
+        x: hit.rect.col + 2,
+        y: hit.row,
+        release: false,
     });
     assert_eq!(state.conversation.view, View::Agents);
-    assert_eq!(state.conversation.selected_agent.as_ref(), Some(&hit.identity.key));
+    assert_eq!(
+        state.conversation.selected_agent.as_ref(),
+        Some(&hit.identity.key)
+    );
     assert!(!state.conversation.detail);
     assert_eq!(state.chat_saved_draft(), before);
 
     state.chat_change_view(View::Activity);
     state.chat_frame(Instant::now());
-    let hit = state.conversation.sidebar_agents.iter()
-        .find(|hit| hit.identity.run_id.as_deref() == Some("drawn")).unwrap().clone();
+    let hit = state
+        .conversation
+        .sidebar_agents
+        .iter()
+        .find(|hit| hit.identity.run_id.as_deref() == Some("drawn"))
+        .unwrap()
+        .clone();
     caller(&mut state, "newer-in-same-group", "Original");
     state.chat_key(Key::Mouse {
-        button: 2, x: hit.rect.col + 2, y: hit.row, release: false,
+        button: 2,
+        x: hit.rect.col + 2,
+        y: hit.row,
+        release: false,
     });
     assert_eq!(state.conversation.view, View::Agents);
     assert!(state.conversation.detail);
@@ -355,7 +393,11 @@ fn sidebar_mouse_uses_painted_identity_and_the_exact_drawn_call() {
 
     state.chat_key(Key::Escape);
     state.chat_key(Key::Open);
-    assert_eq!(state.conversation.view, View::Activity, "right arrow still navigates the canvas");
+    assert_eq!(
+        state.conversation.view,
+        View::Activity,
+        "right arrow still navigates the canvas"
+    );
 }
 
 #[test]
@@ -363,32 +405,59 @@ fn sidebar_expired_member_or_call_never_falls_back_to_a_replacement_or_logs() {
     let mut state = sidebar_state();
     state.chat_frame(Instant::now());
     // The old painted member left while another member still occupies this row.
-    let hit = state.conversation.sidebar_agents.iter_mut()
-        .find(|hit| hit.identity.key == "member:example-builder").unwrap();
+    let hit = state
+        .conversation
+        .sidebar_agents
+        .iter_mut()
+        .find(|hit| hit.identity.key == "member:example-builder")
+        .unwrap();
     hit.identity.key = "member:expired".into();
     let hit = hit.clone();
     let before = state.chat_saved_draft();
     for button in [0, 2] {
         state.chat_key(Key::Mouse {
-            button, x: hit.rect.col + 2, y: hit.row, release: false,
+            button,
+            x: hit.rect.col + 2,
+            y: hit.row,
+            release: false,
         });
         assert_eq!(state.conversation.view, View::Activity);
-        assert!(state.notice.as_deref().unwrap().contains("no longer available"));
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("no longer available")
+        );
         assert_eq!(state.chat_saved_draft(), before);
     }
 
     caller(&mut state, "evicted", "Same caller");
     state.chat_frame(Instant::now());
-    let hit = state.conversation.sidebar_agents.iter()
-        .find(|hit| hit.identity.run_id.as_deref() == Some("evicted")).unwrap().clone();
+    let hit = state
+        .conversation
+        .sidebar_agents
+        .iter()
+        .find(|hit| hit.identity.run_id.as_deref() == Some("evicted"))
+        .unwrap()
+        .clone();
     state.audit = Default::default();
     caller(&mut state, "replacement", "Same caller");
     state.chat_key(Key::Mouse {
-        button: 2, x: hit.rect.col + 2, y: hit.row, release: false,
+        button: 2,
+        x: hit.rect.col + 2,
+        y: hit.row,
+        release: false,
     });
     assert_eq!(state.conversation.view, View::Agents);
     assert!(!state.conversation.detail);
-    assert!(state.notice.as_deref().unwrap().contains("no longer in the retained"));
+    assert!(
+        state
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("no longer in the retained")
+    );
     assert_eq!(state.chat_saved_draft(), before);
     assert!(state.actions.is_empty());
 }
@@ -399,13 +468,25 @@ fn sidebar_hits_exist_only_for_visible_rows_in_the_current_frame() {
     state.chat_frame(Instant::now());
     let hit = state.conversation.sidebar_agents.first().unwrap().clone();
     let before = state.chat_saved_draft();
-    assert!(!state.chat_sidebar_agent_mouse(0, hit.rect.col + 2, 0), "heading is not a member");
-    assert!(!state.chat_sidebar_agent_mouse(0, hit.rect.col + 2, state.geometry.rows - 1), "footer has no hit");
+    assert!(
+        !state.chat_sidebar_agent_mouse(0, hit.rect.col + 2, 0),
+        "heading is not a member"
+    );
+    assert!(
+        !state.chat_sidebar_agent_mouse(0, hit.rect.col + 2, state.geometry.rows - 1),
+        "footer has no hit"
+    );
 
     state.conversation.process_generation += 1;
     assert!(state.chat_sidebar_agent_mouse(2, hit.rect.col + 2, hit.row));
     assert_eq!(state.conversation.view, View::Activity);
-    assert!(state.notice.as_deref().unwrap().contains("Sessions changed"));
+    assert!(
+        state
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("Sessions changed")
+    );
     state.conversation.process_generation -= 1;
     state.help = true;
     assert!(!state.chat_sidebar_agent_mouse(0, hit.rect.col + 2, hit.row));

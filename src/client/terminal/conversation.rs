@@ -3282,15 +3282,26 @@ impl State {
             for kind in self.ui.panels.iter().filter(|_| !agent_view) {
                 let mut section = match kind {
                     crate::client::ui::Panel::Agents => {
-                        let mut section =
-                            vec![(format!(" Members · {}", agents.len()), PanelTone::Heading, None)];
-                        section.push((" Click select · right-click history".into(), PanelTone::Muted, None));
+                        let mut section = vec![(
+                            format!(" Members · {}", agents.len()),
+                            PanelTone::Heading,
+                            None,
+                        )];
+                        section.push((
+                            " Click select · right-click history".into(),
+                            PanelTone::Muted,
+                            None,
+                        ));
                         for agent in agents.iter().take(4) {
                             let identity = SidebarAgentIdentity {
                                 key: agent_key(agent),
                                 run_id: None,
                             };
-                            section.push((format!(" {}", field(agent, "name")), PanelTone::Accent, Some(identity.clone())));
+                            section.push((
+                                format!(" {}", field(agent, "name")),
+                                PanelTone::Accent,
+                                Some(identity.clone()),
+                            ));
                             section.push((
                                 format!("   reported {}", field(agent, "status")),
                                 PanelTone::Muted,
@@ -3315,7 +3326,11 @@ impl State {
                                     key: format!("caller:{}", controller.key),
                                     run_id: Some(controller.run_id.clone()),
                                 };
-                                section.push((format!(" ↳ {}", controller.name), tone, Some(identity.clone())));
+                                section.push((
+                                    format!(" ↳ {}", controller.name),
+                                    tone,
+                                    Some(identity.clone()),
+                                ));
                                 section.push((
                                     format!(
                                         "   {} · {} calls · {}",
@@ -3327,12 +3342,20 @@ impl State {
                             }
                         }
                         if agents.is_empty() && observed.is_empty() {
-                            section.push((" Waiting for member or caller activity".into(), PanelTone::Muted, None));
+                            section.push((
+                                " Waiting for member or caller activity".into(),
+                                PanelTone::Muted,
+                                None,
+                            ));
                         }
                         section
                     }
                     crate::client::ui::Panel::Queue => vec![
-                        (format!(" Queue · {pending} pending"), PanelTone::Heading, None),
+                        (
+                            format!(" Queue · {pending} pending"),
+                            PanelTone::Heading,
+                            None,
+                        ),
                         (" /queue to review and edit".into(), PanelTone::Muted, None),
                     ],
                     _ => {
@@ -3369,12 +3392,15 @@ impl State {
                 if index >= footer_start {
                     line.push_str(&footer[index - footer_start]);
                 } else {
-                    let (text, tone, identity) = sidebar
-                        .get(index)
-                        .cloned()
-                        .unwrap_or((String::new(), PanelTone::Normal, None));
+                    let (text, tone, identity) = sidebar.get(index).cloned().unwrap_or((
+                        String::new(),
+                        PanelTone::Normal,
+                        None,
+                    ));
                     line.push_str(&self.chat_line(&text, tone, rect.width));
-                    if !self.help && let Some(identity) = identity {
+                    if !self.help
+                        && let Some(identity) = identity
+                    {
                         self.conversation.sidebar_agents.push(SidebarAgentHit {
                             rect,
                             row: index as u16,

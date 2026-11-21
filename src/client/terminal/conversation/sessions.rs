@@ -152,27 +152,44 @@ impl State {
             self.geometry.rows,
             self.ui.sidebar,
             self.ui.sidebar_width,
-        ).sidebar else {
+        )
+        .sidebar
+        else {
             return false;
         };
-        let Some(hit) = self.conversation.sidebar_agents.iter().find(|hit| {
-            hit.rect == rect && hit.row == y
-                && x >= rect.col && x < rect.col.saturating_add(rect.width)
-        }).cloned() else {
+        let Some(hit) = self
+            .conversation
+            .sidebar_agents
+            .iter()
+            .find(|hit| {
+                hit.rect == rect
+                    && hit.row == y
+                    && x >= rect.col
+                    && x < rect.col.saturating_add(rect.width)
+            })
+            .cloned()
+        else {
             return false;
         };
         if hit.view != self.conversation.view
             || hit.process_generation != self.conversation.process_generation
         {
-            self.notice = Some("Sessions changed · choose a newly displayed row; draft and recipient kept".into());
+            self.notice = Some(
+                "Sessions changed · choose a newly displayed row; draft and recipient kept".into(),
+            );
             self.dirty = true;
             return true;
         }
         // A painted row is an identity, not an index into a refreshed roster.
         let data = self.chat_data();
         let entries = self.chat_recipients(&data);
-        let Some(index) = entries.iter().position(|entry| agent_key(entry) == hit.identity.key) else {
-            self.notice = Some("This member or caller is no longer available · draft and recipient kept".into());
+        let Some(index) = entries
+            .iter()
+            .position(|entry| agent_key(entry) == hit.identity.key)
+        else {
+            self.notice = Some(
+                "This member or caller is no longer available · draft and recipient kept".into(),
+            );
             self.dirty = true;
             return true;
         };
@@ -277,8 +294,14 @@ impl State {
                 PanelTone::Muted,
             ));
         }
-        rows.push(("h / right-click · read-only history".into(), PanelTone::Normal));
-        rows.push(("History keeps your draft and recipient".into(), PanelTone::Muted));
+        rows.push((
+            "h / right-click · read-only history".into(),
+            PanelTone::Normal,
+        ));
+        rows.push((
+            "History keeps your draft and recipient".into(),
+            PanelTone::Muted,
+        ));
         rows
     }
 
