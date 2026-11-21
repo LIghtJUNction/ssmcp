@@ -1,4 +1,6 @@
-# SSMCP 0.10.25：Git 依赖与发行流程已更新，继续最终验收
+# SSMCP 0.10.25：依赖版本树已提交，继续统一控制开关与最终验收
+
+最新已核对的 E9 源码提交为 **`71851cf221076e661b5c243a63d585fb1b04fdaf`**，目录树为 `0b25cd91d25a451e35278b048e0cbb1fb7414f0a`。它在 E8 之后加入离线依赖版本树，并修正了此前一处 boxed error 回归断言的字符串调用。当前仅完成源码与静态核对，尚无新编译或测试结果。[版本树源码事实](source-E9-version-tree-public-facts.json)
 
 E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推送退出码均为 0，最终提交为 **`f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b`**，目录树为 `4852c9a5c2d928e46ae4b291a4d27e5229998a18`，工作树与子模块干净。其中发布配方固定于父提交 `879ba17`。[E8 结束回执与源码事实](source-E8-completed-public-facts.json)它在此前三次 Git 依赖与本地启动改动之后，加入了实际的 `git-source-v1` 发布流程：六个平台的 GitHub 安装包使用已验证的 Git 来源，crate 发布单独延期。[发布源码与合同事实](source-E8-release-contract-public-facts.json)
 
@@ -11,9 +13,10 @@ E8 源码阶段已于 **2026-11-21 07:42:19 UTC** 正常结束，三次普通推
 | [7c1cd94](https://github.com/LIghtJUNction/ssmcp/commit/7c1cd94e08636617f4fded83f86048d3c012c7c3) | 本地输出目录被拒绝时停止反复重连；补充工作区、历史和网页打开失败诊断 | 源码、静态记录；没有运行测试 |
 | [a53a0c5](https://github.com/LIghtJUNction/ssmcp/commit/a53a0c5047833ded61193a0b0ce548937e89e959) | 匿名账户夹具完成服务端退出后再进入下一场景；保存脱敏失败上下文 | 原断言保留，尚未执行新脚本 |
 | [1a2f759](https://github.com/LIghtJUNction/ssmcp/commit/1a2f7591ad0abb53907c048dcaed028434e17c47) | 四项直接 Git 依赖去掉固定版本选择器；zuse 锁项和子模块同步到 0.3.0 来源 | 回执记录依赖解析成功；没有编译或产品验收 |
-| [9e1a06c](https://github.com/LIghtJUNction/ssmcp/commit/9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b) | 补充错误类型生命周期和初始输出清理阶段的分类 | 尚未编译；一处新增回归测试的错误字符串调用仍待后续修正 |
+| [9e1a06c](https://github.com/LIghtJUNction/ssmcp/commit/9e1a06c4c6a04fe6a7ac7919c9cee9ab497ac95b) | 补充错误类型生命周期和初始输出清理阶段的分类 | 当时新增断言的字符串调用已在 71851cf 修正；没有把后续修正记成旧提交已通过 |
 | [879ba17](https://github.com/LIghtJUNction/ssmcp/commit/879ba17fc3ba4bad6a26a85494b79e29acf1938a) | Git 源二进制发行、独立 registry 导出及旧标签发布分支 | 已读取固定源码并静态审阅；尚无新流程运行结果 |
 | [f6ca9d0](https://github.com/LIghtJUNction/ssmcp/commit/f6ca9d0d1c1a1a088c03f14fa7c7f785732c386b) | 在既有 HTTP/WebSocket 测试中扩展同账号双会话元数据乱序完成检查 | 回归定义已提交，尚未运行；没有新增独立 Rust 测试项 |
+| [71851cf](https://github.com/LIghtJUNction/ssmcp/commit/71851cf221076e661b5c243a63d585fb1b04fdaf) | 离线依赖版本树、早期版本命令路由，以及 boxed error 断言修正 | 四个文件完成静态核对；三个新回归定义尚未运行 |
 
 E7 三次提交依次基于 PR #164 合并点 **P2 `3f678a7`**，形成 P2 → 7c1cd94 → a53a0c5 → 1a2f759 的连续提交链。源码事实表包含完整 commit、tree、差异范围和执行边界。E7 三次提交一共涉及 12 个路径；E7 三次普通推送退出码均在回执中记录为 0，公开 GitHub 提交已直接读回。
 
@@ -89,6 +92,7 @@ f6 的回归定义使用同一 bearer 的两个重叠 HTTP 调用和实际 WebSo
 |---|---|---|
 | E7 源码与依赖解析 | 1a2f759 | 源码阶段退出 0；解析、格式和差异检查按回执记录；未编译或执行产品测试 |
 | E8 源码阶段 | f6ca9d0；发布配方 879ba17 | 阶段退出 0、三次推送和静态核对完成；尚无编译、测试或发布运行结果 |
+| E9 首个源码增量 | 71851cf | 依赖版本树已提交并静态审阅；未编译或执行三个新回归 |
 | 当前 PATH 的隔离 socket 实测 | 0.10.25／摘要 54651b3f，源码尚未绑定 | 1 次发送、1 次 fixture 调用、完整回执及清理通过；原指定会话仍未测 |
 | 原 35 阶段检查 | W / r14 | 全部通过；包括 2,057 个隔离库测试、6 个宿主库测试、101 个普通 integration、1 个显式 worker，以及另行执行的 14 个 ignored 测试 |
 | 真实进程与传输 | W | 12 项隔离客户端与 6 项传输检查通过 |
@@ -125,7 +129,11 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 ## 依赖版本树与统一控制开关
 
-用户要求的 `ssmcp --version --all` 依赖版本树，以及“移除 foreground/background 区别，统一为 Computer use On/Off”已纳入 E9。原作者已于 **07:58:56 UTC** 实际开始 E9，起点为 f6ca9d0；目前尚无该阶段完成源码或检查结果。原启动回执已完整读取，阶段允许的窄检查是发布策略脚本与 `cargo check --tests --locked --offline --jobs 1`，即使后续完成也不会代替最终整套验收。[实际启动与执行边界](source-E9-launch-public-facts.json)
+用户要求的 `ssmcp --version --all` 已在 71851cf 提交。它从二进制内嵌的构建期 Cargo.lock 显示从 ssmcp 可达的依赖树，按 name、version、source 区分包；重复身份、歧义和缺失依赖会报错，共享节点和环分别标记。完整字符串生成成功后才输出，普通 `--version` 继续只输出应用版本与换行。
+
+输出与文档明确说明：锁图包含构建、开发和各目标的依赖，实际链接代码仍随目标与 features 改变。已审阅的版本处理代码不在运行时读取工作区的锁文件、查询网络或执行 Cargo。版本树本身没有给出主仓 commit 或完整锁文件摘要，仍须结合发行 manifest 和源码回执判断构建来源。该增量完成独立静态审阅，没有运行验证；它也没有修改 H2 的六份固定发布配方。[固定源码与检查边界](source-E9-version-tree-public-facts.json)
+
+“移除 foreground/background 区别，统一为 Computer use On/Off”继续属于 E9 后续工作，尚无完成源码或验收结果。原作者已于 **07:58:56 UTC** 实际开始 E9，起点为 f6ca9d0；目前尚无该阶段完成源码或检查结果。原启动回执已完整读取，阶段允许的窄检查是发布策略脚本与 `cargo check --tests --locked --offline --jobs 1`，即使后续完成也不会代替最终整套验收。[实际启动与执行边界](source-E9-launch-public-facts.json)
 
 此前 07:49:51 UTC 的首次启动尝试在锁校验阶段中止，没有启动作者模型或执行 Cargo。后续核对实际文件描述符、fdinfo 与内核锁记录后才启动 E9，旧失败记录继续保留，没有被记成产品或测试失败。
 
@@ -133,6 +141,6 @@ H2 已按实际 E8 配方完成静态适配、AST 解析和独立源码复核，
 
 这个应用层开关不承诺拦截同一 UID 任意 shell、独立 zuse 或外部 Browser 插件，也不修改主机权限。依赖版本树应报告当前二进制编译时实际锁定的来源，不能把运行命令时的远端最新提交冒充为构建来源。
 
-接下来完成 E8/E9 源码，刷新并固定实际依赖与最终候选，由原执行者按原流程完成构建、真实进程、多用户、完整界面与 P1 验收，再核对正式发行及公开产物。新的失败和未执行项继续单独记录。
+接下来完成 E9 其余源码与依赖刷新，正常合并后，从实际 main 合并结果选定最终 S 并核对 tree、差异和父链；随后由原执行者按原流程完成构建、真实进程、多用户、完整界面与 P1 验收，再核对正式发行及公开产物。即使合并发生 squash，也先固定实际合并提交再运行最终验收，不把旧成绩移给新提交。新的失败和未执行项继续单独记录。
 
 [Google Docs 当前报告](https://docs.google.com/document/d/1Nq6DQk1EteNRucZo8J5RvhPI8PVUaans4wLgAaWrTkY/edit)
