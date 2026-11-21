@@ -1,13 +1,13 @@
 {
   "schema": "ssmcp-unified-source-and-cli-matrix-stage.v1",
-  "snapshot_utc": "2026-11-21 19:59:13 UTC",
+  "snapshot_utc": "2026-11-21 20:06:57 UTC",
   "source": {
     "commit": "db6f14b5faea8d434f4107877005b7669c1c940e",
     "tree": "3df927ca150b651d4c2951dcf93757e44f88fdba",
     "branch": "fix/release-0.10.26-20261121",
     "version": "0.10.26",
     "frozen": true,
-    "main_at_last_actual_read": "834522e0a75b6cd17a982bdb26492364476dc7a7",
+    "main_at_last_actual_read": "add39e18ff92680ff3ac0c3e911407956e20b228",
     "previous_candidate": "fc650a91bdab60dea96ee7e18c15bec3af9f9b32",
     "commits_since_previous_candidate": 2,
     "changed_paths_since_previous_candidate": 3
@@ -789,7 +789,11 @@
         "capture_bytes": 3111,
         "capture_sha256": "f294f7694b1a2aa83d3acc18f53f3d3de80234b00076856dddb3d9ef06380dee",
         "evidence_origin": "source coordinator seq625 preserved in continuation"
-      }
+      },
+      "status": "completed",
+      "conclusion": "success",
+      "all_six_jobs_success": true,
+      "updated_at": "2026-11-21T20:00:41Z"
     },
     "validation_boundary": "Build only; actual same-source CI and CLI results recorded separately. No H2 import or execution by report writer.",
     "local_test_attempt": {
@@ -800,7 +804,58 @@
       "exit_code": 1,
       "both_eof": true,
       "product_tests_executed": false,
-      "evidence_origin": "source coordinator seq632"
+      "evidence_origin": "source coordinator seq632",
+      "stdout_bytes": 367,
+      "stderr_bytes": 0,
+      "no_truncation": true,
+      "receipt": {
+        "bytes": 289,
+        "sha256": "c5033b1ea5dc155cc193df88ac359e307a8aa87fdb17890f9dfefc464a5d8729"
+      },
+      "independent_original_read_by_acceptance": true
+    },
+    "development_binary_attempt": {
+      "native_job_suffix": "-2b2",
+      "status": "failed after main binaries succeeded",
+      "exit_code": 1,
+      "stdout_bytes": 5654,
+      "stderr_bytes": 0,
+      "both_eof": true,
+      "no_truncation": true,
+      "main_binaries_stage_exit_code": 0,
+      "main_binaries": [
+        {
+          "name": "ssmcp",
+          "bytes": 121396568,
+          "sha256": "39d41d7a46d1663c7c7ce2ee4f0d66909a3592383a474c75e02629b71df4ad2e"
+        },
+        {
+          "name": "ssmcp-frontend",
+          "bytes": 5651824,
+          "sha256": "d05ea9b777d3feb0ba46971b86aed4ac9a43f3694a9b5b0769164df649aeef4c"
+        },
+        {
+          "name": "ssmcpd",
+          "bytes": 59169968,
+          "sha256": "4ce1d2ecbb565a94ff762a3aa141e7bf257110d71157830e1cb8bf08bfb81e6f"
+        }
+      ],
+      "vt_snapshot_stage": {
+        "status": "compile timeout",
+        "budget_seconds": 180,
+        "exit_code": -15,
+        "started_utc": "2026-11-21T20:00:27Z",
+        "ended_utc": "2026-11-21T20:03:27Z",
+        "stderr_bytes": 107,
+        "compiler_diagnostic_reported": false
+      },
+      "receipt": {
+        "bytes": 6952,
+        "sha256": "1660aa56bcd17e905b93f6b0eb873f418641279a94776e011c13d74059a5ef57"
+      },
+      "worktree_clean": true,
+      "evidence_origin": "source coordinator seq645 and independent acceptance seq643",
+      "cli_e2e_executed_by_this_job": false
     }
   },
   "resume_fix": {
@@ -1275,8 +1330,8 @@
       "profile": "dev",
       "binary_targets": [
         "ssmcp",
-        "ssmcp-server",
         "ssmcp-frontend",
+        "ssmcpd",
         "vt_snapshot"
       ],
       "native_script_groups": [
@@ -1293,8 +1348,22 @@
         "Zuse lifecycle",
         "update"
       ],
-      "status": "building binaries; execution results pending",
-      "original_script_deadlines_and_assertions_retained": true
+      "status": "three main binaries built; vt_snapshot compilation timed out; gap runs pending",
+      "original_script_deadlines_and_assertions_retained": true,
+      "native_scripts": [
+        "account-interactive",
+        "agent-entry",
+        "local",
+        "local-socket",
+        "context-reload",
+        "message-references",
+        "user-wait",
+        "terminal-control",
+        "service-portable",
+        "session-service",
+        "007",
+        "007-upgrade"
+      ]
     }
   },
   "docs_residue": {
@@ -1390,18 +1459,18 @@
     "run_id": 44942653543,
     "head_sha": "db6f14b5faea8d434f4107877005b7669c1c940e",
     "attempt": 1,
-    "status": "in_progress",
-    "conclusion": null,
+    "status": "completed",
+    "conclusion": "success",
     "url": "https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543",
-    "status_snapshot_utc": "2026-11-21 19:59:13 UTC",
+    "status_snapshot_utc": "2026-11-21 20:05:47 UTC",
     "jobs": [
       {
         "id": 136963031474,
         "name": "linux (ubuntu-24.04-arm)",
-        "status": "in_progress",
-        "conclusion": null,
+        "status": "completed",
+        "conclusion": "success",
         "started_at": "2026-11-21T19:45:47Z",
-        "completed_at": null,
+        "completed_at": "2026-11-21T20:00:40Z",
         "steps": [
           {
             "number": 1,
@@ -1592,20 +1661,26 @@
           {
             "number": 32,
             "name": "Run cargo build --locked --release",
-            "status": "in_progress",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
           },
           {
             "number": 33,
             "name": "Check staged Linux installation",
-            "status": "pending",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
           },
           {
             "number": 66,
             "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "pending",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "number": 67,
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
           }
         ]
       },
@@ -2060,10 +2135,10 @@
       {
         "id": 136963031738,
         "name": "linux (ubuntu-24.04)",
-        "status": "in_progress",
-        "conclusion": null,
+        "status": "completed",
+        "conclusion": "success",
         "started_at": "2026-11-21T19:45:45Z",
-        "completed_at": null,
+        "completed_at": "2026-11-21T19:59:16Z",
         "steps": [
           {
             "number": 1,
@@ -2254,20 +2329,26 @@
           {
             "number": 32,
             "name": "Run cargo build --locked --release",
-            "status": "in_progress",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
           },
           {
             "number": 33,
             "name": "Check staged Linux installation",
-            "status": "pending",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
           },
           {
             "number": 66,
             "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-            "status": "pending",
-            "conclusion": null
+            "status": "completed",
+            "conclusion": "success"
+          },
+          {
+            "number": 67,
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success"
           }
         ]
       }
@@ -2344,6 +2425,131 @@
       "macos_installer_bounds_tests": 3,
       "nested_child_counts_not_added": true
     },
-    "not_a_Release_run": true
+    "not_a_Release_run": true,
+    "updated_at": "2026-11-21T20:00:41Z",
+    "linux_log_evidence": {
+      "finalized_at_utc": "2026-11-21 20:04:14 UTC",
+      "proof_file_bytes": 141985,
+      "proof_file_sha256": "2bad5ed9717935e4f98c1e82ac48632014475492b2a2300a5c9c888a07dddcd3",
+      "platforms": [
+        {
+          "platform": "linux_x64",
+          "job_id": 136963031738,
+          "library": {
+            "passed": 1985,
+            "failed": 0,
+            "ignored": 13
+          },
+          "server_unit": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0
+          },
+          "integration_targets": {
+            "targets": 19,
+            "passed": 102,
+            "failed": 0,
+            "ignored": 17
+          },
+          "six_named_regressions_passed": [
+            "client::tests::resume_command_preserves_connection_flags_without_persisting_picker_state",
+            "client::tests::resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument",
+            "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
+            "runtime::time::tests::timer_and_late_observation_stay_with_the_original_history_lease",
+            "client::interface::history::tests::conversation_lease_releases_while_an_inherited_descriptor_stays_open",
+            "client::interface::history::tests::transaction_lock_releases_while_an_inherited_descriptor_stays_open"
+          ],
+          "acceptance": {
+            "agents": 469,
+            "unified": 105,
+            "dashboard": 80,
+            "input_history": 150,
+            "daemon_systemd": 182
+          },
+          "cli_resume": {
+            "actual_argv_confirmed_from_fixed_source": true,
+            "script": "scripts/e2e_input_history.py",
+            "picker_auto_opens": true,
+            "no_queued_request_redelivery": true,
+            "no_native_tool_replay": true,
+            "new_request_appended_once": true
+          },
+          "optimized_release_build": "passed",
+          "staged_installation": {
+            "status": "success",
+            "scope": "temporary CI DESTDIR",
+            "silent_shell_assertions": 4,
+            "evidence": "commands logged under bash -e and successful step; no invented per-assertion PASS output"
+          }
+        },
+        {
+          "platform": "linux_arm",
+          "job_id": 136963031474,
+          "library": {
+            "passed": 1985,
+            "failed": 0,
+            "ignored": 13
+          },
+          "server_unit": {
+            "passed": 13,
+            "failed": 0,
+            "ignored": 0
+          },
+          "integration_targets": {
+            "targets": 19,
+            "passed": 102,
+            "failed": 0,
+            "ignored": 17
+          },
+          "six_named_regressions_passed": [
+            "client::tests::resume_command_preserves_connection_flags_without_persisting_picker_state",
+            "client::tests::resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument",
+            "client::tests::resume_rejects_noninteractive_modes_and_help_does_not_start_a_session",
+            "runtime::time::tests::timer_and_late_observation_stay_with_the_original_history_lease",
+            "client::interface::history::tests::conversation_lease_releases_while_an_inherited_descriptor_stays_open",
+            "client::interface::history::tests::transaction_lock_releases_while_an_inherited_descriptor_stays_open"
+          ],
+          "acceptance": {
+            "agents": 469,
+            "unified": 105,
+            "dashboard": 80,
+            "input_history": 150,
+            "daemon_systemd": 182
+          },
+          "cli_resume": {
+            "actual_argv_confirmed_from_fixed_source": true,
+            "script": "scripts/e2e_input_history.py",
+            "picker_auto_opens": true,
+            "no_queued_request_redelivery": true,
+            "no_native_tool_replay": true,
+            "new_request_appended_once": true
+          },
+          "optimized_release_build": "passed",
+          "staged_installation": {
+            "status": "success",
+            "scope": "temporary CI DESTDIR",
+            "silent_shell_assertions": 4,
+            "evidence": "commands logged under bash -e and successful step; no invented per-assertion PASS output"
+          }
+        }
+      ],
+      "exhaustive_cli_matrix_claimed": false,
+      "formal_release_claimed": false
+    }
+  },
+  "zuse_current_release_observation": {
+    "release_id": 453909150,
+    "version": "v0.6.0",
+    "published_at": "2026-11-21T18:54:10Z",
+    "url": "https://github.com/LIghtJUNction/zuse/releases/tag/v0.6.0",
+    "linux_x64_asset": {
+      "id": 776545206,
+      "bytes": 1399658,
+      "sha256": "6a38b67eddc26a5671658d4ea4b767922e7be78f44e5af480fa3ba14dd3bac15"
+    },
+    "main_compatibility_commit": "add39e18ff92680ff3ac0c3e911407956e20b228",
+    "private_actual_observation_job_suffix": "-2c1",
+    "status": "actual download/install observation pending",
+    "candidate_source_unchanged": true
   }
 }

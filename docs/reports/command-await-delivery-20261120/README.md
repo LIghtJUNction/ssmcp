@@ -1,15 +1,15 @@
-# SSMCP 当前迭代：历史锁已修复，四个平台 CI 通过
+# SSMCP 当前迭代：六个平台 CI 全部通过，补齐 CLI 验证
 
-**更新于 2026-11-21 19:59:13 UTC。** 当前候选为 [db6f14b](https://github.com/LIghtJUNction/ssmcp/commit/db6f14b5faea8d434f4107877005b7669c1c940e)。开发机 V14 已编译出新的库测试程序；Windows x64、Windows ARM、macOS Intel 和 macOS ARM 四个 CI job 已成功，两个 Linux job 已通过核心测试与界面验收，仍在构建发行程序。**整体 CI 尚未结束，全子命令矩阵尚未收齐，v0.10.26 尚未发布。** [当前 CI](https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543) · [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
+**更新于 2026-11-21 20:06:57 UTC。** 当前候选为 [db6f14b](https://github.com/LIghtJUNction/ssmcp/commit/db6f14b5faea8d434f4107877005b7669c1c940e)。[CI 44942653543](https://github.com/LIghtJUNction/ssmcp/actions/runs/44942653543) 已于 **20:00:41 UTC** 完成，Linux、Windows、macOS 的 x64／Intel 与 ARM 六个平台全部成功。开发机 V14 库测试程序构建也已通过。**全子命令补充矩阵尚未收齐，v0.10.26 尚未发布。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
 
-本轮继续包含用户要求的“检查，测试所有子命令”。同源 CI 已完成包含真实 CLI `resume` 的会话界面验收；开发机将补充 12 份分组 CLI 脚本、22 次 config／trust／ui 场景，以及空历史恢复和私有安装生命周期。当前正在构建所需开发版程序，尚未取得这些补充结果；帮助输出只证明入口解析，不能替代正常功能执行。
+本轮继续包含用户要求的“检查，测试所有子命令”。同源 CI 已完成包含真实 CLI `resume` 的会话界面验收；开发机将补充 12 份分组 CLI 脚本、22 次 config／trust／ui 场景，以及空历史恢复和私有安装生命周期。三个主程序已构建，辅助终端解码器编译超时；尚未取得这些补充结果；帮助输出只证明入口解析，不能替代正常功能执行。
 
 ## 已合入的实际修正
 
 | 范围 | 当前候选中的变化 |
 |---|---|
 | `ssmcp resume` | 单独识别命令，接入当前工作区的历史选择器。空历史提示后正常退出且不联网；有历史时要求交互终端，由用户选择，保留工作区、归档与租约校验 |
-| 历史会话锁 | 使用已有的 `HistoryLock` 在释放会话时显式解锁；即使旧文件描述符的副本仍然打开，新客户端也能取得租约。新增回归还检查关闭旧副本不会解除新拥有者的锁 |
+| 历史会话锁 | 使用已有的 `HistoryLock` 在 Unix 释放会话时显式解锁；即使旧文件描述符的副本仍然打开，新客户端也能取得租约。新增回归还检查关闭旧副本不会解除新拥有者的锁 |
 | Windows 管道预期 | `--input pipe` 在非 Unix 平台先被平台检查拒绝，测试现在精确期待这条实际错误。六组非交互拒绝案例和帮助检查均保留 |
 | Linux 协议夹具 | 三处正向目录统一为五个实际提供者，移除已退役 Playwright；独立调用陷阱、懒加载状态和无外部探测断言保留 |
 | 安装安全测试 | 每个 Store 使用独立测试目标，Windows ARM64 保留原有五项安装／卸载安全测试 |
@@ -30,12 +30,22 @@
 | Windows ARM | job 成功；库 1302 通过、0 失败、4 忽略 |
 | macOS Intel | job 成功；库 1423 通过、0 失败、5 忽略 |
 | macOS ARM | job 成功；库 1423 通过、0 失败、5 忽略 |
-| Linux x64 | workspace 测试、agents、unified、dashboard、conversation UI 与后台 watchdog 步骤成功；发行程序构建中，安装检查未完成 |
-| Linux ARM | 上述核心测试、界面验收与后台 watchdog 步骤成功；发行程序构建中，安装检查未完成 |
+| Linux x64 | job 成功；库 1985 通过、0 失败、13 忽略；发行构建与临时安装检查通过 |
+| Linux ARM | job 成功；库 1985 通过、0 失败、13 忽略；发行构建与临时安装检查通过 |
 
 四个已完成平台的日志都逐条确认三项 `resume` 测试和原计时／历史租约测试通过。各平台的 `release_client` 为 5/5，通过单独选择的 native plugin contract 为 1/1，ztuio contracts 为 13/13；`ssmcp` 二进制测试目标为 0 tests、成功结束。两项 macOS 还通过各 3 个流式下载安装边界测试。子进程的重复测试输出没有加进主目标计数。
 
-继承文件描述符的两项历史锁回归带 `#[cfg(unix)]`，两个 macOS 日志均逐条通过；Windows 记为平台不适用。Linux 行目前依据实际 job 步骤状态，没有把未读取的完整日志换算成测试计数。已完成步骤也不代表整个 Linux job 或整个 CI 已成功。
+继承文件描述符的两项历史锁回归带 `#[cfg(unix)]`，两个 macOS 和两个 Linux 日志均逐条通过；Windows 记为平台不适用。两个 Linux 的服务端单元测试还分别通过 13 项，19 个集成测试目标各自合计 102 通过、0 失败、17 忽略。另行执行或子进程过滤测试的结果未重复累加。
+
+两份 Linux 完整日志分别明确记录：agents 469 项、unified 105 项、真实 PTY dashboard 80 项、input/history 150 项以及真实 user systemd 后台会话 182 项通过。固定源码 [e2e_input_history.py](https://github.com/LIghtJUNction/ssmcp/blob/db6f14b5faea8d434f4107877005b7669c1c940e/scripts/e2e_input_history.py) 确实把 `resume` 插入新进程的 argv，并等待自动打开历史选择器；两平台都验证恢复不会重投旧请求或重放原生工具，新请求只追加一次。该结论不单凭日志中沿用的 `/resume` 提示文字。
+
+Linux 安装检查在临时 `DESTDIR` 中完成，四项静默 shell 断言验证客户端、服务端、systemd unit 和 code-mode 脚本存在；证据是实际命令、`bash -e` 和成功的步骤状态。界面 compositor 夹具的 58 项检查明确使用示例事件和隔离 PTY，不连接真实服务；其他会话和界面 E2E 的独立范围保留在事实记录中。这些同源结果可复用于命令覆盖矩阵，尚未映射的子命令仍待补齐。
+
+## 本机补充构建与当前 Zuse 兼容性观察
+
+用于补充 CLI 的本机任务已成功构建并保存 `ssmcp`、`ssmcp-frontend` 和 `ssmcpd`。随后 `vt_snapshot` 辅助程序编译达到 180 秒预算，进程退出 -15；其 stderr 只有编译中的提示，没有源码诊断。整个聚合任务因此为失败，不能写成整套构建通过。回执为 **6952 字节**，SHA-256 `1660aa56bcd17e905b93f6b0eb873f418641279a94776e011c13d74059a5ef57`；已有三个主程序可供不依赖该辅助程序的场景使用。
+
+[Zuse v0.6.0](https://github.com/LIghtJUNction/zuse/releases/tag/v0.6.0) 已于 18:54:10 UTC 发布；默认下载安装需要兼容这一当前版本。SSMCP 主线 [add39e1](https://github.com/LIghtJUNction/ssmcp/commit/add39e18ff92680ff3ac0c3e911407956e20b228) 已有针对新包元数据的兼容修改。执行侧正在私有目录中使用已构建的 `db6f14b` 客户端实际验证下载和安装；该结果将决定是否需要吸收此修改。当前尚无这次观察的终态，既有六平台 CI 仍明确绑定 `db6f14b`。
 
 ## 上一轮 CI 的失败及对应修正
 
@@ -114,7 +124,7 @@ H2 会按实际候选读取锁文件、依赖图与 gitlink，无需把新依赖
 
 v0.10.25 的 [Release 运行 44934221685](https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685)仍保留失败终态：12 个 job 成功、3 失败、4 跳过。旧标签未移动，旧运行未重跑，缺失的原生完整返回未拼装补造。上述两次独立 CI 均不是正式 Release 运行。
 
-开发机主工作区上次完成的正常同步仍是 `d4887ae`，用户修改和本地依赖状态保留；当前候选在独立验证工作区推进。最终正常合并后仍需再次同步。当前不能声称用户正在运行的客户端已升级；下一步收齐同源 CI、全子命令矩阵、空历史恢复和私有安装场景，再完成正式发布及公开资产核验。
+开发机主工作区上次完成的正常同步仍是 `d4887ae`，用户修改和本地依赖状态保留；当前候选在独立验证工作区推进。最终正常合并后仍需再次同步。当前不能声称用户正在运行的客户端已升级；下一步收齐全子命令矩阵、空历史恢复和私有安装场景，再完成正式发布及公开资产核验。
 
 ---
 
