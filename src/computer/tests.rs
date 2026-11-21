@@ -349,3 +349,19 @@ async fn only_four_lifecycle_tools_exist_and_legacy_actions_are_rejected() {
     computer.shutdown().await.unwrap();
     assert!(computer.perform("ssmcp.computer.version", json!({})).await.is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn selected_external_entry_rejects_a_downloader_without_searching_another_cli() {
+    let temporary = Temporary::new();
+    let selected = temporary.0.join("first-zuse");
+    let other = temporary.0.join("second-zuse");
+    fake_cli(&selected, "exec npx zuse --version");
+    fake_cli(&other, "printf 'zuse 0.4.0\\n'");
+    let error = crate::program::selected_entry(&selected, "zuse").unwrap_err();
+    assert!(error.contains("refusing to run a downloader"));
+    assert_eq!(
+        crate::program::selected_entry(&other, "zuse").unwrap(),
+        other.canonicalize().unwrap()
+    );
+}

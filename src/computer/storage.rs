@@ -225,6 +225,70 @@ pub(super) struct Installation {
     pub binary_sha256: String,
 }
 
+// This guard is created only for a directory made by this invocation. Failed
+// initialization removes only recorded objects whose identities still match.
+struct Initialization {
+    root: PathBuf,
+    identity: Identity,
+    entries: Vec<(PathBuf, Identity, bool)>,
+    committed: bool,
+}
+
+impl Initialization {
+    fn file(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        writer: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        if directory(&self.root)? != self.identity {
+            return Err("Zuse manager root changed during initialization".into());
+        }
+        let path = self.root.join(name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| error.to_string())?;
+        self.entries.push((path, identity(&file)?, false));
+        writer(&mut file, bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())
+    }
+
+    fn directory(&mut self, name: &str) -> Result<(), String> {
+        if directory(&self.root)? != self.identity {
+            return Err("Zuse manager root changed during initialization".into());
+        }
+        let path = self.root.join(name);
+        crate::platform::private_directory(&path).map_err(|error| error.to_string())?;
+        let id = directory(&path)?;
+        self.entries.push((path, id, true));
+        Ok(())
+    }
+}
+
+impl Drop for Initialization {
+    fn drop(&mut self) {
+        if self.committed || directory(&self.root).ok().as_ref() != Some(&self.identity) {
+            return;
+        }
+        for (path, expected, is_directory) in self.entries.iter().rev() {
+            if *is_directory {
+                if directory(path).ok().as_ref() == Some(expected) {
+                    let _ = fs::remove_dir(path);
+                }
+            } else if private_file(path).and_then(|file| identity(&file)).ok().as_ref() == Some(expected) {
+                let _ = fs::remove_file(path);
+            }
+        }
+        // No recursive deletion: unknown, replaced or extra files survive.
+        let _ = fs::remove_dir(&self.root);
+    }
+}
+
 pub(super) struct Store {
     root: PathBuf,
     owner_id: String,
@@ -234,6 +298,14 @@ pub(super) struct Store {
 
 impl Store {
     pub(super) fn open(root: &Path, create_store: bool) -> Result<Option<Self>, String> {
+        Self::open_with(root, create_store, |file, bytes| file.write_all(bytes))
+    }
+
+    fn open_with(
+        root: &Path,
+        create_store: bool,
+        owner_writer: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<Option<Self>, String> {
         let exists = match fs::symlink_metadata(root) {
             Ok(_) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -254,9 +326,15 @@ impl Store {
             }
         };
         let root_identity = directory(root)?;
+        let mut initialization = created.then(|| Initialization {
+            root: root.to_owned(),
+            identity: root_identity.clone(),
+            entries: Vec::new(),
+            committed: false,
+        });
         let lock_path = root.join("manager.lock");
-        if created {
-            create(&lock_path, b"", false)?;
+        if let Some(initialization) = initialization.as_mut() {
+            initialization.file("manager.lock", b"", |file, bytes| file.write_all(bytes))?;
         }
         let lock = private_file(&lock_path)?;
         crate::platform::lock_file(&lock, true)
@@ -264,11 +342,12 @@ impl Store {
         if directory(root)? != root_identity {
             return Err("Zuse manager root changed while acquiring its lock".into());
         }
-        if created {
+        if let Some(initialization) = initialization.as_mut() {
             let owner = Owner { schema: SCHEMA, owner_id: id()?, directory: root_identity.clone() };
-            crate::platform::private_directory(&root.join("downloads")).map_err(|error| error.to_string())?;
-            crate::platform::private_directory(&root.join("installations")).map_err(|error| error.to_string())?;
-            json(&root.join("owner.json"), &owner)?;
+            initialization.directory("downloads")?;
+            initialization.directory("installations")?;
+            let bytes = serde_json::to_vec_pretty(&owner).map_err(|error| error.to_string())?;
+            initialization.file("owner.json", &bytes, owner_writer)?;
             sync_directory(root)?;
         }
         let owner: Owner = read(&root.join("owner.json"))?;
@@ -277,6 +356,9 @@ impl Store {
         }
         directory(&root.join("downloads"))?;
         directory(&root.join("installations"))?;
+        if let Some(initialization) = initialization.as_mut() {
+            initialization.committed = true;
+        }
         Ok(Some(Self { root: root.to_owned(), owner_id: owner.owner_id, root_identity, _lock: lock }))
     }
 
@@ -489,5 +571,53 @@ impl Drop for Stage {
             let _ = fs::remove_file(self.path.join(name));
         }
         let _ = fs::remove_dir(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod initialization_tests {
+    use super::*;
+
+    struct Temporary(PathBuf);
+
+    impl Temporary {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("ssmcp-zuse-init-{}", id().unwrap()));
+            crate::platform::private_directory(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Temporary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn partial_owner_write_is_removed_and_initialization_can_be_retried() {
+        let temporary = Temporary::new();
+        let root = temporary.0.join("manager");
+        let result = Store::open_with(&root, true, |file, _| {
+            file.write_all(b"{")?;
+            Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "injected full disk"))
+        });
+        assert!(result.is_err());
+        assert!(!root.exists(), "an incomplete owned root must not poison retries");
+        let store = Store::open(&root, true).unwrap().unwrap();
+        store.check().unwrap();
+    }
+
+    #[test]
+    fn an_existing_unreceipted_directory_is_not_initialized_or_removed() {
+        let temporary = Temporary::new();
+        let root = temporary.0.join("manager");
+        crate::platform::private_directory(&root).unwrap();
+        let sentinel = root.join("user-data");
+        fs::write(&sentinel, b"preserve").unwrap();
+        assert!(Store::open(&root, true).is_err());
+        assert_eq!(fs::read(&sentinel).unwrap(), b"preserve");
+        assert!(!root.join("owner.json").exists());
+        assert!(!root.join("manager.lock").exists());
     }
 }

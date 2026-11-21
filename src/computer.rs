@@ -140,8 +140,8 @@ impl Computer {
     async fn version(&self) -> Result<Value, String> {
         // An existing external entry always wins. A broken/unsupported entry is
         // reported as an error instead of silently falling back to another CLI.
-        if crate::platform::executable("zuse").is_ok() {
-            let path = crate::program::executable("zuse")?;
+        if let Ok(selected) = crate::platform::executable("zuse") {
+            let path = crate::program::selected_entry(&selected, "zuse")?;
             let store = storage::Store::open(&self.root, false)?;
             let owned = store.as_ref().map(|store| store.matching(&path)).transpose()?.flatten();
             let mut result = probe::version(&path).await?;
