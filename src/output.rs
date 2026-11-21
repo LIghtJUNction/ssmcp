@@ -328,9 +328,13 @@ impl OutputStore {
             store.owner = owner;
         }
         let store = Arc::new(store);
-        store
-            .cleanup_all()
-            .map_err(|e| format!("initial output retention cleanup: {e}"))?;
+        store.cleanup_all().map_err(|error| {
+            StartupDirectoryError::new(
+                &store.directory,
+                "initialize retention for",
+                io::Error::other(error),
+            )
+        })?;
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&store);
             runtime.spawn(async move {
@@ -1691,10 +1695,7 @@ mod tests {
         let error = OutputStore::at(fixture.path.clone(), Policy::default())
             .err()
             .expect("a directory cannot be used as the cleanup lock");
-        assert!(
-            error.starts_with("initial output retention cleanup: open output cleanup lock:"),
-            "{error}"
-        );
+        assert!(error.contains("open output cleanup lock:"), "{error}");
         assert!(
             lock.is_dir(),
             "a failed initialization must not remove the unexpected entry"
@@ -1734,13 +1735,19 @@ mod tests {
         let path = fixture.path.join(".cleanup.lock");
         std::fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        let error = OutputStore::at(fixture.path.clone(), Policy::default())
+        assert_eq!(
+            std::fs::metadata(&fixture.path).unwrap().mode() & 0o777,
+            0o700,
+            "the root itself passes private-directory validation"
+        );
+        let error = OutputStore::at_restoring(fixture.path.clone(), Policy::default(), None)
             .err()
             .expect("a symlink cannot be used as the cleanup lock");
-        assert!(
-            error.starts_with("initial output retention cleanup: open output cleanup lock:"),
-            "{error}"
-        );
+        let refused = error.downcast_ref::<StartupDirectoryError>().unwrap();
+        assert_eq!(refused.directory, fixture.path);
+        assert_eq!(refused.operation, "initialize retention for");
+        assert!(!crate::client::watchdog_retries(true, Some(error.as_ref())));
+        assert!(error.contains("open output cleanup lock:"), "{error}");
         assert_eq!(std::fs::read_link(&path).unwrap(), target);
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched lock target");
     }

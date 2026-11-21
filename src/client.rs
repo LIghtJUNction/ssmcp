@@ -2005,7 +2005,7 @@ pub async fn run() -> crate::Result<()> {
 
 pub(crate) fn watchdog_retries(
     enabled: bool,
-    error: Option<&(dyn std::error::Error + Send + Sync)>,
+    error: Option<&(dyn std::error::Error + Send + Sync + 'static)>,
 ) -> bool {
     enabled
         && error.is_none_or(|error| {
