@@ -1,71 +1,90 @@
-# SSMCP 当前迭代：resume 修复已固定，新构建进行中
+# SSMCP 当前迭代：统一源码已固定，全子命令验证准备中
 
-**更新于 2026-11-21 19:02:13 UTC。** 用户反馈的 `ssmcp resume` 误入已退役 SSH 路径的问题已提交修复，发布说明也已跟进。当前候选已固定为 [d67ae61](https://github.com/LIghtJUNction/ssmcp/commit/d67ae612c8acc9d3a2e9090996b69826d1b48d8d)，从主线 `d4887ae` 向前九个提交、涉及十三个文件。前一候选 `4c6cd21` 的库测试和严格 Clippy 已实际完成；这些结果保留原源码身份。**新候选正在构建，尚无完成的运行验收，v0.10.26 尚未发布。** [本阶段事实与回执身份](resume-fix-and-validation-public-facts.json)
+**更新于 2026-11-21 19:32:48 UTC。** 候选已固定为 [fc650a9](https://github.com/LIghtJUNction/ssmcp/commit/fc650a91bdab60dea96ee7e18c15bec3af9f9b32)，包含 `resume` 修复、正式 CI 夹具修正，以及正常合入的 TLS、JSON 错误回执和最新依赖改动。与最近实际读取的主线 `834522e` 相比，候选向前十三个提交、涉及十四个文件。**V12 完成源码与依赖同步后，因共享构建资源等待超时退出；编译和产品测试均未启动，v0.10.26 尚未发布。** [完整阶段事实](unified-source-and-cli-matrix-public-facts.json)
 
-## resume 的原因与已提交修复
+用户新增的“检查，测试所有子命令”已列入本轮必要工作。命令入口已静态盘点，执行将使用最终候选和隔离环境，逐项记录真实子命令的退出码、关键结果与原件。帮助输出只证明入口解析，不能替代正常功能执行。
 
-原命令没有单独识别首参数 `resume`，随后把它当作连接目标，落入已退役的 SSH 连接报错。使用旧源码 `4f73f56` 对应的实际二进制、隔离的私有配置，已重现用户错误：真正的 `ssmcp resume` 子命令退出码为 **1**。外层采集程序退出码为 **0** 仅表示采集完成，不能作为命令成功的证据；这次复现没有使用用户配置。
+## 已合入的实际修正
 
-[核心修复 0dc3f6c](https://github.com/LIghtJUNction/ssmcp/commit/0dc3f6cd784ae9b34d738de9f2ef663400f94932)已通过实际差分读取与独立静态审阅，仅涉及客户端入口、终端历史入口及现有历史 E2E 的启动方式。
-
-| 场景 | 已提交的行为 |
+| 范围 | 当前候选中的变化 |
 |---|---|
-| `ssmcp resume [options]` | 单独识别开头的 `resume`，其余参数沿用普通启动解析；参数值或原生协议尾参中的同名文字不被吞掉 |
-| 当前工作区没有未归档历史 | 提示后以 0 退出，不进入登录或联网流程 |
-| 有历史 | 要求交互终端，正常连接后一次性打开已有历史选择器，由用户选择 |
-| 选择历史 | 保留原工作区、归档状态与租约校验，不自动选择最近一条 |
-| 保存与恢复边界 | 临时聊天布局不写入用户配置，不重放请求，也不恢复模型、PTY 或成员凭据 |
-| 非交互组合 | 明确拒绝后台、列工具、非终端输入和 JSONL 输出等不兼容组合 |
+| `ssmcp resume` | 单独识别命令，接入当前工作区的历史选择器。空历史提示后正常退出且不联网；有历史时要求交互终端，由用户选择，保留原工作区、归档与租约校验 |
+| 恢复边界 | 临时聊天布局不落盘；不自动选择最近历史、不重放请求，也不恢复模型、PTY 或成员凭据 |
+| Linux 协议夹具 | 正向集合明确五个实际提供者，退役 Playwright 有独立调用陷阱；另一份 CLI 目录夹具也已同步五项集合 |
+| 安装安全测试 | 保留每个 Store 独立的测试目标，Windows ARM64 仍运行原有五项安装／卸载安全测试；没有以平台条件跳过它们 |
+| 主线并行修正 | 正常合入独立进程 TLS 初始化测试、官方平台映射，以及 `computer --json` 的错误回执处理 |
+| 发布策略 | 根包为 0.10.26，GitHub 二进制发行继续准备；registry 发布和生产服务器部署显式延期 |
 
-现有历史 E2E 的重启命令已改为真实 CLI `ssmcp resume`；新增三项解析边界回归定义。这里记录的是已提交的代码和测试定义，尚未声称它们在后继候选上执行通过。当前帮助中遗留的旧电脑控制说明也已移除。
+`computer --json` 的操作失败会在 stdout 输出单行 MCP JSON 结果，包含 `isError: true` 和脱敏说明，并以非零状态退出。语法或管理器初始化错误走 stderr。未安装 Zuse 的版本查询仍可成功返回 `available: false`。这些行为来自已合入主线的代码与文档，最终候选的实测结果仍待收齐。[当前命令说明](https://github.com/LIghtJUNction/ssmcp/blob/fc650a91bdab60dea96ee7e18c15bec3af9f9b32/docs/computer-use.md)
 
-[0.10.26 发布说明](https://github.com/LIghtJUNction/ssmcp/blob/6e9336bb1423aeec5e1228c3b555f5de77349f9b/docs/release-notes-0.10.26.md)现为 **9447 字节**，SHA-256 为 `e747b9501705797d822f07ebbbc123c4c972ec5c6747d8f19e0d5cf2998ec326`。说明后继提交只修改这一份文件，固定提交内容、Git blob、分支头与单文件差分均已读回核对。
+## 全子命令矩阵范围
 
-## 新候选的构建状态
+下面是待执行矩阵的范围，**不是通过清单**。会为有副作用的命令使用私有配置、私有会话、测试中继或已有服务替身；不会把真实系统注册、外部 OAuth、外部提供者与更新安装路径的未执行情况隐藏在帮助检查中。
 
-包含发布说明的 `6e9336b` 首次 V9 尝试在格式检查处退出 1，编译和产品测试均未启动，也没有库测试程序产物。原输出指出 `src/client.rs` 的三处 Rust 排版差异。源码方已正常提交 [d67ae61](https://github.com/LIghtJUNction/ssmcp/commit/d67ae612c8acc9d3a2e9090996b69826d1b48d8d)，仅修正这三处排版；完整实际差分已读取，业务逻辑、发布说明和发布配方不变。
-
-V10 已从 `d67ae61` 开始构建；源码、tree 与 gitlink 选择步骤已完成，尚未取得构建通过回执。V9 的失败记录为 8886 字节，SHA-256 为 `fe44bfc2e1f11a8d95ee2d5ef5b6d4fa233073ab7d7bcb11ab22f8da46ff2365`，原验收协调方已完整读取，继续保留。
-
-## 已完成的验证绑定前一候选
-
-以下结果均属于源码 **`4c6cd21b2ab46c11febbac7c1921e302da49f4b2`**，没有转记为新修复的成绩。
-
-| 检查 | 实际结果 |
+| 命令族 | 需要分别核对的入口 |
 |---|---|
-| Node / 发布策略 / 部署策略 | 64 / 118 / 35 项通过 |
-| 新库测试程序构建 | 成功；实际生成 0.10.26 测试程序，构建记录为 `fresh: false` |
-| 库 private 组 | 1972 通过、0 失败、12 忽略、6 过滤 |
-| 库 host 组 | 6 通过、0 失败 |
-| 必须执行的 code-mode 组 | 2 通过、0 失败 |
-| Linux 严格 Clippy | 退出码 0 |
-| Windows GNU 严格 Clippy | 退出码 0；属于交叉目标检查，不是 Windows 原生运行验收 |
+| 信息与启动 | 帮助、版本与完整版本树、协议目录、列工具；裸启动、账号目标、服务器／context 选择、Linux local、CLI resume |
+| 账号与目录 | login／setup、whoami、logout、list／ls、远端会话目录和交互选择 |
+| 连接与终端 | 远程 process／thread attach、只读聊天、显式 PTY、本地保存会话 attach，及名称消歧 |
+| 消息 | send 的目标、stdin、请求 ID、等待形式；wait 的 any／all／gather／count 及别名 |
+| context 与 config | context 创建、列举、查看、检查、选择、移除；config path／get／set／unset，以及真实私有持久化后的读回 |
+| trust | add／list／remove／path，私有公钥或 pin 的写入与读回 |
+| Zuse 生命周期 | computer version／download／install／uninstall，成功、结构化失败和未安装状态 |
+| 更新与界面 | update／check；ui show／check／init／preview，包括静态预览和无效配置 |
+| 保存会话 | sessions create／list／status／start／stop／close／restart／logs／auth／remove |
+| 服务管理 | service install／uninstall／start／stop／restart／status／run，区分 dry-run、替身验证与实际系统注册 |
+| 007 | install／upgrade／run／start／stop／status／uninstall，以及 007 sessions 的列表与生命周期 |
+| 内部与退役入口 | 内部 helper 由对应夹具覆盖；invite、join、旧 browser setup 和电脑控制开关等退役形式应明确拒绝 |
 
-原验收协调方已独立完整读取以上构建、测试和检查原件，输出均收至 EOF。嵌套夹具进程输出的额外结果行没有重复计入普通库测试数量。
+聊天 attach 与 Shell PTY、`sessions` 与 `service` 生命周期、`local --socket` 与聊天 `--input sock` 均是不同路径。TUI 的 `/resume` 等斜杠命令以及原生 MCP 工具不计作顶层 CLI 子命令。这里不把所有参数组合展开成笛卡尔积；结果表会明确每一条实际场景的覆盖边界。
 
-首次库构建在共享 Cargo 锁的 **180 秒**等待预算耗尽后退出，未启动 Cargo，也没有测试程序产物。之后仅把资源排队预算改为 **600 秒**，后续有界尝试完成构建；产品测试期限和断言未改，未终止其他任务。首次资源阻塞记录继续保留。实际新库程序为 159890640 字节，SHA-256 为 `9cc239292099c9982a0fbf3b48b350ff7a53bf00e27b4b63de5757a6abe3b796`。
+## 当前验证与历史尝试
 
-## 正式 CI 修正与发布范围
+最终 `fc650a9` 的 V12 原件已完整读回：源码与依赖同步成功且工作区干净，随后等待共享 Cargo 锁超时，退出码 1；没有启动 toolchain、编译或产品测试，没有生成库测试程序。回执为 27564 字节，SHA-256 为 `5355c7ee25edcd404b86e40f152ae92af89546ce81c1f699ffe44bf9f9186564`。这是资源排队结果，不能称为编译或产品失败。执行侧正在评估专属构建目标目录，继续同一固定源码的既定验证。
 
-先前正式 CI 暴露的两类测试前提已在候选中修正。Linux 协议夹具只注册实际支持的 Codex、Claude、Pi、OpenCode 与 SSMCP，并独立捕获退役 Playwright 的意外探测或启动；原有惰性加载、缓存与隔离断言保留。安装安全测试使用每个 Store 独立的测试目标与不会执行的合成归档；生产宿主平台选择和安装／卸载安全条件保留。
+| 来源 | 已取得的实际结果 |
+|---|---|
+| `4c6cd21` | Node／发布／部署脚本 64／118／35 项通过；库 private 1972 通过、0 失败，另有 host 6 项和必需 code-mode 2 项通过；Linux 与 Windows GNU 严格 Clippy 通过 |
+| `6e9336b` V9 | 格式检查退出 1，未编译、未运行产品测试；三处排版已由后继提交修正 |
+| `d67ae61` V10 | 新库测试程序构建通过；没有把它作为后续合流源码的测试成绩 |
+| `84256bf` V11 | 新库测试程序构建通过；随后测试任务等待共享锁 180 秒到期，`tests=[]`，没有执行产品测试 |
+| `fc650a9` V12 | 源码和依赖同步成功；共享资源等待超时，编译、测试均未启动 |
 
-根包版本已调整为 0.10.26，其他锁定依赖身份保留。发布策略显式延期 0.10.26 的 registry 发布和服务器部署；后续未列入延期的版本仍走原分流。新增脚本覆盖的是 0.10.26 策略路由；完整 GitHub-only／16 资产模拟夹具仍以 0.10.25 为例，不把它描述为已执行完整 0.10.26 发布链。
+V11 排队结果的原件为 **289 字节**，SHA-256 为 `cebd058b340edee3adac19ab7cc4375d6047a4b8feae4296784ff482afbc6d70`；退出码 1 表示未取得资源，不能称为测试断言失败。上述记录均保留原源码身份，旧成功不会迁移到最终候选，旧失败与未执行也不会被后续成功覆盖。
 
-## 发布核验器仍是静态准备
+## 依赖与发布核验
 
-[固定 432900 的 H2 包](https://github.com/LIghtJUNction/ssmcp/tree/432900420ef4fbe093ad284cb49e66e1e2892800/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-v26-unbound)八份文件已独立静态审阅，dispatch adapter 保持原字节，原始回执、运行身份、job、artifact 与公开资产核验条件保留。**模块尚未导入、核验器尚未执行，真实源码、主线、标签和运行绑定仍未填写。**
+最终源码的六份发布配方已重新读取，字节数、SHA-256 与 Git blob 全部匹配[固定 432900 的 H2 包](https://github.com/LIghtJUNction/ssmcp/tree/432900420ef4fbe093ad284cb49e66e1e2892800/docs/reports/command-await-delivery-20261120/publication-verifier-git-source-zuse-cli-v26-unbound)。完整递归树共 1299 项、未截断。
 
-已从 `6e9336b` 实际读取六份发布配方：完整字节数、SHA-256 与 Git blob 均匹配固定包 pins；1299 项递归树未截断，三个 gitlink 也完全一致。后继 `d67ae61` 的实际差分只改客户端排版，因此配方与 gitlink 身份保留，H2 包无需改写。静态准备不代替真实发布验收，旧源码上的测试结果同样不能代替新源码执行。
+| 身份 | 当前实际值 |
+|---|---|
+| Cargo.toml | 9795 字节；SHA-256 `3e2bf8c01e41d1a292798154a9e2bac455222d6a6ad286e7a4ff4ae42ac25b94` |
+| Cargo.lock | 67037 字节；SHA-256 `0ab882b9801d48dcdf92ef6b5217752a5dc34bf75deddae62e84fefd14090465` |
+| zcall | 0.4.2，revision `aaac54236f7ce0f4e1559c6e3b78d680d9dabf41` |
+| zharness | 0.6.0，锁文件与 gitlink 均为 `8907262ce6c8494f2849f8e5abd84f7a3da2e405` |
+| 其他直接 gitlink | zplugin `592a1be`、ztuio `9c632b3`，身份保留 |
 
-## 旧发布失败与仓库同步继续保留
+H2 会按实际候选读取锁文件、依赖图与 gitlink，无需把新依赖 SHA 写成固定常量。旧静态包中的 gitlink 观察仍属于旧配方来源，不能改称它描述最终源码。**H2 仍未导入或执行，实际发布运行也未绑定。**
 
-v0.10.25 的 [Release 运行 44934221685](https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685)已以失败结束：19 个 job 中 **12 成功、3 失败、4 跳过**。两份 Linux 协议夹具和 Windows ARM64 库测试失败，finalize 与公开 Release 发布步骤跳过；Release 对象查询返回 404，Git 标签保留。原运行没有重跑，标签没有移动。
+现有发布合同将产品检查及资产构建固定到候选 S；实际工作流运行的主线 P 需包含 S，并保持六份发布配方一致。合同没有要求整个 S／P tree 相等，后续主线的普通代码改动不会自动进入本次 tag 资产。这是已审工作流的现有行为，没有放宽原始回执、checkout、job、artifact 或公开文件核验。[发布工作流](https://github.com/LIghtJUNction/ssmcp/blob/fc650a91bdab60dea96ee7e18c15bec3af9f9b32/.github/workflows/release.yml)
 
-旧请求的 HTTP 200 capture 和实际 run 身份已恢复；保存原生完整返回时遇到参数大小限制的缺口仍保留，后续读取结果没有拼装成原回执。旧本地通过记录、正式 CI 失败和回执缺口分别保留。[旧失败与修正范围](current-iteration-Release-CI-followup.md)
+## 文档中的正确现用入口
 
-开发机主仓库已正常快进到 `d4887ae`，本地依赖的 HEAD、差分和未跟踪文件清单保持一致，用户修改和文件保留。主工作区仍有未提交内容；这次已有同步不代表尚未合并的 0.10.26 也已同步。
+服务文档还残留旧 `invite` 推荐和 `--ssh` 示例，已列入发布后的最小清理草案。当前可使用以下 OAuth 形式：
 
-下一步以包含 resume 修复的最终候选完成既定构建、回归、真实安装生命周期和正式发布。发布目标保持 GitHub 二进制包与安装器。已提交的 `exec.read` 当前页输出展示与现场安装状态继续分别记录；目前不声称用户正在运行的界面已升级。
+```sh
+ssmcp alice@relay.example
+ssmcp login --server https://relay.example
+ssmcp sessions create workstation alice@relay.example
+```
+
+示例中的账号、服务器与会话名应替换为自己的值。本轮保持冻结产品源码不变，正确入口先在这份说明中明确；不把旧文档残留当作现行命令应成功的依据。
+
+## 发布与同步状态
+
+v0.10.25 的 [Release 运行 44934221685](https://github.com/LIghtJUNction/ssmcp/actions/runs/44934221685)仍保留失败终态：12 个 job 成功、3 失败、4 跳过；旧标签未移动，旧运行未重跑，原生完整返回缺口也未拼装补造。
+
+开发机主工作区上次完成的正常同步仍是 `d4887ae`，用户修改和本地依赖状态已保留；最终候选在独立验证工作区推进。后续主线合并与再次同步将以实际回执记录，当前不能声称用户正在运行的客户端已升级。下一步继续收齐最终源码的构建、全子命令矩阵、相关 E2E、安装生命周期和正式发布。
 
 ---
 
