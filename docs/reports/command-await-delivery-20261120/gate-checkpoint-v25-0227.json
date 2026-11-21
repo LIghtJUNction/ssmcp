@@ -205,12 +205,14 @@
       "source": "complete original host log"
     },
     "ordinary_integration": {
-      "passed": 102,
-      "source": "completed Gate review receipt"
+      "passed": 101,
+      "targets": 19,
+      "source": "completed Gate count clarification receipt"
     },
     "mandatory_ignored": {
       "passed": 14,
-      "source": "completed Gate review receipt"
+      "source": "completed Gate review receipt",
+      "scope": "Four separate mandatory-ignored groups; excludes the separately counted worker test."
     },
     "launcher": {
       "name": "release25-final11-launch/exit.json",
@@ -355,7 +357,26 @@
       "host": 6,
       "private": 2073,
       "total": 2079
-    }
+    },
+    "explicit_ignored_worker": {
+      "passed": 1,
+      "name": "integration-zuse_worker_entry",
+      "arguments": [
+        "--ignored",
+        "--exact",
+        "missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log": {
+        "name": "candidate2-integration-zuse_worker_entry.log",
+        "bytes": 198,
+        "sha256": "f00d1baea7ad85a902f12159066b4b6b74520492ca7965519efbf4752b0561d7"
+      },
+      "raw_log": "\nrunning 1 test\ntest missing_worker_entry_is_recoverable_without_spawning_the_embedding_binary ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n",
+      "source": "original worker log and count clarification"
+    },
+    "integration_passed_including_worker": 102
   },
   "original_goal_tests": {
     "map_receipt": {
@@ -480,5 +501,19 @@
       "draft": true,
       "merged": false
     }
+  },
+  "count_clarification": {
+    "read_at_utc": "2026-11-21T02:34:05.729182+00:00",
+    "recorded_at_utc": "2026-11-21T02:35:05.760Z",
+    "receipt": {
+      "name": "root-completed-gate-count-clarification.json",
+      "bytes": 1792,
+      "sha256": "c683c79e718368c28264f05e9b0101d4d409f986f125684b35590e5a25746fad"
+    },
+    "source_revision": "647bce2ec9cf74beab43adea831c2e0712d28ea8",
+    "gate_sha256": "645dd18969232888cbb393e4193542b421706161eaf6ef2af0af6acca553d7ec",
+    "previous_report_commit": "0c8cfaa02e6c32845b7a456d68045b787a9a9559",
+    "original_completed_review_retained_unchanged": true,
+    "test_execution_and_total_passes_unchanged": true
   }
 }
