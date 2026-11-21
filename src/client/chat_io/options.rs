@@ -370,4 +370,3 @@ mod tests {
         assert_eq!(saved.server.as_deref(), Some("https://relay.example"));
     }
 }
-

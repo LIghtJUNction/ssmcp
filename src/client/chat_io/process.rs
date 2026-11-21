@@ -198,8 +198,15 @@ impl Program {
         self.run_cancellable(text, None).await
     }
 
-    pub(crate) async fn run_cancellable(&self, text: &str, mut cancelled: Option<tokio::sync::watch::Receiver<bool>>) -> Result<String, String> {
-        if cancelled.as_ref().is_some_and(|receiver| *receiver.borrow()) {
+    pub(crate) async fn run_cancellable(
+        &self,
+        text: &str,
+        mut cancelled: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<String, String> {
+        if cancelled
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
             return Err("worker task cancelled before process dispatch".into());
         }
         let mut process = Managed::spawn(&mut self.command(text))
@@ -215,9 +222,13 @@ impl Program {
             Ok::<(), io::Error>(())
         };
         let cancel = async {
-            let Some(receiver) = cancelled.as_mut() else { return std::future::pending::<()>().await; };
+            let Some(receiver) = cancelled.as_mut() else {
+                return std::future::pending::<()>().await;
+            };
             while !*receiver.borrow_and_update() {
-                if receiver.changed().await.is_err() { break; }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
             }
         };
         let result = tokio::select! {
@@ -234,7 +245,10 @@ impl Program {
         };
         let Some(result) = result else {
             process.shutdown().await;
-            return Err("worker task cancelled after owned process cleanup; prior effects may remain".into());
+            return Err(
+                "worker task cancelled after owned process cleanup; prior effects may remain"
+                    .into(),
+            );
         };
         match result {
             Ok(Ok((written, output, _, status))) if status.success() => {
@@ -295,4 +309,3 @@ mod tests {
         assert!(program.run(data).await.unwrap_err().contains("exited"));
     }
 }
-

@@ -50,7 +50,9 @@ pub(crate) struct Allocation {
 impl Capacity {
     pub(crate) fn allocate(self, total: usize, factor: f64) -> Result<Allocation, String> {
         if total == 0 || !factor.is_finite() || factor <= 0.0 {
-            return Err("worker allocation needs a positive registered worker count and factor".into());
+            return Err(
+                "worker allocation needs a positive registered worker count and factor".into(),
+            );
         }
         let share = |capacity: u64| -> Result<u64, String> {
             let value = capacity as f64 / total as f64 * factor;
@@ -79,7 +81,13 @@ mod tests {
 
     #[test]
     fn worker_defaults_and_factor_reject_nonfinite_or_nonpositive_values() {
-        assert_eq!(Config::parse("10", None).unwrap(), Config { count: 10, factor: 1.0 });
+        assert_eq!(
+            Config::parse("10", None).unwrap(),
+            Config {
+                count: 10,
+                factor: 1.0
+            }
+        );
         for count in ["0", "129", "-1", "1.5", ""] {
             assert!(Config::parse(count, None).is_err(), "{count}");
         }
@@ -100,12 +108,18 @@ mod tests {
         assert_eq!(two_sessions.cpu_micros_per_second, 200_000);
         assert_eq!(two_sessions.memory_bytes, capacity.memory_bytes / 10);
         assert_eq!(two_sessions.registered_workers, 10);
-        assert_eq!(capacity.allocate(10, 0.5).unwrap().cpu_micros_per_second, 100_000);
+        assert_eq!(
+            capacity.allocate(10, 0.5).unwrap().cpu_micros_per_second,
+            100_000
+        );
     }
 
     #[test]
     fn unrepresentable_worker_budgets_fail_instead_of_rounding_up() {
-        let capacity = Capacity { cpu_micros_per_second: 1, memory_bytes: 1 };
+        let capacity = Capacity {
+            cpu_micros_per_second: 1,
+            memory_bytes: 1,
+        };
         assert!(capacity.allocate(10, 1.0).is_err());
         assert!(capacity.allocate(0, 1.0).is_err());
         assert!(capacity.allocate(1, f64::MAX).is_err());

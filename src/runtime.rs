@@ -438,7 +438,12 @@ impl Runtime {
     }
     pub fn validate_reload(&self) -> Result<(), String> {
         #[cfg(target_os = "linux")]
-        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+        if let Some(pool) = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
             let state = pool.queue.snapshot();
             if state.working != 0 || state.queued != 0 {
                 return Err("finish or cancel worker tasks and wait for owned cleanup before reloading this connection".into());
@@ -458,26 +463,49 @@ impl Runtime {
         self.call_connection
     }
 
-    pub(crate) fn configure_workers(&self, config: crate::worker::Config, agent: &crate::client::chat_io::Agent) -> Result<(), String> {
+    pub(crate) fn configure_workers(
+        &self,
+        config: crate::worker::Config,
+        agent: &crate::client::chat_io::Agent,
+    ) -> Result<(), String> {
         #[cfg(target_os = "linux")]
         {
             let pool = crate::worker::Pool::new(config, agent, self.tool_root.clone())?;
-            self.registry.replace(Provider::Worker, crate::worker::Pool::tools())?;
-            *self.workers.lock().unwrap_or_else(|error| error.into_inner()) = Some(pool);
+            self.registry
+                .replace(Provider::Worker, crate::worker::Pool::tools())?;
+            *self
+                .workers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(pool);
             Ok(())
         }
         #[cfg(not(target_os = "linux"))]
-        { let _ = (config, agent); Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into()) }
+        {
+            let _ = (config, agent);
+            Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into())
+        }
     }
 
     pub(crate) fn start_workers(&self) {
         #[cfg(target_os = "linux")]
-        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone() { pool.start(); }
+        if let Some(pool) = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        {
+            pool.start();
+        }
     }
 
     pub(crate) fn stop_workers(&self) {
         #[cfg(target_os = "linux")]
-        if let Some(pool) = self.workers.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+        if let Some(pool) = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
             pool.queue.close(crate::worker::now_ms());
         }
     }
@@ -753,8 +781,15 @@ impl Runtime {
                 Provider::Audit => self.audit.read(arguments).await.map(backend::result),
                 #[cfg(target_os = "linux")]
                 Provider::Worker => {
-                    let pool = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone().ok_or("worker mode was not configured")?;
-                    pool.perform(&tool.native_name, arguments, self).await.map(backend::result)
+                    let pool = self
+                        .workers
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clone()
+                        .ok_or("worker mode was not configured")?;
+                    pool.perform(&tool.native_name, arguments, self)
+                        .await
+                        .map(backend::result)
                 }
                 Provider::Plugins => self.plugins.perform(&tool, arguments).await,
                 provider if self.native.contains(provider) => {
@@ -895,8 +930,14 @@ impl Runtime {
         self.registry.close();
         #[cfg(target_os = "linux")]
         {
-            let pool = self.workers.lock().unwrap_or_else(|error| error.into_inner()).clone();
-            if let Some(pool) = pool && let Err(error) = pool.shutdown().await {
+            let pool = self
+                .workers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            if let Some(pool) = pool
+                && let Err(error) = pool.shutdown().await
+            {
                 self.audit.push(json!({"type":"ssmcp.worker.cleanup_failed","cleanup_complete":false,"error":error}));
             }
         }
@@ -1311,4 +1352,3 @@ mod tests {
         );
     }
 }
-

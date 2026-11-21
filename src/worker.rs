@@ -2,8 +2,6 @@
 //! while authentication and result ownership remain with the submitting call.
 mod config;
 pub(crate) use config::Config;
-#[cfg(any(target_os = "linux", test))]
-mod queue;
 #[cfg(target_os = "linux")]
 mod child;
 #[cfg(target_os = "linux")]
@@ -11,9 +9,11 @@ mod executor;
 #[cfg(any(target_os = "linux", test))]
 mod limits;
 #[cfg(target_os = "linux")]
-mod registry;
-#[cfg(target_os = "linux")]
 mod pool;
+#[cfg(any(target_os = "linux", test))]
+mod queue;
+#[cfg(target_os = "linux")]
+mod registry;
 #[cfg(target_os = "linux")]
 pub(crate) use pool::{Pool, TaskContext};
 
@@ -57,12 +57,28 @@ fn view() -> &'static Mutex<Display> {
 /// This only publishes in-process display data; it does not initialize limits.
 pub(crate) fn prepare_display(config: Config) {
     let mut view = view().lock().unwrap_or_else(|error| error.into_inner());
-    view.pending = Some(Snapshot { generation: String::new(), total: config.count, idle: 0, working: 0,
-        offline: config.count, queued: 0, closed: false,
-        slots: (0..config.count).map(|slot| SlotView { slot, epoch: 0, state: "offline", task_id: None,
-            reason: Some("waiting for the authenticated worker connection".into()) }).collect() });
+    view.pending = Some(Snapshot {
+        generation: String::new(),
+        total: config.count,
+        idle: 0,
+        working: 0,
+        offline: config.count,
+        queued: 0,
+        closed: false,
+        slots: (0..config.count)
+            .map(|slot| SlotView {
+                slot,
+                epoch: 0,
+                state: "offline",
+                task_id: None,
+                reason: Some("waiting for the authenticated worker connection".into()),
+            })
+            .collect(),
+    });
     #[cfg(target_os = "linux")]
-    { view.pool = None; }
+    {
+        view.pool = None;
+    }
 }
 
 pub(crate) fn display() -> Option<Snapshot> {
@@ -76,7 +92,11 @@ pub(crate) fn display() -> Option<Snapshot> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis().min(u64::MAX as u128) as u64
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
 }
 
 /// Checked before ordinary CLI initialization; the private child never starts
@@ -85,9 +105,20 @@ pub(crate) async fn child_entry() -> Option<crate::Result<()>> {
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new("--ssmcp-worker-child")) {
         return None;
     }
-    if std::env::args_os().count() != 2 { return Some(Err("private worker entry accepts no command-line payload".into())); }
+    if std::env::args_os().count() != 2 {
+        return Some(Err(
+            "private worker entry accepts no command-line payload".into()
+        ));
+    }
     #[cfg(target_os = "linux")]
-    { Some(child::run().await.map_err(Into::into)) }
+    {
+        Some(child::run().await.map_err(Into::into))
+    }
     #[cfg(not(target_os = "linux"))]
-    { Some(Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into())) }
+    {
+        Some(Err(
+            "worker hard limits currently require Linux cgroup v2 and the user's systemd manager"
+                .into(),
+        ))
+    }
 }

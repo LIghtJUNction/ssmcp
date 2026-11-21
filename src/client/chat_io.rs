@@ -404,4 +404,3 @@ fn retained_reply(output: &str) -> String {
     }
     text
 }
-

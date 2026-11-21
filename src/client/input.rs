@@ -772,16 +772,24 @@ mod platform {
                 Path::new("/bin/sh"),
                 std::env::current_dir().unwrap(),
                 crate::output::OutputStore::new_connection().unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
             let primary = terminals.primary();
-            terminals.call("terminal.open", serde_json::json!({"name":"hidden","select":false}))
-                .await.unwrap();
+            terminals
+                .call(
+                    "terminal.open",
+                    serde_json::json!({"name":"hidden","select":false}),
+                )
+                .await
+                .unwrap();
             let mut keys = SessionKeys {
-                pending:b"\x1b[18".to_vec(),
-                since:Some(Instant::now() - Duration::from_secs(1)),
-                pasting:false,
+                pending: b"\x1b[18".to_vec(),
+                since: Some(Instant::now() - Duration::from_secs(1)),
+                pasting: false,
             };
-            let mut utf8 = Utf8Input { pending:vec![0xe7] };
+            let mut utf8 = Utf8Input {
+                pending: vec![0xe7],
+            };
             for bytes in [
                 b"printf '__MONITOR_BLOCKED__\\n'\r".as_slice(),
                 b"\x1b[18~\x1bOQ\x1b\r",
@@ -790,8 +798,15 @@ mod platform {
                 // Absent, replaced, or failed displays may reject the bytes;
                 // none of those outcomes permits fallback into either PTY.
                 if let Err(error) = forward_input(
-                    &terminals, &mut keys, &mut utf8, bytes, false, InputMode::Monitor,
-                ).await {
+                    &terminals,
+                    &mut keys,
+                    &mut utf8,
+                    bytes,
+                    false,
+                    InputMode::Monitor,
+                )
+                .await
+                {
                     assert!(error.contains("worker monitor"), "{error}");
                 }
             }
@@ -799,7 +814,9 @@ mod platform {
             assert_eq!(keys.pending, b"\x1b[18");
             assert_eq!(utf8.pending, [0xe7]);
             assert!(Arc::ptr_eq(&terminals.selected(), &primary));
-            forward(&primary, "printf '__MONITOR_%s__\\n' READY\n").await.unwrap();
+            forward(&primary, "printf '__MONITOR_%s__\\n' READY\n")
+                .await
+                .unwrap();
             let output = read_until(&primary, &mut 0, "__MONITOR_READY__").await;
             assert!(!output.contains("__MONITOR_BLOCKED__"), "{output}");
             terminals.shutdown().await;
@@ -1155,11 +1172,7 @@ mod platform {
         None
     }
 
-    async fn run(
-        terminals: &Terminals,
-        mode: &Mode,
-        input_mode: InputMode,
-    ) -> Result<(), String> {
+    async fn run(terminals: &Terminals, mode: &Mode, input_mode: InputMode) -> Result<(), String> {
         if let Some((rows, cols)) = size() {
             input_resize(terminals, rows, cols, input_mode).await?;
         }
@@ -1211,7 +1224,10 @@ mod platform {
                         if key.bKeyDown != 0 {
                             let text = utf16.key(key);
                             if input_mode == InputMode::Monitor {
-                                super::super::terminal::monitor_keyboard_bytes(text.as_bytes(), false)?;
+                                super::super::terminal::monitor_keyboard_bytes(
+                                    text.as_bytes(),
+                                    false,
+                                )?;
                             } else {
                                 forward_human(terminals, &mut keys, &text).await?;
                             }
