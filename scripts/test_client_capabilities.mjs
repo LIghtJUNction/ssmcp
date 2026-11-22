@@ -73,6 +73,25 @@ test('registered source overrides use previous exports and the same real host br
   assert.equal(record.requests.length,1);
 });
 
+test('fresh calls load an edited registered override and malformed edits fail explicitly', async () => {
+  const hashes = [];
+  for (const version of [1, 2]) {
+    const override = localSource(`core => ({localVersion:() => ${version}})`);
+    hashes.push(override.sha256);
+    const record = await run('return [localVersion(), typeof tools.search];',
+      () => assert.fail('local validation needs no native call'),
+      [...officialSources(), override]);
+    success(record);
+    assert.deepEqual(value(record), [version, 'function']);
+  }
+  assert.notEqual(hashes[0], hashes[1]);
+  const broken = await run("return call('one','must.not.start',{});",
+    () => assert.fail('bad override must fail before user code'),
+    [...officialSources(), localSource('core => ({')]);
+  failure(broken, /Unexpected/);
+  assert.equal(broken.requests.length, 0);
+});
+
 test('tool sources cannot replace protected core permissions or output primitives', async () => {
   for (const name of ['call','clients','image','print','console']) {
     const record = await run("return 'must not start';",()=>assert.fail('no native call'),
