@@ -37,6 +37,8 @@ struct NativeAnswers {
     source_bundle: Option<Value>,
     legacy_tool_sources: bool,
     source_error: Option<String>,
+    capability_replies: std::collections::VecDeque<Result<Value, String>>,
+    capability_probe_pause: Option<(Arc<Notify>, Arc<Notify>)>,
 }
 
 struct Fixture {
@@ -238,6 +240,8 @@ impl Fixture {
             source_bundle: None,
             legacy_tool_sources: false,
             source_error: None,
+            capability_replies: std::collections::VecDeque::new(),
+            capability_probe_pause: None,
         }));
         let answers = native.clone();
         let expected_agent = agent_id.clone();
@@ -335,13 +339,17 @@ impl Fixture {
                     let mut state = answers.lock().unwrap();
                     state.calls.push(name.clone());
                     if name == "ssmcp.client.capabilities" {
-                        let mut manifest = json!({"schema":"ssmcp.client.capabilities.v1","thread_scope":1,
-                            "client_version":if state.legacy_tool_sources {"0.10.25"} else {"0.10.26"}});
-                        if !state.legacy_tool_sources {
-                            manifest["tool_sources"] =
-                                json!({"schema":1,"uri":crate::tool_repository::URI});
+                        if let Some(reply) = state.capability_replies.pop_front() {
+                            reply
+                        } else {
+                            let mut manifest = json!({"schema":"ssmcp.client.capabilities.v1","thread_scope":1,
+                                "client_version":if state.legacy_tool_sources {"0.10.25"} else {"0.10.26"}});
+                            if !state.legacy_tool_sources {
+                                manifest["tool_sources"] =
+                                    json!({"schema":1,"uri":crate::tool_repository::URI});
+                            }
+                            Ok(manifest)
                         }
-                        Ok(manifest)
                     } else {
                         let attribution = attribution.expect("authenticated native attribution");
                         assert_eq!(attribution.account.subject, "42");
@@ -498,6 +506,8 @@ impl Fixture {
                 };
                 let pause = if name == "ssmcp.ui.tool_summary" {
                     answers.lock().unwrap().summary_probe_pause.take()
+                } else if name == "ssmcp.client.capabilities" {
+                    answers.lock().unwrap().capability_probe_pause.take()
                 } else {
                     None
                 };
@@ -1589,23 +1599,281 @@ async fn implicit_legacy_client_keeps_native_calls_and_explicit_source_selection
     .unwrap_err();
     assert!(error.contains("unknown client resource"), "{error}");
     assert_eq!(fixture.native.lock().unwrap().source_reads, 1);
-    fixture.native.lock().unwrap().legacy_tool_sources = false;
-    fixture.native.lock().unwrap().source_error = Some("invalid ssmcprc.toml fixture".into());
-    let authorization = fixture
+    // Capabilities are static for a native connection. A client upgrade gets a
+    // new authenticated Session rather than mutating the old legacy manifest.
+    let modern = Fixture::new().await;
+    modern.publish_summary_requirement();
+    modern.native.lock().unwrap().source_error = Some("invalid ssmcprc.toml fixture".into());
+    let authorization = modern
         .broker
-        .authenticate("mcp", &fixture.token)
+        .authenticate("mcp", &modern.token)
         .await
         .unwrap();
+    let modern_request = json!({"code":"return 'must not execute';","timeout_ms":10000,
+        "agent":{"client_id":modern.session.client_id(),"id":modern.agent_id,"token":modern.agent_token}});
     let error = execute(
-        fixture.broker.clone(),
+        modern.broker.clone(),
         "mcp".into(),
         authorization,
-        fixture.token.clone(),
-        serde_json::from_value(request).unwrap(),
+        modern.token.clone(),
+        serde_json::from_value(modern_request).unwrap(),
     )
     .await
     .unwrap_err();
     assert!(error.contains("invalid ssmcprc.toml fixture"), "{error}");
+    assert_eq!(modern.native.lock().unwrap().source_reads, 1);
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 1);
+    fixture.assert_summary_observation_did_not_consume_questions();
+    modern.assert_summary_observation_did_not_consume_questions();
+}
+
+async fn load_fixture_tool_sources(
+    fixture: &Fixture,
+    run: &code_mode::AuditRun,
+) -> Result<tool_sources::Loaded, String> {
+    let arguments =
+        serde_json::from_value(json!({"code":"return null;","timeout_ms":10000})).unwrap();
+    tool_sources::load(
+        &fixture.broker,
+        "mcp",
+        &fixture.token,
+        run,
+        &arguments,
+        std::slice::from_ref(&fixture.session),
+    )
+    .await
+}
+
+fn capability_call_count(fixture: &Fixture) -> usize {
+    fixture
+        .native
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .filter(|name| name.as_str() == "ssmcp.client.capabilities")
+        .count()
+}
+
+#[tokio::test]
+async fn selected_source_support_coalesces_but_rc_and_new_connections_are_not_cached() {
+    use sha2::{Digest, Sha256};
+    let fixture = Fixture::new().await;
+    fixture.publish_summary_requirement();
+    let arrived = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    fixture.native.lock().unwrap().capability_probe_pause = Some((arrived.clone(), resume.clone()));
+    let first_run = fixture.run();
+    let second_run = fixture.run();
+    let observed = timeout(Duration::from_secs(5), async {
+        tokio::join!(biased;
+            load_fixture_tool_sources(&fixture, &first_run),
+            load_fixture_tool_sources(&fixture, &second_run),
+            async {
+                arrived.notified().await;
+                resume.notify_one();
+            },
+        )
+    })
+    .await;
+    // Always release the owned peer before asserting a failed observation.
+    resume.notify_one();
+    let (first, second, ()) = observed.expect("bounded concurrent source preparation");
+    for loaded in [first.unwrap(), second.unwrap()] {
+        let response = loaded.append(original());
+        assert_eq!(
+            response["structuredContent"]["tool_sources"]["mode"],
+            "authorized_client"
+        );
+        assert_eq!(
+            response["structuredContent"]["tool_sources"]["client_version"],
+            "0.10.26"
+        );
+    }
+    assert_eq!(capability_call_count(&fixture), 1);
     assert_eq!(fixture.native.lock().unwrap().source_reads, 2);
+
+    let mut sources = crate::tool_repository::official_seed().await.unwrap();
+    let code = "core => ({cacheMarker: () => 'fresh local source'})".to_owned();
+    let sha = crate::hex::encode(Sha256::digest(code.as_bytes()));
+    sources.sources.push(crate::tool_repository::Source {
+        name: "local".into(),
+        path: "/fixture/cache-marker.js".into(),
+        sha256: sha.clone(),
+        code,
+        repository: None,
+    });
+    fixture.native.lock().unwrap().source_bundle = Some(serde_json::to_value(sources).unwrap());
+    let updated = load_fixture_tool_sources(&fixture, &fixture.run())
+        .await
+        .unwrap();
+    assert_eq!(updated.bundle.sources.last().unwrap().sha256, sha);
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 3);
+    fixture.native.lock().unwrap().source_error =
+        Some("invalid ssmcprc.toml after negotiation".into());
+    let error = load_fixture_tool_sources(&fixture, &fixture.run())
+        .await
+        .err()
+        .expect("RC errors stay strict");
+    assert!(
+        error.contains("invalid ssmcprc.toml after negotiation"),
+        "{error}"
+    );
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 4);
+    assert_eq!(capability_call_count(&fixture), 1);
+
+    let fresh = Fixture::new().await;
+    fresh.native.lock().unwrap().legacy_tool_sources = true;
+    let loaded = load_fixture_tool_sources(&fresh, &fresh.run())
+        .await
+        .unwrap();
+    let response = loaded.append(original());
+    assert_eq!(
+        response["structuredContent"]["tool_sources"]["mode"],
+        "legacy_client_official_seed"
+    );
+    assert_eq!(
+        response["structuredContent"]["tool_sources"]["client_version"],
+        "0.10.25"
+    );
+    assert_eq!(capability_call_count(&fresh), 1);
+    assert_eq!(fresh.native.lock().unwrap().source_reads, 0);
+    fixture.assert_summary_observation_did_not_consume_questions();
+}
+
+#[tokio::test]
+async fn selected_source_support_retries_failures_instead_of_assuming_a_legacy_client() {
+    let fixture = Fixture::new().await;
+    fixture.publish_summary_requirement();
+    fixture.native.lock().unwrap().legacy_tool_sources = true;
+    let replies = [
+        (
+            Err("native probe temporarily busy".into()),
+            "temporarily busy",
+        ),
+        (
+            Ok(json!({"isError":true,"content":[{"type":"text","text":"probe failed"}]})),
+            "could not negotiate",
+        ),
+        (
+            Ok(json!({"schema":"unknown","client_version":"0.10.26"})),
+            "unknown capability manifest",
+        ),
+        (
+            Ok(json!({"schema":"ssmcp.client.capabilities.v1","client_version":""})),
+            "invalid capability version",
+        ),
+        (
+            Ok(
+                json!({"schema":"ssmcp.client.capabilities.v1","client_version":"0.10.26",
+            "tool_sources":{"schema":999,"uri":crate::tool_repository::URI}}),
+            ),
+            "unsupported tool-source capability",
+        ),
+    ];
+    for (index, (reply, reason)) in replies.into_iter().enumerate() {
+        fixture
+            .native
+            .lock()
+            .unwrap()
+            .capability_replies
+            .push_back(reply);
+        let error = load_fixture_tool_sources(&fixture, &fixture.run())
+            .await
+            .err()
+            .expect("unsuccessful capability negotiation must not become legacy support");
+        assert!(error.contains(reason), "{reason}: {error}");
+        assert_eq!(capability_call_count(&fixture), index + 1);
+        assert_eq!(fixture.native.lock().unwrap().source_reads, 0);
+    }
+    for _ in 0..2 {
+        let loaded = load_fixture_tool_sources(&fixture, &fixture.run())
+            .await
+            .unwrap();
+        let response = loaded.append(original());
+        assert_eq!(
+            response["structuredContent"]["tool_sources"]["mode"],
+            "legacy_client_official_seed"
+        );
+        assert_eq!(
+            response["structuredContent"]["tool_sources"]["client_version"],
+            "0.10.25"
+        );
+    }
+    assert_eq!(capability_call_count(&fixture), 6);
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 0);
+    fixture.assert_summary_observation_did_not_consume_questions();
+}
+
+#[tokio::test]
+async fn shared_source_support_rechecks_each_waiting_member_and_cached_oauth_authority() {
+    let fixture = Fixture::new().await;
+    fixture.publish_summary_requirement();
+    fixture.native.lock().unwrap().legacy_tool_sources = true;
+    let second = fixture
+        .session
+        .collaboration
+        .dispatch(
+            &fixture.owner,
+            "join",
+            json!({"name":"separate waiting member"}),
+        )
+        .await
+        .unwrap();
+    let first_run = fixture.run();
+    let second_run = code_mode::AuditRun::new("return null;", None).unwrap();
+    second_run.record_connection(&fixture.session).unwrap();
+    second_run
+        .bind(
+            fixture.session.client_id(),
+            &fixture.owner,
+            second["agent_id"].as_str().unwrap(),
+            second["token"].as_str().unwrap(),
+        )
+        .unwrap();
+    let arrived = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    fixture.native.lock().unwrap().capability_probe_pause = Some((arrived.clone(), resume.clone()));
+    let observed = timeout(Duration::from_secs(5), async {
+        tokio::join!(biased;
+            load_fixture_tool_sources(&fixture, &first_run),
+            load_fixture_tool_sources(&fixture, &second_run),
+            async {
+                arrived.notified().await;
+                let result = fixture.session.collaboration.dispatch(
+                    &fixture.owner, "leave", json!({"agent_id":second["agent_id"],"token":second["token"]}),
+                ).await;
+                resume.notify_one();
+                result
+            },
+        )
+    }).await;
+    resume.notify_one();
+    let (first, second, revoked) = observed.expect("bounded shared probe with member revocation");
+    revoked.unwrap();
+    let loaded = first.expect("the valid initializer can finish negotiating support");
+    let error = second
+        .err()
+        .expect("a revoked waiter cannot reuse another member's authorization");
+    assert!(error.contains("binding"), "{error}");
+    assert_eq!(capability_call_count(&fixture), 1);
+    loaded
+        .verify(&fixture.broker, "mcp", &fixture.token)
+        .await
+        .unwrap();
+    fixture.broker.oauth.revoke_subject("42").unwrap();
+    assert!(
+        loaded
+            .verify(&fixture.broker, "mcp", &fixture.token)
+            .await
+            .is_err()
+    );
+    let error = load_fixture_tool_sources(&fixture, &first_run)
+        .await
+        .err()
+        .expect("cached capabilities never restore revoked OAuth authority");
+    assert!(error.contains("authorization"), "{error}");
+    assert_eq!(capability_call_count(&fixture), 1);
+    assert_eq!(fixture.native.lock().unwrap().source_reads, 0);
     fixture.assert_summary_observation_did_not_consume_questions();
 }
