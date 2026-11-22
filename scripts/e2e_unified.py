@@ -4,7 +4,7 @@
 Reuses e2e.py's isolated account WebSocket/PKCE harness and the session helper's
 reload reader and output pagination checks. No installed Harness is exposed to
 the client PATH, no model is invoked, and no package or runtime is installed.
-Only generated fixtures and the test's own output artifacts are changed.
+Only generated fixtures are changed.
 
 Example: python3 scripts/e2e_unified.py --bin-dir target/debug --timeout 240 \
     --report target/acceptance/unified.json --revision <tested-commit>
@@ -189,8 +189,8 @@ class Unified(SessionFeatures):
 
     def track(self, value):
         if isinstance(value, dict):
-            if value.get("schema") == "ssmcp.output.v1" and value.get("path"):
-                self.artifact_path(value)
+            if value.get("schema") == "ssmcp.output.v1":
+                self.check_memory_artifact(value)
             for child in value.values():
                 self.track(child)
         elif isinstance(value, list):
@@ -198,7 +198,7 @@ class Unified(SessionFeatures):
                 self.track(child)
 
     def artifact_bytes(self, metadata, *, client_id=None, secret=None):
-        self.artifact_path(metadata)
+        self.check_memory_artifact(metadata)
         result = bytearray()
         while len(result) < metadata["bytes"]:
             page = super().call("ssmcp.output.read", {
@@ -508,16 +508,15 @@ class Unified(SessionFeatures):
             self.poll_exec()
         expected = LONG_PREFIX + b"Z" * LONG_BYTES + LONG_LIVE + LONG_DONE
         artifact = done["stdout"]["artifact"]
-        raw = self.artifact_path(artifact).read_bytes()
+        raw, pages = self.read_paginated_output(self.client_id, artifact)
         self.check(raw == expected and bytes(self.streams[job["job_id"]]["stdout"]) == expected,
                    "long stdout retains its complete prefix/body/tail in both stored bytes and live events")
         self.check(artifact["complete"] and artifact["bytes"] == len(expected)
                    and artifact["observed_bytes"] == len(expected)
                    and artifact["lines"] == expected.count(b"\n")
                    and artifact["sha256"] == hashlib.sha256(expected).hexdigest()
-                   and artifact["retention_secs"] == 86400 and artifact["expires_at_unix"] > time.time(),
-                   "long-output metadata truthfully reports full integrity, SHA-256, lines and 24-hour retention")
-        pages = self.verify_pagination(self.client_id, artifact)
+                   and artifact["retention_secs"] == 900 and artifact["expires_at_unix"] > time.time(),
+                   "long-output metadata truthfully reports full integrity, SHA-256, lines and 15-minute retention")
         self.retained_artifact = artifact
         self.save("long-stdout.log", raw)
         self.save("long-output.json", {"live": live, "final": done, "pages": pages,
@@ -526,8 +525,7 @@ class Unified(SessionFeatures):
         lines = self.finish_job(line_job)["stdout"]["artifact"]
         self.check(lines["complete"] and lines["lines"] == 600 and lines["bytes"] < 32768,
                    "600 short lines independently trigger the existing line threshold")
-        self.expiring_artifact = lines
-        self.artifact_path(lines)
+        self.check_memory_artifact(lines)
         typed = "typed-é\n" * 5000
         (self.workspace / "typed-output.txt").write_text(typed)
         spilled = super().call("ssmcp.fs.read_text", {"path": "typed-output.txt"})
@@ -541,8 +539,10 @@ class Unified(SessionFeatures):
         self.save("structured-result.json", {"artifact": spilled["artifact"],
                   "native_keys": sorted(native), "text_sha256": hashlib.sha256(typed.encode()).hexdigest()})
         cleanup = self.call("ssmcp.output.cleanup")
-        self.check(self.artifact_path(artifact).is_file() and cleanup["retention_secs"] == 86400
-                   and cleanup["max_retained_bytes"] == 512 * 1024 * 1024,
+        fresh = self.call("ssmcp.output.stat", {"id": artifact["id"]})
+        self.check(fresh["sha256"] == artifact["sha256"] and cleanup["storage"] == "memory"
+                   and cleanup["retention_secs"] == 900
+                   and cleanup["max_retained_bytes"] == 32 * 1024 * 1024,
                    "explicit cleanup preserves fresh output and retains the existing quota policy")
 
     def workspace_audit(self):
@@ -685,7 +685,8 @@ class Unified(SessionFeatures):
                 )
             self.check(isolated, f"{tool} on another client does not expose the first client's audit stream")
         self.call("ssmcp.output.cleanup", client_id=self.sibling_id, secret=self.sibling_token)
-        self.check(self.artifact_path(self.retained_artifact).is_file(),
+        primary_output = self.call("ssmcp.output.stat", {"id": self.retained_artifact["id"]})
+        self.check(primary_output["sha256"] == self.retained_artifact["sha256"],
                    "another client's cleanup leaves the first client's retained artifact intact")
         self.save("client-isolation.json", {"primary": self.client_id, "sibling": self.sibling_id, "denied": denied})
 
@@ -735,24 +736,6 @@ class Unified(SessionFeatures):
         self.stopped(timeout_ids, "execution timeout")
         self.save("cancel-timeout.json", {"cancel": result, "cancel_pids": cancel_ids, "timeout": final, "timeout_pids": timeout_ids})
 
-    def expiration(self):
-        # Accelerate only the filesystem timestamp of a verified completed test
-        # artifact. The real 24-hour policy and production cleanup code remain intact.
-        artifact = self.expiring_artifact
-        path = self.artifact_path(artifact)
-        self.check(artifact["complete"], "expiration fixture is finalized before its timestamp is aged")
-        old = time.time() - 86460
-        os.utime(path, (old, old), follow_symlinks=False)
-        client, _, _ = self.titled_client("unified-retention", "自动清理验收", self.workspace)
-        wait_for(lambda: not path.exists(), timeout=5, description="automatic retention after a new connection starts")
-        denied = self.rejected("ssmcp.output.stat", {"id": artifact["id"]})
-        self.stop(client)
-        self.check(self.artifact_path(self.retained_artifact).is_file(),
-                   "automatic expiration removes aged completed output while keeping fresh output")
-        self.save("automatic-expiration.json", {"artifact": artifact,
-                  "method": "aged this test artifact mtime by 86460 seconds; no cleanup tool called after aging",
-                  "trigger": "new connection startup / production automatic janitor", "stat_after_expiry": denied})
-
     def reload_client(self):
         job, identities = self.tree("reload")
         old_id, token, pid = self.client_id, self.secret, self.client.pid
@@ -776,14 +759,17 @@ class Unified(SessionFeatures):
         tools = self.tool_catalog(through_code=True)
         self.check({tool["name"]: tool for tool in tools} == self.initial_catalog,
                    "reload rebuilds the full no-Harness catalog through the new registry")
-        preserved = self.call("ssmcp.output.stat", {"id": self.retained_artifact["id"]})
-        self.check(preserved["sha256"] == self.retained_artifact["sha256"]
-                   and preserved["bytes"] == self.retained_artifact["bytes"],
-                   "acknowledged reload preserves owned output through the private one-use handoff")
+        unavailable = {
+            tool: self.rejected(tool, {"id": self.retained_artifact["id"]})
+            for tool in ("ssmcp.output.stat", "ssmcp.output.read")
+        }
+        self.check(all("output is unavailable in this connection" in value["value"]["content"][0]["text"]
+                       for value in unavailable.values()),
+                   "acknowledged reload clears output owned by the replaced connection")
         self.rejected("ssmcp.output.read", {"id": self.retained_artifact["id"]}, client_id=self.sibling_id, secret=self.sibling_token)
         self.save("reload.json", {"acknowledgement": accepted, "old_client_id": old_id,
                   "new_client_id": self.client_id, "process_pid": pid, "stopped_processes": identities,
-                  "old_job_rejected": stale, "retained_output": preserved, "old_oauth_status": 200})
+                  "old_job_rejected": stale, "previous_output_rejected": unavailable, "old_oauth_status": 200})
 
     def disconnect(self):
         job, identities = self.tree("disconnect")
@@ -802,7 +788,6 @@ class Unified(SessionFeatures):
                   ("output_storage", self.outputs),
                   ("file_skill_audit", self.workspace_audit), ("client_isolation", self.client_isolation),
                   ("cancel_timeout", self.cancellation), ("native_parent_exit", self.native_parent_exit),
-                  ("automatic_expiration", self.expiration),
                   ("reload", self.reload_client), ("disconnect", self.disconnect)]
         for name, action in stages:
             self.current_section = name
@@ -861,8 +846,7 @@ def main():
             signal.setitimer(signal.ITIMER_REAL, 0)
             cleanup_errors = []
             for label, action in (("stop clients and owned account router", harness.cleanup),
-                                  ("save redacted terminal evidence", harness.save_logs),
-                                  ("remove identified test artifacts", harness.remove_test_artifacts)):
+                                  ("save redacted terminal evidence", harness.save_logs)):
                 try:
                     action()
                 except Exception as cleanup_error:

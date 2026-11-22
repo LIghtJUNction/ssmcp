@@ -65,7 +65,6 @@ class ConnectionReader:
 class SessionFeatures(Harness):
     def __init__(self, directory, binary_dir):
         super().__init__(directory, binary_dir)
-        self.artifacts = {}
         self.metrics = {}
 
     def titled_client(self, label, title, cwd):
@@ -83,17 +82,11 @@ class SessionFeatures(Harness):
         }, client_id=client_id)
         self.read_until(r"SSMCP_READY", client_id=client_id)
 
-    def artifact_path(self, metadata):
-        artifact_id = metadata.get("id", "")
-        path = Path(metadata.get("path", ""))
-        expected = Path(f"/tmp/ssmcp-{os.geteuid()}") / f"output-{artifact_id}.log"
-        if not re.fullmatch(r"[a-f0-9]{32}", artifact_id) or path != expected or path.is_symlink():
-            raise AssertionError("output artifact is outside the private managed directory")
-        stat = path.stat()
-        if stat.st_uid != os.geteuid() or stat.st_mode & 0o077 or stat.st_nlink != 1:
-            raise AssertionError("output artifact is not private and singly linked")
-        self.artifacts[artifact_id] = path
-        return path
+    def check_memory_artifact(self, metadata):
+        if (not re.fullmatch(r"[a-f0-9]{32}", metadata["id"])
+                or metadata["schema"] != "ssmcp.output.v1"
+                or metadata["path"] is not None or metadata["storage"] != "memory"):
+            raise AssertionError("expected a connection-scoped memory artifact without a disk path")
 
     def settled_output(self, client_id, marker, minimum):
         previous = None
@@ -109,11 +102,11 @@ class SessionFeatures(Harness):
             metadata = status.get("output_artifact")
             if cursor < minimum or not metadata or time.monotonic() - stable_since < 0.15:
                 return False
-            path = self.artifact_path(metadata)
-            with path.open("rb") as output:
-                output.seek(max(0, path.stat().st_size - 1024))
-                tail = output.read()
-            return status if marker in tail else False
+            self.check_memory_artifact(metadata)
+            tail = self.call("ssmcp.output.read", {
+                "id": metadata["id"], "offset": max(0, metadata["bytes"] - 1024), "max_bytes": 1024,
+            }, client_id=client_id)
+            return status if marker in base64.b64decode(tail["data_base64"], validate=True) else False
 
         return wait_for(settled, timeout=20.0, description="complete stable terminal output")
 
@@ -124,7 +117,7 @@ class SessionFeatures(Harness):
                    and result["data_base64"] == "" and not result["truncated"],
                    "long terminal read returns metadata without inline body or lost prefix")
         metadata = result["artifact"]
-        data = self.artifact_path(metadata).read_bytes()
+        data, pages = self.read_paginated_output(client_id, metadata)
         lines = data.count(b"\n") + int(bool(data) and not data.endswith(b"\n"))
         self.check(metadata["bytes"] == len(data)
                    and metadata["lines"] == lines
@@ -135,10 +128,11 @@ class SessionFeatures(Harness):
         self.check(result["next_cursor"] == status["next_cursor"] == len(data)
                    and result["range"] == {"start": 0, "end": len(data), "stored_end": len(data)},
                    "spilled terminal cursor and stored byte range cover the full session")
-        return metadata, data
+        return metadata, data, pages
 
-    def verify_pagination(self, client_id, metadata):
-        digest = hashlib.sha256()
+    def read_paginated_output(self, client_id, metadata):
+        self.check_memory_artifact(metadata)
+        output = bytearray()
         cursor = 0
         pages = 0
         chunk_size = 32768
@@ -151,17 +145,20 @@ class SessionFeatures(Harness):
             results = self.public_call("code_mode", {"code": code})["result"]
             for result in results:
                 data = base64.b64decode(result["data_base64"], validate=True)
-                if (result["offset"] != cursor or result["bytes"] != len(data)
+                if (result["path"] is not None or result["storage"] != "memory"
+                        or result["size"] != metadata["bytes"]
+                        or result["eof"] != (result["next_offset"] == metadata["bytes"])
+                        or result["offset"] != cursor or result["bytes"] != len(data)
                         or result["next_offset"] != cursor + len(data)
                         or not 0 < len(data) <= chunk_size
                         or result["sha256"] != hashlib.sha256(data).hexdigest()):
                     raise AssertionError("output pagination changed bytes or cursor semantics")
-                digest.update(data)
+                output.extend(data)
                 cursor = result["next_offset"]
                 pages += 1
-        self.check(cursor == metadata["bytes"] and digest.hexdigest() == metadata["sha256"],
+        self.check(cursor == metadata["bytes"] and hashlib.sha256(output).hexdigest() == metadata["sha256"],
                    "outputs.read reconstructs the exact artifact across bounded WSS pages")
-        return pages
+        return bytes(output), pages
 
     def run(self):
         self.prepare()
@@ -182,14 +179,15 @@ class SessionFeatures(Harness):
             "printf '\\nSSMCP_LARGE_END\\n'\n"
         )
         self.call("terminal.write", {"data": command})
-        artifact, data = self.inspect_spill(self.client_id, marker=END, minimum=LARGE_BYTES)
+        artifact, data, pages = self.inspect_spill(self.client_id, marker=END, minimum=LARGE_BYTES)
         self.check(BEGIN in data and END in data and b"Z" * LARGE_BYTES in data
                    and len(data) > 1100000,
                    "real command output exceeding 1.1 MiB retains deterministic beginning, body and ending")
-        pages = self.verify_pagination(self.client_id, artifact)
         code = "return await outputs.cleanup(%s);" % json.dumps(self.client_id)
-        self.public_call("code_mode", {"code": code})
-        self.check(self.artifact_path(artifact).is_file(),
+        cleanup = self.public_call("code_mode", {"code": code})["result"]
+        current = self.call("ssmcp.output.stat", {"id": artifact["id"]})
+        self.check(cleanup["storage"] == "memory" and cleanup["active_artifacts"] >= 1
+                   and current["path"] is None and current["sha256"] == artifact["sha256"],
                    "retention cleanup preserves the active terminal artifact")
 
         line_client, _, line_credentials = self.titled_client("line-threshold", "验证行数阈值", workspace)
@@ -203,7 +201,7 @@ class SessionFeatures(Harness):
                 "while [ \"$i\" -lt 600 ]; do printf 'x\\n'; i=$((i+1)); done; "
                 "printf 'SSMCP_LINES_END\\n'\n",
             }, client_id=line_id)
-            line_artifact, line_data = self.inspect_spill(line_id, marker=b"SSMCP_LINES_END", minimum=1200)
+            line_artifact, line_data, _ = self.inspect_spill(line_id, marker=b"SSMCP_LINES_END", minimum=1200)
             self.check(line_artifact["lines"] > 500 and len(line_data) < 32768,
                        "more than 500 short lines trigger spilling below the byte threshold")
         finally:
@@ -235,29 +233,21 @@ class SessionFeatures(Harness):
         listed = self.public_call("list")["clients"]
         self.check(all(item["id"] != old_id for item in listed),
                    "the disconnected client ID is absent after reload")
-        code = "return await outputs.stat(%s, {id:%s});" % (
-            json.dumps(self.client_id), json.dumps(artifact["id"]),
-        )
-        retained = self.public_call("code_mode", {"code": code})["result"]
-        self.check(retained["bytes"] == artifact["bytes"]
-                   and retained["sha256"] == artifact["sha256"]
-                   and retained["path"] == artifact["path"],
-                   "the reloaded client can still inspect the previous output artifact before expiry")
+        for tool in ("ssmcp.output.stat", "ssmcp.output.read"):
+            code = "return await call(%s, %s, %s);" % (
+                json.dumps(self.client_id), json.dumps(tool), json.dumps({"id": artifact["id"]}),
+            )
+            unavailable = self.public_call("code_mode", {"code": code})["result"]
+            self.check(unavailable["isError"] is True
+                       and "output is unavailable in this connection" in unavailable["content"][0]["text"],
+                       f"{tool} rejects the previous connection's output after reload")
         self.metrics = {
             "large_output_bytes": artifact["bytes"], "large_output_lines": artifact["lines"],
             "large_output_sha256": artifact["sha256"], "artifact_read_pages": pages,
             "line_threshold_bytes": line_artifact["bytes"], "line_threshold_lines": line_artifact["lines"],
             "client_id_changed": True, "same_process_reconnected": True,
-            "previous_oauth_status": 200, "artifact_survived_reload": True,
+            "previous_oauth_status": 200, "artifact_survived_reload": False,
         }
-
-    def remove_test_artifacts(self):
-        # Only artifacts identified and verified by this test are removed, after
-        # all clients stop. Never run broad /tmp cleanup or delete unrelated logs.
-        for artifact_id, path in self.artifacts.items():
-            for candidate in (path, path.with_name(f"output-{artifact_id}.meta.json")):
-                if candidate.is_file() and not candidate.is_symlink():
-                    candidate.unlink(missing_ok=True)
 
 
 def main():
@@ -275,7 +265,6 @@ def main():
             raise
         finally:
             harness.cleanup()
-            harness.remove_test_artifacts()
         report = {
             "status": "passed", "checks": harness.checks, "metrics": harness.metrics,
             "duration_seconds": round(time.monotonic() - started, 3),
