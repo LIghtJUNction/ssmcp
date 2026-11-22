@@ -26,7 +26,10 @@ pub(crate) enum Source {
     Web(WebAction),
     Handoff(String),
     #[cfg(all(test, unix))]
-    Context { command: String, arguments: String },
+    Context {
+        command: String,
+        arguments: String,
+    },
 }
 #[derive(Debug)]
 pub(crate) enum Loaded {

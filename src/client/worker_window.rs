@@ -234,7 +234,7 @@ pub(super) fn linked_overview() -> Option<String> {
 }
 
 fn current_snapshot() -> Option<LinkedSnapshot> {
-    fresh_snapshot(&linked_state()?)
+    fresh_snapshot(linked_state()?.as_ref())
 }
 
 fn fresh_snapshot(state: &ParentState) -> Option<LinkedSnapshot> {
