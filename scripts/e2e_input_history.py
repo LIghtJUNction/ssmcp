@@ -27,7 +27,7 @@ import zlib
 
 from e2e_account_relay import wait_for
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME, RIGHT
-from e2e_client_ui import column, empty_composer_ready
+from e2e_client_ui import column, empty_composer_ready, view
 from e2e_dashboard import sha256, text
 
 
@@ -639,7 +639,7 @@ class InputHistory(Composer):
         self.save_shot("shell-command", front)
         front.send("/tasks")
         front.send(ENTER)
-        tasks = front.until(lambda shot: (column(shot) or ())[:1] == ("tasks",)
+        tasks = front.until(lambda shot: view(shot, "tasks")
                             and "Tasks ·" in text(shot) and "exit 7" in text(shot)
                             and "SHELL_PREFIX" in text(shot),
                             "the independent Tasks column includes the completed shell job")
@@ -683,7 +683,7 @@ class InputHistory(Composer):
         self.highlight_recipient(front, member)
         front.send(ENTER)
         front.until(lambda shot: "To Input fixture member" in text(shot)
-                    and (column(shot) or ())[:2] == ("conversation", 2),
+                    and view(shot, "conversation"),
                     "Enter selecting the exact registered fixture recipient")
         selected = self.ui("/display/conversation")
         self.check(selected["target"] == member["agent_id"]

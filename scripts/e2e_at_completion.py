@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import time
 
-from e2e_input_history import InputHistory, ENTER, HOME, DOWN, column, text
+from e2e_input_history import InputHistory, ENTER, HOME, DOWN, text
+from e2e_client_ui import view
 
 
 class AtCompletion(InputHistory):
@@ -46,7 +47,7 @@ class AtCompletion(InputHistory):
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
         front.until(lambda shot: "To Reference fixture member" in text(shot)
-                    and column(shot) == ("conversation", 2, 8), "exact fixture recipient")
+                    and view(shot, "conversation"), "exact fixture recipient")
 
         for typed, path, expected in [
             ("@not", "notes.txt", "@notes.txt "),
@@ -63,30 +64,46 @@ class AtCompletion(InputHistory):
                        "the second Enter delivers exactly the selected file-only reference")
 
         source = self.complete_reference(front, "@van", "@vanishes.txt", "@vanishes.txt ",
-                                         ENTER, "select-before-validation-failure")
+                                         ENTER, "select-before-file-disappears")
         before = {record["id"] for record in self.queue()["queue"]}
-        (self.workspace / "vanishes.txt").unlink()
-        front.send(ENTER)
-        front.until(lambda shot: "vanishes.txt:" in text(shot), "missing-file validation error")
+        vanished = self.workspace / "vanishes.txt"
+        vanished.unlink()
+        record = self.queue_current(front, source)
+        front.until(lambda shot: any("reference notice:" in row.lower()
+                                     and "@vanishes.txt:" in row for row in shot["rows"]),
+                    "the accepted missing reference displays its warning")
         state = self.ui("/display/conversation")
-        self.check(state["draft"]["text"] == source,
-                   "validation failure preserves the exact selected reference in the composer")
+        self.check(not state["draft"]["text"],
+                   "accepting a missing selected reference clears the acknowledged composer")
         self.check(state["target"] == member["agent_id"],
-                   "validation failure preserves the exact selected recipient")
-        held = [record for record in self.queue()["queue"] if record["id"] not in before]
-        self.check(len(held) == 1 and held[0]["status"] == "editing"
-                   and held[0]["text"] == source,
-                   "failed validation retains the exact request as a non-deliverable edit")
+                   "accepting a missing selected reference preserves the exact recipient")
+        created = [item for item in self.queue()["queue"] if item["id"] not in before]
+        self.check(len(created) == 1 and created[0]["id"] == record["id"]
+                   and created[0]["status"] == "queued",
+                   "the second Enter queues the selected missing reference exactly once")
+        self.check(any("@vanishes.txt:" in warning
+                       for warning in record.get("reference_warnings", [])),
+                   "the exact queued identity retains the missing-reference warning")
+        self.check(not vanished.exists(),
+                   "referencing the disappeared file does not recreate it")
+        self.save_shot("missing-reference-accepted", front, cells=True)
+
+        # Restore the file only after the original payload was acknowledged.
+        # Delivery must use that frozen unavailable reference, not reread it.
+        vanished.write_text(files["vanishes.txt"], encoding="utf-8")
+        queued = self.record(self.queue(), message_id=record["id"])
+        self.check(queued["status"] == "queued" and queued["text"] == record["text"]
+                   and queued["reference_warnings"] == record["reference_warnings"],
+                   "restoring the file leaves the acknowledged queue payload and warning frozen")
+        references = self.delivered_references(front, member, record, source)
+        self.check(len(references) == 1 and references[0]["kind"] == "file"
+                   and references[0]["path"] == "vanishes.txt"
+                   and references[0]["status"] == "unavailable"
+                   and references[0].get("warning") in record["reference_warnings"]
+                   and "read" not in references[0] and "preview" not in references[0],
+                   "delivery preserves the exact source with one unavailable reference and no fabricated contents")
         self.check(not self.messages(self.work(member=member)),
-                   "a failed file validation delivers no request")
-        self.save_shot("validation-failure", front, cells=True)
-        (self.workspace / "vanishes.txt").write_text(files["vanishes.txt"], encoding="utf-8")
-        front.send(ENTER)
-        self.wait_state(front, lambda current: not current["draft"]["text"],
-                        "the recovered held reference did not submit")
-        recovered = self.record(self.queue(), message_id=held[0]["id"])
-        self.check(recovered["status"] == "queued", "retry preserves the held request identity")
-        self.delivered_references(front, member, recovered, source)
+                   "the acknowledged missing-reference request is not delivered again")
 
         long_path = "鼠标 02 中文说明文档 带空格和很长的文件名 界.txt"
         for typed, visible_prefix, path, source, narrow in [

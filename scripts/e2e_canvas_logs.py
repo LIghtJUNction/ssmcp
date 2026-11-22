@@ -78,8 +78,17 @@ def run(binary, decoder, output, checks):
                   "conversation starts with an open group and compact command and diff cards")
             check(DIAGNOSTIC not in text(initial),
                   "background diagnostics do not appear in the conversation")
-            # Conversation headers omit their numeric position and count. Check
-            # the fixture's initial count on the first actual Audit header below.
+            # Read the real default counter before opening a recipient column.
+            preview.send(LEFT)
+            statistics = preview.until(lambda shot: view(shot, "statistics"), "the default first column")
+            check(column(statistics) == ("statistics", 1, 7),
+                  "the default workflow starts with seven columns and Statistics first")
+            preview.send(ESCAPE)
+            preview.until(lambda shot: view(shot, "conversation"), "the empty conversation")
+            preview.send(b"/sessions\r")
+            preview.until(lambda shot: column(shot) == ("recipients", 3, 8), "the explicit recipient column")
+            preview.send(ESCAPE)
+            preview.until(lambda shot: view(shot, "conversation"), "conversation after opening recipients")
             initial_count = 8
             save_shot(output, "canvas-conversation", initial)
 
@@ -140,20 +149,31 @@ def run(binary, decoder, output, checks):
                   "Escape restores the bookmarked column with the edited draft and cursor")
 
             preview.send(RIGHT)
+            preview.until(lambda shot: view(shot, "recipients"), "Right at draft end reaching recipients")
+            preview.send(RIGHT)
             audit = preview.until(lambda shot: view(shot, "code audit"),
-                                  "Right at draft end navigating to code audit")
-            check(column(audit) == ("code audit", 3, initial_count),
-                  "the main workflow starts with all eight logical columns")
+                                  "Right from recipients navigating to code audit")
+            check(column(audit) == ("code audit", 4, initial_count),
+                  "the explicit recipient column retains the other eight logical columns")
             check(draft in prompt_text(audit), "Right at the draft boundary changes columns without changing text")
-            preview.send(ALT_LEFT)
+            preview.send(ALT_LEFT * 2)
             returned = preview.until(lambda shot: view(shot, "conversation"), "Alt+Left returning to conversation")
             check(draft in prompt_text(returned) and returned["cursor"] == cursor,
                   "horizontal round trip restores the original composer cursor")
 
             preview.send(LEFT + ALT_LEFT)
-            agents = preview.until(lambda shot: view(shot, "sessions") and "Builder" in body(shot),
-                                   "Alt+Left reaching agents from inside a nonempty draft")
-            check(draft in prompt_text(agents), "Alt+Left changes columns while preserving a nonempty draft")
+            statistics = preview.until(lambda shot: view(shot, "statistics"),
+                                       "Alt+Left reaching Statistics from inside a nonempty draft")
+            check(draft in prompt_text(statistics), "Alt+Left changes columns while preserving a nonempty draft")
+            statistics_body = body(statistics)
+            preview.send(ALT_LEFT)
+            bounded_left = snapshot(preview)
+            check(view(bounded_left, "statistics") and column(bounded_left)[1] == 1
+                  and body(bounded_left) == statistics_body,
+                  "horizontal navigation stops at the first column")
+            preview.send(ALT_RIGHT * 2)
+            preview.until(lambda shot: view(shot, "recipients") and "Builder" in body(shot),
+                          "the explicitly opened recipient column")
             preview.send(b"\x1b[B")
             selected = preview.until(
                 lambda shot: any("›" in row and "Builder" in row for row in shot["rows"]),
@@ -161,19 +181,14 @@ def run(binary, decoder, output, checks):
             )
             selected_body = body(selected)
             preview.send(ALT_LEFT)
-            bounded_left = snapshot(preview)
-            check(view(bounded_left, "sessions") and column(bounded_left)[1] == 1
-                  and body(bounded_left) == selected_body,
-                  "horizontal navigation stops at the first column")
+            preview.until(lambda shot: view(shot, "conversation"), "leaving the selected recipient column")
             preview.send(ALT_RIGHT)
-            preview.until(lambda shot: view(shot, "conversation"), "leaving the selected agents column")
-            preview.send(ALT_LEFT)
             retained = preview.until(
-                lambda shot: view(shot, "sessions")
+                lambda shot: view(shot, "recipients")
                 and any("›" in row and "Builder" in row for row in shot["rows"]),
-                "the selected agent surviving a column round trip",
+                "the selected recipient surviving a column round trip",
             )
-            check(body(retained) == selected_body, "agent selection is retained independently in its logical column")
+            check(body(retained) == selected_body, "recipient selection is retained independently in its logical column")
 
             # Sessions reserves right-click for the clicked thread's history.
             # Preview members use synthetic IDs, so this must report unavailable
@@ -182,7 +197,7 @@ def run(binary, decoder, output, checks):
                                if "›" in row and "Builder" in row)
             preview.send(mouse(2, y=builder_row + 1))
             history_unavailable = preview.until(
-                lambda shot: view(shot, "sessions") and not logs_open(shot)
+                lambda shot: view(shot, "recipients") and not logs_open(shot)
                 and "Thread history unavailable" in text(shot),
                 "right-click routing to the selected preview thread's history",
             )
@@ -190,7 +205,7 @@ def run(binary, decoder, output, checks):
                   and draft in prompt_text(history_unavailable),
                   "unavailable preview thread history preserves selection and the shared draft")
             preview.send(mouse(2, release=True, y=builder_row + 1))
-            check(view(snapshot(preview), "sessions"),
+            check(view(snapshot(preview), "recipients"),
                   "right-button release does not open diagnostics after a thread-history request")
             preview.send(b"\x1b[20~")
             logs = preview.until(logs_open, "F9 opening diagnostic logs from the Sessions column")
@@ -198,7 +213,7 @@ def run(binary, decoder, output, checks):
                   "F9 restores Logs' saved editing focus while preserving the shared draft")
             preview.send(ESCAPE)
             restored = preview.until(
-                lambda shot: view(shot, "sessions") and not logs_open(shot),
+                lambda shot: view(shot, "recipients") and not logs_open(shot),
                 "Escape restoring the Sessions column",
             )
             check(body(restored) == selected_body and draft in prompt_text(restored),
@@ -207,7 +222,7 @@ def run(binary, decoder, output, checks):
             recipient = preview.until(lambda shot: view(shot, "conversation") and "To Builder" in text(shot),
                                       "the selected member becoming the draft recipient")
             check(draft in prompt_text(recipient), "choosing a recipient preserves the shared draft")
-            preview.send(ALT_RIGHT)
+            preview.send(ALT_RIGHT * 2)
             preview.until(lambda shot: view(shot, "code audit"), "code audit with the chosen recipient")
             preview.resize(12, 60)
             short_audit = preview.until(
@@ -224,9 +239,9 @@ def run(binary, decoder, output, checks):
             scrolled = preview.until(lambda shot: body(shot) != body(short_audit),
                                      "code audit scrolling within its own column")
             scrolled_body = body(scrolled)
-            preview.send(ALT_LEFT)
+            preview.send(ALT_LEFT * 2)
             preview.until(lambda shot: view(shot, "conversation"), "leaving the scrolled audit column")
-            preview.send(ALT_RIGHT)
+            preview.send(ALT_RIGHT * 2)
             back = preview.until(lambda shot: view(shot, "code audit"), "returning to the scrolled audit column")
             check(body(back) == scrolled_body and "To Builder" in text(back)
                   and draft in prompt_text(back),
@@ -235,7 +250,7 @@ def run(binary, decoder, output, checks):
             save_shot(output, "canvas-narrow-audit", back)
 
             preview.resize(30, 110)
-            preview.send(ALT_LEFT)
+            preview.send(ALT_LEFT * 2)
             grown = preview.until(lambda shot: shot["size"] == [30, 110]
                                   and view(shot, "conversation") and draft in prompt_text(shot),
                                   "conversation after restoring terminal dimensions")
@@ -261,10 +276,10 @@ def run(binary, decoder, output, checks):
             preview.send(b"\x1b")
             preview.until(lambda shot: view(shot, "queue") and "Esc back" not in body(shot)
                           and "#example-" in body(shot), "return from Inspect to the request card")
-            preview.send(ALT_RIGHT)
+            preview.send(ALT_RIGHT * 2)
             preview.until(lambda shot: view(shot, "code audit"),
-                          "the original audit column remaining after the inserted queue")
-            preview.send(ALT_LEFT)
+                          "the original audit column remaining after the inserted queue and recipients")
+            preview.send(ALT_LEFT * 2)
             preview.until(lambda shot: view(shot, "queue"), "return to the inserted queue column")
             preview.send(b"/new chat\r")
             duplicate = preview.until(lambda shot: view(shot, "conversation")
@@ -284,7 +299,7 @@ def run(binary, decoder, output, checks):
                           "closing the duplicate conversation returns to its neighbor and reduces the count")
             preview.send(b"/close\r")
             preview.until(lambda shot: view(shot, "conversation"), "closing the inserted queue restores the original neighbor")
-            preview.send(ALT_RIGHT)
+            preview.send(ALT_RIGHT * 2)
             original = preview.until(lambda shot: view(shot, "code audit"), "original audit after removing inserted columns")
             check("To Builder" in text(original) and column(original)[2] == initial_count
                   and preview.process.poll() is None,
@@ -406,8 +421,8 @@ def run_diff_login(binary, decoder, output, checks):
             preview.send(ALT_RIGHT)
             duplicate_right = preview.until(lambda shot: view(shot, "code audit"),
                                             "the actual Audit neighbor of the duplicate conversation")
-            check(column(duplicate_right) == ("code audit", 4, 9),
-                  "the duplicate conversation inserts a ninth column before Audit")
+            check(column(duplicate_right) == ("code audit", 4, 8),
+                  "the duplicate conversation inserts an eighth column before Audit")
             preview.send(ALT_LEFT)
             preview.until(lambda shot: view(shot, "conversation") and body(shot) == expected_body,
                           "the duplicate conversation restored from its actual right neighbor")
@@ -479,9 +494,15 @@ def run_tasks(binary, decoder, output, checks):
         preview = Preview(binary, decoder, config, rows=30, cols=110)
         try:
             initial = preview.until(lambda shot: view(shot, "conversation"), "the eight-column canvas")
-            check(column(initial) == ("conversation", 2, 8),
-                  "the default canvas has eight columns with conversation second")
-            preview.send(ALT_LEFT + b"\x1b[B\r")
+            preview.send(ALT_LEFT)
+            statistics = preview.until(lambda shot: view(shot, "statistics"), "the real default canvas counter")
+            check(column(statistics) == ("statistics", 1, 7),
+                  "the default canvas has eight columns with Statistics first")
+            preview.send(ESCAPE)
+            preview.until(lambda shot: view(shot, "conversation"), "the empty task fixture composer")
+            preview.send(b"/sessions\r")
+            preview.until(lambda shot: column(shot) == ("recipients", 3, 8), "the explicit task recipient picker")
+            preview.send(b"\x1b[B\r")
             recipient = preview.until(lambda shot: view(shot, "conversation")
                                       and "To Builder" in text(shot), "the shared task-panel recipient")
             command(preview, recipient, "/tasks")
@@ -560,7 +581,7 @@ def run_tasks(binary, decoder, output, checks):
             check(body(returned) == original_body and draft in prompt_text(returned)
                   and "To Builder" in text(returned),
                   "Audit to Logs to Tasks to Logs then Escape returns to the original bookmarked column")
-            preview.send(ALT_LEFT)
+            preview.send(ALT_LEFT * 2)
             chat = preview.until(lambda shot: view(shot, "conversation"), "the shared composer after task navigation")
             check(draft in prompt_text(chat) and chat["cursor"] == cursor,
                   "task and log navigation preserves the original wide-glyph composer cursor")
@@ -579,7 +600,7 @@ def run_tasks(binary, decoder, output, checks):
             preview.send(LEFT)
             current_logs = preview.until(logs_open, "Logs before closing its column")
             command(preview, current_logs, "/close")
-            closed_logs = preview.until(lambda shot: view(shot, "history") and column(shot)[2] == 7,
+            closed_logs = preview.until(lambda shot: view(shot, "questions") and column(shot)[2] == 7,
                                         "closing the actual Logs column")
             command(preview, closed_logs, "/tasks")
             repaired = preview.until(lambda shot: task_list(shot) and column(shot) == ("tasks", 8, 8),

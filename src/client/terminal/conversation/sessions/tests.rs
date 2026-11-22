@@ -395,12 +395,22 @@ fn sidebar_mouse_uses_painted_identity_and_the_exact_drawn_call() {
     assert!(state.actions.is_empty());
 
     state.chat_key(Key::Escape);
+    assert_eq!(state.conversation.view, View::Agents);
+    assert!(!state.conversation.detail);
+    let recipient_column = state.conversation.snapshot()["canvas"]["active"]
+        .as_u64()
+        .unwrap();
     state.chat_key(Key::Open);
     assert_eq!(
-        state.conversation.view,
-        View::Activity,
-        "right arrow still navigates the canvas"
+        state.conversation.snapshot()["canvas"]["active"],
+        recipient_column + 1
     );
+    assert_eq!(
+        state.conversation.view,
+        View::Audit,
+        "right arrow reaches the panel after the explicitly opened recipients"
+    );
+    assert_eq!(state.chat_saved_draft(), before);
 }
 
 #[test]
