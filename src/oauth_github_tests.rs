@@ -527,6 +527,11 @@ fn visible_clients(value: &Value) -> Vec<String> {
 async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_acl_and_rotates_refresh()
  {
     let mut fixture = Fixture::start().await;
+    // The fixture binds verified GitHub subject 42 to the platform handle alice.
+    let expected_identity = format!(
+        "<strong>alice@{}</strong>",
+        Url::parse(PUBLIC).unwrap().host_str().unwrap()
+    );
     let alice = fixture
         .attach("alice-project", &["alice@ssmcp.example.test"])
         .await;
@@ -566,8 +571,8 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!response.headers().contains_key(header::LOCATION));
     let consent = response.text().await.unwrap();
-    assert!(consent.contains("<strong>alice@ssmcp.example.test</strong>"));
-    assert!(!consent.contains("Alice@github"));
+    assert!(consent.contains(&expected_identity));
+    assert!(!consent.contains("@github"));
     assert!(consent.contains("name=decision value=allow"));
     assert!(consent.contains("name=decision value=deny"));
     assert!(!consent.contains("github-alice-token"));
@@ -585,9 +590,9 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
         .callback(&state, Some(&flow.cookie), "alice-code")
         .await;
     assert_eq!(retry.status(), StatusCode::OK);
-    let retry_page = retry.text().await.unwrap();
-    assert!(retry_page.contains("<strong>alice@ssmcp.example.test</strong>"));
-    assert!(!retry_page.contains("Alice@github"));
+    let retry_consent = retry.text().await.unwrap();
+    assert!(retry_consent.contains(&expected_identity));
+    assert!(!retry_consent.contains("@github"));
     assert_eq!(fixture.github.exchanges.load(Ordering::SeqCst), 1);
     assert!(fixture.broker.oauth.state.lock().unwrap().codes.is_empty());
     // A stale consent page cannot have its already-verified identity replaced by another login.
@@ -710,6 +715,11 @@ async fn github_http_requires_bound_callback_and_explicit_consent_then_filters_a
 #[tokio::test]
 async fn github_http_denial_consumes_consent_without_issuing_an_mcp_grant() {
     let fixture = Fixture::start().await;
+    // The fixture binds verified GitHub subject 7 to the platform handle bob.
+    let expected_identity = format!(
+        "<strong>bob@{}</strong>",
+        Url::parse(PUBLIC).unwrap().host_str().unwrap()
+    );
     let flow = fixture.begin(RESOURCE).await;
     let target = fixture.start_provider(&flow).await;
     let state = query(&target, "state");
@@ -718,8 +728,8 @@ async fn github_http_denial_consumes_consent_without_issuing_an_mcp_grant() {
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     let consent = response.text().await.unwrap();
-    assert!(consent.contains("<strong>bob@ssmcp.example.test</strong>"));
-    assert!(!consent.contains("bob@github"));
+    assert!(consent.contains(&expected_identity));
+    assert!(!consent.contains("@github"));
     let response = fixture.action(&flow, "decision", "deny").await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let callback = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();

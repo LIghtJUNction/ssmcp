@@ -1644,7 +1644,7 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message;
 
         history::with_test_history(directory, async {
-            // Both conversations are live records in the same process-scoped store.
+            // Both conversations must outlive the in-flight calls in one live store.
             history::record("user", "Conversation B").unwrap();
             let b_history = history::current().unwrap().unwrap().metadata.id;
             history::release_current().unwrap();
@@ -1721,6 +1721,7 @@ mod tests {
             let b_owner = history::current_owner().unwrap();
             assert_eq!(b_owner.id(), b_history);
             assert_ne!(a_owner.id(), b_owner.id());
+            assert_ne!(a_owner, b_owner);
 
             // Both native calls are now in flight. Complete B first, then A
             // while B is still selected, using only the already-captured owners.

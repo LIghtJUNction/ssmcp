@@ -372,6 +372,14 @@ async fn named_login_validates_before_oauth_and_claims_only_after_consent() {
             .unwrap()
     );
     let (cookie, csrf) = fixture.session("123");
+    let account = fixture
+        .broker
+        .portal
+        .storage(|store| store.account("123"))
+        .await
+        .unwrap();
+    assert_eq!(account.subject, "123");
+    let address = format!("{}@ssmcp.test", account.handle.as_deref().unwrap());
     let page = fixture
         .client
         .get(format!("{}/setup?code={code}", fixture.base))
@@ -382,8 +390,8 @@ async fn named_login_validates_before_oauth_and_claims_only_after_consent() {
         .text()
         .await
         .unwrap();
-    assert!(page.contains("客户端请求使用用户名：<strong>alice-home</strong>"));
-    assert!(page.contains("首次选择用户名时会保存此名称"));
+    assert!(page.contains(&format!("<p>平台账户：<strong>{address}</strong></p>")));
+    assert!(page.contains("<p>客户端请求使用用户名：<strong>alice-home</strong>"));
     assert!(
         fixture
             .broker
