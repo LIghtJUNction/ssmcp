@@ -415,13 +415,23 @@ impl Monitor {
 
 impl State {
     pub(super) fn worker_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) {
-        // The raw decoder keeps split paste markers and pasted Ctrl-C literal.
-        // Discard every text byte; only monitor navigation and a real Ctrl-C act.
-        let (_, actions) = self.keyboard.feed(bytes, now, flush, false, true);
+        // The raw decoder keeps split paste markers and pasted control keys literal.
+        // Text is discarded; only navigation and actual monitor controls act.
+        let (_, actions) = self.keyboard.feed_worker(bytes, now, flush);
         for action in actions {
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return;
+            }
+            if matches!(action, Key::ClientReload) {
+                if self.preview {
+                    self.notice = Some("Preview has no connected worker to reload".into());
+                } else if self.actions.len() < 64 && !self.actions.contains(&"client.reload") {
+                    self.actions.push("client.reload");
+                    self.notice = Some("Requesting worker reload".into());
+                }
+                self.dirty = true;
+                continue;
             }
             let Some(monitor) = self.worker.as_mut() else {
                 return;
@@ -537,6 +547,9 @@ impl State {
             ),
             String::new(),
         ];
+        if let Some(notice) = &self.notice {
+            rows[1] = line(self, &[(PanelTone::Warning, notice.clone())]);
+        }
         if let Some(snapshot) = snapshot {
             let counts = [
                 (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
@@ -643,16 +656,16 @@ impl State {
         }
         rows.truncate(height.saturating_sub(1));
         rows.resize_with(height.saturating_sub(1), String::new);
-        let footer = if height == 1 {
-            "Workers · Ctrl+C Stop"
-        } else if g.cols < 28 {
-            "←→ ↑↓ End ^C Stop"
-        } else if g.cols < 36 {
-            "←→ Worker ↑↓ Logs ^C Stop"
-        } else if g.cols < 68 {
-            "←→ Worker · ↑↓ Logs · End Live · ^C Stop"
+        let footer = if g.cols < 28 {
+            "^R Reload ^C Stop"
+        } else if height == 1 {
+            "Workers · ^R Reload · ^C Stop"
+        } else if g.cols < 48 {
+            "←→ ↑↓ · ^R Reload · ^C Stop"
+        } else if g.cols < 80 {
+            "←→ Worker · ↑↓ Logs · ^R Reload · ^C Stop"
         } else {
-            "←→ Worker · ↑↓ / PgUp / PgDn Logs · End Live · Ctrl+C Stop"
+            "←→ Worker · ↑↓ / PgUp / PgDn Logs · End Live · Ctrl+R Reload · Ctrl+C Stop"
         };
         rows.push(line(self, &[(PanelTone::Muted, footer.into())]));
         Frame {
@@ -1291,6 +1304,7 @@ mod tests {
                 }
                 assert!(!text.contains("Type a message"));
                 assert!(!text.contains("Next caller"));
+                assert!(text.contains("Ctrl+R Reload") || text.contains("^R Reload"));
                 assert!(frame.hidden);
                 assert!(frame.bracketed_paste);
                 assert_eq!(frame.rows.len(), usize::from(rows));
@@ -1803,8 +1817,38 @@ mod tests {
     }
 
     #[test]
+    fn worker_reload_queues_one_restart_and_never_edits_or_interrupts_the_composer() {
+        for bytes in [b"\x12\x12".as_slice(), b"\x1b[114;5u", b"\x1b[27;5;114~"] {
+            for split in 0..=bytes.len() {
+                let mut state = state(20, 100, false);
+                state.preview = false;
+                state.conversation.composer.set_text("preserved worker draft");
+                let before = state.conversation.composer.text().to_owned();
+                let now = Instant::now();
+                assert!(state.keyboard(&bytes[..split], now, false).is_empty());
+                assert!(state.keyboard(&bytes[split..], now, false).is_empty());
+                assert_eq!(state.actions, vec!["client.reload"]);
+                assert_eq!(state.conversation.composer.text(), before);
+                assert_eq!(state.notice.as_deref(), Some("Requesting worker reload"));
+            }
+        }
+        let now = Instant::now();
+        let mut keyboard = super::super::Keyboard::default();
+        let (_, actions) = keyboard.feed_worker(b"\x03", now, false);
+        assert!(matches!(actions.as_slice(), [Key::Interrupt]));
+        let (literal, actions) = keyboard.feed(b"\x12", now, false, false, false);
+        assert_eq!(literal, b"\x12");
+        assert!(actions.is_empty());
+
+        let mut preview = state(20, 100, false);
+        preview.keyboard(b"\x12", now, false);
+        assert!(preview.actions.is_empty());
+        assert!(preview.notice.as_deref().unwrap().contains("Preview"));
+    }
+
+    #[test]
     fn worker_monitor_consumes_layout_keys_mouse_and_split_pastes_without_changing_the_draft() {
-        let bytes = b"\x1bOQignored\r\x1b\x1b[<0;2;3M\x1b[18~\x1b[200~pasted\x03\x1bOQ\r\x1b[201~";
+        let bytes = b"\x1bOQignored\r\x1b\x1b[<0;2;3M\x1b[18~\x1b[200~pasted\x03\x12\x1b[114;5u\x1bOQ\r\x1b[201~";
         for split in 0..=bytes.len() {
             let mut state = state(20, 80, false);
             state
@@ -1825,6 +1869,7 @@ mod tests {
             after.as_object_mut().unwrap().remove("pending_questions");
             assert_eq!(after, before);
             assert!(state.actions.is_empty());
+            assert!(state.notice.is_none());
             assert!(!state.selection);
             assert!(!state.help);
             assert_eq!(state.ui.layout, Layout::Chat);

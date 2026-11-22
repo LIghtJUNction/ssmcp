@@ -96,8 +96,14 @@ Select a station to inspect its retained activity. The left column scrolls throu
 | Home | Show its earliest retained entry. |
 | End | Return to the latest entries and follow new activity. |
 | Ctrl+Home / Ctrl+End | Select the first or last worker. |
+| Ctrl+R | Request a reload of this worker session. |
+| Ctrl+C | Close this worker window. |
 | Mouse click | Select a station from the station navigation. |
 | Mouse wheel | Scroll the selected station's log when the pointer is in the log area. |
+
+In an attached worker window, Ctrl+R replaces the worker child while keeping the main chat, its draft, and its connection open. The replacement keeps the requested pool size, working directory, and launch arguments, but starts with a new client identity and no inherited manager or worker registrations. A standalone or headless worker follows the existing process-restart path.
+
+Reload is refused while tasks are running or queued; the worker panel shows the reason. Finish the tasks, or cancel them and wait for their acknowledgements and cleanup, before retrying. An accepted reload follows the existing connection cleanup and starts a fresh in-memory pool. It does not resume old tasks or prove that an external executor has stopped.
 
 Each station retains up to 64 log entries within a 16 KiB budget; an entry's text is limited to 1 KiB. Older entries drop out as new activity arrives, so Home only reaches the earliest retained entry. The monitor shows task summaries and work attributed to that station. A missing command or progress report remains explicitly unavailable. Full task results remain accessible through the authenticated `worker.result` workflow.
 
@@ -263,6 +269,6 @@ python3 scripts/e2e_worker_windows.py \
 
 The script requires already-built executables and never invokes Cargo. It checks the two connections and the `/worker_pool` link, initial offline capacity, external workers becoming available through real waits, an editable parent chat, literal arguments and working directory, and a single child launch. A private clipboard recorder exercises invitation prompts and the full-pool refusal; resizing checks the actual request acknowledgement and preserves waiting station identities. The authenticated protocol covers manager attachment, task submission, claim retry, an actual private command, truthful progress, per-task timing, completion, cancellation acknowledgement, and result retrieval. Shrinking to zero exercises both idle and busy retirement, authenticated release and retry receipts; subsequent growth must create offline capacity without counting old collaboration memberships as available workers.
 
-Lifecycle cases cover parent exit, parent `/reload`, worker-only closure, missing-terminal failure, and explicit headless mode. State and temporary directories are isolated inside the fixture. The test checks that coordination and cleanup leave no conversation or context-memory files. Its explicit report and terminal receipts are test artifacts. Each result records the tested executable hashes.
+Lifecycle cases cover parent exit, parent `/reload`, worker-only closure, missing-terminal failure, and explicit headless mode. The same worker scenario also checks a visible Ctrl+R refusal while a claim is active, then a worker-only replacement after work is settled. It checks the unchanged parent connection and draft, preserved capacity and arguments, fresh child identity, and the existing normal-exit and terminal-restoration receipts. State and temporary directories are isolated inside the fixture. The test checks that coordination and cleanup leave no conversation or context-memory files. Its explicit report and terminal receipts are test artifacts. Each result records the tested executable hashes.
 
 This Linux test uses a terminal fixture and does not exercise an installed desktop terminal. Its daemon case checks dispatch to the background-service path and the absence of an extra window; full user-systemd lifecycle coverage remains in [e2e_daemon.py](../scripts/e2e_daemon.py). A failed prerequisite exits with a blocked result; it is not counted as a passing test.

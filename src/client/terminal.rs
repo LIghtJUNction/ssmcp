@@ -1130,6 +1130,7 @@ fn request_interrupt(_state: &mut State) {
 #[derive(Clone, Copy)]
 enum Key {
     Interrupt,
+    ClientReload,
     Help,
     Questions,
     Select,
@@ -1168,6 +1169,8 @@ enum Key {
     PasteEnd,
 }
 const KEYS: &[(&[u8], Key)] = &[
+    (b"\x1b[114;5u", Key::ClientReload),
+    (b"\x1b[27;5;114~", Key::ClientReload),
     (b"\x1b[1;3A", Key::InputGrow),
     (b"\x1b[1;3B", Key::InputShrink),
     (b"\x1b[57352;3u", Key::InputGrow),
@@ -1279,11 +1282,12 @@ impl Keyboard {
         true
     }
 
-    fn accepts(&self, key: Key, allow_logs: bool) -> bool {
+    fn accepts(&self, key: Key, allow_logs: bool, worker_controls: bool) -> bool {
         if self.pasting {
             return matches!(key, Key::PasteEnd) && self.paste_png.allows_end();
         }
         match key {
+            Key::ClientReload => worker_controls,
             Key::Interrupt
             | Key::Help
             | Key::Questions
@@ -1322,6 +1326,22 @@ impl Keyboard {
         allow_logs: bool,
         force_logs: bool,
     ) -> (Vec<u8>, Vec<Key>) {
+        self.feed_inner(bytes, now, flush, allow_logs, force_logs, false)
+    }
+
+    fn feed_worker(&mut self, bytes: &[u8], now: Instant, flush: bool) -> (Vec<u8>, Vec<Key>) {
+        self.feed_inner(bytes, now, flush, false, true, true)
+    }
+
+    fn feed_inner(
+        &mut self,
+        bytes: &[u8],
+        now: Instant,
+        flush: bool,
+        allow_logs: bool,
+        force_logs: bool,
+        worker_controls: bool,
+    ) -> (Vec<u8>, Vec<Key>) {
         if self.image_paste_expired(now) {
             self.discard_image_paste();
         }
@@ -1332,10 +1352,14 @@ impl Keyboard {
             if self.pasting {
                 self.paste_last_input = Some(now);
             }
-            if byte == 0x03 && !self.pasting {
+            if !self.pasting && (byte == 0x03 || (worker_controls && byte == 0x12)) {
                 self.pending.clear();
                 self.since = None;
-                actions.push(Key::Interrupt);
+                actions.push(if byte == 0x03 {
+                    Key::Interrupt
+                } else {
+                    Key::ClientReload
+                });
                 continue;
             }
             // A fresh ESC starts a new key. Resolve a preceding standalone ESC
@@ -1406,7 +1430,8 @@ impl Keyboard {
                 continue;
             }
             if let Some((sequence, key)) = KEYS.iter().find(|(sequence, key)| {
-                self.accepts(*key, allow_logs) && *sequence == self.pending.as_slice()
+                self.accepts(*key, allow_logs, worker_controls)
+                    && *sequence == self.pending.as_slice()
             }) {
                 match key {
                     Key::Toggle => {
@@ -1431,7 +1456,8 @@ impl Keyboard {
                 self.pending.clear();
                 self.since = None;
             } else if KEYS.iter().any(|(sequence, key)| {
-                self.accepts(*key, allow_logs) && sequence.starts_with(&self.pending)
+                self.accepts(*key, allow_logs, worker_controls)
+                    && sequence.starts_with(&self.pending)
             }) {
                 self.since.get_or_insert(now);
             } else {

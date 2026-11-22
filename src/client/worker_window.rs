@@ -51,7 +51,46 @@ struct LinkedSnapshot {
 
 struct ParentState {
     closed: AtomicBool,
+    reload_requested: AtomicBool,
     snapshot: Mutex<Option<(LinkedSnapshot, Instant)>>,
+}
+
+enum ChildUpdate {
+    Snapshot(LinkedSnapshot),
+    Reload,
+}
+
+impl ParentState {
+    fn receive(&self, update: ChildUpdate) -> bool {
+        if self.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        match update {
+            ChildUpdate::Snapshot(snapshot) => {
+                *self.snapshot.lock().unwrap_or_else(|error| error.into_inner()) =
+                    Some((snapshot, Instant::now()));
+                true
+            }
+            ChildUpdate::Reload => {
+                self.reload_requested.store(true, Ordering::Release);
+                false
+            }
+        }
+    }
+
+    fn take_reload_request(&self) -> bool {
+        self.reload_requested.swap(false, Ordering::AcqRel)
+    }
+
+    fn watch(&self, reader: &mut impl Read, pid: u32) {
+        while let Ok(update) = read_child_update(reader, pid) {
+            if !self.receive(update) {
+                break;
+            }
+        }
+        self.closed.store(true, Ordering::Release);
+        *self.snapshot.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
 }
 
 pub(super) fn linked_snapshot() -> Option<serde_json::Value> {
@@ -122,6 +161,7 @@ pub(super) fn launch(
         reported_closed: AtomicBool::new(false),
         state: Arc::new(ParentState {
             closed: AtomicBool::new(false),
+            reload_requested: AtomicBool::new(false),
             snapshot: Mutex::new(None),
         }),
         watcher: None,
@@ -181,23 +221,7 @@ pub(super) fn launch(
                 window.watcher = Some(
                     thread::Builder::new()
                         .name("ssmcp-worker-status".into())
-                        .spawn(move || {
-                            while let Ok(snapshot) = read_snapshot(&mut reader, pid) {
-                                if state.closed.load(Ordering::Acquire) {
-                                    break;
-                                }
-                                *state
-                                    .snapshot
-                                    .lock()
-                                    .unwrap_or_else(|error| error.into_inner()) =
-                                    Some((snapshot, Instant::now()));
-                            }
-                            state.closed.store(true, Ordering::Release);
-                            *state
-                                .snapshot
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner()) = None;
-                        })
+                        .spawn(move || state.watch(&mut reader, pid))
                         .map_err(|error| format!("could not watch the Workers window: {error}"))?,
                 );
                 *LINKED
@@ -232,6 +256,11 @@ pub(super) fn launch(
 }
 
 impl WindowChild {
+    /// Only this owned child's authenticated control connection can request it.
+    pub(super) fn take_reload_request(&self) -> bool {
+        self.state.take_reload_request()
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire)
             || self
@@ -274,7 +303,12 @@ impl WindowChild {
         if self.reported_closed.load(Ordering::Acquire) {
             return Ok(false);
         }
-        if self.is_closed() {
+        // A process can exit immediately after writing its reload request. Let
+        // the authenticated reader drain that final message before classifying
+        // the exit; PID liveness alone would lose the request.
+        if self.state.closed.load(Ordering::Acquire)
+            || self.watcher.as_ref().is_some_and(thread::JoinHandle::is_finished)
+        {
             self.state.closed.store(true, Ordering::Release);
             return Ok(!self.reported_closed.swap(true, Ordering::AcqRel));
         }
@@ -403,6 +437,7 @@ impl Drop for WindowChild {
 struct ChildState {
     stop: AtomicBool,
     ready: AtomicBool,
+    reload_sent: AtomicBool,
     stream: Mutex<TcpStream>,
     client_id: Mutex<Option<String>>,
     resize: Mutex<ResizeState>,
@@ -452,6 +487,7 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
     let state = Arc::new(ChildState {
         stop: AtomicBool::new(false),
         ready: AtomicBool::new(false),
+        reload_sent: AtomicBool::new(false),
         stream: Mutex::new(stream),
         client_id: Mutex::new(None),
         resize: Mutex::new(ResizeState::default()),
@@ -518,7 +554,44 @@ pub(super) fn child_ready(client_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Pause snapshots before the accepted reload tears down the old runtime.
+pub(super) fn child_prepare_reload() {
+    if let Some(state) = CHILD_SESSION.get().and_then(Weak::upgrade) {
+        state.prepare_reload();
+    }
+}
+
+/// Called after the old connection, jobs, and terminal have been cleaned up.
+pub(super) fn child_request_reload() -> Result<(), String> {
+    CHILD_SESSION
+        .get()
+        .and_then(Weak::upgrade)
+        .ok_or("Workers window has no live parent control channel")?
+        .request_reload()
+        .map_err(|error| format!("could not request worker window reload: {error}"))
+}
+
 impl ChildState {
+    fn prepare_reload(&self) {
+        let _stream = self.stream.lock().unwrap_or_else(|error| error.into_inner());
+        self.ready.store(false, Ordering::Release);
+    }
+
+    fn request_reload(&self) -> io::Result<()> {
+        let mut stream = self.stream.lock().unwrap_or_else(|error| error.into_inner());
+        if self.stop.load(Ordering::Acquire) {
+            return Err(io::Error::other("parent has stopped"));
+        }
+        if self.ready.load(Ordering::Acquire) {
+            return Err(io::Error::other("worker reload has not been prepared"));
+        }
+        if !self.reload_sent.load(Ordering::Acquire) {
+            stream.write_all(b"L\n")?;
+            self.reload_sent.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
     fn take_resize(&self) -> Option<usize> {
         if self.stop.load(Ordering::Acquire) {
             return None;
@@ -589,6 +662,9 @@ impl ChildState {
             .stream
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if !first && !self.ready.load(Ordering::Acquire) {
+            return Ok(());
+        }
         // Copy the receipt before sampling core state. A new accepted receipt
         // therefore never accompanies a snapshot taken before its core update.
         let receipt = self
@@ -716,11 +792,21 @@ fn local_snapshot(client_id: &str) -> Option<LinkedSnapshot> {
 }
 
 fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot> {
+    match read_child_update(reader, pid)? {
+        ChildUpdate::Snapshot(snapshot) => Ok(snapshot),
+        ChildUpdate::Reload => Err(io::Error::other("worker requested reload before readiness")),
+    }
+}
+
+fn read_child_update(reader: &mut impl Read, pid: u32) -> io::Result<ChildUpdate> {
     let mut line = Vec::with_capacity(512);
     for _ in 0..4096 {
         let mut byte = [0];
         reader.read_exact(&mut byte)?;
         if byte == *b"\n" {
+            if line == b"L" {
+                return Ok(ChildUpdate::Reload);
+            }
             let snapshot: LinkedSnapshot =
                 serde_json::from_slice(&line).map_err(io::Error::other)?;
             let counts = snapshot
@@ -752,7 +838,7 @@ fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot>
             {
                 return Err(io::Error::other("invalid worker window status"));
             }
-            return Ok(snapshot);
+            return Ok(ChildUpdate::Snapshot(snapshot));
         }
         line.push(byte[0]);
     }
@@ -1135,6 +1221,18 @@ mod tests {
         let mut ready = [0];
         parent.read_exact(&mut ready).unwrap();
         assert_eq!(ready, *b"R");
+        read_snapshot(&mut parent, std::process::id()).unwrap();
+        assert!(session.state.request_reload().is_err());
+        session.state.prepare_reload();
+        // No live worker display is installed in this fixture. A prepared
+        // reload must stop sampling it while the old runtime is being removed.
+        session.state.send_current_snapshot("fixture-client", false).unwrap();
+        session.state.request_reload().unwrap();
+        session.state.request_reload().unwrap();
+        assert!(matches!(read_child_update(&mut parent, std::process::id()).unwrap(), ChildUpdate::Reload));
+        parent.set_nonblocking(true).unwrap();
+        let mut extra = [0];
+        assert_eq!(parent.read(&mut extra).unwrap_err().kind(), io::ErrorKind::WouldBlock);
         drop(parent);
         let deadline = Instant::now() + Duration::from_secs(2);
         while !session.state.stop.load(Ordering::Acquire) && Instant::now() < deadline {
@@ -1142,7 +1240,36 @@ mod tests {
         }
         assert!(session.state.stop.load(Ordering::Acquire));
         assert!(session.state.announce_ready("fixture-client").is_err());
+        assert!(session.state.request_reload().is_err());
         drop(session);
+    }
+
+    #[test]
+    fn reload_updates_are_once_per_owned_window_and_stop_or_eof_never_relaunches() {
+        let state = || ParentState {
+            closed: AtomicBool::new(false),
+            reload_requested: AtomicBool::new(false),
+            snapshot: Mutex::new(None),
+        };
+        let old = state();
+        old.watch(&mut &b"L\nL\n"[..], std::process::id());
+        assert!(old.closed.load(Ordering::Acquire));
+        assert!(old.take_reload_request());
+        assert!(!old.take_reload_request());
+        assert!(!old.receive(ChildUpdate::Reload));
+        assert!(!old.take_reload_request());
+
+        let replacement = state();
+        assert!(!replacement.take_reload_request());
+        replacement.watch(&mut &b""[..], std::process::id());
+        assert!(replacement.closed.load(Ordering::Acquire));
+        assert!(!replacement.take_reload_request());
+
+        let stopped = state();
+        stopped.closed.store(true, Ordering::Release);
+        stopped.watch(&mut &b"L\n"[..], std::process::id());
+        assert!(!stopped.take_reload_request());
+        assert!(read_snapshot(&mut &b"L\n"[..], std::process::id()).is_err());
     }
 
     #[test]

@@ -138,6 +138,11 @@ def fixture_pty(command):
                     os.write(master, b"\x03")
                     interrupted = True
                     record(directory, "monitor_interrupt")
+                reload_request = directory / "reload-monitor"
+                if reload_request.is_file():
+                    reload_request.unlink()
+                    os.write(master, b"\x12\x12")
+                    record(directory, "monitor_reload")
                 if selector.select(0.025):
                     try:
                         chunk = os.read(master, 65536)
@@ -777,6 +782,7 @@ class WorkerWindows(Harness):
         elapsed = active_slot.get("current_task_elapsed_ms")
         self.check(isinstance(elapsed, int) and elapsed >= 0 and active_slot["total_work_ms"] >= elapsed,
                    "current work time is present while the real task is active")
+        self.assert_busy_reload(directory, worker, manager, task_id)
         self.bound(worker["id"], executor, "ssmcp.worker.complete", {
             "claim": assignment["claim"], "status": "completed", "output": "WINDOW_TASK_OK",
         })
@@ -849,9 +855,85 @@ class WorkerWindows(Harness):
                    and all(entry["exit_code"] == 0 and entry["terminal_restored"] for entry in ended),
                    "every actual worker has its own normal-exit and restored-terminal receipt")
 
+    def assert_busy_reload(self, directory, worker, manager, task_id):
+        original = next(entry for entry in events(directory) if entry["kind"] == "worker")
+        transcript = directory / f"worker-{original['supervisor'][0]}.pty"
+        decoder = Decoder(self.decoder_binary)
+        offset = 0
+        try:
+            decoder.request(op="resize", rows=ROWS, cols=COLS)
+            (directory / "reload-monitor").touch()
+
+            def busy_notice():
+                nonlocal offset
+                data = transcript.read_bytes()
+                decoder.feed(data[offset:])
+                offset = len(data)
+                frame = decoder.request(op="snapshot", cells=True)
+                return frame if "finish or cancel worker tasks" in "\n".join(frame["rows"]) else None
+
+            frame = wait_for(busy_notice, timeout=15, description="busy reload rejection in the real worker panel")
+        finally:
+            decoder.close()
+        state = self.bound(worker["id"], manager, "ssmcp.worker.status")["worker"]
+        self.check(state["working"] == 1 and any(slot.get("task_id") == task_id for slot in state["slots"])
+                   and process_identity(original["identity"][0]) == original["identity"]
+                   and len([entry for entry in events(directory) if entry["kind"] == "worker"]) == 1,
+                   "Ctrl+R visibly refuses a busy pool without replacing its child or releasing the active claim")
+        self.cases["busy-worker-reload"] = {"worker_client_id": worker["id"],
+                                            "process_id": original["identity"][0], "frame": frame}
+
+    def reload_worker(self, frontend, directory, workspace, parent, worker):
+        original = next(entry for entry in events(directory) if entry["kind"] == "worker")
+        frontend.send(b"\x01\x0b/worker +1\r")
+        self.pool_projection(frontend, parent,
+                             lambda pool: pool["desired_total"] == 4 and pool["total"] == 4
+                             and pool["offline"] == 4 and pool["working"] == 0 and pool["queued"] == 0,
+                             "settled four-slot capacity before worker-only reload")
+        frontend.send(b"\x1b\x01\x0bPARENT_DRAFT_SURVIVES_WORKER_RELOAD")
+        frontend.until(lambda shot: "PARENT_DRAFT_SURVIVES_WORKER_RELOAD" in input_text(shot),
+                       "parent draft before worker reload")
+        (directory / "reload-monitor").touch()
+        same_parent, replacement = self.select_pair(frontend, workspace, excluding=(worker["id"],))
+        records = wait_for(lambda: ([entry for entry in events(directory) if entry["kind"] == "worker"]
+                                    if len([entry for entry in events(directory) if entry["kind"] == "worker"]) == 2
+                                    else None), timeout=10, description="one replacement after worker Ctrl+R")
+        current = records[-1]
+        self.owned.extend([current["identity"], current["supervisor"]])
+        wait_for(lambda: process_identity(original["identity"][0]) != original["identity"],
+                 timeout=15, description="old worker exits before replacement is used")
+        self.check(same_parent["id"] == parent["id"] and frontend.process.poll() is None
+                   and replacement["id"] != worker["id"]
+                   and current["identity"][0] != original["identity"][0],
+                   "worker Ctrl+R replaces only its child process and connection, preserving the parent")
+        self.check(len([entry for entry in events(directory) if entry["kind"] == "launcher"]) == 2
+                   and len([entry for entry in events(directory) if entry["kind"] == "monitor_reload"]) == 2,
+                   "repeated Ctrl+R keys create one replacement after the earlier busy rejection")
+        new_manager = self.join(replacement["id"], "worker-reload-observer")
+        state = self.bound(replacement["id"], new_manager, "ssmcp.worker.status")["worker"]
+        self.check(state["manager"] is None and state["total"] == 4 and state["desired_total"] == 4
+                   and state["offline"] == 4 and state["registered_workers"] == 0,
+                   "the replacement preserves requested capacity without inheriting the old manager or workers")
+        expected = list(original["argv"])
+        expected[expected.index("--worker") + 1] = "4"
+        self.check(current["cwd"] == str(workspace) and current["argv"] == expected,
+                   "worker-only reload preserves literal arguments and cwd with the updated capacity")
+        self.pool_projection(frontend, parent,
+                             lambda pool: pool["client_id"] == replacement["id"]
+                             and pool["process_id"] == current["identity"][0],
+                             "unchanged parent links the replacement worker")
+        frontend.until(lambda shot: "PARENT_DRAFT_SURVIVES_WORKER_RELOAD" in input_text(shot),
+                       "parent draft survives worker-only reload")
+        self.cases["worker-reload"] = {"parent_client_id": parent["id"],
+                                      "old_worker_client_id": worker["id"], "worker_client_id": replacement["id"],
+                                      "old_process_id": original["identity"][0], "process_id": current["identity"][0],
+                                      "desired_total": state["desired_total"]}
+        frontend.send(b"\x01\x0b")
+
     def default_and_parent_exit(self):
-        frontend, directory, _, parent, worker, manager = self.launch("parent-exit")
+        frontend, directory, workspace, parent, worker, manager = self.launch("parent-exit")
         self.protocol(frontend, directory, parent, worker, manager)
+        self.reload_worker(frontend, directory, workspace, parent, worker)
         self.assert_no_persisted_conversation_state("active coordination")
         frontend.request_exit()
         self.check(frontend.wait_exit() == 0, "parent exits normally after two Ctrl-C presses")

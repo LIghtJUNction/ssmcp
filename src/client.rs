@@ -1789,15 +1789,29 @@ impl WorkerController {
                 }
             }
         }
-        let closed = self.window.as_ref().map(|window| window.poll_closed());
-        match closed {
-            Some(Ok(true)) => {
+        let transition = self.window.as_ref().map(|window| {
+            // Read closed first: its release follows the final reload message.
+            // A concurrently arriving reload is handled now or on the next poll.
+            let closed = window.poll_closed();
+            (closed, window.take_reload_request())
+        });
+        match transition {
+            Some((Ok(_), true)) => {
+                // The child sent this only after its old runtime was cleaned up.
+                // Drop its owned handle before opening exactly one replacement.
+                self.window = None;
+                self.pending = None;
+                terminal::notice("Reloading worker window; this chat session stays connected.");
+                // Re-check parent stop intent on the next UI tick before launch.
+                return;
+            }
+            Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
                 self.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
             }
-            Some(Err(error)) => {
+            Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
                 self.desired = 0;
@@ -2464,12 +2478,19 @@ pub async fn run() -> crate::Result<()> {
                     biased;
                     _ = interrupt.recv() => true,
                     _ = terminate.recv() => true,
-                    _ = std::future::ready(()) => service.as_ref().is_some_and(|runner| runner.stop_requested()),
+                    _ = std::future::ready(()) => service.as_ref().is_some_and(|runner| runner.stop_requested())
+                        || (options.worker_window_child && worker_window::child_stop_requested()),
                 };
                 if stopped {
                     if let Some(runner) = &service {
                         runner.record("stopped", attempt, None, None, None)?;
                     }
+                    return Ok(());
+                }
+                if options.worker_window_child {
+                    // An attached child cannot re-use the one-shot parent
+                    // handshake after exec. Its existing owner replaces it.
+                    worker_window::child_request_reload()?;
                     return Ok(());
                 }
                 if let Some(runner) = &service {
@@ -3598,9 +3619,24 @@ async fn connect_inner(
                 }
             },
             _ = ui_updates.tick(), if display_session.is_some() => {
-                if options.worker_window_child && worker_window::child_stop_requested() {
+                if terminal::exit_requested()
+                    || service.is_some_and(|runner| runner.stop_requested())
+                    || (options.worker_window_child && worker_window::child_stop_requested())
+                {
                     intentionally_stopped = true;
                     break Ok(());
+                }
+                if options.worker_window.is_some() {
+                    let stopping = tokio::select! {
+                        biased;
+                        _ = interrupt.recv() => true,
+                        _ = terminate.recv() => true,
+                        _ = std::future::ready(()) => false,
+                    };
+                    if stopping {
+                        intentionally_stopped = true;
+                        break Ok(());
+                    }
                 }
                 if options.worker_window_child
                     && let Some(total) = worker_window::take_resize_request()
@@ -3619,10 +3655,6 @@ async fn connect_inner(
                 if options.worker.is_some() && local_input.as_ref().is_none_or(input::Input::is_finished) {
                     intentionally_stopped = true;
                     break Err(worker_monitor_closed());
-                }
-                if terminal::exit_requested() {
-                    intentionally_stopped = true;
-                    break Ok(());
                 }
                 render::set_git_status(git_status.snapshot());
             },
@@ -3789,6 +3821,9 @@ async fn connect_inner(
             _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
+    if reload_requested && options.worker_window_child {
+        worker_window::child_prepare_reload();
+    }
     backend.stop_workers();
     peer_ports.shutdown().await;
     if let Some(chat) = &chat {
