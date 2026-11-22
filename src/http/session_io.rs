@@ -356,6 +356,7 @@ mod tests {
             run.clone(),
             None,
             "io-fixture".into(),
+            Default::default(),
         );
         let pending = tokio::spawn(host(crate::code_mode::HostRequest::Call {
             client_id: client_id.clone(),

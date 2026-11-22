@@ -7,6 +7,7 @@ mod registry;
 #[cfg(test)]
 #[path = "oauth/registry_tests.rs"]
 mod registry_tests;
+pub mod transfer;
 
 use crate::{
     broker::{Authorization, Broker, Session, valid_username},

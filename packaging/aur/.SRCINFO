@@ -17,6 +17,7 @@ pkgbase = ssmcp-git
 	depends = nodejs>=18
 	depends = bubblewrap>=0.8
 	depends = util-linux
+	depends = git
 	optdepends = rsync: synchronize workspace directory contents
 	optdepends = python: GitHub account portal SSH synchronization
 	optdepends = shadow: provision restricted portal SSH accounts

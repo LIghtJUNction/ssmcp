@@ -28,16 +28,18 @@ sudo /usr/local/libexec/ssmcp/setup-server \
 
 ## 1. 安装程序与服务账户
 
-服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线；具体归档与安装方法见[发布与平台支持](releases.md)。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；依赖由发行版包管理器安装和更新：
+服务端运行于 Linux；客户端支持 Linux、macOS 和 Windows 的 x86_64 / ARM64。Linux 客户端需要 5.3 或更新内核以使用 pidfd，预编译 GNU 包以 glibc 2.35 为基线；具体归档与安装方法见[发布与平台支持](releases.md)。源码构建使用仓库固定的 Rust 1.100.0。服务端通过系统安装的 Node.js 18+ 执行代码，通过 bubblewrap 0.8+ 创建隔离环境，并在该环境内用 util-linux 提供的 prlimit 限制进程数；Git 也是服务端运行依赖，由发行版包管理器安装和更新：
 
 ```sh
 # Debian / Ubuntu
-sudo apt install openssh-server nodejs bubblewrap util-linux
+sudo apt install openssh-server nodejs bubblewrap util-linux git
 # Arch Linux
-sudo pacman -S openssh nodejs bubblewrap util-linux
+sudo pacman -S openssh nodejs bubblewrap util-linux git
 # Fedora
-sudo dnf install openssh-server nodejs bubblewrap util-linux
+sudo dnf install openssh-server nodejs bubblewrap util-linux git
 ```
+
+服务端通过系统 `git` 从程序内嵌的 bundle 初始化官方工具仓库，并读取固定提交的工具源码。预编译服务端同样需要安装 Git，并确保它在服务的 `PATH` 中可用；官方仓库初始化无需访问 GitHub。[工具仓库初始化](../src/tool_repository.rs)
 
 只运行本机 `ssmcp` 客户端时无需 Node.js 或 bubblewrap。构建并安装服务端文件：
 
@@ -55,7 +57,7 @@ sudo useradd --system --gid ssmcp --no-create-home \
 
 ### 验证 JavaScript 执行环境
 
-`ssmcpd check-runtime` 使用已安装的 Node.js、bubblewrap、prlimit 和 JavaScript runner 执行固定检查程序。检查通过真实的 `code_mode` 沙箱与进程通信路径运行；客户端列表为空，所有原生工具调用都被拒绝。它无需网关 TOML、OAuth 凭据或在线客户端，也不连接外部网络。
+`ssmcpd check-runtime` 使用已安装的 Git、Node.js、bubblewrap、prlimit 和 JavaScript runner 执行固定检查程序。检查通过真实的 `code_mode` 沙箱与进程通信路径运行；客户端列表为空，所有原生工具调用都被拒绝。它无需网关 TOML、OAuth 凭据或在线客户端，也不连接外部网络。
 
 ```sh
 /usr/local/bin/ssmcpd check-runtime

@@ -99,7 +99,7 @@ jobs:
           crate = os.environ["CRATE_PUBLICATION"]
           if contract == "git-source-v1":
               expected = ("not_requested" if build_only == "true"
-                          else "deferred" if version == "0.10.25" else "registry")
+                          else "deferred" if version in {"0.10.25", "0.10.26"} else "registry")
               if crate != expected:
                   raise ValueError("validated crate policy does not match the Git source contract")
           elif (not contract and not crate and publish == "true"
@@ -164,6 +164,7 @@ jobs:
               "0.10.23": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
               "0.10.24": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
               "0.10.25": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
+              "0.10.26": "Preserve active relay sessions until a separate non-disruptive server switch is verified.",
           }
           deferred = deferred_versions.get(version)
           deploy = "true" if publish == "true" and requested and deferred is None else "false"

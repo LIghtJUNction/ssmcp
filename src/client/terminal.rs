@@ -33,6 +33,7 @@ pub(crate) mod markdown;
 mod retired_keys;
 mod sleep;
 mod update_notice;
+mod worker;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(34);
 const MAX_REPLIES: usize = 8192;
@@ -75,7 +76,7 @@ impl Session {
         title: Option<&str>,
         endpoint: Option<&str>,
     ) -> io::Result<Option<Self>> {
-        Self::start_with_account(ui, cwd, title, endpoint, true)
+        Self::start_with_account(ui, cwd, title, endpoint, true, false)
     }
 
     #[cfg(target_os = "linux")]
@@ -85,7 +86,19 @@ impl Session {
         title: Option<&str>,
         endpoint: Option<&str>,
     ) -> io::Result<Option<Self>> {
-        Self::start_with_account(ui, cwd, title, endpoint, false)
+        Self::start_with_account(ui, cwd, title, endpoint, false, false)
+    }
+
+    /// A worker connection starts directly in its read-only monitor. It never
+    /// restores a composer or briefly renders the ordinary conversation view.
+    pub(crate) fn start_worker(
+        ui: &Ui,
+        cwd: &str,
+        title: Option<&str>,
+        endpoint: Option<&str>,
+        account: bool,
+    ) -> io::Result<Option<Self>> {
+        Self::start_with_account(ui, cwd, title, endpoint, account, true)
     }
 
     fn start_with_account(
@@ -94,6 +107,7 @@ impl Session {
         title: Option<&str>,
         endpoint: Option<&str>,
         account: bool,
+        worker_mode: bool,
     ) -> io::Result<Option<Self>> {
         if !ui.dashboard
             || ui.log_format == LogFormat::Jsonl
@@ -111,6 +125,9 @@ impl Session {
         let mut options = ui.clone();
         options.color &= std::env::var_os("NO_COLOR").is_none();
         let mut state = State::new(rows, cols, &options);
+        if worker_mode {
+            state.worker = Some(worker::Monitor::default());
+        }
         state.set_context(cwd, title);
         state.server_origin = endpoint.and_then(footer::Origin::parse);
         if !account {
@@ -130,8 +147,10 @@ impl Session {
         if account_server.is_some() {
             state.account = AccountStatus::Loading;
         }
-        state.graphics = images::Graphics::environment(&options);
-        state.chat_restore_reload_state();
+        if !worker_mode {
+            state.graphics = images::Graphics::environment(&options);
+            state.chat_restore_reload_state();
+        }
         let shared = Arc::new(Shared {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
@@ -233,6 +252,14 @@ impl Session {
                 Err(error)
             }
         }
+    }
+
+    pub(crate) fn resume_history(&self) {
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .chat_resume();
     }
 }
 
@@ -883,6 +910,9 @@ pub(crate) fn snapshot() -> serde_json::Value {
         return serde_json::json!({"active": false});
     };
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if state.worker.is_some() {
+        return state.worker_snapshot(shared.alive.load(Ordering::Acquire));
+    }
     state.chat_poll_goal();
     let g = state.geometry;
     let chat = state.ui.layout == Layout::Chat;
@@ -958,6 +988,9 @@ pub(crate) fn preview_bytes(ui: &Ui, rows: u16, cols: u16) -> Vec<u8> {
 pub(crate) fn seed_preview() {
     if let Some(shared) = shared() {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.worker.is_some() {
+            return;
+        }
         let context_label = std::mem::take(&mut state.context_label);
         *state = preview_state(state.geometry.rows, state.geometry.cols, &state.ui);
         state.context_label = context_label;
@@ -1003,6 +1036,20 @@ pub(crate) fn keyboard_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
     Some(state.keyboard(bytes, Instant::now(), false))
+}
+
+/// A monitor has no headless input fallback. Its independent input pump keeps
+/// this rule even after the compositor disappears or another view replaces it.
+pub(super) fn monitor_keyboard_bytes(bytes: &[u8], flush: bool) -> Result<(), String> {
+    let Some(shared) = shared().filter(|shared| shared.alive.load(Ordering::Acquire)) else {
+        return Err("worker monitor is unavailable; local input was not forwarded".into());
+    };
+    let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+    if state.worker.is_none() {
+        return Err("worker monitor was replaced; local input was not forwarded".into());
+    }
+    let _ = state.keyboard(bytes, Instant::now(), flush);
+    Ok(())
 }
 
 /// Preserve an outer reader's actual image-input time when it retains a split
@@ -1532,6 +1579,7 @@ impl vt100::Callbacks for Replies {
 }
 
 struct State {
+    worker: Option<worker::Monitor>,
     context_label: String,
     server_origin: Option<footer::Origin>,
     connection_versions: Option<super::update::ConnectionVersions>,
@@ -1580,6 +1628,7 @@ impl State {
         let geometry = Geometry::new(rows, cols, ui, None);
         let conversation = conversation::Conversation::default();
         let mut state = Self {
+            worker: None,
             events: events::EventView::new(),
             attached_history: None,
             context_label: String::new(),
@@ -1972,6 +2021,10 @@ impl State {
     }
 
     fn keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) -> Vec<u8> {
+        if self.worker.is_some() {
+            self.worker_keyboard(bytes, now, flush);
+            return Vec::new();
+        }
         if self.keyboard.image_paste_expired(now) {
             self.discard_image_paste();
         }
@@ -2225,6 +2278,9 @@ impl State {
         previous_cell: Option<images::CellSize>,
     ) -> bool {
         let pixels_changed = self.graphics.cell() != previous_cell;
+        if self.worker.is_some() {
+            return self.dirty || pixels_changed;
+        }
         let sleep_changed = self.sleep.visible != self.sleep_wants_overlay();
         let frozen = self.selection
             && !self.sleep.visible
@@ -2237,7 +2293,9 @@ impl State {
     fn frame(&mut self, now: Instant) -> Frame {
         self.rendered_update_notice = None;
         let mut frame = self.base_frame(now);
-        self.sleep_overlay(&mut frame);
+        if self.worker.is_none() {
+            self.sleep_overlay(&mut frame);
+        }
         if self.sleep.visible {
             self.rendered_update_notice = None;
         }
@@ -2245,7 +2303,8 @@ impl State {
             // This frame owns visibility, including transitions away from Chat.
             // The manager hint is safe while the terminal State lock is held.
             super::messaging::watch_recipients(
-                self.ui.layout == Layout::Chat
+                self.worker.is_none()
+                    && self.ui.layout == Layout::Chat
                     && self.conversation.view == conversation::View::Agents
                     && !self.help
                     && !self.sleep.visible,
@@ -2256,6 +2315,9 @@ impl State {
 
     fn base_frame(&mut self, now: Instant) -> Frame {
         self.media.clear();
+        if self.worker.is_some() {
+            return self.worker_frame(crate::worker::display().as_ref());
+        }
         self.events
             .image_cells(self.graphics.cell().filter(|_| self.ui.color));
         if self.ui.layout == Layout::Chat {

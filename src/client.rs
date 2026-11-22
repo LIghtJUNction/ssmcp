@@ -4,7 +4,7 @@ pub(crate) mod account;
 pub(crate) mod agent;
 pub(crate) mod attachments;
 mod audit_view;
-mod chat_io;
+pub(crate) mod chat_io;
 mod clipboard;
 pub(crate) mod completion;
 mod composer;
@@ -55,7 +55,17 @@ use crate::{
     },
 };
 use serde_json::json;
-use std::{ffi::OsString, io, path::PathBuf, process::ExitStatus, sync::Arc, time::Duration};
+use std::{
+    ffi::OsString,
+    io,
+    path::PathBuf,
+    process::ExitStatus,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, BufReader},
     process::{Child, ChildStdout, Command},
@@ -71,6 +81,7 @@ Usage: ssmcp [username@server] [options]
 Start
   ssmcp                         Reuse your last authorized account
   ssmcp local                   Run a local MCP session on Linux
+  ssmcp resume [options]        Open this workspace's saved conversation picker
   ssmcp alice@relay.example     Connect and sign in when needed
   ssmcp list                    List online processes and registered threads
   ssmcp -i                      Open an authorized remote terminal
@@ -82,6 +93,8 @@ Manage
   config · whoami · logout      Account and server settings
   context                     Saved local and HTTPS connection targets
   update [--check]              Update the installed client
+  cleanup                      Inspect and clean registered workspace files
+  tools [status|check|update]    Inspect or update this client's tool repository
   sessions · attach · service  Saved and background sessions
   computer                     Zuse CLI version and installation
   setup · ui · 007             Setup, appearance and recovery
@@ -90,6 +103,8 @@ Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
   --input MODE  Chat input (terminal by default, none disables chat)
   --agent NAME  Chat recipient (next-caller by default)
+  --worker N    Worker monitor with N isolated execution slots (Linux)
+  --worker-k K  Resource share multiplier, default 1; choose an explicit --agent
   --load-harness NAME  Preload one native protocol
   --list-harnesses     List supported harness providers
   --version [--all]    Show the version or the locked dependency tree
@@ -105,6 +120,8 @@ const HELP_FULL: &str = r#"ssmcp — connect your devices and control authorized
 
 Usage: ssmcp username@server [options]
        ssmcp [--server URL] [options]
+       ssmcp resume [options]
+       ssmcp [connection options] --worker N [--worker-k K] [--agent codex|claude|opencode|exec]
        ssmcp whoami|logout [--server URL] [--json]
        ssmcp list [--json | -i] [--client ID]
        ssmcp -i [--server URL] [--client ID]
@@ -112,6 +129,8 @@ Usage: ssmcp username@server [options]
        ssmcp config path
        ssmcp context <create|list|show|inspect|use|rm> [options]
        ssmcp update [--check]
+       ssmcp cleanup [--dry-run|--list|--config|--set-config FILE]
+       ssmcp tools [status|check|update]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
        ssmcp [options] [--server URL]
@@ -270,6 +289,10 @@ Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
+Use `ssmcp resume` to start the foreground client at this workspace's saved
+conversation picker (the same as /resume). Select a conversation and press Enter.
+Only saved text is restored: models, credentials, terminals and queued requests
+are not resumed or replayed. An empty history exits without connecting.
 "#;
 
 // A single reader owns every partial frame after Ready, including while a native
@@ -426,6 +449,8 @@ struct Options {
     allow: Vec<String>,
     context_roots: Vec<PathBuf>,
     chat: chat_io::Settings,
+    worker: Option<crate::worker::Config>,
+    resume_history: AtomicBool,
     list_tools: bool,
     daemon: bool,
     session_control: bool,
@@ -520,6 +545,10 @@ impl Options {
         new_connection: bool,
     ) -> Result<Option<Self>, String> {
         let mut args = args.into_iter().peekable();
+        let resume_history = new_connection && args.peek().is_some_and(|arg| arg == "resume");
+        if resume_history {
+            args.next();
+        }
         let mut local_mode = args.peek().is_some_and(|arg| arg == "local");
         if local_mode {
             args.next();
@@ -542,6 +571,8 @@ impl Options {
         let mut allow = Vec::new();
         let mut context_roots = Vec::new();
         let mut chat = chat_io::Flags::default();
+        let mut worker_count = None;
+        let mut worker_factor = None;
         let mut list_tools = false;
         let mut daemon = false;
         let mut session_control = false;
@@ -561,6 +592,35 @@ impl Options {
         let mut harness_arguments = Vec::new();
         while let Some(arg) = args.next() {
             match arg.to_str() {
+                Some("--worker" | "--worker-k") => {
+                    let name = arg.to_str().expect("matched UTF-8 worker flag");
+                    let value = args
+                        .next()
+                        .ok_or_else(|| format!("{name} requires a value"))?
+                        .into_string()
+                        .map_err(|_| format!("{name} must be UTF-8"))?;
+                    let target = if name == "--worker" {
+                        &mut worker_count
+                    } else {
+                        &mut worker_factor
+                    };
+                    if target.replace(value).is_some() {
+                        return Err(format!("{name} may be supplied only once"));
+                    }
+                }
+                Some(value)
+                    if value.starts_with("--worker=") || value.starts_with("--worker-k=") =>
+                {
+                    let (name, value) = value.split_once('=').expect("worker equals flag");
+                    let target = if name == "--worker" {
+                        &mut worker_count
+                    } else {
+                        &mut worker_factor
+                    };
+                    if target.replace(value.to_owned()).is_some() {
+                        return Err(format!("{name} may be supplied only once"));
+                    }
+                }
                 Some("--load-harness") => {
                     if harness_name.is_some() {
                         return Err("--load-harness may be supplied only once".into());
@@ -825,7 +885,39 @@ impl Options {
                 _ => return Err("unexpected argument; see ssmcp --help".into()),
             }
         }
-        let chat = chat.finish()?;
+        let worker = match worker_count {
+            Some(count) => Some(crate::worker::Config::parse(
+                &count,
+                worker_factor.as_deref(),
+            )?),
+            None if worker_factor.is_some() => return Err("--worker-k requires --worker N".into()),
+            None => None,
+        };
+        #[cfg(not(target_os = "linux"))]
+        if worker.is_some() {
+            return Err("worker hard limits currently require Linux cgroup v2 and the user's systemd manager".into());
+        }
+        let chat = if worker.is_some() {
+            chat.finish_for_worker(true)?
+        } else {
+            chat.finish()?
+        };
+        if worker.is_some()
+            && (resume_history
+                || list_tools
+                || harness_name.is_some()
+                || !matches!(chat.input, chat_io::Input::Terminal | chat_io::Input::None))
+        {
+            return Err("--worker is a tool-controlled monitor: use terminal or none input, omit resume, --list-tools and --load-harness; choose a local executable with --agent".into());
+        }
+        if resume_history
+            && (daemon
+                || list_tools
+                || chat.input != chat_io::Input::Terminal
+                || log_format == Some(render::LogFormat::Jsonl))
+        {
+            return Err("ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output".into());
+        }
         if list_tools && !chat.arguments().is_empty() {
             return Err("--list-tools cannot configure chat input or an agent".into());
         }
@@ -1006,6 +1098,8 @@ impl Options {
             allow,
             context_roots,
             chat,
+            worker,
+            resume_history: AtomicBool::new(resume_history),
             list_tools,
             daemon,
             session_control,
@@ -1099,6 +1193,14 @@ impl Options {
         let metadata = self.metadata()?;
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
         args.extend_from_slice(self.chat.arguments());
+        if let Some(worker) = self.worker {
+            args.extend([
+                OsString::from("--worker"),
+                OsString::from(worker.count.to_string()),
+                OsString::from("--worker-k"),
+                OsString::from(worker.factor.to_string()),
+            ]);
+        }
         for (flag, value) in [("-i", &self.identity), ("-F", &self.config)] {
             if let Some(value) = value {
                 args.extend([
@@ -1246,6 +1348,9 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
     }
     let options =
         Options::parse_saved(spec)?.ok_or("saved session must contain connection options")?;
+    if options.worker.is_some() && options.chat.input != chat_io::Input::None {
+        return Err("saved worker pools require explicit --input none; the foreground monitor does not accept chat".into());
+    }
     options.chat.validate_saved_input()?;
     if options.daemon
         || options.list_tools
@@ -1268,17 +1373,24 @@ pub(crate) fn validate_session_spec(spec: &crate::session::SessionSpec) -> crate
 /// context roots or resolving the session's credentials.
 pub(crate) fn saved_chat_enabled(spec: &crate::session::SessionSpec) -> bool {
     let mut args = spec.args.iter();
+    let mut enabled = true;
+    let mut worker = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--" => break,
-            "--input" => return args.next().is_none_or(|value| value != "none"),
+            "--input" => enabled = args.next().is_none_or(|value| value != "none"),
+            "--worker" => {
+                worker = true;
+                args.next();
+            }
+            value if value.starts_with("--worker=") => worker = true,
             arg if connection_option_takes_value(arg) => {
                 args.next();
             }
             _ => {}
         }
     }
-    true
+    enabled && !worker
 }
 
 /// Read display metadata without reopening optional context roots or transports.
@@ -1403,6 +1515,12 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
     let Some(mut options) = Options::parse_new(connection)? else {
         return Ok(());
     };
+    if options.resume_history.load(Ordering::Relaxed) {
+        return Err(
+            "ssmcp resume opens a foreground history picker and cannot create a background session"
+                .into(),
+        );
+    }
     if options.destination.is_some() {
         return Err("Use ssmcp sessions create NAME username@server for an OAuth session".into());
     }
@@ -1431,6 +1549,8 @@ fn connection_option_takes_value(option: &str) -> bool {
             option,
             "--name"
                 | "--load-harness"
+                | "--worker"
+                | "--worker-k"
                 | "--server"
                 | "--context"
                 | "--username"
@@ -1584,6 +1704,9 @@ async fn retry_legacy_self_account(
 }
 
 pub async fn run() -> crate::Result<()> {
+    if let Some(result) = crate::worker::child_entry().await {
+        return result;
+    }
     let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(request) = version::request(&args)? {
         print!("{}", version::render(request)?);
@@ -1631,6 +1754,25 @@ pub async fn run() -> crate::Result<()> {
     }
     if agent::dispatch(&args)? {
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "cleanup") {
+        let arguments = args
+            .iter()
+            .map(|arg| {
+                arg.to_str()
+                    .map(str::to_owned)
+                    .ok_or("cleanup arguments must be valid UTF-8")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(output) =
+            crate::managed_files::command::run(&arguments, std::path::Path::new("."))?
+        {
+            println!("{output}");
+            return Ok(());
+        }
+    }
+    if args.first().is_some_and(|arg| arg == "tools") {
+        return crate::tool_repository::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "update") {
         return update::run(args.into_iter().skip(1).collect()).await;
@@ -1711,10 +1853,25 @@ pub async fn run() -> crate::Result<()> {
         return Ok(());
     };
     if service.is_some() || options.daemon {
+        if options.worker.is_some() && options.chat.input != chat_io::Input::None {
+            return Err("background worker pools require explicit --input none".into());
+        }
         options.chat.validate_saved_input()?;
     }
     if options.destination.is_some() {
         return Err("SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server".into());
+    }
+    if options.resume_history.load(Ordering::Relaxed) {
+        if interface::history::sessions()?.is_empty() {
+            println!(
+                "No saved conversations in this workspace. Start ssmcp to begin a conversation."
+            );
+            return Ok(());
+        }
+        use std::io::IsTerminal;
+        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+            return Err("ssmcp resume requires an interactive terminal to choose a saved conversation; run it from a terminal in this workspace".into());
+        }
     }
     if options.is_local() {
         if service.is_some() {
@@ -1769,6 +1926,14 @@ pub async fn run() -> crate::Result<()> {
         ui.color = false;
         ui.log_format = render::LogFormat::Jsonl;
         ui.show_raw_json = false;
+    }
+    if options.resume_history.load(Ordering::Relaxed) {
+        if !ui.dashboard || ui.log_format == render::LogFormat::Jsonl {
+            return Err("ssmcp resume requires the interactive dashboard; enable ui.dashboard and use pretty log output".into());
+        }
+        // Open the requested picker even when the saved layout is audit or logs.
+        // This startup choice does not write the user's appearance configuration.
+        ui.layout = ui::Layout::Chat;
     }
     interface::initialize_path(options.ui_config.as_deref());
     render::configure(ui.clone());
@@ -2005,6 +2170,12 @@ pub async fn run() -> crate::Result<()> {
             },
         }
     }
+}
+
+fn worker_monitor_closed() -> crate::Error {
+    Box::new(relay::PermanentFailure(
+        "worker monitor closed; stopping its owned execution slots".into(),
+    ))
 }
 
 pub(crate) fn watchdog_retries(
@@ -2404,7 +2575,17 @@ impl Transport<'_> {
         cwd: &str,
         title: Option<&str>,
         url: &str,
+        worker: bool,
     ) -> io::Result<Option<terminal::Session>> {
+        if worker {
+            return terminal::Session::start_worker(
+                ui,
+                cwd,
+                title,
+                Some(url),
+                matches!(self, Self::Account { .. }),
+            );
+        }
         match self {
             Self::Account { .. } => terminal::Session::start(ui, cwd, title, Some(url)),
             #[cfg(target_os = "linux")]
@@ -2423,7 +2604,11 @@ async fn connect(
 ) -> crate::Result<ConnectionExit> {
     #[cfg(target_os = "linux")]
     if let Some(settings) = &options.local {
-        let host = local::Host::start(settings, options.chat.input == chat_io::Input::None).await?;
+        let host = local::Host::start(
+            settings,
+            options.worker.is_some() || options.chat.input == chat_io::Input::None,
+        )
+        .await?;
         let result = connect_inner(
             options,
             ui,
@@ -2512,7 +2697,7 @@ async fn connect_inner(
         }
     };
     let mut metric_channel = None;
-    let chat_enabled = options.chat.input != chat_io::Input::None;
+    let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
     let registration = register_ssh(
         &wire_metadata,
         options.account_compat,
@@ -2569,8 +2754,17 @@ async fn connect_inner(
         transport.timing_support((time_observation_supported, wait_display_supported));
     let github_auth = !metadata.allow.is_empty();
     let login_received_at = std::time::Instant::now();
+    if let Some(worker) = options.worker {
+        crate::worker::prepare_display(worker);
+    }
     let display_session = if options.chat.input == chat_io::Input::Terminal {
-        match transport.start_display(ui, &metadata.cwd, metadata.title.as_deref(), &url) {
+        match transport.start_display(
+            ui,
+            &metadata.cwd,
+            metadata.title.as_deref(),
+            &url,
+            options.worker.is_some(),
+        ) {
             Ok(session) => session,
             Err(error) => {
                 render::status(
@@ -2584,6 +2778,24 @@ async fn connect_inner(
     } else {
         None
     };
+    if options.worker.is_some()
+        && options.chat.input == chat_io::Input::Terminal
+        && display_session.is_none()
+    {
+        let _ = ssh.kill().await;
+        return Err(Box::new(relay::PermanentFailure("worker monitor requires a live dashboard; use --input none for an explicitly headless pool".into())));
+    }
+    if options.resume_history.load(Ordering::Relaxed) {
+        let Some(display) = display_session.as_ref() else {
+            let _ = ssh.kill().await;
+            return Err(Box::new(relay::PermanentFailure(
+                "ssmcp resume could not open the interactive history picker; use a supported terminal with the dashboard enabled".into(),
+            )));
+        };
+        if options.resume_history.swap(false, Ordering::Relaxed) {
+            display.resume_history();
+        }
+    }
     if options.chat.input == chat_io::Input::Terminal
         && options.chat.agent != chat_io::Agent::NextCaller
         && display_session.is_none()
@@ -2648,6 +2860,9 @@ async fn connect_inner(
         runtime.bind_client_id(&client_id)?;
         runtime.configure_timing(time_observation_supported, wait_display_supported)?;
         runtime.configure_chat(chat_enabled)?;
+        if let Some(worker) = options.worker {
+            runtime.configure_workers(worker, &options.chat.agent)?;
+        }
         runtime.enable_default_skill_sources()?;
         Ok(runtime)
     }) {
@@ -2701,6 +2916,9 @@ async fn connect_inner(
     }
     let login_expires_in = login_expires_in.saturating_sub(login_received_at.elapsed().as_secs());
     let mut output = json!({"url":url,"client_id":client_id,"name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,"type":"shell"});
+    if options.worker.is_some() {
+        output["worker"] = json!(crate::worker::display());
+    }
     if let Some(harness) = &options.harness {
         output["agent"] = json!(harness.provider.label());
         output["agent_scope"] = json!("protocol_catalog");
@@ -2771,11 +2989,31 @@ async fn connect_inner(
         },
     );
     let local_input = match if options.chat.input == chat_io::Input::Terminal {
-        input::Input::attach(backend.terminals())
+        if options.worker.is_some() {
+            input::Input::attach_monitor(backend.terminals())
+        } else {
+            input::Input::attach(backend.terminals())
+        }
     } else {
         Ok(None)
     } {
-        Ok(input) => input,
+        Ok(input)
+            if options.worker.is_none()
+                || options.chat.input != chat_io::Input::Terminal
+                || input.is_some() =>
+        {
+            input
+        }
+        Ok(_) => {
+            let _ = ssh.start_kill();
+            backend.shutdown().await;
+            incoming.stop().await;
+            let _ = ssh.wait().await;
+            return Err(Box::new(relay::PermanentFailure(
+                "worker monitor input is unavailable; no hidden terminal fallback is permitted"
+                    .into(),
+            )));
+        }
         Err(error) => {
             let _ = ssh.start_kill();
             backend.shutdown().await;
@@ -2824,6 +3062,14 @@ async fn connect_inner(
     let mut intentionally_stopped = false;
     let mut service_updates = tokio::time::interval(Duration::from_secs(1));
     service_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Only connected sessions schedule cleanup. Constructors, discovery commands
+    // and the private worker child never initialize or scan a workspace here.
+    let cleanup_period = Duration::from_secs(5 * 60);
+    let mut cleanup_updates =
+        tokio::time::interval_at(tokio::time::Instant::now() + cleanup_period, cleanup_period);
+    cleanup_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut managed_cleanup = backend.start_managed_file_cleanup("startup");
+    backend.start_workers();
     let mut result: crate::Result<()> = 'connected: loop {
         tokio::select! {
             ended = chat_io::input_ended(&mut chat) => match ended {
@@ -2893,6 +3139,15 @@ async fn connect_inner(
                 },
                 None => {},
             },
+            _ = cleanup_updates.tick() => {
+                // A slow scan never overlaps the next one or blocks relay calls.
+                if managed_cleanup.is_finished() {
+                    if let Err(error) = (&mut managed_cleanup).await {
+                        render::status("cleanup", "Warning", &format!("Managed-file cleanup task failed: {error}"));
+                    }
+                    managed_cleanup = backend.start_managed_file_cleanup("periodic");
+                }
+            },
             _ = service_updates.tick(), if service.is_some() => {
                 if service.expect("guarded service runner").stop_requested() {
                     intentionally_stopped = true;
@@ -2900,6 +3155,10 @@ async fn connect_inner(
                 }
             },
             _ = ui_updates.tick(), if display_session.is_some() => {
+                if options.worker.is_some() && local_input.as_ref().is_none_or(input::Input::is_finished) {
+                    intentionally_stopped = true;
+                    break Err(worker_monitor_closed());
+                }
                 if terminal::exit_requested() {
                     intentionally_stopped = true;
                     break Ok(());
@@ -3062,6 +3321,7 @@ async fn connect_inner(
             _ = terminate.recv() => { intentionally_stopped = true; break Ok(()); },
         }
     };
+    backend.stop_workers();
     if let Some(chat) = &chat {
         chat.stop();
     }
@@ -3082,6 +3342,13 @@ async fn connect_inner(
         intentionally_stopped = true;
         reload_requested = false;
         result = Ok(());
+    }
+    if let Err(error) = managed_cleanup.await {
+        render::status(
+            "cleanup",
+            "Warning",
+            &format!("Managed-file cleanup task failed: {error}"),
+        );
     }
     git_status.shutdown().await;
     if matches!(&transport, Transport::Account { .. })
@@ -3135,8 +3402,173 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker_flags_keep_next_caller_nonexecuting_and_save_explicit_headless_execution() {
+        let parse = |args: &[&str]| {
+            Options::parse(
+                ["--server", "https://relay.example"]
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .map(OsString::from),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let default = parse(&["--worker", "10"]);
+        assert_eq!(
+            default.worker,
+            Some(crate::worker::Config {
+                count: 10,
+                factor: 1.0
+            })
+        );
+        assert_eq!(default.chat.agent, chat_io::Agent::NextCaller);
+        let explicit = parse(&[
+            "--name",
+            "worker-fixture",
+            "--worker",
+            "3",
+            "--worker-k",
+            "0.5",
+            "--input",
+            "none",
+            "--agent",
+            "codex",
+        ]);
+        let saved = explicit.session_spec().unwrap();
+        let restored = Options::parse_saved(&saved).unwrap().unwrap();
+        assert_eq!(restored.worker, explicit.worker);
+        assert_eq!(restored.chat.agent, chat_io::Agent::Codex);
+        assert_eq!(restored.chat.input, chat_io::Input::None);
+        assert!(!saved_chat_enabled(&saved));
+    }
+
+    #[test]
+    fn worker_flags_reject_ambiguous_counts_factors_and_hidden_chat_inputs() {
+        for args in [
+            vec!["--worker", "0"],
+            vec!["--worker", "129"],
+            vec!["--worker-k", "1"],
+            vec!["--worker", "2", "--worker-k", "NaN"],
+            vec!["--worker", "2", "--worker", "3"],
+            vec!["--worker", "2", "--input", "pipe"],
+            vec!["--worker", "2", "--load-harness", "codex"],
+            vec!["--worker", "2", "--list-tools"],
+        ] {
+            assert!(
+                Options::parse(
+                    ["--server", "https://relay.example"]
+                        .into_iter()
+                        .chain(args)
+                        .map(OsString::from)
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn resume_command_preserves_connection_flags_without_persisting_picker_state() {
+        let options = Options::parse_new(
+            [
+                "resume",
+                "--server",
+                "https://relay.example",
+                "--name",
+                "history-client",
+                "--session-control",
+                "--no-watchdog",
+            ]
+            .map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(options.resume_history.load(Ordering::Relaxed));
+        assert!(options.destination.is_none());
+        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
+        assert_eq!(options.name.as_deref(), Some("history-client"));
+        assert_eq!(options.chat.input, chat_io::Input::Terminal);
+        assert!(!options.watchdog);
+        let spec = options.session_spec().unwrap();
+        assert!(!spec.args.iter().any(|arg| arg == "resume"));
+        let saved = Options::parse_saved(&spec).unwrap().unwrap();
+        assert!(!saved.resume_history.load(Ordering::Relaxed));
+        assert!(saved.session_control);
+        assert_eq!(saved.server, options.server);
+    }
+
+    #[test]
+    fn resume_is_only_a_leading_command_not_a_flag_value_or_harness_argument() {
+        let title = Options::parse_new(
+            ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!title.resume_history.load(Ordering::Relaxed));
+        assert_eq!(title.title.as_deref(), Some("resume"));
+        for leading_resume in [false, true] {
+            let mut args = vec![
+                "--server",
+                "https://relay.example",
+                "--load-harness",
+                "codex",
+                "--",
+                "resume",
+            ];
+            if leading_resume {
+                args.insert(0, "resume");
+            }
+            let options = Options::parse_new(args.into_iter().map(OsString::from))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                options.resume_history.load(Ordering::Relaxed),
+                leading_resume
+            );
+            assert_eq!(
+                options.harness.unwrap().arguments,
+                vec![OsString::from("resume")]
+            );
+        }
+    }
+
+    #[test]
+    fn resume_rejects_noninteractive_modes_and_help_does_not_start_a_session() {
+        let foreground_error = "ssmcp resume requires a foreground interactive dashboard; omit --daemon, --list-tools, non-terminal --input and JSONL output";
+        let pipe_error = if cfg!(unix) {
+            foreground_error
+        } else {
+            "pipe and MCP stdio chat input require Unix; use web or MCP HTTP on Windows"
+        };
+        for (flags, expected) in [
+            (vec!["--daemon"], foreground_error),
+            (vec!["--list-tools"], foreground_error),
+            (vec!["--input", "none"], foreground_error),
+            (vec!["--input", "pipe"], pipe_error),
+            (vec!["--raw"], foreground_error),
+            (vec!["--log-format", "jsonl"], foreground_error),
+        ] {
+            let mut args = vec!["resume", "--server", "https://relay.example"];
+            args.extend(flags);
+            let error = Options::parse_new(args.into_iter().map(OsString::from))
+                .err()
+                .unwrap();
+            assert_eq!(error, expected);
+        }
+        for flag in ["--help", "--help-full"] {
+            assert!(
+                Options::parse_new(["resume", flag].map(OsString::from))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     #[test]
     fn watchdog_keeps_retrying_transient_transport_errors() {
+        let closed_monitor = worker_monitor_closed();
+        assert!(!watchdog_retries(true, Some(closed_monitor.as_ref())));
         let disconnected = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
         assert!(watchdog_retries(true, Some(&disconnected)));
         assert!(!watchdog_retries(false, Some(&disconnected)));

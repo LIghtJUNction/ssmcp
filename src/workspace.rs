@@ -188,8 +188,8 @@ impl Workspace {
             ),
             tool(
                 "ssmcp.fs.write",
-                "Atomically write one bounded file. Existing files require overwrite=true. Use rsync for larger files.",
-                json!({"path":path,"data_base64":{"type":"string","maxLength":MAX_FILE_BYTES.div_ceil(3)*4},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false}}),
+                "Atomically write one bounded file. Existing files require overwrite=true. temporary=true registers a new file under .ssmcp/tmp for automatic cleanup; it requires overwrite=false. Use rsync for larger files.",
+                json!({"path":path,"data_base64":{"type":"string","maxLength":MAX_FILE_BYTES.div_ceil(3)*4},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false},"temporary":{"type":"boolean","default":false}}),
                 &["path", "data_base64"],
                 false,
             ),
@@ -202,8 +202,8 @@ impl Workspace {
             ),
             tool(
                 "ssmcp.fs.write_text",
-                "Atomically write at most 262144 UTF-8 bytes. Existing files require overwrite=true; preserve existing permission bits. Optional expected_sha256 requires an existing bounded file and guards cooperating native writes, not arbitrary external writers.",
-                json!({"path":path,"text":{"type":"string","maxLength":MAX_FILE_BYTES},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false},"expected_sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"}}),
+                "Atomically write at most 262144 UTF-8 bytes. Existing files require overwrite=true; preserve existing permission bits. temporary=true registers a new file under .ssmcp/tmp for automatic cleanup and requires overwrite=false. Optional expected_sha256 requires an existing bounded file and guards cooperating native writes, not arbitrary external writers.",
+                json!({"path":path,"text":{"type":"string","maxLength":MAX_FILE_BYTES},"overwrite":{"type":"boolean","default":false},"create_parents":{"type":"boolean","default":false},"temporary":{"type":"boolean","default":false},"expected_sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"}}),
                 &["path", "text"],
                 false,
             ),
@@ -635,33 +635,96 @@ impl Root {
 
     fn write(&self, args: FileWriteArgs) -> Result<Value, String> {
         let data = decode(&args.data_base64, MAX_FILE_BYTES)?;
-        self.write_bytes(
+        let tracking_warning = self.write_bytes(
             "ssmcp.fs.write",
             &args.path,
             &data,
-            args.overwrite,
-            args.create_parents,
-            None,
+            WriteOptions {
+                overwrite: args.overwrite,
+                create_parents: args.create_parents,
+                temporary: args.temporary,
+                expected_sha256: None,
+            },
         )?;
-        Ok(json!({"path":args.path,"written":data.len()}))
+        Ok(with_tracking_warning(
+            json!({"path":args.path,"written":data.len()}),
+            tracking_warning,
+        ))
     }
 
     fn write_text(&self, args: TextWriteArgs) -> Result<Value, String> {
         if args.text.len() > MAX_FILE_BYTES {
             return Err(format!("text exceeds {MAX_FILE_BYTES} UTF-8 bytes"));
         }
-        self.write_bytes(
+        let tracking_warning = self.write_bytes(
             "ssmcp.fs.write_text",
             &args.path,
             args.text.as_bytes(),
-            args.overwrite,
-            args.create_parents,
-            args.expected_sha256.as_deref(),
+            WriteOptions {
+                overwrite: args.overwrite,
+                create_parents: args.create_parents,
+                temporary: args.temporary,
+                expected_sha256: args.expected_sha256.as_deref(),
+            },
         )?;
-        Ok(
+        Ok(with_tracking_warning(
             json!({"path":args.path,"written":args.text.len(),"sha256":sha256(args.text.as_bytes())}),
-        )
+            tracking_warning,
+        ))
     }
+
+    fn creation_warning(
+        &self,
+        path: &str,
+        identity: &crate::managed_files::FileIdentity,
+        source: &str,
+        temporary: bool,
+    ) -> Option<String> {
+        crate::managed_files::record_created(
+            &self.path,
+            Path::new(path),
+            if temporary {
+                crate::managed_files::Category::Temporary
+            } else {
+                crate::managed_files::Category::UserFile
+            },
+            source,
+            identity,
+        )
+        .err()
+        .map(|failure| format!("File created successfully; creation tracking failed: {failure}"))
+    }
+}
+
+fn with_tracking_warning(mut value: Value, warning: Option<String>) -> Value {
+    if let Some(warning) = warning {
+        value["tracking_warning"] = json!(warning);
+    }
+    value
+}
+
+fn validate_temporary_write(path: &str, overwrite: bool, temporary: bool) -> Result<(), String> {
+    if !temporary {
+        return Ok(());
+    }
+    let parts = Path::new(path)
+        .components()
+        .filter(|part| !matches!(part, Component::CurDir))
+        .collect::<Vec<_>>();
+    if overwrite
+        || parts.len() < 3
+        || parts[0] != Component::Normal(std::ffi::OsStr::new(".ssmcp"))
+        || parts[1] != Component::Normal(std::ffi::OsStr::new("tmp"))
+        || parts
+            .iter()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(
+            "temporary=true requires overwrite=false and a relative file path under .ssmcp/tmp/"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -788,10 +851,16 @@ impl Root {
         tool: &str,
         path: &str,
         data: &[u8],
-        overwrite: bool,
-        create_parents: bool,
-        expected_sha256: Option<&str>,
-    ) -> Result<(), String> {
+        options: WriteOptions<'_>,
+    ) -> Result<Option<String>, String> {
+        let WriteOptions {
+            overwrite,
+            create_parents,
+            temporary,
+            expected_sha256,
+        } = options;
+        crate::managed_files::validate_user_write(Path::new(path)).map_err(error)?;
+        validate_temporary_write(path, overwrite, temporary)?;
         validate_hash(expected_sha256)?;
         if expected_sha256.is_some() && !overwrite {
             return Err("expected_sha256 requires overwrite=true and an existing file".into());
@@ -818,12 +887,21 @@ impl Root {
                 Err(error) => return Err(error.to_string()),
             }
         }
-        atomic_write(&parent, name, data, overwrite, mode)?;
+        let created = matches!(&before, audit::Snapshot::Missing);
+        let identity = atomic_write(&parent, name, data, overwrite, mode)?;
         self.audit.written(tool, path, before, data);
-        Ok(())
+        // Registration rechecks the captured identity. Release the directory
+        // writer lock before entering the independently locked registry.
+        drop(parent);
+        Ok(if created {
+            self.creation_warning(path, &identity, tool, temporary)
+        } else {
+            None
+        })
     }
 
     fn edit_text(&self, args: TextEditArgs) -> Result<Value, String> {
+        crate::managed_files::validate_user_write(Path::new(&args.path)).map_err(error)?;
         validate_hash(args.expected_sha256.as_deref())?;
         if args.old_text.is_empty() {
             return Err("old_text must not be empty".into());
@@ -1008,7 +1086,7 @@ fn atomic_write(
     data: &[u8],
     overwrite: bool,
     mode: u32,
-) -> Result<(), String> {
+) -> Result<crate::managed_files::FileIdentity, String> {
     let temporary = CString::new(format!(".ssmcp-{}.tmp", random_id().map_err(error)?)).unwrap();
     let mut file = open_at(
         parent,
@@ -1034,6 +1112,7 @@ fn atomic_write(
     file.set_permissions(std::fs::Permissions::from_mode(mode))
         .map_err(error)?;
     file.sync_all().map_err(error)?;
+    let identity = crate::managed_files::FileIdentity::from_file(&file).map_err(error)?;
     let outcome = if overwrite {
         unsafe {
             libc::renameat(
@@ -1057,7 +1136,8 @@ fn atomic_write(
     if outcome != 0 {
         return Err(error(io::Error::last_os_error()));
     }
-    parent.sync_all().map_err(error)
+    parent.sync_all().map_err(error)?;
+    Ok(identity)
 }
 
 fn random_id() -> io::Result<String> {
@@ -1178,6 +1258,13 @@ struct FileReadArgs {
     #[serde(default = "default_file_bytes")]
     max_bytes: usize,
 }
+struct WriteOptions<'a> {
+    overwrite: bool,
+    create_parents: bool,
+    temporary: bool,
+    expected_sha256: Option<&'a str>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileWriteArgs {
@@ -1187,6 +1274,8 @@ struct FileWriteArgs {
     overwrite: bool,
     #[serde(default)]
     create_parents: bool,
+    #[serde(default)]
+    temporary: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1197,6 +1286,8 @@ struct TextWriteArgs {
     overwrite: bool,
     #[serde(default)]
     create_parents: bool,
+    #[serde(default)]
+    temporary: bool,
     #[serde(default)]
     expected_sha256: Option<String>,
 }
@@ -1259,6 +1350,288 @@ struct NetReadArgs {
 struct NetWriteArgs {
     id: String,
     data_base64: String,
+}
+
+#[cfg(test)]
+mod managed_file_integration_tests {
+    use super::*;
+    use crate::managed_files::{self, Category};
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("ssmcp-created-files-test-{}", random_id().unwrap()));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(&path)
+                    .unwrap();
+            }
+            #[cfg(windows)]
+            crate::platform::windows::create_private_directory(&path).unwrap();
+            Self(path)
+        }
+
+        fn workspace(&self) -> Workspace {
+            Workspace::new(self.0.clone()).unwrap()
+        }
+
+        fn expire_immediately(&self) {
+            let mut config = managed_files::config(&self.0).unwrap();
+            config.max_age_seconds = 0;
+            managed_files::set_config(&self.0, &config).unwrap();
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn native_writes_record_creation_and_only_explicit_temporary_files_expire() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        for (name, args) in [
+            (
+                "ssmcp.fs.write_text",
+                json!({"path":"./.ssmcp/tmp/text.txt","text":"temporary text", "temporary":true,"create_parents":true}),
+            ),
+            (
+                "ssmcp.fs.write",
+                json!({"path":".ssmcp/tmp/binary.bin","data_base64":STANDARD.encode([0, 255, 42]),"temporary":true}),
+            ),
+            (
+                "ssmcp.fs.write_text",
+                json!({"path":".ssmcp/tmp/user.txt","text":"keep user content"}),
+            ),
+            (
+                "ssmcp.fs.write_text",
+                json!({"path":"./new.rs","text":"fn main() {}"}),
+            ),
+        ] {
+            let result = workspace.perform(name, args).await.unwrap();
+            assert!(result.get("tracking_warning").is_none(), "{result}");
+        }
+        let records = managed_files::list(&scratch.0).unwrap();
+        assert_eq!(records.len(), 4);
+        for (path, category) in [
+            (".ssmcp/tmp/text.txt", Category::Temporary),
+            (".ssmcp/tmp/binary.bin", Category::Temporary),
+            (".ssmcp/tmp/user.txt", Category::UserFile),
+            ("new.rs", Category::UserFile),
+        ] {
+            let record = records
+                .iter()
+                .find(|record| record.relative_path == path)
+                .unwrap();
+            assert_eq!(record.category, category);
+        }
+        scratch.expire_immediately();
+        let preview = managed_files::cleanup(&scratch.0, true, "unit-native-write").unwrap();
+        assert_eq!(preview.would_remove_files, 2);
+        assert_eq!(preview.removed_files, 0);
+        assert!(scratch.0.join(".ssmcp/tmp/text.txt").exists());
+        let cleaned = managed_files::cleanup(&scratch.0, false, "reload").unwrap();
+        assert_eq!(cleaned.trigger, "reload");
+        assert_eq!(cleaned.removed_files, 2);
+        assert_eq!(cleaned.kept_protected, 2);
+        assert!(cleaned.errors.is_empty(), "{cleaned:?}");
+        assert!(!scratch.0.join(".ssmcp/tmp/text.txt").exists());
+        assert!(!scratch.0.join(".ssmcp/tmp/binary.bin").exists());
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/user.txt")).unwrap(),
+            "keep user content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("new.rs")).unwrap(),
+            "fn main() {}"
+        );
+    }
+
+    #[tokio::test]
+    async fn temporary_write_validation_precedes_directory_or_file_mutation() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        for path in [
+            "user.txt",
+            ".ssmcp/inputs/input.txt",
+            ".ssmcp/tmp",
+            ".ssmcp/tmp/../input.txt",
+        ] {
+            assert!(workspace.perform(
+                "ssmcp.fs.write_text",
+                json!({"path":path,"text":"must not appear","temporary":true,"create_parents":true}),
+            ).await.is_err(), "{path}");
+        }
+        assert!(!scratch.0.join(".ssmcp").exists());
+        assert!(!scratch.0.join("user.txt").exists());
+        assert!(workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/managed-files/record.json","text":"must not replace internal metadata","create_parents":true}),
+        ).await.is_err());
+        assert!(!scratch.0.join(".ssmcp").exists());
+        assert!(workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/new.txt","text":"must not appear","temporary":true,"overwrite":true,"create_parents":true}),
+        ).await.is_err());
+        assert!(!scratch.0.join(".ssmcp").exists());
+        workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/existing.txt","text":"keep existing content","create_parents":true}),
+        ).await.unwrap();
+        let before = managed_files::list(&scratch.0).unwrap();
+        assert!(workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/existing.txt","text":"must not replace","temporary":true,"overwrite":true}),
+        ).await.is_err());
+        let after = managed_files::list(&scratch.0).unwrap();
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before[0].id, after[0].id);
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/existing.txt")).unwrap(),
+            "keep existing content"
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_overwrite_keeps_new_content_without_a_false_creation_record() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/replaced.txt","text":"old temporary content","temporary":true,"create_parents":true}),
+        ).await.unwrap();
+        let before = managed_files::list(&scratch.0).unwrap();
+        assert_eq!(before.len(), 1);
+        workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/replaced.txt","text":"new user content","overwrite":true}),
+        ).await.unwrap();
+        let after = managed_files::list(&scratch.0).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(before[0].id, after[0].id);
+        scratch.expire_immediately();
+        let cleaned = managed_files::cleanup(&scratch.0, false, "unit-native-overwrite").unwrap();
+        assert_eq!(cleaned.removed_files, 0);
+        assert_eq!(cleaned.kept_changed, 1);
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/replaced.txt")).unwrap(),
+            "new user content"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_overwrites_are_not_recorded_as_creation_and_tracking_failure_keeps_output() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        std::fs::write(scratch.0.join("existing.txt"), b"before").unwrap();
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"existing.txt","text":"after","overwrite":true}),
+            )
+            .await
+            .unwrap();
+        assert!(managed_files::list(&scratch.0).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(scratch.0.join("existing.txt")).unwrap(),
+            b"after"
+        );
+        std::fs::create_dir(scratch.0.join(".ssmcp")).unwrap();
+        std::fs::write(
+            scratch.0.join(".ssmcp/managed-files"),
+            b"not a registry directory",
+        )
+        .unwrap();
+        let result = workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":"created.txt","text":"success survives tracking failure"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["written"], "success survives tracking failure".len());
+        assert!(
+            result["tracking_warning"]
+                .as_str()
+                .unwrap()
+                .contains("created successfully")
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join("created.txt")).unwrap(),
+            "success survives tracking failure"
+        );
+        assert_eq!(
+            std::fs::read(scratch.0.join(".ssmcp/managed-files")).unwrap(),
+            b"not a registry directory"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cleanup_defers_to_native_write_lock_and_preserves_a_replacement() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        workspace.perform(
+            "ssmcp.fs.write_text",
+            json!({"path":".ssmcp/tmp/shared.txt","text":"old temporary content","temporary":true,"create_parents":true}),
+        ).await.unwrap();
+        scratch.expire_immediately();
+        let parent = workspace
+            .root
+            .directory(&Root::components(".ssmcp/tmp").unwrap(), false)
+            .unwrap();
+        let write_guard = locked_directory(&parent).unwrap();
+        let busy = managed_files::cleanup(&scratch.0, false, "unit-writer-busy").unwrap();
+        assert_eq!(busy.removed_files, 0);
+        assert_eq!(busy.kept_active, 1);
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(),
+            "old temporary content"
+        );
+        drop(write_guard);
+        workspace
+            .perform(
+                "ssmcp.fs.write_text",
+                json!({"path":".ssmcp/tmp/shared.txt","text":"new user content","overwrite":true}),
+            )
+            .await
+            .unwrap();
+        let replaced = managed_files::cleanup(&scratch.0, false, "unit-replaced").unwrap();
+        assert_eq!(replaced.removed_files, 0);
+        assert_eq!(replaced.kept_changed, 1);
+        assert_eq!(
+            std::fs::read_to_string(scratch.0.join(".ssmcp/tmp/shared.txt")).unwrap(),
+            "new user content"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unsupported_tracking_names_keep_the_original_workspace_write_behavior() {
+        let scratch = Scratch::new();
+        let workspace = scratch.workspace();
+        for path in ["notes:1.txt", "literal\\name.txt"] {
+            let result = workspace
+                .perform(
+                    "ssmcp.fs.write_text",
+                    json!({"path":path,"text":"ordinary Unix filename"}),
+                )
+                .await
+                .unwrap();
+            assert!(result.get("tracking_warning").is_some());
+            assert_eq!(
+                std::fs::read_to_string(scratch.0.join(path)).unwrap(),
+                "ordinary Unix filename"
+            );
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

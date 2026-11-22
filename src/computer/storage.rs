@@ -341,6 +341,8 @@ pub(super) struct Store {
     root: PathBuf,
     owner_id: String,
     root_identity: Identity,
+    #[cfg(test)]
+    fixture_target: Option<&'static str>,
     _lock: File,
 }
 
@@ -417,8 +419,24 @@ impl Store {
             root: root.to_owned(),
             owner_id: owner.owner_id,
             root_identity,
+            #[cfg(test)]
+            fixture_target: None,
             _lock: lock,
         }))
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_fixture_target(mut self, target: &'static str) -> Self {
+        self.fixture_target = Some(target);
+        self
+    }
+
+    fn target(&self) -> Result<&'static str, String> {
+        #[cfg(test)]
+        if let Some(target) = self.fixture_target {
+            return Ok(target);
+        }
+        release::target()
     }
 
     fn check(&self) -> Result<(), String> {
@@ -445,7 +463,7 @@ impl Store {
     }
 
     pub(super) fn save_download(&self, release: Release, bytes: &[u8]) -> Result<Download, String> {
-        release.verify(bytes, release::target()?)?;
+        release.verify(bytes, self.target()?)?;
         let download_id = id()?;
         let destination = self.location("downloads", &download_id)?;
         let stage = Stage::new(destination)?;
@@ -479,7 +497,7 @@ impl Store {
         if archive_id != receipt.archive {
             return Err("The recorded Zuse download was replaced".into());
         }
-        let binary = archive::executable(&content, &receipt.release, release::target()?)?;
+        let binary = archive::executable(&content, &receipt.release, self.target()?)?;
         let installation_id = id()?;
         let destination = self.location("installations", &installation_id)?;
         let stage = Stage::new(destination)?;
@@ -516,7 +534,7 @@ impl Store {
     fn verify_installation(&self, id: &str) -> Result<Installation, String> {
         let path = self.location("installations", id)?;
         let receipt: Installation = read(&path.join("receipt.json"))?;
-        receipt.release.validate(release::target()?)?;
+        receipt.release.validate(self.target()?)?;
         exact_files(
             &path,
             &[

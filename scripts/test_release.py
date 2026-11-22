@@ -126,7 +126,7 @@ class DeploymentPolicyTests(unittest.TestCase):
         events.extend(("workflow_dispatch", {"inputs": inputs}) for inputs in (
             {}, {"deploy_server": True}, {"deploy_server": "true"},
             {"deploy_server": False}, {"deploy_server": "false"}))
-        for version in ("0.10.15", "0.10.16", "0.10.17", "0.10.18", "0.10.19", "0.10.20", "0.10.21", "0.10.22", "0.10.23", "0.10.24", "0.10.25"):
+        for version in ("0.10.15", "0.10.16", "0.10.17", "0.10.18", "0.10.19", "0.10.20", "0.10.21", "0.10.22", "0.10.23", "0.10.24", "0.10.25", "0.10.26"):
             for name, event in events:
                 with self.subTest(version=version, name=name, event=event):
                     result, output = self.run_policy(event, name=name, version=version)
@@ -138,7 +138,7 @@ class DeploymentPolicyTests(unittest.TestCase):
                     self.assertIn("active relay sessions", report["deployment_deferred"])
 
     def test_other_versions_keep_existing_deployment_selection(self):
-        for version in ("0.10.26", "0.10.24-rc.1"):
+        for version in ("0.10.27", "0.10.24-rc.1"):
             with self.subTest(version=version):
                 self.assert_policy({}, "true", name="push", version=version)
                 self.assert_policy({"inputs": {"deploy_server": False}}, "false", version=version)
@@ -211,12 +211,18 @@ class PublicationContractTests(unittest.TestCase):
                                      capture_output=True, text=True, timeout=10)
             return process, output.read_text() if output.exists() else ""
 
-    def test_v25_binary_release_and_build_only_select_distinct_crate_modes(self):
+    def test_deferred_binary_releases_and_build_only_select_distinct_crate_modes(self):
         for flags, status in (({}, "deferred"),
+                              ({"version": "0.10.26"}, "deferred"),
                               ({"publish": "false", "build_only": "true", "crate": "not_requested"},
                                "not_requested"),
-                              ({"version": "0.10.26", "crate": "registry"}, "registry")):
+                              ({"version": "0.10.26", "publish": "false", "build_only": "true",
+                                "crate": "not_requested"}, "not_requested"),
+                              ({"version": "0.10.27", "crate": "registry"}, "registry")):
             with self.subTest(flags=flags):
+                policy = release.crate_publication(
+                    flags.get("version", "0.10.25"), build_only=flags.get("build_only") == "true")
+                self.assertEqual(policy["status"], status)
                 result, output = self.route(**flags)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output, f"release_contract=git-source-v1\ncrate_publication={status}\n")
@@ -236,6 +242,7 @@ class PublicationContractTests(unittest.TestCase):
 
     def test_missing_or_mismatched_new_policy_cannot_fall_back_to_legacy(self):
         for flags in ({"crate": "registry"}, {"crate": ""}, {"contract": ""},
+                      {"version": "0.10.26", "crate": "registry"}, {"version": "0.10.27"},
                       {"contract": "unsupported"}, {"version": "0.10.25-01"}):
             with self.subTest(flags=flags):
                 result, output = self.route(**flags)

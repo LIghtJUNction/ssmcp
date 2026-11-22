@@ -204,7 +204,7 @@ enum Entry {
 struct Active {
     metadata: SessionMetadata,
     // A lifetime lease prevents another client from editing or evicting this session.
-    _lease: File,
+    _lease: HistoryLock,
 }
 
 struct History {
@@ -386,13 +386,13 @@ impl History {
         })
     }
 
-    fn lease(&self, id: &str) -> Result<File, String> {
+    fn lease(&self, id: &str) -> Result<HistoryLock, String> {
         let lease = self
             .directory
             .open(&format!("{id}.lease"), true, true, false)?;
         crate::platform::lock_file(&lease, true)
             .map_err(|_| "conversation is open in another client; choose a different history")?;
-        Ok(lease)
+        Ok(HistoryLock { _file: lease })
     }
 
     fn load(&self, id: &str) -> Result<Conversation, String> {
@@ -2177,6 +2177,36 @@ mod tests {
         assert_eq!(history.directory.lock().err().as_deref(), busy);
         drop(next);
         assert!(history.directory.lock().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn conversation_lease_releases_while_an_inherited_descriptor_stays_open() {
+        let temp = Temporary::new();
+        let mut original = temp.history();
+        original.record("user", "Retained lease fixture").unwrap();
+        let saved = original.current().unwrap().unwrap();
+        let inherited = original
+            .active
+            .as_ref()
+            .unwrap()
+            ._lease
+            ._file
+            .try_clone()
+            .unwrap();
+        let mut next = temp.history();
+        let busy = Some("conversation is open in another client; choose a different history");
+        assert_eq!(next.resume(&saved.metadata.id).err().as_deref(), busy);
+
+        original.release_current();
+        assert!(original.current().unwrap().is_none());
+        assert_eq!(next.resume(&saved.metadata.id).unwrap(), saved);
+        let mut other = temp.history();
+        assert_eq!(other.resume(&saved.metadata.id).err().as_deref(), busy);
+        drop(inherited);
+        assert_eq!(other.resume(&saved.metadata.id).err().as_deref(), busy);
+        next.release_current();
+        assert_eq!(other.resume(&saved.metadata.id).unwrap(), saved);
     }
 
     #[test]

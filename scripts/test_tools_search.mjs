@@ -1,3 +1,4 @@
+import { officialSources } from '../src/tool_repository/fixture.mjs';
 // Exercise the real code_mode worker through its JSON transport; no model or
 // external service is invoked. Run: node --test scripts/test_tools_search.mjs
 import assert from 'node:assert/strict';
@@ -40,7 +41,7 @@ function run(code, reply) {
       else resolve({frames, requests, exitCode, signal, stderr});
     });
     child.stdin.write(JSON.stringify({
-      type:'run', code, clients:[{id:'one', type:'shell', name:'search-fixture'}],
+      tool_sources: officialSources(), type:'run', code, clients:[{id:'one', type:'shell', name:'search-fixture'}],
     }) + '\n');
   });
 }

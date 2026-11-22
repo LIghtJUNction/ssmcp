@@ -122,7 +122,9 @@ fn native_executable(path: &Path) -> bool {
     crate::platform::is_executable(path)
 }
 
-pub(super) struct Program {
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Program {
     program: PathBuf,
     args: Vec<String>,
     argv_message: bool,
@@ -169,6 +171,14 @@ fn failure_output(stdout: &[u8], stderr: &[u8]) -> String {
 }
 
 impl Program {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn for_worker(agent: &Agent) -> Result<Self, String> {
+        match Target::resolve(agent)? {
+            Target::Program(program) => Ok(program),
+            _ => Err("worker executor required: select --agent codex, claude, opencode or an explicit --agent exec; Next caller and a forwarded peer are not locally resource-limited executors".into()),
+        }
+    }
+
     fn command(&self, text: &str) -> Command {
         let mut command = Command::new(&self.program);
         command
@@ -185,6 +195,20 @@ impl Program {
     }
 
     pub(super) async fn run(&self, text: &str) -> Result<String, String> {
+        self.run_cancellable(text, None).await
+    }
+
+    pub(crate) async fn run_cancellable(
+        &self,
+        text: &str,
+        mut cancelled: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<String, String> {
+        if cancelled
+            .as_ref()
+            .is_some_and(|receiver| *receiver.borrow())
+        {
+            return Err("worker task cancelled before process dispatch".into());
+        }
         let mut process = Managed::spawn(&mut self.command(text))
             .map_err(|error| format!("could not start the selected chat agent: {error}"))?;
         let stdin = process.child.stdin.take();
@@ -197,15 +221,35 @@ impl Program {
             }
             Ok::<(), io::Error>(())
         };
-        let result = tokio::time::timeout(PROCESS_LIMIT, async {
-            tokio::try_join!(
-                async { Ok::<_, io::Error>(write.await) },
-                bounded_output(stdout),
-                bounded_output(stderr),
-                process.wait()
-            )
-        })
-        .await;
+        let cancel = async {
+            let Some(receiver) = cancelled.as_mut() else {
+                return std::future::pending::<()>().await;
+            };
+            while !*receiver.borrow_and_update() {
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            result = tokio::time::timeout(PROCESS_LIMIT, async {
+                tokio::try_join!(
+                    async { Ok::<_, io::Error>(write.await) },
+                    bounded_output(stdout),
+                    bounded_output(stderr),
+                    process.wait()
+                )
+            }) => Some(result),
+            _ = cancel => None,
+        };
+        let Some(result) = result else {
+            process.shutdown().await;
+            return Err(
+                "worker task cancelled after owned process cleanup; prior effects may remain"
+                    .into(),
+            );
+        };
         match result {
             Ok(Ok((written, output, _, status))) if status.success() => {
                 written.map_err(|error| format!("chat agent input failed: {error}"))?;

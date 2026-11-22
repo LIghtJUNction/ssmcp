@@ -431,7 +431,25 @@ class Interactions(InputHistory):
         self.check(self.ui("/display/conversation")["draft"]["text"] == draft,
                    "answering a question leaves the main draft byte-for-byte unchanged")
         self.capture_pair(front, "answer-pending", "Answer queued")
-        reply = self.response("return null;", agent=self.binding(requester))
+        # Request identity and source preparation alone do not claim answers.
+        # Make this independent binding action explicit before expecting delivery.
+        delivery_code = "await collab.bind(%s, %s); return null;" % (
+            json.dumps(self.client_id), json.dumps({
+                "agent_id": requester["agent_id"], "token": requester["token"],
+            }),
+        )
+        reply = self.response(delivery_code, agent=self.binding(requester))
+        diagnostic = json.dumps({
+            "code": delivery_code, "client_id": self.client_id,
+            "requester_agent_id": requester["agent_id"], "question_id": request_id,
+            "question_before_call": view, "response": reply,
+        }, ensure_ascii=False, indent=2)
+        for secret in [self.secret, *self.sensitive]:
+            if secret:
+                diagnostic = diagnostic.replace(
+                    json.dumps(secret, ensure_ascii=False)[1:-1], "[redacted]")
+        (self.output / "interactions-question-answer-response.json").write_text(
+            diagnostic + "\n", encoding="utf-8")
         answers = reply["structuredContent"].get("question_answers", [])
         self.check(len(answers) == 1 and answers[0]["id"] == request_id
                    and answers[0]["answer"] == answer

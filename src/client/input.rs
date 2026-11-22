@@ -18,9 +18,26 @@ pub(crate) struct Input {
     mode: Arc<platform::Mode>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    Terminal,
+    Monitor,
+}
+
 impl Input {
     pub(crate) fn attach(terminals: Arc<Terminals>) -> Result<Option<Self>, String> {
-        platform::attach(terminals)
+        platform::attach(terminals, InputMode::Terminal)
+    }
+
+    /// Keep monitor input separate from the ordinary headless PTY fallback,
+    /// including after display failure, shutdown, or a reconnect.
+    pub(crate) fn attach_monitor(terminals: Arc<Terminals>) -> Result<Option<Self>, String> {
+        super::terminal::monitor_keyboard_bytes(&[], false)?;
+        platform::attach(terminals, InputMode::Monitor)
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     pub(crate) async fn shutdown(mut self) {
@@ -166,6 +183,35 @@ async fn resize(terminals: &Terminals, rows: u16, cols: u16) -> Result<(), Strin
         }
     }
     Ok(())
+}
+
+async fn input_tick(
+    terminals: &Terminals,
+    keys: &mut SessionKeys,
+    mode: InputMode,
+) -> Result<(), String> {
+    if mode == InputMode::Monitor {
+        // Do not drain composer actions, fallback keys, or hidden PTY replies.
+        super::terminal::monitor_keyboard_bytes(&[], true)
+    } else {
+        forward_display(terminals, keys).await
+    }
+}
+
+async fn input_resize(
+    terminals: &Terminals,
+    rows: u16,
+    cols: u16,
+    mode: InputMode,
+) -> Result<(), String> {
+    if mode == InputMode::Monitor {
+        if rows > 0 && cols > 0 {
+            super::terminal::physical_resize(rows, cols);
+        }
+        Ok(())
+    } else {
+        resize(terminals, rows, cols).await
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -404,28 +450,38 @@ mod platform {
         }
     }
 
-    pub(super) fn attach(terminals: Arc<Terminals>) -> Result<Option<Input>, String> {
+    pub(super) fn attach(
+        terminals: Arc<Terminals>,
+        input_mode: InputMode,
+    ) -> Result<Option<Input>, String> {
         // Do not steal input from a foreground job if this client was backgrounded.
         // SAFETY: these functions inspect process and terminal state only.
         let foreground = unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) };
         if foreground > 0 && foreground != unsafe { libc::getpgrp() } {
             return Ok(None);
         }
-        attach_from(terminals, libc::STDIN_FILENO)
+        attach_from(terminals, libc::STDIN_FILENO, input_mode)
     }
 
-    fn attach_from(terminals: Arc<Terminals>, source: RawFd) -> Result<Option<Input>, String> {
+    fn attach_from(
+        terminals: Arc<Terminals>,
+        source: RawFd,
+        input_mode: InputMode,
+    ) -> Result<Option<Input>, String> {
         let Some(fd) = reopen_tty(source).map_err(|e| format!("open local terminal input: {e}"))?
         else {
             return Ok(None);
         };
         // Register before changing the mode so every error path leaves it unchanged.
         let resized = signal(SignalKind::window_change()).map_err(|e| e.to_string())?;
-        let mode = Mode::enable(fd, super::super::terminal::active())?;
+        let mode = Mode::enable(
+            fd,
+            input_mode == InputMode::Monitor || super::super::terminal::active(),
+        )?;
         let task_mode = mode.clone();
         let task = tokio::spawn(async move {
             let _restore = RestoreOnExit(task_mode.clone());
-            if let Err(error) = run(&terminals, &task_mode, resized).await {
+            if let Err(error) = run(&terminals, &task_mode, resized, input_mode).await {
                 crate::client::render::status("input", "Warning", &error);
             }
         });
@@ -491,7 +547,11 @@ mod platform {
         Ok(unsafe { saved.assume_init() })
     }
 
-    async fn forward_size(terminals: &Terminals, mode: &Mode) -> Result<(), String> {
+    async fn forward_size(
+        terminals: &Terminals,
+        mode: &Mode,
+        input_mode: InputMode,
+    ) -> Result<(), String> {
         let mut size = MaybeUninit::<libc::winsize>::zeroed();
         // SAFETY: TIOCGWINSZ writes into a valid winsize structure.
         if unsafe {
@@ -504,13 +564,18 @@ mod platform {
         {
             // SAFETY: the ioctl succeeded.
             let size = unsafe { size.assume_init() };
-            resize(terminals, size.ws_row, size.ws_col).await?;
+            input_resize(terminals, size.ws_row, size.ws_col, input_mode).await?;
         }
         Ok(())
     }
 
-    async fn run(terminals: &Terminals, mode: &Mode, mut resized: Signal) -> Result<(), String> {
-        forward_size(terminals, mode).await?;
+    async fn run(
+        terminals: &Terminals,
+        mode: &Mode,
+        mut resized: Signal,
+        input_mode: InputMode,
+    ) -> Result<(), String> {
+        forward_size(terminals, mode, input_mode).await?;
         let mut buffer = [0; 4096];
         let mut utf8 = Utf8Input::default();
         let mut keys = SessionKeys::default();
@@ -519,11 +584,11 @@ mod platform {
         while mode.active.load(Ordering::Acquire) {
             tokio::select! {
                 _ = replies.tick() => {
-                    forward_display(terminals, &mut keys).await?;
+                    input_tick(terminals, &mut keys, input_mode).await?;
                 }
                 event = resized.recv() => {
                     if event.is_none() { break; }
-                    forward_size(terminals, mode).await?;
+                    forward_size(terminals, mode, input_mode).await?;
                 }
                 ready = mode.fd.readable() => {
                     let mut ready = ready.map_err(|e| format!("read local terminal: {e}"))?;
@@ -533,8 +598,8 @@ mod platform {
                         if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
                     });
                     match read {
-                        Ok(Ok(0)) => { forward_input(terminals, &mut keys, &mut utf8, &[], true).await?; break; }
-                        Ok(Ok(n)) => forward_input(terminals, &mut keys, &mut utf8, &buffer[..n], false).await?,
+                        Ok(Ok(0)) => { forward_input(terminals, &mut keys, &mut utf8, &[], true, input_mode).await?; break; }
+                        Ok(Ok(n)) => forward_input(terminals, &mut keys, &mut utf8, &buffer[..n], false, input_mode).await?,
                         Ok(Err(e)) if e.kind() == io::ErrorKind::Interrupted => continue,
                         Ok(Err(e)) => return Err(format!("read local terminal: {e}")),
                         Err(_) => continue,
@@ -553,7 +618,11 @@ mod platform {
         utf8: &mut Utf8Input,
         bytes: &[u8],
         eof: bool,
+        input_mode: InputMode,
     ) -> Result<(), String> {
+        if input_mode == InputMode::Monitor {
+            return super::super::terminal::monitor_keyboard_bytes(bytes, eof);
+        }
         if let Some(output) = super::super::terminal::keyboard_bytes(bytes) {
             apply_display_changes(terminals).await?;
             let text = utf8.push(&output, eof);
@@ -697,6 +766,62 @@ mod platform {
             .expect("interactive shell did not produce expected output")
         }
 
+        #[tokio::test]
+        async fn monitor_input_never_writes_cycles_or_drains_keys_to_a_hidden_pty() {
+            let terminals = Terminals::new(
+                Path::new("/bin/sh"),
+                std::env::current_dir().unwrap(),
+                crate::output::OutputStore::new_connection().unwrap(),
+            )
+            .unwrap();
+            let primary = terminals.primary();
+            terminals
+                .call(
+                    "terminal.open",
+                    serde_json::json!({"name":"hidden","select":false}),
+                )
+                .await
+                .unwrap();
+            let mut keys = SessionKeys {
+                pending: b"\x1b[18".to_vec(),
+                since: Some(Instant::now() - Duration::from_secs(1)),
+                pasting: false,
+            };
+            let mut utf8 = Utf8Input {
+                pending: vec![0xe7],
+            };
+            for bytes in [
+                b"printf '__MONITOR_BLOCKED__\\n'\r".as_slice(),
+                b"\x1b[18~\x1bOQ\x1b\r",
+                b"\x1b[200~printf '__MONITOR_BLOCKED__\\n'\r\x1b[201~",
+            ] {
+                // Absent, replaced, or failed displays may reject the bytes;
+                // none of those outcomes permits fallback into either PTY.
+                if let Err(error) = forward_input(
+                    &terminals,
+                    &mut keys,
+                    &mut utf8,
+                    bytes,
+                    false,
+                    InputMode::Monitor,
+                )
+                .await
+                {
+                    assert!(error.contains("worker monitor"), "{error}");
+                }
+            }
+            let _ = input_tick(&terminals, &mut keys, InputMode::Monitor).await;
+            assert_eq!(keys.pending, b"\x1b[18");
+            assert_eq!(utf8.pending, [0xe7]);
+            assert!(Arc::ptr_eq(&terminals.selected(), &primary));
+            forward(&primary, "printf '__MONITOR_%s__\\n' READY\n")
+                .await
+                .unwrap();
+            let output = read_until(&primary, &mut 0, "__MONITOR_READY__").await;
+            assert!(!output.contains("__MONITOR_BLOCKED__"), "{output}");
+            terminals.shutdown().await;
+        }
+
         #[test]
         fn input_decoder_preserves_split_characters_and_controls() {
             let mut decoder = Utf8Input::default();
@@ -803,7 +928,7 @@ mod platform {
             )
             .unwrap();
             let terminal = terminals.primary();
-            let input = attach_from(terminals.clone(), source.as_raw_fd())
+            let input = attach_from(terminals.clone(), source.as_raw_fd(), InputMode::Terminal)
                 .unwrap()
                 .unwrap();
             let mut cursor = 0;
@@ -887,7 +1012,7 @@ mod platform {
             let exiting = terminals
                 .get(opened["terminal_id"].as_str().unwrap())
                 .unwrap();
-            let input = attach_from(terminals.clone(), source.as_raw_fd())
+            let input = attach_from(terminals.clone(), source.as_raw_fd(), InputMode::Terminal)
                 .unwrap()
                 .unwrap();
             write(&keyboard, b"exit\n");
@@ -961,7 +1086,10 @@ mod platform {
         }
     }
 
-    pub(super) fn attach(terminals: Arc<Terminals>) -> Result<Option<Input>, String> {
+    pub(super) fn attach(
+        terminals: Arc<Terminals>,
+        input_mode: InputMode,
+    ) -> Result<Option<Input>, String> {
         if !io::stdin().is_terminal() {
             return Ok(None);
         }
@@ -1002,7 +1130,7 @@ mod platform {
                     | ENABLE_VIRTUAL_TERMINAL_INPUT);
         // The dashboard interprets Ctrl-C as editing input. Without a dashboard,
         // keep the console's existing interrupt path.
-        if crate::client::terminal::active() {
+        if input_mode == InputMode::Monitor || crate::client::terminal::active() {
             local &= !ENABLE_PROCESSED_INPUT;
         }
         // SAFETY: handle is open and local contains supported console input mode flags.
@@ -1020,7 +1148,7 @@ mod platform {
         let task_mode = mode.clone();
         let task = tokio::spawn(async move {
             let _restore = RestoreOnExit(task_mode.clone());
-            if let Err(error) = run(&terminals, &task_mode).await {
+            if let Err(error) = run(&terminals, &task_mode, input_mode).await {
                 crate::client::render::status("input", "Warning", &error);
             }
         });
@@ -1044,9 +1172,9 @@ mod platform {
         None
     }
 
-    async fn run(terminals: &Terminals, mode: &Mode) -> Result<(), String> {
+    async fn run(terminals: &Terminals, mode: &Mode, input_mode: InputMode) -> Result<(), String> {
         if let Some((rows, cols)) = size() {
-            resize(terminals, rows, cols).await?;
+            input_resize(terminals, rows, cols, input_mode).await?;
         }
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1054,7 +1182,7 @@ mod platform {
         let mut keys = SessionKeys::default();
         while mode.active.load(Ordering::Acquire) {
             tick.tick().await;
-            forward_display(terminals, &mut keys).await?;
+            input_tick(terminals, &mut keys, input_mode).await?;
             let mut count = 0;
             // ReadConsoleInputW is only called when records already exist. This
             // frontend is the sole console input consumer; no blocking stdin
@@ -1095,12 +1223,19 @@ mod platform {
                         let key = unsafe { event.Event.KeyEvent };
                         if key.bKeyDown != 0 {
                             let text = utf16.key(key);
-                            forward_human(terminals, &mut keys, &text).await?;
+                            if input_mode == InputMode::Monitor {
+                                super::super::terminal::monitor_keyboard_bytes(
+                                    text.as_bytes(),
+                                    false,
+                                )?;
+                            } else {
+                                forward_human(terminals, &mut keys, &text).await?;
+                            }
                         }
                     }
                     WINDOW_BUFFER_SIZE_EVENT => {
                         if let Some((rows, cols)) = size() {
-                            resize(terminals, rows, cols).await?;
+                            input_resize(terminals, rows, cols, input_mode).await?;
                         }
                     }
                     _ => {}

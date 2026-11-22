@@ -513,9 +513,22 @@ class Local(Harness):
             "client_id": self.client_id, "targets": [{"type": "agent_messages"}], "timeout_ms": 1000}}, modern=True)
         result = response.get("result", {})
         expected_error = "await requires an authenticated account and the current participant's collab binding"
-        self.check(status == 200 and result.get("isError") is True
-                   and any(item.get("type") == "text" and item.get("text") == expected_error
-                           for item in result.get("content", [])),
+        denied = result.get("structuredContent", {})
+        self.check(status == 200 and result.get("isError") is False
+                   and denied.get("schema_version") == 1 and denied.get("mode") == "any"
+                   and denied.get("status") == "unauthorized"
+                   and denied.get("error") == {"code": "await_unauthorized", "message": expected_error}
+                   and denied.get("completion_permission", False) is None
+                   and denied.get("continue_wait") is False and denied.get("wait_id", False) is None
+                   and denied.get("results") == [{
+                       "target": {"type": "agent_messages", "after": None, "limit": 32},
+                       "status": "unauthorized",
+                       "error": {"code": "await_authorization_revoked",
+                                 "message": "observation withheld at the final response boundary"},
+                   }]
+                   and not any(value.get(key) for value in (result, denied)
+                               for key in ("user_messages", "native_messages", "question_answers", "user_wait"))
+                   and all(value.get("user_consent_to_end") is None for value in (result, denied)),
                    "enabling local timers preserves the existing account requirement for public typed await")
         self.time_primitives_verified = True
 

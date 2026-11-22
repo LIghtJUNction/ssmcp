@@ -134,6 +134,7 @@ async fn failed_time_calls_and_their_real_summary_probe_keep_all_delivery_passiv
             audit.clone(),
             None,
             "time error fixture".into(),
+            Default::default(),
         );
         let failure = host(HostRequest::Call {
             client_id: fixture.session.client_id().into(),

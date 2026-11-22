@@ -1,6 +1,6 @@
 //! Operator-selected chat ingress and dispatch for one live connection.
 mod options;
-mod process;
+pub(crate) mod process;
 mod transport;
 
 pub(crate) use options::{Agent, Flags, Input, Settings, takes_value};

@@ -66,8 +66,30 @@ fn store_bytes_at(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let name = format!("{prefix}-{id}.{extension}");
-    save(root, &name, bytes)
+    let identity = save(root, &name, bytes)
         .map_err(|error| format!("Could not save the private input in .ssmcp/inputs: {error}"))?;
+    let relative = Path::new(".ssmcp").join("inputs").join(&name);
+    if let Err(error) = crate::managed_files::record_created(
+        root,
+        &relative,
+        crate::managed_files::Category::PersistentInput,
+        &format!("client.input.{prefix}"),
+        &identity,
+    ) {
+        // Import already succeeded. Do not discard the user's input or emit a
+        // second terminal event while the composer may hold its display lock.
+        // The structured warning is content-free; cleanup will keep an
+        // unregistered input, and the file remains an ordinary @ reference.
+        crate::observability::log(
+            "warn",
+            "managed_files",
+            &[
+                ("event", "input_creation_tracking_failed".into()),
+                ("method", format!("client.input.{prefix}")),
+                ("status", format!("{:?}", error.kind())),
+            ],
+        );
+    }
     Ok(format!("@\".ssmcp/inputs/{name}\""))
 }
 
@@ -154,7 +176,7 @@ pub(super) fn input_directory(root: &Path) -> io::Result<std::fs::File> {
 }
 
 #[cfg(unix)]
-fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<crate::managed_files::FileIdentity> {
     use std::{ffi::CString, io::Write, os::fd::AsRawFd};
     let inputs = input_directory(root)?;
     let name = CString::new(name).expect("generated ASCII filename");
@@ -164,7 +186,10 @@ fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         0o600,
     )?;
-    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::managed_files::FileIdentity::from_file(&file));
     if result.is_err() {
         drop(file);
         // SAFETY: remove only the newly created name through the same directory fd.
@@ -174,7 +199,11 @@ fn save(root: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn save(_root: &Path, _name: &str, _bytes: &[u8]) -> io::Result<()> {
+fn save(
+    _root: &Path,
+    _name: &str,
+    _bytes: &[u8],
+) -> io::Result<crate::managed_files::FileIdentity> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "automatic private paste files are not supported on this platform yet; save the text inside the workspace and reference it with @path",
@@ -257,6 +286,39 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+        let records = crate::managed_files::list(&fixture.0).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|record| {
+            record.category == crate::managed_files::Category::PersistentInput
+                && record.source == "client.input.paste"
+        }));
+        let mut config = crate::managed_files::config(&fixture.0).unwrap();
+        config.max_age_seconds = 0;
+        config.max_total_bytes = 0;
+        crate::managed_files::set_config(&fixture.0, &config).unwrap();
+        let cleaned = crate::managed_files::cleanup(&fixture.0, false, "unit-paste").unwrap();
+        assert_eq!(cleaned.removed_files, 0);
+        assert_eq!(cleaned.kept_protected, 2);
+        assert_eq!(fs::read_to_string(fixture.path(&first)).unwrap(), text);
+        assert_eq!(fs::read_to_string(fixture.path(&second)).unwrap(), text);
+    }
+
+    #[test]
+    fn paste_reference_remains_usable_when_creation_tracking_is_unavailable() {
+        let fixture = Fixture::new();
+        fs::create_dir(fixture.0.join(".ssmcp")).unwrap();
+        fs::set_permissions(fixture.0.join(".ssmcp"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(fixture.0.join(".ssmcp/managed-files"), b"not a directory").unwrap();
+        let reference = store_at(&fixture.0, "input that must survive a tracking failure").unwrap();
+        assert_eq!(reference.len(), REFERENCE_BYTES);
+        assert_eq!(
+            fs::read_to_string(fixture.path(&reference)).unwrap(),
+            "input that must survive a tracking failure",
+        );
+        assert_eq!(
+            fs::read(fixture.0.join(".ssmcp/managed-files")).unwrap(),
+            b"not a directory",
         );
     }
 
