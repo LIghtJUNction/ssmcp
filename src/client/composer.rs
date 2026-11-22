@@ -56,6 +56,14 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show keyboard shortcuts and commands",
     },
     SlashCommand {
+        name: "/version",
+        description: "Show this client's version",
+    },
+    SlashCommand {
+        name: "/about",
+        description: "Show application information, license and project links",
+    },
+    SlashCommand {
         name: "/exit",
         description: "Close this frontend and restore the terminal",
     },
@@ -1152,7 +1160,7 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("› /codex"))
         );
-        draft.insert("a");
+        draft.insert("au");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
     }
 
@@ -1282,7 +1290,20 @@ mod tests {
         assert_eq!(rendered.lines.len(), 4);
         assert!(rendered.lines[1].contains("/reload"));
         assert_eq!(rendered.cursor_col, 5);
-        for value in ["/filter cargo", "/unknown", "message /reload", "/\n"] {
+        for (prefix, command) in [("/ver", "/version"), ("/abo", "/about")] {
+            draft.set_text(prefix);
+            let suggestions = draft.suggestions();
+            assert_eq!(suggestions.len(), 1);
+            assert_eq!(suggestions[0].name, command);
+        }
+        for value in [
+            "/filter cargo",
+            "/version extra",
+            "/about extra",
+            "/unknown",
+            "message /reload",
+            "/\n",
+        ] {
             draft.set_text(value);
             assert!(draft.suggestions().is_empty());
         }

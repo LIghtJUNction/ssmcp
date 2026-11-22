@@ -194,6 +194,7 @@ pub(super) struct Conversation {
     #[cfg(test)]
     question_fixture: Option<Vec<crate::client::interface::questions::QuestionView>>,
     help_scroll: usize,
+    about: bool,
     openai_panel: Option<openai::Panel>,
     sessions: Vec<crate::client::interface::history::SessionSummary>,
     pub(super) history_list_stale: bool,
@@ -728,8 +729,31 @@ impl State {
             "/goal" => self.chat_goal(rest)?,
             "/openai" | "/openai-session" | "/openai-subject" | "/chatgpt" | "/plugin-docs" => {
                 self.chat_openai_command(command, rest)?;
+                self.conversation.about = false;
+            }
+            "/version" => {
+                if !rest.is_empty() {
+                    return Err("Use /version without arguments".into());
+                }
+                self.notice = Some(
+                    crate::client::version::render(crate::client::version::Request::Plain)?
+                        .trim_end()
+                        .to_owned(),
+                );
+            }
+            "/about" => {
+                if !rest.is_empty() {
+                    return Err("Use /about without arguments".into());
+                }
+                self.conversation.openai_panel = None;
+                self.conversation.about = true;
+                self.conversation.help_scroll = 0;
+                self.help = true;
+                self.conversation.content_focus = true;
+                self.notice = None;
             }
             "/help" => {
+                self.conversation.about = false;
                 self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = true;
@@ -1689,6 +1713,7 @@ impl State {
         let content = self.conversation.content_focus;
         match key {
             Key::Help => {
+                self.conversation.about = false;
                 self.conversation.openai_panel = None;
                 self.conversation.help_scroll = 0;
                 self.help = !self.help;
@@ -1958,6 +1983,7 @@ impl State {
         }
         if self.help {
             self.help = false;
+            self.conversation.about = false;
             self.conversation.openai_panel = None;
             self.conversation.content_focus = false;
             self.notice = None;
@@ -2214,6 +2240,7 @@ impl State {
                 self.conversation.composer.backspace();
             }
             '?' if self.conversation.composer.is_empty() && !self.conversation.content_focus => {
+                self.conversation.about = false;
                 self.conversation.openai_panel = None;
                 self.help = !self.help;
             }
@@ -2996,6 +3023,7 @@ impl State {
         if self.help {
             body = self.chat_help_rows(height);
         } else {
+            self.conversation.about = false;
             self.conversation.openai_panel = None;
         }
         body.resize_with(usize::from(height), || {
@@ -5282,6 +5310,95 @@ mod tests {
         assert!(!state.chat_menu_visible());
         input(&mut state, b"\t");
         assert_eq!(state.conversation.composer.text(), "/re");
+    }
+
+    #[test]
+    fn information_commands_remain_literal_while_editing_a_queued_request() {
+        for command in ["/version", "/about"] {
+            let mut state = preview(36, 120);
+            state.conversation.composer.set_text(command);
+            state.conversation.editing = Some("request-being-edited".into());
+            assert!(!state.chat_menu_visible());
+            state.chat_submit();
+            assert_eq!(state.conversation.composer.text(), command);
+            assert_eq!(
+                state.conversation.editing.as_deref(),
+                Some("request-being-edited")
+            );
+            assert!(state.notice.as_deref().unwrap().contains("Preview only"));
+            assert!(!state.help);
+            assert!(!state.conversation.about);
+            assert!(state.actions.is_empty());
+            assert!(state.conversation.submitting.is_none());
+        }
+    }
+
+    #[test]
+    fn about_shows_build_information_and_switches_cleanly_to_help_and_openai() {
+        let mut state = preview(36, 160);
+        state.conversation.composer.set_text("保留草稿界");
+        state.conversation.composer.left();
+        state.conversation.target = Some("chosen-agent".into());
+        let draft = state.chat_composer_stamp();
+        state.conversation.help_scroll = 42;
+
+        assert!(state.chat_command("/about").unwrap());
+        assert!(state.help);
+        assert!(state.conversation.about);
+        assert!(state.conversation.content_focus);
+        assert_eq!(state.conversation.help_scroll, 0);
+        let about = state.chat_help_rows(1000).join("\n");
+        for value in [
+            "About ssmcp",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_DESCRIPTION"),
+            env!("CARGO_PKG_LICENSE"),
+            env!("CARGO_PKG_REPOSITORY"),
+            "/help",
+        ] {
+            assert!(about.contains(value), "{value}: {about}");
+        }
+        assert!(!about.contains("Write and send"));
+        state.chat_key(Key::End);
+        let _ = state.chat_help_rows(3);
+        assert!(state.conversation.help_scroll > 0);
+        state.chat_key(Key::Home);
+        assert_eq!(state.conversation.help_scroll, 0);
+        state.chat_key(Key::Escape);
+        assert!(!state.help);
+        assert!(!state.conversation.about);
+        assert_eq!(state.chat_composer_stamp(), draft);
+
+        assert!(state.chat_command("/about").unwrap());
+        state.chat_key(Key::Help);
+        assert!(!state.help);
+        assert!(!state.conversation.about);
+        state.chat_key(Key::Help);
+        assert!(state.help);
+        assert!(!state.conversation.about);
+        assert!(state.chat_help_rows(1000).join("\n").contains("Write and send"));
+
+        assert!(state.chat_command("/about").unwrap());
+        assert!(state.chat_command("/help existing-arguments").unwrap());
+        assert!(!state.conversation.about);
+        assert!(state.chat_help_rows(1000).join("\n").contains("Write and send"));
+
+        assert!(state.chat_command("/about").unwrap());
+        assert!(state.chat_command("/openai").unwrap());
+        assert!(!state.conversation.about);
+        assert!(state.conversation.openai_panel.is_some());
+        assert!(
+            state
+                .chat_help_rows(1000)
+                .join("\n")
+                .contains("OpenAI caller metadata")
+        );
+        assert!(state.chat_command("/about").unwrap());
+        assert!(state.conversation.openai_panel.is_none());
+        assert!(state.chat_help_rows(1000).join("\n").contains("About ssmcp"));
+        assert_eq!(state.chat_composer_stamp(), draft);
+        assert!(state.actions.is_empty());
+        assert!(state.conversation.submitting.is_none());
     }
 
     #[test]
