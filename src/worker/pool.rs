@@ -228,17 +228,23 @@ impl Pool {
             tool(
                 "attach",
                 "Attach this exact verified participant thread as the pool manager. The first explicit attach or successful submit fixes ownership for this native connection. Identical owner retries are idempotent; other agents cannot take over. No model is started and caller-supplied owner IDs are not accepted.",
-                json!({}), json!([]), false,
+                json!({}),
+                json!([]),
+                false,
             ),
             tool(
                 "tasks",
                 "List only the manager's retained task metadata, ordered by task ID, up to 128 items per page. Prompts, expanded inputs and results are omitted; use result for one task. Terminal retention remains bounded and cursors are not durable across reconnects.",
-                json!({"cursor":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":128,"default":32}}), json!([]), true,
+                json!({"cursor":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":128,"default":32}}),
+                json!([]),
+                true,
             ),
             tool(
                 "stop",
                 "The authenticated manager stops this pool from accepting new tasks, cancels queued work and requests cancellation of running work. Running remote slots remain occupied until the exact claimant acknowledges; this does not kill an external agent. A later connection loss makes unconfirmed effects unknown, never replay-safe. This operation cannot restart or resize the pool.",
-                json!({}), json!([]), false,
+                json!({}),
+                json!([]),
+                false,
             ),
             tool(
                 "submit",
@@ -312,8 +318,10 @@ impl Pool {
                     );
                 }
                 Claimed::Waiting if !self.queue.accepting() => {
-                    return Ok(json!({"status":"not_accepting","execution":"remote", "worker":self.queue.snapshot(),
-                        "wait_hint":"The manager stopped this pool. Existing claimants must reuse their original request_id to acknowledge cancellation; no new tasks will be assigned."}));
+                    return Ok(
+                        json!({"status":"not_accepting","execution":"remote", "worker":self.queue.snapshot(),
+                        "wait_hint":"The manager stopped this pool. Existing claimants must reuse their original request_id to acknowledge cancellation; no new tasks will be assigned."}),
+                    );
                 }
                 Claimed::Waiting if wait_ms == 0 || tokio::time::Instant::now() >= deadline => {
                     return Ok(
@@ -335,8 +343,12 @@ impl Pool {
     ) -> Result<Value, String> {
         let source = Source::capture();
         let actor = actor(&source)?;
-        let client_id = source.call.as_ref().and_then(|call| call.client_id())
-            .ok_or("worker tools require the verified native client identity")?.to_owned();
+        let client_id = source
+            .call
+            .as_ref()
+            .and_then(|call| call.client_id())
+            .ok_or("worker tools require the verified native client identity")?
+            .to_owned();
         match name {
             "ssmcp.worker.status" => {
                 if arguments.as_object().is_none_or(|map| !map.is_empty()) {
@@ -372,7 +384,9 @@ impl Pool {
                 empty_arguments(&arguments, "attach")?;
                 source.require_owner()?;
                 let manager = self.queue.attach(&actor, &client_id, now_ms())?;
-                Ok(json!({"manager":manager,"caller_is_manager":true,"worker":self.queue.snapshot()}))
+                Ok(
+                    json!({"manager":manager,"caller_is_manager":true,"worker":self.queue.snapshot()}),
+                )
             }
             "ssmcp.worker.tasks" => {
                 #[derive(Deserialize)]
@@ -383,18 +397,27 @@ impl Pool {
                     #[serde(default = "default_task_limit")]
                     limit: usize,
                 }
-                fn default_task_limit() -> usize { 32 }
+                fn default_task_limit() -> usize {
+                    32
+                }
                 let request: List = serde_json::from_value(arguments)
                     .map_err(|error| format!("invalid worker task listing: {error}"))?;
-                let page = self.queue.tasks(&actor, &client_id, request.cursor.as_deref(), request.limit)?;
+                let page = self.queue.tasks(
+                    &actor,
+                    &client_id,
+                    request.cursor.as_deref(),
+                    request.limit,
+                )?;
                 Ok(json!({"page":page,"worker":self.queue.snapshot()}))
             }
             "ssmcp.worker.stop" => {
                 empty_arguments(&arguments, "stop")?;
                 let changed = self.queue.stop(&actor, &client_id, now_ms())?;
-                Ok(json!({"stop_requested":true,"changed":changed,"worker":self.queue.snapshot(),
+                Ok(
+                    json!({"stop_requested":true,"changed":changed,"worker":self.queue.snapshot(),
                     "external_execution_stopped":false,
-                    "wait_hint":"Inspect retained task results. A running remote task remains occupied until its original claimant reports completion; cancellation is not proof that external effects stopped."}))
+                    "wait_hint":"Inspect retained task results. A running remote task remains occupied until its original claimant reports completion; cancellation is not proof that external effects stopped."}),
+                )
             }
             "ssmcp.worker.submit" => {
                 let request: Submit = serde_json::from_value(arguments)
@@ -641,7 +664,8 @@ mod tests {
             .collect();
         assert_eq!(names.len(), 10);
         for name in [
-            "status", "attach", "tasks", "stop", "submit", "result", "cancel", "wait", "claim", "complete",
+            "status", "attach", "tasks", "stop", "submit", "result", "cancel", "wait", "claim",
+            "complete",
         ] {
             assert!(names.contains(format!("ssmcp.worker.{name}").as_str()));
         }
@@ -707,22 +731,50 @@ mod tests {
 
     #[test]
     fn manager_identity_comes_only_from_the_verified_call_thread() {
-        use crate::{runtime::call_scope::CallScope, wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution}};
+        use crate::{
+            runtime::call_scope::CallScope,
+            wire::{CodeContext, ControlAccount, ControlAgent, ControlAttribution},
+        };
         let client = "a".repeat(64);
         let participant = format!("agent_{}", "b".repeat(32));
         let attribution = ControlAttribution {
-            account: ControlAccount { provider: "github".into(), subject: "123".into(), login: "same-label".into() },
+            account: ControlAccount {
+                provider: "github".into(),
+                subject: "123".into(),
+                login: "same-label".into(),
+            },
             owner: None,
-            agent: Some(ControlAgent { id: participant.clone(), name: "same display name".into() }),
+            agent: Some(ControlAgent {
+                id: participant.clone(),
+                name: "same display name".into(),
+            }),
         };
         let mut source = Source::default();
-        source.call = Some(CallScope::from_relay_for_client(7, Some(&client), 1, Some(&attribution), None).unwrap());
-        assert!(actor(&source).is_err(), "account/participant without a verified thread is not a manager");
+        source.call = Some(
+            CallScope::from_relay_for_client(7, Some(&client), 1, Some(&attribution), None)
+                .unwrap(),
+        );
+        assert!(
+            actor(&source).is_err(),
+            "account/participant without a verified thread is not a manager"
+        );
         let context = CodeContext {
-            run_id: "c".repeat(32), code: "return 1".into(), timestamp_ms: 1,
-            session_id: Some(client.clone()), thread_id: Some(participant.clone()),
+            run_id: "c".repeat(32),
+            code: "return 1".into(),
+            timestamp_ms: 1,
+            session_id: Some(client.clone()),
+            thread_id: Some(participant.clone()),
         };
-        source.call = Some(CallScope::from_relay_for_client(7, Some(&client), 2, Some(&attribution), Some(&context)).unwrap());
+        source.call = Some(
+            CallScope::from_relay_for_client(
+                7,
+                Some(&client),
+                2,
+                Some(&attribution),
+                Some(&context),
+            )
+            .unwrap(),
+        );
         let caller = actor(&source).unwrap();
         let queue = Queue::<()>::new("owned-pool".into(), 1).unwrap();
         let manager = queue.attach(&caller, &client, 1).unwrap();

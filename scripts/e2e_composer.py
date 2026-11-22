@@ -24,7 +24,7 @@ import time
 
 from e2e_account_relay import wait_for
 from e2e_dashboard import Dashboard, sha256, text
-from e2e_client_ui import body_text, column, empty_composer_ready, left_rows
+from e2e_client_ui import body_text, column, empty_composer_ready, left_rows, view
 
 
 ESC = b"\x1b"
@@ -164,8 +164,8 @@ class Composer(Dashboard):
         if self.ui("/display/conversation")["draft"]["text"]:
             raise AssertionError("local command helper would overwrite a nonempty draft")
         front.send(command + "\r")
-        destination = {"/queue": ("queue", 4, 8), "/logs": ("logs", 7, 8)}[command]
-        front.until(lambda shot: column(shot) == destination, f"local {command} column")
+        destination = {"/queue": "queue", "/logs": "logs", "/sessions": "recipients"}[command]
+        front.until(lambda shot: view(shot, destination), f"local {command} column")
 
     def activate_column(self, front, name):
         state = self.ui("/display/conversation")["canvas"]
@@ -173,12 +173,16 @@ class Composer(Dashboard):
         distance = index - state["active"]
         if distance:
             front.send((ALT_RIGHT if distance > 0 else ALT_LEFT) * abs(distance))
-        front.until(lambda shot: column(shot) == (name, index + 1, len(state["columns"])),
+        front.until(lambda shot: (view(shot, "conversation") if name == "conversation"
+                                  else column(shot) == (name, index + 1, len(state["columns"]))),
                     f"horizontal navigation to the existing {name} column")
+        observed = self.ui("/display/conversation")["canvas"]
+        if observed["active"] != index or observed["columns"] != state["columns"]:
+            raise AssertionError("horizontal navigation changed the canvas or reached the wrong column")
 
     def wait_submitted(self, front, request_text, *, next_draft="", waiting=False):
         draft = next_draft or "Message the agent"
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: view(shot, "conversation")
                                  and request_text in body_text(shot)
                                  and shot["rows"][-1].lstrip().startswith("Queued ·")
                                  and request_text not in input_text(shot)
@@ -199,7 +203,7 @@ class Composer(Dashboard):
                     "the accepted request visible in the queue")
         self.check(record["status"] == "queued", "typed input is acknowledged by the server queue")
         self.focus_input(front)
-        front.until(lambda shot: column(shot) == ("queue", 4, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "queue") and not shot["hide_cursor"],
                     "the visible Queue composer regaining input focus")
         return record
 
@@ -223,16 +227,21 @@ class Composer(Dashboard):
 
     def agents(self, front):
         self.focus_input(front)
-        # Queue, audit and history are independent columns. Reach the existing
-        # conversation first, then exercise ordinary Left at the draft edge.
         self.activate_column(front, "conversation")
         self.focus_input(front)
-        draft = self.ui("/display/conversation")["draft"]
-        if draft["cursor"] != 0:
-            raise AssertionError("agent panel helper requires the start of the current draft")
-        front.send(LEFT)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"],
-                    "Left entering the adjacent Sessions column")
+        state = self.ui("/display/conversation")
+        if state["draft"]["cursor"] != 0:
+            raise AssertionError("recipient helper requires the start of the current draft")
+        if "recipients" not in state["canvas"]["columns"]:
+            # Initialize through the public command only while the test-owned
+            # composer is empty; later visits navigate without touching edits.
+            if state["draft"]["text"] or state["editing"] is not None:
+                raise AssertionError("open /sessions before composing or editing a request")
+            self.command(front, "/sessions")
+        else:
+            self.activate_column(front, "recipients")
+        front.until(lambda shot: view(shot, "recipients") and shot["hide_cursor"],
+                    "the explicitly opened recipient picker")
 
     def highlight_recipient(self, front, member=None):
         # Local steering recipients precede observed/native process threads.
@@ -250,7 +259,7 @@ class Composer(Dashboard):
             selected_key = "member:" + member["agent_id"]
         front.send(HOME + DOWN * index)
         front.until(
-            lambda shot: column(shot) == ("sessions", 1, 8) and shot["hide_cursor"]
+            lambda shot: view(shot, "recipients") and shot["hide_cursor"]
             and self.ui("/display/conversation")["selected_agent"] == selected_key,
             "the exact local recipient highlighted in Sessions",
         )
@@ -264,7 +273,7 @@ class Composer(Dashboard):
         # retain their explicit recipient label above the input.
         visible_recipient = f"To {label}"
         front.until(lambda shot: visible_recipient in text(shot)
-                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+                                 and view(shot, "conversation") and not shot["hide_cursor"],
                     "selected recipient returning to the conversation composer")
         selected = self.ui("/display/conversation")
         self.check(selected["target"] == ("next" if member is None else member["agent_id"])
@@ -435,7 +444,7 @@ class Composer(Dashboard):
         self.check(all(member["token"] not in json.dumps(roster) for member in members),
                    "the roster shows the registered threads and their statuses without participant tokens")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"],
                     "Escape returning from agents to the default conversation")
         navigation_draft = "保留草稿 界"
         front.send(navigation_draft.encode() + LEFT)
@@ -447,32 +456,32 @@ class Composer(Dashboard):
                                                 "cursor": len(navigation_draft.encode()) - len("界".encode())},
                    "Left within nonempty UTF-8 input moves the cursor without opening agents")
         front.send(b"\x01" + LEFT)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8) and navigation_draft in input_text(shot),
-                    "Left at the start of a draft opening the agent panel")
+        front.until(lambda shot: view(shot, "statistics") and navigation_draft in input_text(shot),
+                    "Left at the start of a draft opening Statistics")
         before_choice = self.ui("/display/conversation")
         self.check(before_choice["draft"] == {"text": navigation_draft, "cursor": 0}
                    and before_choice["target"] is None and before_choice["editing"] is None,
-                   "opening agents preserves the draft and does not choose or send a recipient")
+                   "opening Statistics preserves the draft and does not choose or send a recipient")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"],
                     "Escape closing the panel without clearing the Unicode draft")
         after_escape = self.ui("/display/conversation")
         self.check(after_escape["draft"] == before_choice["draft"] and after_escape["target"] is None,
                    "Escape restores the conversation with exactly the same UTF-8 cursor and recipient")
         self.agents(front)
         self.highlight_recipient(front, members[0])
-        front.send(RIGHT)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.send(ALT_LEFT)
+        front.until(lambda shot: view(shot, "conversation")
                                  and navigation_draft in input_text(shot) and not shot["hide_cursor"],
-                    "Right moving to the conversation without choosing a member")
+                    "Alt+Left returning from Recipients without choosing a member")
         navigated = self.ui("/display/conversation")
         self.check(navigated["target"] is None and navigated["draft"] == before_choice["draft"],
-                   "Right changes only the active column, preserving the draft and recipient")
+                   "horizontal navigation changes only the active column, preserving the draft and recipient")
         self.agents(front)
         self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
                    "horizontal navigation preserves the independently highlighted member")
         front.send(ENTER)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: view(shot, "conversation")
                                  and "To Shared name" in text(shot) and not shot["hide_cursor"],
                     "Enter choosing the member and returning to the conversation")
         chosen = self.ui("/display/conversation")
@@ -483,7 +492,7 @@ class Composer(Dashboard):
         self.check(self.ui("/display/conversation")["selected_agent"] == "member:" + members[0]["agent_id"],
                    "reopening agents highlights the currently selected member")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"],
                     "the selected member conversation restored")
         front.send(b"\x01\x0b")
         front.until(lambda shot: "Message the agent" in input_text(shot), "the navigation fixture draft cleared")
@@ -503,17 +512,17 @@ class Composer(Dashboard):
                                  and retargeted["text"] in input_text(shot),
                     "an exact-agent requirement taken back for recipient editing")
         # Keep the held edit while navigating from Queue through the canvas;
-        # the ordinary Left boundary action enters Agents from conversation.
+        # the explicitly opened recipient column retains the held draft.
         front.send(b"\x01")
         self.agents(front)
         held = self.ui("/display/conversation")
         self.check(held["editing"] == retargeted["id"]
                    and held["target"] == members[0]["agent_id"]
                    and held["draft"] == {"text": retargeted["text"], "cursor": 0},
-                   "Left preserves the held request, exact recipient and original text during retargeting")
+                   "recipient navigation preserves the held request, exact recipient and original text during retargeting")
         front.send(HOME + ENTER)
         front.until(lambda shot: editing_queue(shot, "Next caller")
-                                 and column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"],
+                                 and view(shot, "conversation") and not shot["hide_cursor"],
                     "the explicit Next caller choice returning to the active edit")
         retargeted_text = "COMPOSER_RETARGET_NEXT_CALLER"
         front.send(b"\x01\x0b" + retargeted_text.encode() + ENTER)
@@ -591,7 +600,7 @@ class Composer(Dashboard):
         # Inspect the existing Queue column without writing a slash command
         # into the restored draft or relying on the old F2 view order.
         self.activate_column(front, "queue")
-        front.until(lambda shot: column(shot) == ("queue", 4, 8)
+        front.until(lambda shot: view(shot, "queue")
                                  and visible_record(shot, handoff["text"], "queued", handoff["id"]),
                     "confirmed undelivered work republished after the reload handoff")
         # Restored records are locally queued at revision zero until the client

@@ -129,7 +129,7 @@ impl Default for Canvas {
     fn default() -> Self {
         Self {
             columns: [
-                View::Agents,
+                View::Statistics,
                 View::Activity,
                 View::Audit,
                 View::Queue,
@@ -408,6 +408,7 @@ impl State {
                     self.conversation.detail = false;
                     self.conversation.detail_scroll = 0;
                 }
+                View::Statistics => {}
                 View::Agents => self.chat_select_target(),
                 View::Logs => {
                     self.logs.screen_mut().set_scrollback(0);
@@ -723,7 +724,7 @@ mod tests {
         assert_eq!(state.conversation.canvas.active, 0);
         state.chat_key(Key::CanvasLeft);
         assert_eq!(state.conversation.canvas.active, 0);
-        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(state.conversation.view, View::Statistics);
         state.canvas_move(isize::MAX);
         let last = state.conversation.canvas.columns.len() - 1;
         assert_eq!(state.conversation.canvas.active, last);
@@ -1019,7 +1020,7 @@ mod tests {
                 .map(|column| column.view)
                 .collect::<Vec<_>>(),
             vec![
-                View::Agents,
+                View::Statistics,
                 View::Activity,
                 View::Audit,
                 View::Queue,

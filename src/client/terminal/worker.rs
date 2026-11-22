@@ -358,8 +358,10 @@ impl State {
                     .collect();
                 rows.push(line(self, &parts));
             }
-            let status = if snapshot.closed && snapshot.working > 0 {
-                "Stopping · waiting for owned work to stop"
+            let status = if (snapshot.stopping || snapshot.closed) && snapshot.working > 0 {
+                "Stopping intake · waiting for task acknowledgement"
+            } else if snapshot.stopping {
+                "Intake stopped"
             } else if snapshot.closed {
                 "Stopped"
             } else {
@@ -372,6 +374,32 @@ impl State {
                     format!("Queued {} · {status}", snapshot.queued),
                 )],
             ));
+            let identity = identity_lines(snapshot, g.cols);
+            if identity.len() + 6 <= height.saturating_sub(rows.len() + 1) {
+                rows.extend(
+                    identity
+                        .iter()
+                        .map(|text| line(self, &[(PanelTone::Muted, text.clone())])),
+                );
+            } else {
+                // Never show a truncated identifier as if it were complete.
+                rows.push(line(
+                    self,
+                    &[(PanelTone::Muted, format!("OS PID {}", snapshot.process_id))],
+                ));
+                rows.push(line(
+                    self,
+                    &[(
+                        PanelTone::Muted,
+                        if snapshot.manager.is_some() {
+                            "Manager attached · enlarge for IDs"
+                        } else {
+                            "Manager unbound"
+                        }
+                        .into(),
+                    )],
+                ));
+            }
             rows.push(String::new());
             let available = height.saturating_sub(rows.len() + 1);
             let panel_rows = self
@@ -415,6 +443,37 @@ impl State {
             mouse_capture: true,
         }
     }
+}
+
+fn identity_lines(snapshot: &Snapshot, width: u16) -> Vec<String> {
+    let mut text = vec![format!("OS PID {}", snapshot.process_id)];
+    if let Some(manager) = &snapshot.manager {
+        text.extend([
+            "Manager session ID".into(),
+            manager.client_id.clone(),
+            "Manager thread ID".into(),
+            manager.thread_id.clone(),
+        ]);
+    } else {
+        text.push("Manager unbound".into());
+    }
+    let width = usize::from(width.max(1));
+    let mut output = Vec::new();
+    for text in text {
+        let mut row = String::new();
+        let mut used = 0;
+        for character in panel::safe_text(&text).chars() {
+            let cells = character.width().unwrap_or(0);
+            if used + cells > width && !row.is_empty() {
+                output.push(std::mem::take(&mut row));
+                used = 0;
+            }
+            row.push(character);
+            used += cells;
+        }
+        output.push(row);
+    }
+    output
 }
 
 fn log_lines(slot: &SlotView, width: usize) -> Vec<(LogAnchor, PanelTone, String)> {
@@ -519,6 +578,9 @@ mod tests {
     fn snapshot() -> Snapshot {
         Snapshot {
             generation: "fixture".into(),
+            process_id: 31415,
+            manager: None,
+            stopping: false,
             total: 3,
             idle: 1,
             working: 1,
@@ -555,6 +617,50 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn worker_manager_identity_is_explicit_without_abbreviating_ids_or_hiding_active_work() {
+        let mut snapshot = snapshot();
+        assert!(identity_lines(&snapshot, 80).contains(&"Manager unbound".into()));
+        let client = "c".repeat(64);
+        let thread = "agent_verified_manager";
+        snapshot.manager = Some(crate::worker::ManagerView {
+            client_id: client.clone(),
+            thread_id: thread.into(),
+            participant_id: thread.into(),
+            connection: 1,
+            attached_at_ms: 1,
+        });
+        for width in [1, 4, 18, 48, 80] {
+            let identity = identity_lines(&snapshot, width);
+            assert!(identity.concat().contains(&client));
+            assert!(identity.concat().contains(thread));
+            assert!(
+                identity
+                    .iter()
+                    .all(|line| line.width() <= usize::from(width))
+            );
+        }
+        let mut wide = state(30, 100, false);
+        let text = screen(&wide.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(text.contains(&client) && text.contains(thread));
+        assert!(text.contains("OS PID 31415"));
+        snapshot.stopping = true;
+        let text = screen(&wide.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(text.contains("Working 1"));
+        assert!(text.contains("waiting for task acknowledgement"));
+        let mut narrow = state(18, 18, false);
+        let text = screen(&narrow.worker_frame(Some(&snapshot)))
+            .screen()
+            .contents();
+        assert!(!text.contains(&client[..16]));
+        assert!(text.contains("Manager attached"));
+        assert!(text.contains("Working 1"));
     }
 
     fn log(sequence: u64) -> SlotLog {

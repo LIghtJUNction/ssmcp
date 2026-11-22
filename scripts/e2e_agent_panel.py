@@ -25,7 +25,7 @@ import tempfile
 import time
 
 from e2e_composer import Composer, DOWN, ENTER, ESC, HOME
-from e2e_client_ui import column, empty_composer_ready
+from e2e_client_ui import column, empty_composer_ready, view
 from e2e_dashboard import sha256, text
 
 
@@ -118,7 +118,7 @@ class AgentPanel(Composer):
         index = 1 + next(index for index, value in enumerate(roster)
                          if value["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * index + ENTER)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"]
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"]
                     and "To Builder" in text(shot), "the selected member's composer")
         state = self.ui("/display/conversation")
         self.check(state["target"] == member["agent_id"],
@@ -273,10 +273,10 @@ class AgentPanel(Composer):
 
     def leave_thread_history(self, front):
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("sessions", 1, 8),
+        front.until(lambda shot: view(shot, "recipients"),
                     "history returns to Sessions")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: view(shot, "conversation")
                     and not shot["hide_cursor"], "Sessions returns to the same composer")
 
     def member_history_actions(self, front, members, composition):
@@ -368,7 +368,7 @@ class AgentPanel(Composer):
                    and self.queue()["queue"] == queue_before,
                    "sidebar left-click selects a row without sending or changing recipients")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "return to sidebar overview")
+        front.until(lambda shot: view(shot, "conversation"), "return to sidebar overview")
         self.click_sidebar(front, "Builder", expected=2, button=2)
         opened = self.wait_conversation(front, lambda state:
             state["view"] == "history" and state["thread_history"] is not None
@@ -407,7 +407,7 @@ class AgentPanel(Composer):
                    "observed callers do not fabricate authenticated session members")
         self.save_shot("callers", front)
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the original composer")
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"], "the original composer")
 
         members = []
         for role in ("Implementation", "Review"):
@@ -464,7 +464,7 @@ class AgentPanel(Composer):
         front.send(ESC)
         front.until(lambda shot: selected_name(shot, CALLER["name"]), "back to the selected caller")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8), "the caller sidebar")
+        front.until(lambda shot: view(shot, "conversation"), "the caller sidebar")
         self.click_sidebar(front, CALLER["model"], button=2)
         front.until(lambda shot: "Observed call ·" in text(shot)
                     and "terminal.status" in text(shot), "sidebar opens the drawn call audit")
@@ -494,7 +494,7 @@ class AgentPanel(Composer):
         self.save_shot("narrow-models", front)
 
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8) and not shot["hide_cursor"], "the preserved composer")
+        front.until(lambda shot: view(shot, "conversation") and not shot["hide_cursor"], "the preserved composer")
         returned = self.ui("/display/conversation")
         self.check({key: returned[key] for key in composition} == composition,
                    "returning from the resized roster preserves the exact original composition")

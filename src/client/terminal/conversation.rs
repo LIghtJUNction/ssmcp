@@ -25,6 +25,7 @@ pub(super) mod reload_state;
 mod sessions;
 #[cfg(all(test, target_os = "linux"))]
 mod skill_picker_tests;
+mod statistics;
 mod tasks;
 mod timing;
 mod user_wait;
@@ -37,6 +38,7 @@ pub(super) enum View {
     #[default]
     Activity,
     Audit,
+    Statistics,
     Agents,
     Queue,
     Questions,
@@ -49,7 +51,8 @@ impl View {
         match self {
             Self::Activity => "conversation",
             Self::Audit => "code audit",
-            Self::Agents => "sessions",
+            Self::Statistics => "statistics",
+            Self::Agents => "recipients",
             Self::Queue => "queue",
             Self::Questions => "questions",
             Self::History => "history",
@@ -61,12 +64,12 @@ impl View {
         match self {
             Self::Activity => Self::Audit,
             Self::Audit => Self::Queue,
-            Self::Agents => Self::Activity,
+            Self::Statistics | Self::Agents => Self::Activity,
             Self::Queue => Self::Questions,
             Self::Questions => Self::History,
             Self::History => Self::Logs,
             Self::Logs => Self::Tasks,
-            Self::Tasks => Self::Agents,
+            Self::Tasks => Self::Statistics,
         }
     }
 }
@@ -208,7 +211,7 @@ pub(super) struct Conversation {
 
 impl Conversation {
     pub(super) fn snapshot(&self) -> Value {
-        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
+        json!({"view":match self.view { View::Activity=>"activity",View::Audit=>"audit",View::Statistics=>"statistics",View::Agents=>"agents",View::Queue=>"queue",View::Questions=>"questions",View::History=>"history",View::Logs=>"logs",View::Tasks=>"tasks" },
             "focus":if self.content_focus {"content"} else {"input"},
             "answering":self.question_id,"pending_questions":crate::client::interface::questions::pending_count(),
             "selected":self.selected,"selected_agent":self.selected_agent,"target":self.target,"native_recipient":self.native_recipient,"native_pending":self.native_pending.is_some(),"editing":self.editing,
@@ -919,12 +922,16 @@ impl State {
             "/new" => {
                 let view = match rest {
                     "" | "chat" | "conversation" => View::Activity,
-                    "agents" => View::Agents,
+                    "statistics" => View::Statistics,
                     "audit" => View::Audit,
                     "queue" => View::Queue,
                     "questions" => View::Questions,
                     "history" => View::History,
-                    _ => return Err("Use /new [chat|agents|audit|queue|questions|history]".into()),
+                    _ => {
+                        return Err(
+                            "Use /new [chat|statistics|audit|queue|questions|history]".into()
+                        );
+                    }
                 };
                 self.canvas_new(view);
             }
@@ -1372,7 +1379,7 @@ impl State {
                     self.chat_recipient_changed(false);
                     self.chat_change_view(View::Activity);
                     self.notice = Some(format!(
-                        "To {} · Enter sends · ← at draft start switches agent",
+                        "To {} · Enter sends · /sessions chooses recipients",
                         panel::safe_text(field(&agent, "name"))
                     ));
                 }
@@ -1406,6 +1413,7 @@ impl State {
                     self.events.open();
                 }
             }
+            View::Statistics => self.canvas_move(1),
             View::Questions => {}
         }
     }
@@ -1415,6 +1423,10 @@ impl State {
             View::Activity => {
                 self.scroll_logs(-delta);
                 self.events.scroll_by(delta);
+            }
+            View::Statistics => {
+                self.conversation.detail_scroll =
+                    self.conversation.detail_scroll.saturating_add_signed(delta);
             }
             View::Audit => self.audit.scroll_by(delta),
             View::Logs => self.scroll_logs(-delta),
@@ -1727,7 +1739,7 @@ impl State {
             self.question_key(key);
             return;
         }
-        if self.conversation.view == View::Agents
+        if matches!(self.conversation.view, View::Statistics | View::Agents)
             && self.conversation.content_focus
             && matches!(key, Key::Delete | Key::Newline)
         {
@@ -2037,6 +2049,10 @@ impl State {
             }
             return;
         }
+        if self.conversation.view == View::Statistics {
+            self.chat_change_view(View::Activity);
+            return;
+        }
         if self.conversation.view == View::Agents {
             if self.conversation.detail {
                 self.audit.back();
@@ -2139,7 +2155,7 @@ impl State {
                 return;
             }
         }
-        if self.conversation.view == View::Agents
+        if matches!(self.conversation.view, View::Statistics | View::Agents)
             && self.conversation.content_focus
             && matches!(
                 character,
@@ -2271,7 +2287,7 @@ impl State {
                 self.help = !self.help;
             }
             ch if !ch.is_control() => {
-                if self.conversation.view == View::Agents {
+                if matches!(self.conversation.view, View::Statistics | View::Agents) {
                     self.chat_change_view(View::Activity);
                 }
                 self.conversation.content_focus = false;
@@ -2579,7 +2595,7 @@ impl State {
         if output == b"\x1b[201~" && !self.keyboard.pasting {
             if let Some(paste) = self.conversation.paste.take() {
                 if !paste.is_empty() {
-                    if self.conversation.view == View::Agents {
+                    if matches!(self.conversation.view, View::Statistics | View::Agents) {
                         self.chat_change_view(View::Activity);
                     }
                     if self.help {
@@ -3034,6 +3050,7 @@ impl State {
                 self.events
                     .render(g.left, height, &self.ui, self.conversation.content_focus)
             }
+            View::Statistics => self.chat_statistics_rows(&data, height),
             View::History => self.chat_history_rows(height),
             View::Questions => self.question_rows(height),
             View::Logs => self.filtered_logs().unwrap_or_else(|| {
@@ -3174,6 +3191,9 @@ impl State {
                     if let Some(hint) = self.chat_contextual_hint("") { return hint; }
                     if self.conversation.logs_open { return "Logs · ←/→ panels · ↑↓ / PgUp/PgDn scroll · F9 filter · right-click / Esc back".into(); }
                     if self.help { return "Help · ↑↓ / PgUp/PgDn scroll · Home/End · Esc back".into(); }
+                    if self.conversation.view == View::Statistics {
+                        return "Statistics · ↑↓ / PgUp/PgDn scroll · Esc back · → conversation".into();
+                    }
                     if self.conversation.view == View::Tasks {
                         return if self.conversation.content_focus {
                             "Tasks · ↑↓ select · Enter details · PgUp/PgDn scroll · Esc back · ←/→ panels".into()
@@ -3183,7 +3203,7 @@ impl State {
                     }
                     if self.conversation.view == View::History {
                         if let Some(history)=&self.conversation.scoped_history {
-                            return format!("{} · live records · PgUp/PgDn · Esc Sessions",history.lock().unwrap_or_else(|error|error.into_inner()).title());
+                            return format!("{} · live records · PgUp/PgDn · Esc Recipients",history.lock().unwrap_or_else(|error|error.into_inner()).title());
                         }
                         return if self.conversation.detail { "Saved conversation · PgUp/PgDn · type to continue · Esc list".into() }
                             else { "↑↓ select · Enter resume · Esc back".into() };
@@ -3193,7 +3213,7 @@ impl State {
                     }
                     if self.conversation.view == View::Agents {
                         return if self.conversation.detail {
-                            "Esc · back to Sessions · ←/→ panels".into()
+                            "Esc · back to Recipients · ←/→ panels".into()
                         } else {
                             if selected_agent.as_ref().is_some_and(|entry| field(entry, "kind") == "observed") {
                                 "Esc back · h history · Enter call history · ←/→ panels".into()
@@ -4188,14 +4208,14 @@ mod tests {
     }
 
     #[test]
-    fn left_opens_agents_only_at_draft_start_and_escape_keeps_the_draft() {
+    fn left_opens_statistics_only_at_draft_start_and_escape_keeps_the_draft() {
         let mut state = preview(28, 120);
         input(&mut state, "中文 draft".as_bytes());
         input(&mut state, b"\x1b[D");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(state.conversation.composer.cursor(), "中文 draf".len());
         input(&mut state, b"\x01\x1b[D");
-        assert_eq!(state.conversation.view, View::Agents);
+        assert_eq!(state.conversation.view, View::Statistics);
         assert!(state.conversation.content_focus);
         assert_eq!(state.conversation.composer.text(), "中文 draft");
         state.chat_key(Key::Escape);
@@ -4204,10 +4224,9 @@ mod tests {
         assert_eq!(state.conversation.composer.text(), "中文 draft");
         assert_eq!(state.conversation.composer.cursor(), 0);
         input(&mut state, b"\x1b[D");
-        assert_eq!(
-            state.conversation.selected_agent.as_deref(),
-            Some("member:next")
-        );
+        assert_eq!(state.conversation.view, View::Statistics);
+        assert!(state.conversation.selected_agent.is_none());
+        assert!(state.conversation.target.is_none());
     }
 
     #[test]
@@ -4433,7 +4452,8 @@ mod tests {
         state.conversation.composer.set_text("draft under review");
         state.conversation.editing = Some("existing-request".into());
         state.conversation.composer.home();
-        input(&mut state, b"\x1b[D\x1b[B\r");
+        state.chat_command("/sessions").unwrap();
+        input(&mut state, b"\x1b[B\r");
         assert_eq!(state.conversation.view, View::Activity);
         assert!(!state.conversation.content_focus);
         assert_eq!(
@@ -4447,7 +4467,7 @@ mod tests {
             Some("existing-request")
         );
         assert!(state.conversation.submitting.is_none());
-        input(&mut state, b"\x1b[D");
+        state.chat_command("/sessions").unwrap();
         assert_eq!(
             state.conversation.selected_agent.as_deref(),
             Some("member:example-builder")
@@ -4467,7 +4487,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_panel_closes_before_typing_or_pasting_without_switching_recipient() {
+    fn statistics_closes_before_typing_or_pasting_without_switching_recipient() {
         let mut state = preview(28, 120);
         state.conversation.target = Some("example-reviewer".into());
         input(&mut state, b"\x1b[D");
@@ -4492,6 +4512,7 @@ mod tests {
     fn removed_agents_command_cannot_open_a_view_or_submit_a_request() {
         let mut state = preview(28, 120);
         assert!(state.chat_command("/agents").is_err());
+        assert!(state.chat_command("/new agents").is_err());
         input(&mut state, b"/agents\r");
         assert_eq!(state.conversation.view, View::Activity);
         assert_eq!(state.conversation.composer.text(), "/agents");

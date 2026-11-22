@@ -157,7 +157,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/new",
-        description: "Add a canvas panel: chat, agents, audit, queue, questions or history",
+        description: "Add a canvas panel: chat, statistics, audit, queue, questions or history",
     },
     SlashCommand {
         name: "/close",

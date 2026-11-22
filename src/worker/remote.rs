@@ -303,8 +303,12 @@ mod tests {
         let client = "a".repeat(64);
         let owner = actor("manager");
         let executor = actor("executor");
-        let first = queue.submit_managed(owner.clone(), &client, "first", "work", "prepared", 1).unwrap();
-        let pending = queue.submit_managed(owner.clone(), &client, "pending", "queued", "prepared", 1).unwrap();
+        let first = queue
+            .submit_managed(owner.clone(), &client, "first", "work", "prepared", 1)
+            .unwrap();
+        let pending = queue
+            .submit_managed(owner.clone(), &client, "pending", "queued", "prepared", 1)
+            .unwrap();
         let claim = claimed(&remote, &queue, &executor, "take-first");
         assert_eq!(claim.task_id, first.task_id);
         assert!(queue.stop(&executor, &client, 2).is_err());
@@ -315,16 +319,43 @@ mod tests {
         assert_eq!(queue.snapshot().working, 1);
         assert_eq!(queue.snapshot().idle, 0);
         assert_eq!(queue.snapshot().queued, 0);
-        assert_eq!(queue.result(&owner, &first.task_id).unwrap().status, TaskStatus::Cancelling);
-        assert_eq!(queue.result(&owner, &pending.task_id).unwrap().status, TaskStatus::Cancelled);
-        assert!(queue.submit_managed(owner.clone(), &client, "new", "work", "prepared", 5).is_err());
-        let Claimed::Assigned { claim: retry, lease } = remote.claim(&queue, &executor, "take-first", 5).unwrap() else { panic!("active claim was lost after stop") };
+        assert_eq!(
+            queue.result(&owner, &first.task_id).unwrap().status,
+            TaskStatus::Cancelling
+        );
+        assert_eq!(
+            queue.result(&owner, &pending.task_id).unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert!(
+            queue
+                .submit_managed(owner.clone(), &client, "new", "work", "prepared", 5)
+                .is_err()
+        );
+        let Claimed::Assigned {
+            claim: retry,
+            lease,
+        } = remote.claim(&queue, &executor, "take-first", 5).unwrap()
+        else {
+            panic!("active claim was lost after stop")
+        };
         assert_eq!(retry, claim);
         assert!(queue.cancellation_requested(&lease));
-        let completion = Completion { claim, status: Status::Cancelled, output: None, error: None };
-        assert!(remote.complete(&queue, &owner, completion.clone(), 6).is_err());
+        let completion = Completion {
+            claim,
+            status: Status::Cancelled,
+            output: None,
+            error: None,
+        };
+        assert!(
+            remote
+                .complete(&queue, &owner, completion.clone(), 6)
+                .is_err()
+        );
         assert_eq!(queue.snapshot().working, 1);
-        let (task, duplicate) = remote.complete(&queue, &executor, completion.clone(), 7).unwrap();
+        let (task, duplicate) = remote
+            .complete(&queue, &executor, completion.clone(), 7)
+            .unwrap();
         assert!(!duplicate);
         assert_eq!(task.status, TaskStatus::Cancelled);
         assert!(!task.replay_safe);
@@ -340,7 +371,9 @@ mod tests {
         let client = "a".repeat(64);
         let owner = actor("old-manager");
         let executor = actor("executor");
-        let task = queue.submit_managed(owner.clone(), &client, "old-work", "work", "prepared", 1).unwrap();
+        let task = queue
+            .submit_managed(owner.clone(), &client, "old-work", "work", "prepared", 1)
+            .unwrap();
         let claim = claimed(&remote, &queue, &executor, "old-claim");
         queue.stop(&owner, &client, 3).unwrap();
         queue.close(4);
@@ -359,7 +392,11 @@ mod tests {
         fresh.attach(&new_owner, &new_client, 5).unwrap();
         assert!(fresh.is_manager(&new_owner, &new_client));
         assert!(!fresh.is_manager(&owner, &client));
-        assert!(remote_new.complete(&fresh, &executor, success(claim), 6).is_err());
+        assert!(
+            remote_new
+                .complete(&fresh, &executor, success(claim), 6)
+                .is_err()
+        );
         assert_eq!(fresh.snapshot().idle, 1);
         assert_eq!(fresh.snapshot().queued, 0);
     }

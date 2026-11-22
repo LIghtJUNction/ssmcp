@@ -22,7 +22,7 @@ import time
 
 from e2e_account_relay import wait_for
 from e2e_composer import Composer, DELETE, ENTER, ESC, LEFT
-from e2e_client_ui import column, empty_composer_ready
+from e2e_client_ui import column, empty_composer_ready, view
 from e2e_dashboard import sha256, text
 
 
@@ -82,7 +82,7 @@ class Questions(Composer):
             return False
         pending = state["pending_questions"]
         if pending == 0:
-            return column(shot) == ("conversation", 2, 8)
+            return view(shot, "conversation")
         # Pending questions replace the title, but never establish the view by
         # themselves. Match the live count as well as the ordinary input state.
         header = shot["rows"][0].split("│", 1)[0].strip()
@@ -104,7 +104,7 @@ class Questions(Composer):
     def details(self, front, marker):
         front.send(SHIFT_UP)
         front.until(
-            lambda shot: column(shot) == ("questions", 5, 8)
+            lambda shot: view(shot, "questions")
             and marker in text(shot) and not shot["hide_cursor"],
             "Shift+Up opening the expected question with its answer input",
         )
@@ -178,7 +178,7 @@ class Questions(Composer):
         wait_for(matching_member, "the exact question member in the local steering roster")
         self.highlight_recipient(front, member)
         front.send(ENTER)
-        front.until(lambda shot: column(shot) == ("conversation", 2, 8)
+        front.until(lambda shot: view(shot, "conversation")
                     and "To Question fixture agent" in text(shot),
                     "Enter selecting an exact member recipient")
         selected = self.ui("/display/conversation")
@@ -246,7 +246,7 @@ class Questions(Composer):
                    and self.question(second["id"])["state"] == "pending",
                    "repeated Shift+Up changes questions without answering either one")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("questions", 5, 8) and shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "questions") and shot["hide_cursor"],
                     "Escape returning from answer input to the question list")
         front.send(ESC)
         front.until(self.conversation_ready,
@@ -272,7 +272,7 @@ class Questions(Composer):
 
         self.details(front, "DETAIL_SKIP_THIRD")
         front.send(ESC)
-        front.until(lambda shot: column(shot) == ("questions", 5, 8) and shot["hide_cursor"],
+        front.until(lambda shot: view(shot, "questions") and shot["hide_cursor"],
                     "the optional question selected in the list")
         front.send(DELETE)
         skipped = self.wait_question(front, third["id"], "skipped")

@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import time
 
-from e2e_input_history import InputHistory, ENTER, HOME, DOWN, column, text
+from e2e_input_history import InputHistory, ENTER, HOME, DOWN, text
+from e2e_client_ui import view
 
 
 class AtCompletion(InputHistory):
@@ -46,7 +47,7 @@ class AtCompletion(InputHistory):
                             if item["agent_id"] == member["agent_id"])
         front.send(HOME + DOWN * selected + ENTER)
         front.until(lambda shot: "To Reference fixture member" in text(shot)
-                    and column(shot) == ("conversation", 2, 8), "exact fixture recipient")
+                    and view(shot, "conversation"), "exact fixture recipient")
 
         for typed, path, expected in [
             ("@not", "notes.txt", "@notes.txt "),

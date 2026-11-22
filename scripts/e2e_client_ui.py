@@ -122,22 +122,24 @@ def column(shot):
     # Read the final exact page tuple, independently of the project title.
     header = shot["rows"][0].split("│", 1)[0]
     matches = list(re.finditer(
-        r"\b(agents|sessions|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
+        r"\b(statistics|recipients|conversation|code audit|queue|questions|history|logs|tasks)\s+(\d+)/(\d+)\b",
         header, re.IGNORECASE,
     ))
     if matches:
         name, position, count = matches[-1].groups()
         return name.lower(), int(position), int(count)
     # The conversation header intentionally omits its numeric counter. Other
-    # pages still expose their tuples, and the navigation checks verify all eight.
+    # pages still expose their real tuples, including explicitly opened recipients.
     if re.search(r"\bconversation\s*$", header, re.IGNORECASE):
-        return "conversation", 2, 8
+        return "conversation", None, None
     return None
 
 
 def view(shot, name):
     current = column(shot)
-    return current is not None and current[0] == name and 1 <= current[1] <= current[2]
+    return (current is not None and current[0] == name
+            and ((name == "conversation" and current[1:] == (None, None))
+                 or (current[1] is not None and 1 <= current[1] <= current[2])))
 
 
 def logs_open(shot):
@@ -211,7 +213,7 @@ def click_tool(preview, shot, marker, title):
 
 
 def empty_composer_ready(shot):
-    return (shot["alternate_screen"] and column(shot) == ("conversation", 2, 8)
+    return (shot["alternate_screen"] and view(shot, "conversation")
             and "Message the agent" in prompt_text(shot) and not shot["hide_cursor"])
 
 
@@ -286,7 +288,7 @@ def main():
             finally:
                 vt.close()
             save_shot(args.out, name, shot)
-            check(column(shot) == ("conversation", 2, 8) and "❯" in prompt_text(shot)
+            check(view(shot, "conversation") and "❯" in prompt_text(shot)
                   and "done" in body_text(shot),
                   f"{name} layout shows the conversation column and its bottom composer")
             check("A quieter workspace" not in body_text(shot),
@@ -303,7 +305,7 @@ def main():
 
         preview = Preview(binary, decoder, config)
         try:
-            initial = preview.until(lambda s: column(s) == ("conversation", 2, 8)
+            initial = preview.until(lambda s: view(s, "conversation")
                                     and f"▾ {TOOL_GROUP}" in body_text(s)
                                     and "Message the agent" in prompt_text(s),
                                     "default conversation column and composer")
@@ -322,7 +324,7 @@ def main():
             preview.send(b"\x1bOR")
             initial = preview.until(lambda s: "Builder" in text(s) and "Reviewer" in text(s)
                                     and "│" in text(s), "the explicitly opened sample-agent sidebar")
-            check(column(initial) == ("conversation", 2, 8)
+            check(view(initial, "conversation")
                   and "Message the agent" in prompt_text(initial),
                   "F3 exposes both sample agents while preserving the current page and composer")
 
@@ -386,7 +388,7 @@ def main():
                 TOOL_DIFF, DIFF_HUNK, DIFF_OLD, DIFF_NEW,
             )), "raw Logs retain the full command, results and diff")
             slash(preview, "/raw")
-            returned = preview.until(lambda s: column(s) == ("conversation", 2, 8)
+            returned = preview.until(lambda s: view(s, "conversation")
                                      and f"▾ {TOOL_GROUP}" in body_text(s) and compact_tool_command(s)
                                      and f"▾ {TOOL_DIFF}" in body_text(s)
                                      and all(line in body_text(s) for line in (DIFF_OLD, DIFF_NEW, DIFF_HUNK)),
@@ -476,7 +478,7 @@ def main():
             check(restored_audit["hide_cursor"],
                   "the Logs round trip preserves audit details and content focus")
             preview.send(b"\x0f")
-            preview.until(lambda s: column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
+            preview.until(lambda s: view(s, "conversation") and not s["hide_cursor"],
                           "Ctrl+O returning to the conversation composer")
 
             slash(preview, "/filter cargo test --lib")
@@ -529,7 +531,7 @@ def main():
                   "Ctrl+End resumes following without changing the draft or composer focus")
             clear_draft(preview)
             preview.send(b"\x1b")
-            preview.until(lambda s: column(s) == ("conversation", 2, 8),
+            preview.until(lambda s: view(s, "conversation"),
                           "Escape returning from filtered Logs to the original conversation")
             preview.resize(30, 120)
             preview.until(lambda s: view(s, "conversation") and prompt_start(s) == 25,
@@ -537,32 +539,96 @@ def main():
 
             slash(preview, "/agents")
             removed = preview.until(lambda s: "Unknown command" in text(s), "removed agent slash command")
-            check(column(removed) == ("conversation", 2, 8) and "/agents" in prompt_text(removed),
+            check(view(removed, "conversation") and "/agents" in prompt_text(removed),
                   "the removed command neither opens a view nor submits its text")
             clear_draft(preview)
             preview.send(b"\x1b[D")
-            agents = preview.until(lambda s: column(s) == ("sessions", 1, 8)
-                                   and "Reviewer" in body_text(s), "Left entering the adjacent Sessions column")
-            check("Next caller" in body_text(agents) and "Builder" in body_text(agents)
-                  and agents["hide_cursor"], "the agent panel shows selectable named recipients")
-            save_shot(args.out, "agents", agents)
+            statistics = preview.until(
+                lambda s: column(s) == ("statistics", 1, 8)
+                and "Statistics" in body_text(s),
+                "Left entering the first Statistics column",
+            )
+            check("Preview · sample data" in body_text(statistics)
+                  and re.search(r"Session process ID\s+unbound\b", body_text(statistics))
+                  and re.search(r"Manager thread ID\s+unbound\b", body_text(statistics))
+                  and f"OS PID {preview.process.pid}" in body_text(statistics)
+                  and re.search(r"Registered session threads\s+none\b", body_text(statistics)),
+                  "Statistics distinguishes unbound preview session IDs from the actual process PID")
+            check("Retained tool calls · this window" in body_text(statistics)
+                  and "Registered members" in body_text(statistics)
+                  and statistics["hide_cursor"],
+                  "Statistics labels retained tool counts and uses read-only content focus")
+            save_shot(args.out, "statistics", statistics)
             preview.send(b"\x1b")
-            returned = preview.until(lambda s: column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
-                                     "Escape returning to the default conversation")
-            check("Message the agent" in prompt_text(returned), "closing agents restores the empty composer")
-            preview.send("切换保留 界".encode() + b"\x01\x1b[D")
-            preview.until(lambda s: column(s) == ("sessions", 1, 8)
-                          and "切换保留 界" in prompt_text(s), "opening agents with a Unicode draft")
+            returned = preview.until(lambda s: view(s, "conversation") and not s["hide_cursor"],
+                                     "Escape returning from Statistics to the conversation")
+            check("Message the agent" in prompt_text(returned),
+                  "closing Statistics restores the unchanged empty composer")
+
+            slash(preview, "/sessions")
+            recipients = preview.until(lambda s: column(s) == ("recipients", 3, 9)
+                                       and "Reviewer" in body_text(s),
+                                       "explicit Sessions command opening the recipient picker")
+            check("Next caller" in body_text(recipients) and "Builder" in body_text(recipients)
+                  and recipients["hide_cursor"],
+                  "the explicit recipient picker retains named and Next caller choices")
+            save_shot(args.out, "recipients", recipients)
+            preview.send(b"\x1b")
+            preview.until(lambda s: view(s, "conversation") and not s["hide_cursor"]
+                          and "Message the agent" in prompt_text(s),
+                          "Escape closing the recipient picker without selecting a target")
+            preview.send("切换保留 界".encode())
+            preview.until(lambda s: view(s, "conversation") and "切换保留 界" in prompt_text(s),
+                          "Unicode draft before revisiting the explicit recipient column")
+            # Recipients remains the third column; Alt+Right changes pages without
+            # inserting a slash command into, or submitting, the shared draft.
+            preview.send(b"\x1b[1;3C")
+            preview.until(lambda s: column(s) == ("recipients", 3, 9)
+                          and "切换保留 界" in prompt_text(s),
+                          "revisiting the recipient picker with its unchanged Unicode draft")
             preview.send(b"\x1b[B\r")
             chosen = preview.until(lambda s: "To Builder" in text(s)
-                                   and column(s) == ("conversation", 2, 8) and not s["hide_cursor"],
-                                   "explicit agent selection returning to the conversation")
+                                   and view(s, "conversation") and not s["hide_cursor"],
+                                   "explicit recipient selection returning to the conversation")
             check("切换保留 界" in prompt_text(chosen)
                   and chosen["cursor"][0] >= chosen["size"][0] - 4,
-                  "agent selection preserves the Unicode draft and returns cursor focus to the composer")
+                  "recipient selection preserves the Unicode draft and returns focus to the composer")
+            chosen_recipient = left_rows(chosen)[prompt_start(chosen)]
+            chosen_prompt = prompt_text(chosen)
+            preview.send(b"\x01\x1b[D")
+            preview.until(lambda s: column(s) == ("statistics", 1, 9)
+                          and "切换保留 界" in prompt_text(s),
+                          "Statistics opened with an explicit recipient and a Unicode draft")
+            preview.resize(18, 52)
+            narrow_statistics = preview.until(
+                lambda s: s["size"] == [18, 52] and view(s, "statistics")
+                and "Session process ID" in body_text(s)
+                and "Manager thread ID" in body_text(s)
+                and f"OS PID {preview.process.pid}" in body_text(s),
+                "narrow Statistics identity rows after terminal resize",
+            )
+            check("Preview · sample data" in body_text(narrow_statistics)
+                  and "切换保留 界" in prompt_text(narrow_statistics)
+                  and "�" not in text(narrow_statistics)
+                  and narrow_statistics["hide_cursor"],
+                  "narrow Statistics keeps readable identity rows and the Unicode draft")
+            save_shot(args.out, "statistics-narrow", narrow_statistics)
+            preview.resize(30, 120)
+            preview.until(lambda s: s["size"] == [30, 120] and view(s, "statistics"),
+                          "Statistics restored to the original terminal size")
+            preview.send(b"\x1b[C")
+            after_statistics = preview.until(
+                lambda s: view(s, "conversation") and not s["hide_cursor"]
+                and "切换保留 界" in prompt_text(s),
+                "Right returning from Statistics to the original composer",
+            )
+            check(left_rows(after_statistics)[prompt_start(after_statistics)] == chosen_recipient
+                  and prompt_text(after_statistics) == chosen_prompt
+                  and "To Builder" in text(after_statistics),
+                  "Statistics navigation and resize preserve the exact recipient and Unicode draft")
             clear_draft(preview)
             slash(preview, "/queue")
-            queued = preview.until(lambda s: column(s) == ("queue", 4, 8)
+            queued = preview.until(lambda s: column(s) == ("queue", 5, 9)
                                    and "#example-" in body_text(s)
                                    and "Keep the interface simple;" in body_text(s)
                                    and "Requests ·" in body_text(s), "sample request queue column")
@@ -578,15 +644,15 @@ def main():
                           and "#example-" in body_text(s)
                           and "Keep the interface simple;" in body_text(s), "Escape returning to the queue list")
             slash(preview, "/logs")
-            preview.until(lambda s: column(s) == ("logs", 7, 8), "Logs opened from the queue column")
+            preview.until(lambda s: column(s) == ("logs", 8, 9), "Logs opened from the queue column")
             preview.send(b"\x1b")
-            queue_return = preview.until(lambda s: column(s) == ("queue", 4, 8)
+            queue_return = preview.until(lambda s: column(s) == ("queue", 5, 9)
                                          and "#example-" in body_text(s)
                                          and "Keep the interface simple;" in body_text(s),
                                          "Escape restoring the originating queue column")
             check("To Builder" in text(queue_return), "Logs preserves the shared recipient")
-            preview.send(b"\x1b[1;3D\x1b[1;3D")
-            preview.until(lambda s: column(s) == ("conversation", 2, 8)
+            preview.send(b"\x1b[1;3D" * 3)
+            preview.until(lambda s: view(s, "conversation")
                           and not s["hide_cursor"], "horizontal navigation back to the conversation")
 
             preview.send(b"\x1bOR")
@@ -692,7 +758,7 @@ def main():
                 "preview rejecting native plugin management without consuming its draft",
             )
             check(preview.process.poll() is None and not plugin_rejected["hide_cursor"]
-                  and column(plugin_rejected) == ("conversation", 2, 8)
+                  and view(plugin_rejected, "conversation")
                   and "To Builder" in text(plugin_rejected)
                   and "❯ /plugin list" in prompt_text(plugin_rejected)
                   and "Native plugins" not in body_text(plugin_rejected),
@@ -717,7 +783,7 @@ def main():
                   "invalid F5 configuration leaves the previous theme and display active")
             config.write_text(saved_config, encoding="utf-8")
             preview.send(b"\x1b[15~")
-            preview.until(lambda s: column(s) == ("conversation", 2, 8)
+            preview.until(lambda s: view(s, "conversation")
                           and s["cells"][0][0]["background"] == [255, 255, 255]
                           and "sidebar_width" not in text(s),
                           "appearance reload preserving the conversation column")
